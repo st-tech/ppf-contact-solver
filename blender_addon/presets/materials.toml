@@ -1,11 +1,11 @@
 # blender_addon/presets/materials.toml
 #
-# Bundled material presets for the ZOZO Contact Solver Blender addon. Selected
+# Bundled material presets for ZOZO's Contact Solver Blender addon. Selected
 # from the Material Params box; the preset menu is FILTERED by the group's
 # current Type (object_type below), and applying a preset never changes the Type.
 # Adding a material is a TOML edit only - no code change.
 #
-# Convention (see calibration/ for the methodology and sources):
+# Convention:
 #  - SHELL (fabrics): young_mod_density_normalized = true. shell_young_modulus is
 #    a CALIBRATED wire membrane stiffness (NOT a textbook Pa; real fabric has no
 #    clean bulk modulus). bend / strain_limit_percent are calibrated against
@@ -20,7 +20,7 @@
 #    only affects inertia/contact, not the shape), so it ships at a uniform 1.0
 #    kg/m^2: a well-conditioned default that lets a light fabric be mixed with
 #    dense bodies without the mass-ratio blowup a real silk GSM (~0.06) would
-#    cause. Real GSM values per fabric are recorded in the plan for reference.
+#    cause.
 #  - SOLID (soft deformable): young_mod_density_normalized = true, like SHELL.
 #    solid_young_modulus is the DENSITY-NORMALIZED modulus E/density (= the wire
 #    value the solver consumes), so it preserves the same deformation as the real

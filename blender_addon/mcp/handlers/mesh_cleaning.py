@@ -342,7 +342,7 @@ def scan_meshes(
     objects = _resolve_meshes(object_names)
 
     with _selected_exactly(objects):
-        bpy.ops.object.ppf_scan_mesh_defects(
+        bpy.ops.object.scan_mesh_defects(
             "EXEC_DEFAULT",
             merge_threshold=merge_threshold,
             area_eps=area_eps,
@@ -416,7 +416,7 @@ def merge_by_distance(
     objects = _resolve_meshes(object_names)
     _require_acknowledgement(objects, acknowledge)
     return _apply_count_changing(
-        bpy.ops.object.ppf_merge_by_distance,
+        bpy.ops.object.merge_by_distance,
         objects,
         verb="Merged vertices",
         merge_threshold=merge_threshold,
@@ -449,7 +449,7 @@ def remove_loose_vertices(
     objects = _resolve_meshes(object_names)
     _require_acknowledgement(objects, acknowledge)
     return _apply_count_changing(
-        bpy.ops.object.ppf_remove_loose_vertices,
+        bpy.ops.object.remove_loose_vertices,
         objects,
         verb="Removed loose vertices",
         acknowledge=True,
@@ -483,7 +483,7 @@ def dissolve_degenerate_faces(
     objects = _resolve_meshes(object_names)
     _require_acknowledgement(objects, acknowledge)
     return _apply_count_changing(
-        bpy.ops.object.ppf_dissolve_degenerate,
+        bpy.ops.object.dissolve_degenerate,
         objects,
         verb="Dissolved degenerate faces",
         merge_threshold=merge_threshold,
@@ -504,7 +504,7 @@ def delete_duplicate_faces(object_names: list[str]):
     """
     objects = _resolve_meshes(object_names)
     return _apply(
-        bpy.ops.object.ppf_delete_duplicate_faces,
+        bpy.ops.object.delete_duplicate_faces,
         objects,
         verb="Deleted duplicate faces",
     )
@@ -524,7 +524,7 @@ def triangulate_for_solver(object_names: list[str]):
     """
     objects = _resolve_meshes(object_names)
     return _apply(
-        bpy.ops.object.ppf_triangulate_for_solver,
+        bpy.ops.object.triangulate_for_solver,
         objects,
         verb="Triangulated",
     )
@@ -544,7 +544,7 @@ def recalculate_normals_outside(object_names: list[str]):
     """
     objects = _resolve_meshes(object_names)
     return _apply(
-        bpy.ops.object.ppf_recalc_normals_outside,
+        bpy.ops.object.recalc_normals_outside,
         objects,
         verb="Recalculated normals",
         measure=_winding,
@@ -569,7 +569,7 @@ def symmetric_triangulate(object_names: list[str]):
     """
     objects = _resolve_meshes(object_names)
     return _apply(
-        bpy.ops.object.ppf_symmetric_triangulate,
+        bpy.ops.object.symmetric_triangulate,
         objects,
         verb="Symmetric-triangulated",
     )

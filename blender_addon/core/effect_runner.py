@@ -27,8 +27,9 @@ import numpy
 
 from ..models.console import console
 from .backends import ConnectionBackend, create_backend
+from .connection import NATIVE_BACKENDS, remote_target_dir
 from .derived import is_sim_running_from_response
-from .gpu_devices import describe_launch, shell_prefix
+from .gpu_devices import AUTOMATIC, describe_launch, shell_prefix
 from .effects import (
     DoClearAnimation,
     DoClearInterrupt,
@@ -70,6 +71,7 @@ from .events import (
     UploadPipelineComplete,
 )
 from .protocol import DEFAULT_CHUNK_SIZE
+from .server_kill import KillReport, kill_remote_server
 from .session import new_session_id
 
 if TYPE_CHECKING:
@@ -78,10 +80,10 @@ if TYPE_CHECKING:
 
 def _server_join(backend, *parts: str) -> str:
     # win_native talks to a Windows server (Windows-style paths).
-    # ssh/docker/local backends all talk to a POSIX server, so the
-    # path must use forward slashes regardless of the client OS,
-    # otherwise a Windows client mixes in backslashes that break
-    # both shell quoting on the remote and the server's open().
+    # Every other backend talks to a POSIX server, so the path must use
+    # forward slashes regardless of the client OS, otherwise a Windows
+    # client mixes in backslashes that break both shell quoting on the
+    # remote and the server's open().
     if backend.backend_type == "win_native":
         return os.path.join(*parts)
     return posixpath.join(*parts)
@@ -196,6 +198,10 @@ class EffectRunner:
         self._interrupt = threading.Event()
         self._project_name: str | None = None
         self._chunk_size: int = DEFAULT_CHUNK_SIZE
+        # What the most recent ``_do_stop_server`` found and killed. Written
+        # on the worker thread, read on the main thread after the stop has
+        # settled to ``server=UNKNOWN``, so the two never overlap.
+        self.last_kill_report: KillReport | None = None
 
         # Raw last-seen server response for UI display.  Kept here —
         # NOT in AppState — because it's a cache, not state.  See
@@ -318,8 +324,16 @@ class EffectRunner:
             case DoLaunchServer(
                 cuda_device=device,
                 cuda_device_uuid=device_uuid,
+                device=compute_device,
+                gpu_backend=gpu_backend,
             ):
-                self._submit_cmd(self._do_launch_server, device, device_uuid)
+                self._submit_cmd(
+                    self._do_launch_server,
+                    device,
+                    device_uuid,
+                    compute_device,
+                    gpu_backend,
+                )
 
             case DoStopServer():
                 self._submit_cmd(self._do_stop_server)
@@ -508,10 +522,11 @@ class EffectRunner:
                 # Stop is special: ``_do_stop_server`` already
                 # dispatched ``ServerStopped`` (server=UNKNOWN), and
                 # an auto-poll right after would re-contact the
-                # process we just told to die — on local-backend the
-                # server is still up (orchestrator owned, or kill not
-                # yet propagated), so the poll succeeds and flips
-                # server back to RUNNING. Skip the auto-poll on stop.
+                # process we just told to die: on a co-located
+                # backend the server is often still up (orchestrator
+                # owned, or kill not yet propagated), so the poll
+                # succeeds and flips server back to RUNNING. Skip the
+                # auto-poll on stop.
                 if not is_poll and not is_stop and self._backend and self._project_name:
                     with self._io_lock:
                         has_pending_cmd = bool(self._cmd_queue)
@@ -560,6 +575,11 @@ class EffectRunner:
         saved_session_id: str = "",
     ) -> None:
         try:
+            # The native backends query a server already on the port before
+            # attaching to it, and a query names a project the server then
+            # selects; naming the add-on's own keeps that query identical to
+            # the first status poll.
+            config = dict(config, project_name=self._project_name or "")
             backend = create_backend(backend_type, config)
             self._backend = backend
             remote_root = ""
@@ -576,6 +596,7 @@ class EffectRunner:
             self._engine.dispatch(ConnectionFailed(error=str(e)))
             return
         self._probe_solver_host_gpus(backend)
+        self._probe_solver_host_builds(backend)
         self._engine.dispatch(Connected(
             remote_root=remote_root,
             session_id=session_id,
@@ -593,6 +614,63 @@ class EffectRunner:
         if backend is not None:
             self._submit_cmd(self._probe_solver_host_gpus, backend)
 
+    def probe_solver_host_builds(self) -> None:
+        """Re-list the connected solver host's solver builds on the worker thread.
+
+        The same Refresh button, for the same reason as the GPU list: it refills
+        a cache the panel reads and changes no application state.
+        """
+        backend = self._backend
+        if backend is not None:
+            self._submit_cmd(self._probe_solver_host_builds, backend)
+
+    def _probe_solver_host_builds(self, backend) -> None:
+        """List the solver builds on the machine *backend* will run the server on.
+
+        ONLY A REMOTE BACKEND IS ASKED. A native connection's builds are on this
+        machine, where the panel resolves them directly from the filesystem on
+        every redraw; asking over the backend would be a slower answer to a
+        question already answered.
+
+        A FAILURE IS RECORDED, NEVER RAISED. This runs inside connect, and a
+        host that cannot list its builds is still a host worth connecting to:
+        the device rows then say why they have nothing to offer, and the launch
+        refuses by name if the selection cannot be resolved.
+        """
+        from . import remote_builds
+
+        remote_builds.forget_builds()
+        if backend.backend_type in NATIVE_BACKENDS:
+            return
+        root = remote_builds.normalize_root(backend.current_directory)
+        if not root:
+            remote_builds.record_probe_failure(
+                "The connection names no directory on the solver host, so its "
+                "solver builds could not be listed."
+            )
+            return
+        try:
+            result = backend.exec_command(
+                remote_builds.probe_command(root),
+                shell=True,
+                timeout=remote_builds.PROBE_TIMEOUT_SECONDS,
+            )
+        except Exception as e:  # noqa: BLE001 - recorded, not swallowed
+            remote_builds.record_probe_failure(
+                f"Could not list the solver builds on the solver host: {e}"
+            )
+            return
+        if result.get("exit_code") != 0:
+            detail = " ".join(result.get("stderr") or []).strip() or "no output"
+            remote_builds.record_probe_failure(
+                f"Listing the solver builds on the solver host failed: {detail}"
+            )
+            return
+        # The root goes in WITH the listing: its keys are absolute paths under
+        # this root, and a reader that derived its own could resolve against a
+        # different one. One probe, one root, one answer.
+        remote_builds.load_builds(result.get("stdout") or [], root)
+
     def _probe_solver_host_gpus(self, backend) -> None:
         """Enumerate the GPUs of the machine *backend* will run the server on.
 
@@ -607,7 +685,14 @@ class EffectRunner:
         from . import gpu_devices
 
         gpu_devices.forget_devices()
-        direct = backend.backend_type in ("local", "win_native")
+        # The macOS native solver runs on the system default Metal device and
+        # offers no way to select another, and macOS carries no nvidia-smi to
+        # enumerate with. An empty cache is what the panel reads as "no
+        # picker"; recording a probe failure would put a red line under a
+        # dropdown that has nothing to offer.
+        if backend.backend_type == "mac_native":
+            return
+        direct = backend.backend_type in ("win_native", "linux_native")
         command = (
             gpu_devices.NVIDIA_SMI_ARGS
             if direct
@@ -633,11 +718,13 @@ class EffectRunner:
         gpu_devices.load_devices("\n".join(result.get("stdout") or []))
 
     def _do_disconnect(self) -> None:
-        from . import gpu_devices
+        from . import gpu_devices, remote_builds
 
         # The next connection may reach a different machine, where a list left
-        # over from this one would name GPUs that are not there.
+        # over from this one would name GPUs, or build directories, that are
+        # not there.
         gpu_devices.forget_devices()
+        remote_builds.forget_builds()
         if self._backend:
             self._backend.disconnect()
             self._backend = None
@@ -666,47 +753,70 @@ class EffectRunner:
         if not self._backend:
             return
         directory = self._backend.current_directory
-        # The launcher invokes the Rust binary at
-        # target/release/ppf-cts-server (.exe on Windows). For the
-        # Local + win_native backends we probe the local filesystem
-        # directly; for SSH / Docker we go through ``exec_command``.
-        # SSH/Docker targets are always Linux, so use POSIX joins and
-        # no .exe regardless of the client OS.
-        if self._backend.backend_type == "win_native":
-            # win_native ships ppf-cts-server.exe under target/release (a dev /
-            # main repo checkout) OR bin/ (a distributable bundle); accept
-            # either, matching the spawn path's probe so a valid bundle root
-            # isn't spuriously rejected here after connect.
-            from .connection import (
-                win_native_not_found_message,
-                win_native_server_binary,
+        # For the three native backends the local filesystem is probed
+        # directly, each with the resolver its own connect path uses; for SSH /
+        # Docker the check goes through ``exec_command``.
+        # SSH/Docker targets are always Linux, so use POSIX joins and no .exe
+        # regardless of the client OS.
+        #
+        # THE REFUSAL HERE IS NOT A MESSAGE BUT A CANCELLATION, which is why
+        # each branch probes exactly what its spawn path probes. The
+        # `Connected` transition schedules this check, and a caller that starts
+        # an upload right after connecting (every `bl_*` scenario does) has its
+        # pipeline in flight when an `ErrorOccurred` lands: that transition
+        # resets the activity and clears the pending build, the upload then
+        # completes into nothing, and the solver sits at NO_BUILD until the
+        # caller's wait expires. Measured on the Windows leg of Blender CI,
+        # where `build.bat` puts the CUDA server under target/cuda/release and
+        # the check looked only under target/release: 23 scenarios failed by
+        # timeout with the upload landed and no build request ever sent (runs
+        # 35159051178 to 35193244970, and a Windows reproduction whose event
+        # trail named `validate_path`).
+        if self._backend.backend_type in NATIVE_BACKENDS:
+            from .connection import native_path_check
+            device = getattr(self._backend, "_device", "GPU")
+            gpu_backend = getattr(self._backend, "_gpu_backend", "AUTO")
+            error = native_path_check(
+                self._backend.backend_type, directory, device, gpu_backend
             )
-            if win_native_server_binary(directory) is None:
-                # Same sentence the launch path raises, so the user is not
-                # told two different things about one missing binary.
+            if error is not None:
+                # Same sentence the launch path raises, so the user is not told
+                # two different things about one missing binary.
                 self._engine.dispatch(ErrorOccurred(
-                    error=win_native_not_found_message(directory),
+                    error=error,
                     source="validate_path",
                 ))
             return
-        if self._backend.backend_type == "local":
-            bin_name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
-            server_bin = os.path.join(directory, "target", "release", bin_name)
-            if not os.path.isfile(server_bin):
-                self._engine.dispatch(ErrorOccurred(
-                    error=f"Remote path not found ({server_bin}).",
-                    source="validate_path",
-                ))
-            return
-        server_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
-        result = self._backend.exec_command(
-            f"if [ -f {server_bin} ]; then echo FOUND; else echo NOT_FOUND; fi",
-            shell=True, cwd="/",
-        )
-        output = "\n".join(result.get("stdout", []))
-        if result["exit_code"] != 0 or "NOT_FOUND" in output:
+        # THE REMOTE ROOT IS JUDGED BY THE LISTING CONNECT ALREADY TOOK, not by
+        # a second command naming one path. Asking about
+        # `target/release/ppf-cts-server` alone refuses a solver host holding a
+        # DISTRIBUTION, which ships `target/<backend>/release` and no
+        # `target/release`: the message is "Remote path not found" naming a
+        # path that host is right not to have. That refusal is a cancellation
+        # rather than a message (see the note above), so the artist's first
+        # upload lands into nothing.
+        #
+        # ASKED ONLY WHETHER THE ROOT HOLDS A SOLVER AT ALL, never whether it
+        # holds the device currently selected. The device is applied at Start
+        # Server, which is where a selection the host cannot serve is refused
+        # by name; refusing it here would cancel a pipeline over a choice the
+        # artist can still change.
+        from . import remote_builds
+        from .connection import remote_holds_any_server
+
+        if remote_builds.probe_error():
             self._engine.dispatch(ErrorOccurred(
-                error=f"Remote path not found ({server_bin}).",
+                error=remote_builds.probe_error(),
+                source="validate_path",
+            ))
+            return
+        probed = remote_builds.normalize_root(directory)
+        if not remote_holds_any_server(probed, remote_builds.cached_builds()):
+            from .connection import remote_not_found_message
+            self._engine.dispatch(ErrorOccurred(
+                error=remote_not_found_message(
+                    probed, remote_builds.cached_builds()
+                ),
                 source="validate_path",
             ))
 
@@ -730,46 +840,91 @@ class EffectRunner:
             # yet doesn't trip a spurious server-lost reset.
             self._engine.dispatch(ServerLost())
 
+    def _launch_device(self, device: str = "") -> str:
+        """The Compute Device this launch runs on.
+
+        What Start Server was given, else what the connection was made with.
+        One reader, so the binary a launch resolves and the GPU token it writes
+        cannot disagree about which device is in play.
+        """
+        from .connection import DEVICE_GPU
+
+        return device or getattr(self._backend, "_device", DEVICE_GPU)
+
+    def _remote_server_binary(
+        self, directory: str, device: str = "", gpu_backend: str = ""
+    ) -> str:
+        """The server on the solver host this connection's selection names.
+
+        Raises rather than falling back, which is the whole point: a selection
+        that cannot be satisfied has to say so at Start Server, naming what the
+        host holds, instead of launching another build and reporting success.
+        The three refusals `remote_not_found_message` distinguishes are each
+        something the artist can act on without changing the path.
+
+        A HOST THAT COULD NOT BE LISTED IS NOT A HOST WITH NO BUILDS. Where the
+        probe failed, its reason is what the artist needs, so it is raised
+        instead of a refusal derived from an empty listing.
+        """
+        from . import remote_builds
+        from .connection import (
+            DEVICE_GPU,
+            GPU_BACKEND_AUTO,
+            remote_not_found_message,
+            remote_server_binary,
+        )
+
+        # THE SELECTION THE LAUNCH WAS GIVEN, falling back to the one the
+        # connection was made with. The panel's remote rows are drawn only once
+        # a connection is up, so the artist's answer arrives with Start Server;
+        # reading the backend's connect-time copy alone would leave those rows
+        # movable and inert, which is the silent substitution the whole device
+        # mechanism exists to prevent.
+        device = self._launch_device(device)
+        gpu_backend = gpu_backend or getattr(
+            self._backend, "_gpu_backend", GPU_BACKEND_AUTO
+        )
+        # THE ROOT THE LISTING WAS TAKEN UNDER, which is what its keys are
+        # joined from. See `remote_builds.normalize_root`.
+        directory = remote_builds.normalize_root(directory)
+        listing = remote_builds.cached_builds()
+        if not listing and remote_builds.probe_error():
+            raise FileNotFoundError(remote_builds.probe_error())
+        found = remote_server_binary(directory, listing, device, gpu_backend)
+        if found is None:
+            raise FileNotFoundError(
+                remote_not_found_message(directory, listing, device, gpu_backend)
+            )
+        return found
+
     def _do_launch_server(
-        self, cuda_device: int = -1, cuda_device_uuid: str = ""
+        self,
+        cuda_device: int = -1,
+        cuda_device_uuid: str = "",
+        device: str = "",
+        gpu_backend: str = "",
     ) -> None:
-        if not self._backend:
+        # BOUND ONCE, for the reason `_do_stop_server` states: a disconnect
+        # runs on the main thread and can clear `self._backend` while this
+        # method is inside its startup wait loop.
+        backend = self._backend
+        if not backend:
             return
 
-        # Win_native spawns a child process instead of writing a launch
-        # script, because there is no shell on the other side of it. The GPU
-        # selection reaches it as an environment variable rather than a command
-        # prefix; everything around that is the same.
-        if self._backend.backend_type == "win_native":
-            launched = False
-            try:
-                launched = self._backend.start_server(
-                    cuda_device, cuda_device_uuid
-                )
-                self._wait_for_win_native_server()
-            except Exception as e:
-                cleanup_error = None
-                if launched:
-                    try:
-                        self._backend.stop_server()
-                    except Exception as stop_error:
-                        cleanup_error = stop_error
-                detail = str(e)
-                if cleanup_error is not None:
-                    detail += f" Cleanup also failed: {cleanup_error}"
-                self._engine.dispatch(ErrorOccurred(
-                    error=f"Failed to start server: {detail}",
-                    source="launch_server",
-                ))
-                return
-            console.write(describe_launch(
-                cuda_device, launched, cuda_device_uuid
-            ))
-            self._engine.dispatch(ServerLaunched())
+        # THE THREE NATIVES SPAWN A CHILD PROCESS instead of writing a launch
+        # script, because there is no shell on the other side of them. Their
+        # launch is one path rather than three: the differences are the name in
+        # the message and whether a GPU can be named at all.
+        if backend.backend_type in NATIVE_BACKENDS:
+            # A NATIVE LAUNCH TAKES NO DEVICE FROM HERE. Its device was settled
+            # when the connection was made, because connecting itself refuses a
+            # root that holds no build for it, and the backend keeps that answer
+            # so a Stop/Start cycle makes the same choice.
+            self._launch_native_server(backend, cuda_device, cuda_device_uuid)
             return
 
-        port = self._backend.server_port
-        directory = self._backend.current_directory
+        port = backend.server_port
+        directory = backend.current_directory
 
         # Check Docker port exposure on the SSH host (not inside container).
         # Only meaningful for SSH+container backends, where Blender runs on
@@ -777,13 +932,13 @@ class EffectRunner:
         # to the docker host. For plain DOCKER backend, Blender talks to the
         # local docker daemon directly via the Container API and the
         # _instance object has no exec_command.
-        if (self._backend.backend_type == "ssh"
-                and hasattr(self._backend, '_container')
-                and self._backend._container):
-            container = self._backend._container
-            if hasattr(self._backend, '_instance') and self._backend._instance:
+        if (backend.backend_type == "ssh"
+                and hasattr(backend, '_container')
+                and backend._container):
+            container = backend._container
+            if hasattr(backend, '_instance') and backend._instance:
                 # Run docker port directly on the SSH host
-                _stdin, stdout, stderr = self._backend._instance.exec_command(
+                _stdin, stdout, stderr = backend._instance.exec_command(
                     f"docker port {container} {port}"
                 )
                 exit_code = stdout.channel.recv_exit_status()
@@ -794,7 +949,8 @@ class EffectRunner:
                     )
 
         # Paths constructed here are sent to a Linux remote over SSH/Docker
-        # (this branch never runs for win_native — see early-return above).
+        # (this branch never runs for a native backend, see the early
+        # return above).
         # Use posixpath so a Windows client doesn't emit backslashes into
         # the shell commands.
         server_log = posixpath.join(directory, "server.log")
@@ -802,16 +958,15 @@ class EffectRunner:
         script_path = "/tmp/start_server.sh"
 
         # Clear progress.log
-        self._backend.exec_command(f"rm -f {progress_file}", shell=True)
+        backend.exec_command(f"rm -f {progress_file}", shell=True)
 
         # ppf-cts-server defaults to binding 127.0.0.1. That is what we want
-        # for SSH (Direct) and Local: paramiko's direct-tcpip channel
-        # terminates at the remote's loopback, and Local connects to
-        # localhost on the same kernel. Inside a container, however,
+        # for SSH (Direct): paramiko's direct-tcpip channel terminates at the
+        # remote's loopback. Inside a container, however,
         # docker -p HOST:CONTAINER forwards traffic to the container's
         # external interface (eth0), not loopback, so we must bind
         # 0.0.0.0 there.
-        in_container = bool(getattr(self._backend, "_container", ""))
+        in_container = bool(getattr(backend, "_container", ""))
         host_flag = "--host 0.0.0.0 " if in_container else ""
 
         # The Rust ppf-cts-server binary writes ``progress.log`` markers
@@ -822,9 +977,27 @@ class EffectRunner:
         # choice is delivered to a server started through a shell. It is
         # applied on the solver host, so the index is that host's, which is
         # also where the panel's device list was enumerated.
-        rust_bin = posixpath.join(directory, "target", "release", "ppf-cts-server")
+        #
+        # WHICH BUILD DIRECTORY, ASKED OF THE LISTING THE SOLVER HOST GAVE,
+        # rather than spelled here. Naming one path would be two defects at
+        # once: the artist's Compute Device would reach nothing on a remote
+        # connection, and a solver host holding a DISTRIBUTION could not be
+        # launched at all, since `build-linux-native/bundle.sh` ships
+        # `target/<backend>/release` and no `target/release`.
+        rust_bin = self._remote_server_binary(directory, device, gpu_backend)
+        # A CPU RUN NAMES NO GPU, and dropping the selection here is not tidiness.
+        # `CUDA_VISIBLE_DEVICES` in front of a binary with no CUDA in it changes
+        # nothing about the run, and `describe_launch` would then write a console
+        # line naming a GPU the solve is not on, which is a record of something
+        # that did not happen. The panel already hides the picker for a CPU
+        # device; this is the same answer where it is applied.
+        from .connection import DEVICE_CPU
+
+        on_cpu = self._launch_device(device) == DEVICE_CPU
+        gpu_index = AUTOMATIC if on_cpu else cuda_device
+        gpu_uuid = "" if on_cpu else cuda_device_uuid
         server_cmd = (
-            f"{shell_prefix(cuda_device, cuda_device_uuid)}"
+            f"{shell_prefix(gpu_index, gpu_uuid)}"
             f"{rust_bin} {host_flag}--port {port}"
         )
 
@@ -842,16 +1015,36 @@ class EffectRunner:
         activate_clause = (
             f'[ -f {venv_activate} ] && source {venv_activate}; '
         )
+        # THE BUILD DIRECTORY IS NAMED, NOT ONLY THE BINARY, and leaving it out
+        # is the split `_apply_target_dir` prevents on the native path. A run
+        # takes three things out of a build directory, and the server binary is
+        # one: the build worker's Python loads the cdylib from whichever target
+        # directory `frontend._target_dirs` finds first, and `frontend`
+        # then writes THAT directory into the session's `command.sh` as
+        # `SOLVER_PATH`. Launching `target/cpu/release/ppf-cts-server` without
+        # naming its target directory therefore starts the CPU server and runs
+        # the solve on whatever `<root>/target` holds, with nothing anywhere
+        # reporting the split, because each binary answers `--backend` honestly
+        # about itself and neither is asked about the other.
+        #
+        # It is exported on its own line rather than inlined into the
+        # `bash -c "..."` below, where a `$` or a backtick would be expanded by
+        # the remote shell before the server ever saw it.
+        target_dir = remote_target_dir(rust_bin)
+        target_clause = (
+            f'export CARGO_TARGET_DIR="{target_dir}"\n' if target_dir else ""
+        )
         script = (
             f'#!/bin/bash\ncd "{directory}"\n'
+            f'{target_clause}'
             f'nohup bash -c "{activate_clause}{server_cmd}" > "{server_log}" 2>&1 &\n'
         )
-        self._backend.exec_command(f"cat <<'EOF' > {script_path}\n{script}EOF\n", shell=True)
-        self._backend.exec_command(f"chmod +x {script_path}", shell=True)
-        result = self._backend.exec_command(script_path, shell=True)
+        backend.exec_command(f"cat <<'EOF' > {script_path}\n{script}EOF\n", shell=True)
+        backend.exec_command(f"chmod +x {script_path}", shell=True)
+        result = backend.exec_command(script_path, shell=True)
         if result["exit_code"] != 0:
             raise FileNotFoundError("Failed to launch server")
-        console.write(describe_launch(cuda_device, True, cuda_device_uuid))
+        console.write(describe_launch(gpu_index, True, gpu_uuid))
 
         # Monitor startup. We keep looping until the client can actually
         # reach the server through whatever transport the backend uses
@@ -870,7 +1063,7 @@ class EffectRunner:
         ready_marker_seen = False
         while True:
             elapsed = time.time() - start
-            result = self._backend.exec_command(
+            result = backend.exec_command(
                 f"cat {progress_file} 2>/dev/null", shell=True,
             )
             lines = result.get("stdout", [])
@@ -891,21 +1084,22 @@ class EffectRunner:
             # publishing the same port (`-p PORT:PORT`, whose docker-proxy
             # binds the host port even with nothing live inside).
             if not ready_marker_seen:
-                log_tail = self._backend.exec_command(
+                log_tail = backend.exec_command(
                     f"tail -20 {server_log} 2>/dev/null", shell=True,
                 )
                 tail_text = "\n".join(log_tail.get("stdout", []))
                 if "Address already in use" in tail_text or "os error 98" in tail_text:
                     raise ConnectionError(
                         f"Server port {port} is already in use on the remote "
-                        "host, so ppf-cts-server could not bind it. Stop "
-                        "whatever holds the port (a stale server, or a Docker "
-                        f"container publishing it with `-p {port}:{port}`) or "
-                        f"choose a different server port.\n{tail_text}"
+                        "host, so ppf-cts-server could not bind it. Press Kill "
+                        "Process to end a stale ppf-cts-server there, stop "
+                        "whatever else holds the port (a Docker container "
+                        f"publishing it with `-p {port}:{port}`), or choose a "
+                        f"different server port.\n{tail_text}"
                     )
 
             if elapsed > max_wait:
-                log_result = self._backend.exec_command(
+                log_result = backend.exec_command(
                     f"tail -20 {server_log}", shell=True,
                 )
                 details = "\n".join(log_result.get("stdout", []))
@@ -921,7 +1115,7 @@ class EffectRunner:
             # Only try querying after SERVER_READY — before that the
             # listener isn't up yet and every query is guaranteed to fail.
             if ready_marker_seen and self._project_name:
-                response, alive = self._backend.query(
+                response, alive = backend.query(
                     {}, self._project_name, self._chunk_size,
                 )
                 if alive:
@@ -931,8 +1125,83 @@ class EffectRunner:
 
         self._engine.dispatch(ServerLaunched())
 
-    def _wait_for_win_native_server(self, timeout: float = 16.0) -> None:
-        """Wait until a Windows Native child answers the solver protocol."""
+    def _launch_native_server(
+        self,
+        # TAKEN FROM THE CALLER, never re-read. `_do_launch_server` bound it
+        # once for the whole launch, and re-reading `self._backend` here would
+        # reopen the window that binding closed: a disconnect runs on the main
+        # thread and can clear the attribute while this helper is inside its
+        # readiness wait.
+        backend,
+        cuda_device: int = -1,
+        cuda_device_uuid: str = "",
+    ) -> None:
+        """Start the server a native backend owns, and wait for it to answer.
+
+        A FAILURE AFTER A SUCCESSFUL SPAWN STOPS WHAT IT STARTED. Otherwise a
+        server that came up and then failed its readiness wait would be left
+        holding the port, and the next Connect would meet a squatter it did not
+        start rather than the error that actually happened.
+        """
+        kind = backend.backend_type
+        label = NATIVE_BACKENDS[kind]
+        launched = False
+        try:
+            if kind == "mac_native":
+                # No device selection accompanies it: the Metal backend opens
+                # the system default device and offers no way to name another,
+                # so there is nothing for a device argument to carry.
+                launched = backend.start_server()
+            else:
+                launched = backend.start_server(cuda_device, cuda_device_uuid)
+            self._wait_for_native_server(backend, label)
+        except Exception as e:
+            cleanup_error = None
+            if launched:
+                try:
+                    backend.stop_server()
+                except Exception as stop_error:
+                    cleanup_error = stop_error
+            detail = str(e)
+            if cleanup_error is not None:
+                detail += f" Cleanup also failed: {cleanup_error}"
+            self._engine.dispatch(ErrorOccurred(
+                error=f"Failed to start server: {detail}",
+                source="launch_server",
+            ))
+            return
+        if kind == "mac_native":
+            console.write(
+                "Solver server started on the system default Metal device."
+                if launched else
+                "Solver server: attached to one that was already running, so "
+                "it keeps the Metal device it started with."
+            )
+        else:
+            console.write(describe_launch(cuda_device, launched, cuda_device_uuid))
+        self._engine.dispatch(ServerLaunched())
+
+    def _wait_for_native_server(
+        self,
+        # TAKEN FROM THE CALLER, for the reason the launch path states: this
+        # is the LONGEST window of the three, a readiness loop that polls
+        # until a deadline, and it re-read `self._backend` on every pass.
+        backend,
+        label: str,
+        timeout: float = 16.0,
+    ) -> None:
+        """Wait until a native child on this machine answers the solver protocol.
+
+        ONE WAITER FOR THE THREE NATIVES, because what is waited for is
+        identical: a child process the add-on spawned, on a loopback port, that
+        answers the protocol once it is ready and whose exit is the one thing
+        that can end the wait early. Only *label* differs, and it appears in the
+        two messages the artist reads.
+
+        A CHILD THAT EXITS IS REPORTED AS AN EXIT rather than waited out, so a
+        server that cannot start says so in a second instead of at the timeout,
+        with the code it exited with and where to read why.
+        """
         from .connection import _probe_ppf_cts_server
 
         deadline = time.monotonic() + timeout
@@ -941,25 +1210,40 @@ class EffectRunner:
             if remaining <= 0:
                 break
             if _probe_ppf_cts_server(
-                self._backend.server_port, timeout=min(0.5, remaining)
+                backend.server_port, timeout=min(0.5, remaining)
             ):
                 return
-            process = getattr(self._backend, "_process", None)
+            process = getattr(backend, "_process", None)
             if process is not None:
                 returncode = process.poll()
                 if returncode is not None:
                     raise RuntimeError(
-                        "Windows Native server exited with code "
-                        f"{returncode} before becoming ready. Check server.log."
+                        f"{label} server exited with code {returncode} before "
+                        "becoming ready. Check server.log."
                     )
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         raise TimeoutError(
-            f"Windows Native server did not become ready within {timeout:g} seconds. "
+            f"{label} server did not become ready within {timeout:g} seconds. "
             "Check server.log."
         )
 
     def _do_stop_server(self) -> None:
-        if not self._backend:
+        # BOUND ONCE, THEN USED, because `self._backend` can be cleared by
+        # ANOTHER THREAD while this runs. `DoDisconnect` calls
+        # `_do_disconnect` directly on Blender's main thread rather than
+        # queueing it on the I/O worker, so a disconnect lands mid-stop: the
+        # guard above passes, the wait loop below then re-reads the attribute
+        # and raises `'NoneType' object has no attribute 'query'`, which the
+        # worker turns into a panel error naming this method. Measured:
+        # "Disconnected." and "[_do_stop_server] 'NoneType' object has no
+        # attribute 'query'" one second apart.
+        #
+        # Acting on the backend this stop was DISPATCHED for is also the right
+        # answer rather than merely a safe one: it is the server the user asked
+        # to stop, and a transport that has since closed reports a transport
+        # failure, which is a true statement, instead of an AttributeError.
+        backend = self._backend
+        if not backend:
             return
         # The cache is keyed off "what the server last said." Once
         # the server is gone, every cached field (data="READY",
@@ -968,33 +1252,34 @@ class EffectRunner:
         # count for a server that no longer holds that state — and,
         # if the user clicks Start again, those stale fields keep
         # showing until a fresh ServerPolled lands.
-        # win_native + local backends both own the server subprocess
-        # directly; their stop_server() handles termination + waiting.
-        # SSH/Docker backends drive the same shape via exec_command in
-        # their own stop_server overrides.
-        if self._backend.backend_type in ("win_native", "local"):
-            self._backend.stop_server()
+        # The native backends own the server subprocess directly; their
+        # stop_server() handles termination and waiting. SSH/Docker backends
+        # drive the same shape via exec_command in their own stop_server
+        # overrides.
+        #
+        # Either branch leaves what it did in ``last_kill_report``, which the
+        # Force Terminate Process operator reads once the stop settles; Stop Server on
+        # Remote ignores it.
+        if backend.backend_type in NATIVE_BACKENDS:
+            self.last_kill_report = backend.stop_server()
             self._response_cache.clear()
             self._engine.dispatch(ServerStopped())
             return
-        # SSH / Docker remote: match the Rust server binary so pkill targets
-        # the actual listener.
-        #
-        # ``-x`` against the process NAME, not ``-f`` against the whole
-        # command line. ``exec_command(shell=True)`` runs this inside
-        # ``/bin/sh -c '...'``, whose own command line contains the pattern,
-        # so a ``-f`` match includes the shell issuing it and the stop can
-        # kill itself before reaching the server. The binary is named
-        # ``ppf-cts-server``, 14 characters, inside the 15-character limit a
-        # bare name match carries.
-        self._backend.exec_command(
-            "pkill -x ppf-cts-server",
-            shell=True,
+        # SSH / Docker remote: ``kill_remote_server`` ends the Rust server
+        # serving THIS backend's port, through the backend's exec_command,
+        # which reaches the host or the container. It is scoped to the port
+        # rather than to the process name because a solver host can be
+        # shared, and a name-wide sweep would end other people's servers.
+        container = getattr(backend, "container", "") or ""
+        self.last_kill_report = kill_remote_server(
+            backend.exec_command,
+            where=f"container {container}" if container else "the solver host",
+            port=backend.server_port,
         )
         # Wait for the server to actually stop.
         alive = True
         for _ in range(5):
-            _response, alive = self._backend.query(
+            _response, alive = backend.query(
                 {}, self._project_name or "", self._chunk_size
             )
             if not alive:
@@ -1010,7 +1295,7 @@ class EffectRunner:
             self._engine.dispatch(ErrorOccurred(
                 error=(
                     "Stop Server: the solver is still answering on port "
-                    f"{self._backend.server_port}. Check that the process is "
+                    f"{backend.server_port}. Check that the process is "
                     f"reachable from the container or host the add-on is "
                     f"driving."
                 ),
@@ -1092,16 +1377,16 @@ class EffectRunner:
         if not self._backend or not self._project_name:
             return 0
         try:
-            # Both LOCAL-disk backends read the output dir off this
-            # machine, so glob it rather than shelling out. `local` belongs
-            # here as much as `win_native` does: cmd.exe has no `ls`, so on
-            # Windows the shell-out below exits non-zero and this returns 0
-            # frames, which the caller cannot tell apart from a solve that
-            # produced none. The fetch then applies nothing, no mesh cache is
-            # attached, and the failure surfaces far from its cause. Globbing
-            # is also the cheaper of the two on POSIX, where it is what the
-            # shell would have done anyway.
-            if self._backend.backend_type in ("win_native", "local"):
+            # The native backends read the output directory off THIS machine,
+            # so glob it rather than shelling out. On Windows the shell-out
+            # below is not merely slower but wrong: cmd.exe has no `ls`, so it
+            # exits non-zero and this returns 0 frames, which the caller cannot
+            # tell apart from a solve that produced none. The fetch then
+            # applies nothing, no mesh cache is attached, and the failure
+            # surfaces far from its cause. Globbing is also the cheaper of the
+            # two on POSIX, where it is what the shell would have done anyway,
+            # which is why the other two natives take this branch as well.
+            if self._backend.backend_type in NATIVE_BACKENDS:
                 import glob
                 output_dir = os.path.join(root, "session", "output")
                 names = [

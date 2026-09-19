@@ -46,7 +46,7 @@ from . import _runner as r
 
 
 # No Blender and no solver, so this holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _PROBE = r'''

@@ -9,7 +9,7 @@
 # scripts, Windows build batch files, and the gh-actions runners invoke
 # the produced executable by that name.
 #
-# Build paths in build.rs are relative to this crate dir, so `src/cpp`
+# Build paths in build.rs are relative to this crate dir, so `src/kernels`
 # and `../../eigsys/eig-hpp` are the resolved locations of the C++
 # sources and the shared eigen header pack respectively.
 
@@ -38,6 +38,11 @@ nalgebra.workspace = true
 rayon.workspace = true
 ppf-cts-core = { path = "../ppf-cts-core" }
 ppf-cts-formats = { path = "../ppf-cts-formats" }
+# The compute seam. Unconditional rather than gated on a backend feature: the
+# driver above it is written once for every backend, so the crate that defines
+# what a backend IS cannot be optional. It also carries the `links` manifest key
+# this crate's build script reads back as DEP_PPFCTSCOMPUTE_LIBDIR.
+ppf-cts-compute = { path = "../ppf-cts-compute" }
 
 # Driver-only dependencies kept on direct version pins. clap matches
 # ppf-cts-server's v4 so the workspace pulls a single major and the
@@ -54,21 +59,84 @@ chrono = "0.4"
 
 [build-dependencies]
 num_cpus = "1.16.0"
+# The build RECIPE lives in the compute crate and the INVOCATION lives here, and
+# the split is forced by cargo rather than chosen: a dependency's build script
+# runs first and is given no way to see the dependent's files, so a compute
+# build script reaching this crate's kernel sources by relative path would work
+# and would fail the one test that crate is held to, since it could no longer be
+# published alone.
+ppf-cts-compute = { path = "../ppf-cts-compute", features = ["build"] }
 
 [dev-dependencies]
 tempfile = "3"
 
 [features]
 default = []
-# CUDA-free build path used by the debug test rig. Skips the C++/CUDA
-# library compile in build.rs and stubs the extern "C" kernel calls in
-# backend.rs with Rust-side kinematics. Lets us exercise the real Rust
-# pipeline (encoder roundtrip, constraint construction, vert_*.bin
-# format, frame timing) on hosts without CUDA. See blender_addon/debug/
-# TEST_RIG.md for the fidelity test that uses this. Cascades to
-# ppf-cts-core's workspace-level `emulated` feature so this driver and
-# ppf-cts-server can't drift independently.
-emulated = ["ppf-cts-core/emulated"]
+# Force one real backend on a host that could serve either. Neither is needed
+# for a normal build: with no features at all, build.rs picks the real backend
+# the host can build (CUDA where a toolkit is present, Metal on macOS) and hard
+# errors when it can neither. Both are build.rs-only switches, so no Rust code
+# outside that file is conditional on them.
+cuda = []
+metal = []
+# The ROCm backend (crates/ppf-cts-compute/rocm). EXPLICIT ONLY, and never
+# inferred from a host probe: dev-1 through dev-6 carry a ROCm SDK and a CUDA
+# toolkit at once, so a probe that selected ROCm automatically would silently
+# move every default build on the fleet off CUDA. Give it its own target
+# directory, which the frontend reads too:
+#     CARGO_TARGET_DIR=target/rocm cargo build --release --features rocm
+# The solver feature turns the compute crate's on too, so the ABI extern block
+# is compiled in the same build that links the library.
+rocm = ["ppf-cts-compute/rocm", "ppf-cts-core/rocm"]
+# The CPU backend (crates/ppf-cts-solver/src/driver). A Rust implementation of the
+# same extern "C" surface the CUDA library exports, so build.rs compiles and
+# links no C++ backend library; what it does compile is the ranged kernel entry
+# points in entrypoints/, which include the shared kernel bodies rather than
+# reimplementing them. It is a real backend: it computes the physics for every
+# scene class it accepts and refuses every class it does not, by name and by
+# count, at initialize().
+#
+# Selection is a feature here rather than a probe in build.rs because cargo
+# resolves the dependency graph before any build script runs, so a build script
+# can only validate the choice, never make it. That is the one mechanical
+# difference between selecting a C++ directory and selecting a Rust module.
+cpu = ["ppf-cts-core/cpu", "ppf-cts-compute/host-only"]
+# The CUDA target reached through the C ABI (`kernels/seam/backend_abi.h`)
+# rather than through the C++ orchestrator's `advance()` exports. It builds a
+# SECOND library, `libppfbe_cuda.so`, beside the one a CUDA build already
+# produces, and turns on the compute crate's `extern "C"` block so
+# `ppf_cts_compute::abi::AbiDevice` can drive it.
+#
+# BESIDE, NOT INSTEAD, and that is the whole reason it is a separate artifact:
+# the C++ orchestrator keeps running every scene it runs today while the
+# neutral driver's route to the same hardware is built and verified. Nothing in
+# a default build changes, and no Rust file outside build.rs is conditional on
+# this name.
+cuda-abi = ["ppf-cts-compute/backend-abi"]
+# The METAL target reached through the same C ABI, on the same terms: it builds
+# a SECOND library, `libppfbe_metal.dylib`, beside the one a Metal build already
+# produces, and turns on the compute crate's `extern "C"` block so
+# `ppf_cts_compute::abi::AbiDevice` can drive it.
+#
+# BESIDE, NOT INSTEAD. Nothing in a default build changes, the C++ orchestrator
+# keeps running every scene, and no Rust file outside build.rs is conditional on
+# this name.
+metal-abi = ["ppf-cts-compute/backend-abi"]
+# The neutral driver DRIVING the CUDA target through that same ABI: the Newton
+# loop, the assembly order and every dispatch decision come from
+# `src/driver/`, and `libppfbe_cuda.so` is what executes them.
+#
+# SEPARATE FROM `cuda-abi` ON PURPOSE, because the two answer different
+# questions and one of them is a gate other work depends on. `cuda-abi` asks
+# whether every generated entry COMPILES under nvcc, and it must keep producing
+# a binary that runs scenes through the C++ orchestrator, which is what makes it
+# usable as a build gate. This one asks whether the driver can drive that
+# library, and today the honest answer is not yet: a build with it starts and
+# fails at `AbiDevice::open`, naming the two kernel tables' lengths. That
+# failure is the point of the feature, not a reason to withhold it: the arm is
+# compiled, so it cannot silently rot, and the next blocker is stated by a
+# running binary rather than by a comment.
+cuda-driver = ["cuda-abi"]
 
 [lints]
 workspace = true

@@ -29,6 +29,12 @@ from __future__ import annotations
 from . import _mcp_lib as ml
 from . import _runner as r
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. It drives the addon's in-process MCP server and never asks the solver to
+# step, so nothing in it is backend-specific. A rig run against a CPU build
+# passed it, and that run is the evidence this line rests on.
+BACKENDS = ("real",)
+
 NEEDS_BLENDER = True
 
 # macOS runners block loopback HTTP to Blender's in-process MCP server, so the

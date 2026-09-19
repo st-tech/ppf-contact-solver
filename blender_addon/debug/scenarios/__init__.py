@@ -3,14 +3,14 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Phase 1 scenario registry. Each scenario module exports a ``run(ctx) -> dict``
+# Scenario registry. Each scenario module exports a ``run(ctx) -> dict``
 # function that returns ``{"status": "pass"|"fail", "violations": [...]}``.
 #
-# Scenarios are protocol-level: they talk to the debug server via the same
+# Protocol-level scenarios talk to the debug server via the same
 # JSON-over-TCP wire the addon's communicator uses, so production code on
 # the server side (transitions, monitor, response generation, atomic upload)
-# is exercised end-to-end. Phase 2 will add Blender-driven counterparts
-# that exercise the addon UI through the same lifecycle.
+# is exercised end-to-end. The ``bl_*`` scenarios drive Blender itself and
+# exercise the addon UI through the same lifecycle.
 
 import os
 import sys
@@ -22,31 +22,41 @@ REPO_ROOT_POSIX: str = os.path.abspath(
 """Repo root with forward-slash separators. Driver string-substitution
 on Windows would otherwise emit backslash escapes."""
 
-from . import rig_emulated_intersection
 from . import rig_lock_axes
-from . import rig_emulated_lock_axes
+from . import rig_lock_axes_projector
 from . import rig_intersection_allowances
 from . import rig_intersection_allowance_isolation
 from . import bl_server_stop_is_real
+from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
 from . import rig_degenerate_rest_shape
 from . import bl_fetch_frame_discovery
 from . import rig_degenerate_tet_rest_shape
 from . import rig_coincident_contact_pair
+from . import rig_backend_cleared_midflight
+from . import rig_device_diagnostic_channel
 from . import rig_launch_config
+from . import rig_solver_log_format
+from . import rig_remote_kill_port_scope
 from . import rig_session_artifact_identity
 from . import server_smoke
 from . import upload_id_changes
-from . import bl_connect_local
+from . import bl_connect_linux_native
 from . import bl_connect_win_native
 from . import bl_connection_path_validation
 from . import bl_connection_path_relative
 from . import bl_connection_failure_reporting
+from . import bl_remote_device_select
 from . import bl_cbor2_missing_reported
 from . import bl_docker_connect_gate
 from . import bl_ssh_proxy_jump
 from . import bl_win_native_root_resolve
 from . import bl_win_native_bundle_layout
+from . import bl_mac_native_root_resolve
+from . import bl_mac_native_real_solve
+from . import bl_native_attach_build_check
+from . import bl_retired_connection_migration
+from . import bl_native_device_real_solve
 from . import bl_solver_gpu_select
 from . import bl_direct_disk_transfer
 from . import bl_rust_binary_protocol
@@ -109,15 +119,13 @@ from . import bl_open_mainfile_disconnect
 from . import bl_param_dirty
 from . import bl_run_consistency
 from . import bl_drape_ready_to_run
-from . import bl_emulated_elastic_drape
-from . import bl_sand_emulated_roundtrip
-from . import bl_emulated_angular_spin
-from . import bl_emulated_world_spin
+from . import bl_elastic_drape
+from . import bl_sand_roundtrip
+from . import bl_angular_spin
+from . import bl_world_spin
 from . import bl_timeline_statistics
 from . import bl_stale_statistics_manifest
 from . import bl_bend_reference_shell
-from . import bl_bend_anisotropy_uv
-from . import bl_bend_aniso_reference
 from . import bl_bend_reference_rod
 from . import bl_bend_reference_rod_curve
 from . import bl_shallow_copy
@@ -201,10 +209,10 @@ from . import bl_world_scaling_pdrd
 from . import bl_pdrd_hinge
 from . import bl_lock_translation
 from . import bl_lock_rotation
-from . import bl_emulated_lock_rotation
-from . import bl_emulated_lock_rotation_prohibit
-from . import bl_emulated_lock_translation_free
-from . import bl_emulated_lock_translation_pinned
+from . import bl_lock_rotation_solve
+from . import bl_lock_rotation_prohibit
+from . import bl_lock_translation_free
+from . import bl_lock_translation_pinned
 from . import bl_pdrd_anchor_release
 from . import bl_pdrd_driven_translate
 from . import bl_pdrd_driven_rotate_vertex
@@ -249,7 +257,6 @@ from . import bl_mcp_transport_conformance
 from . import bl_addon_reload_handoff
 from . import bl_ftetwild_overrides
 from . import bl_project_rename_resync
-from . import bl_intersection_records_roundtrip
 from . import bl_violation_overlay_classification
 from . import bl_intersection_allowances
 from . import bl_self_intersection_build_reject
@@ -283,10 +290,10 @@ from . import bl_solid_spatial_material_map
 from . import bl_spatial_material_map
 from . import bl_material_preset_apply
 
-# Operator-poll regression: the Transfer button used to remain
-# clickable for one event-loop tick after Run.execute because its
-# poll only checked the protocol-version and the cached server
-# response.
+# Operator-poll regression: the Transfer button must be disabled in the
+# same event-loop tick as Run.execute. A poll that consults only the
+# protocol version and the cached server response leaves it clickable
+# for that tick, because the cached response still reads READY.
 from . import bl_transfer_disabled_during_run
 from . import bl_transfer_skip_delete_when_no_data
 
@@ -317,15 +324,14 @@ REGISTRY = {
 
     # Every Lock Translation / Lock Rotation mode at its two gates: the bytes
     # that reach the session directory, and the projector that reads them. The
-    # `bl_lock_*` and `bl_emulated_lock_*` scenarios cover the addon encoder
-    # and the same physics driven through Blender; neither of these needs it.
+    # The `bl_lock_*` scenarios cover the addon encoder and the same physics
+    # driven through Blender; neither of these needs it.
     "rig_lock_axes": rig_lock_axes,
-    "rig_emulated_lock_axes": rig_emulated_lock_axes,
+    "rig_lock_axes_projector": rig_lock_axes_projector,
 
     # The issue-#138 intersection allowances, at their three gates: the
-    # emulator's live scan, the scene-build check, and whether an allowance
+    # solver's live scan, the scene-build check, and whether an allowance
     # stays inside the pairs that asked for it. None needs Blender.
-    "rig_emulated_intersection": rig_emulated_intersection,
     "rig_intersection_allowances": rig_intersection_allowances,
     "rig_intersection_allowance_isolation": rig_intersection_allowance_isolation,
 
@@ -334,11 +340,23 @@ REGISTRY = {
     # #144). `bl_degenerate_tessellation_rejection` covers the addon-side gate
     # that refuses the same geometry a step earlier; both grant the same set.
     "bl_server_stop_is_real": bl_server_stop_is_real,
+    # Force Terminate Process: ends the local server from the refused, disconnected
+    # state, which is the one state Stop Server cannot reach.
+    "bl_force_terminate_port": bl_force_terminate_port,
     "rig_collider_coincident_pair": rig_collider_coincident_pair,
     "rig_degenerate_rest_shape": rig_degenerate_rest_shape,
     "bl_fetch_frame_discovery": bl_fetch_frame_discovery,
     "rig_degenerate_tet_rest_shape": rig_degenerate_tet_rest_shape,
     "rig_coincident_contact_pair": rig_coincident_contact_pair,
+
+    # A disconnect landing mid-operation is a transport failure, never an
+    # AttributeError: disconnect runs on the main thread and the worker does
+    # not serialize against it.
+    "rig_backend_cleared_midflight": rig_backend_cleared_midflight,
+
+    # A failed DEVICE check reaches the host on this machine's build, which
+    # only firing one can settle: a healthy run never touches the channel.
+    "rig_device_diagnostic_channel": rig_device_diagnostic_channel,
 
     # How the rig LAUNCHES Blender (window size, PPF_BLENDER_WINDOW
     # parsing, display probing). Server-only so it does not need the
@@ -348,22 +366,35 @@ REGISTRY = {
     # The identity the runner's cached session artifacts carry, driven
     # through the real fetch entry points against a fake backend. Needs
     # neither Blender nor a solver, so it runs wherever the rig does.
+    "rig_solver_log_format": rig_solver_log_format,
     "rig_session_artifact_identity": rig_session_artifact_identity,
+
+    # The remote kill ends the server on the port it was given and no
+    # other, checked against stand-in processes. Needs neither Blender nor
+    # a solver; the POSIX half is skipped on Windows, where there is no
+    # /bin/sh to build a stand-in from.
+    "rig_remote_kill_port_scope": rig_remote_kill_port_scope,
 
     # Blender-driven scenarios. These produce real ``data.pickle`` via
     # the addon's encoder, exercising the full pipeline:
     # addon -> upload -> frontend.populate -> frontend.make ->
-    # Rust binary (--features emulated) -> vert_*.bin -> fetch.
-    "bl_connect_local": bl_connect_local,
+    # solver binary -> vert_*.bin -> fetch.
+    "bl_connect_linux_native": bl_connect_linux_native,
     "bl_connect_win_native": bl_connect_win_native,
     "bl_connection_path_validation": bl_connection_path_validation,
     "bl_connection_path_relative": bl_connection_path_relative,
+    "bl_remote_device_select": bl_remote_device_select,
     "bl_connection_failure_reporting": bl_connection_failure_reporting,
     "bl_cbor2_missing_reported": bl_cbor2_missing_reported,
     "bl_docker_connect_gate": bl_docker_connect_gate,
     "bl_ssh_proxy_jump": bl_ssh_proxy_jump,
     "bl_win_native_root_resolve": bl_win_native_root_resolve,
     "bl_win_native_bundle_layout": bl_win_native_bundle_layout,
+    "bl_mac_native_root_resolve": bl_mac_native_root_resolve,
+    "bl_mac_native_real_solve": bl_mac_native_real_solve,
+    "bl_native_attach_build_check": bl_native_attach_build_check,
+    "bl_retired_connection_migration": bl_retired_connection_migration,
+    "bl_native_device_real_solve": bl_native_device_real_solve,
     "bl_solver_gpu_select": bl_solver_gpu_select,
     "bl_direct_disk_transfer": bl_direct_disk_transfer,
     "bl_rust_binary_protocol": bl_rust_binary_protocol,
@@ -428,15 +459,13 @@ REGISTRY = {
     "bl_param_dirty": bl_param_dirty,
     "bl_run_consistency": bl_run_consistency,
     "bl_drape_ready_to_run": bl_drape_ready_to_run,
-    "bl_emulated_elastic_drape": bl_emulated_elastic_drape,
-    "bl_sand_emulated_roundtrip": bl_sand_emulated_roundtrip,
-    "bl_emulated_angular_spin": bl_emulated_angular_spin,
-    "bl_emulated_world_spin": bl_emulated_world_spin,
+    "bl_elastic_drape": bl_elastic_drape,
+    "bl_sand_roundtrip": bl_sand_roundtrip,
+    "bl_angular_spin": bl_angular_spin,
+    "bl_world_spin": bl_world_spin,
     "bl_timeline_statistics": bl_timeline_statistics,
     "bl_stale_statistics_manifest": bl_stale_statistics_manifest,
     "bl_bend_reference_shell": bl_bend_reference_shell,
-    "bl_bend_anisotropy_uv": bl_bend_anisotropy_uv,
-    "bl_bend_aniso_reference": bl_bend_aniso_reference,
     "bl_bend_reference_rod": bl_bend_reference_rod,
     "bl_bend_reference_rod_curve": bl_bend_reference_rod_curve,
     "bl_shallow_copy": bl_shallow_copy,
@@ -524,10 +553,10 @@ REGISTRY = {
     "bl_pdrd_hinge": bl_pdrd_hinge,
     "bl_lock_translation": bl_lock_translation,
     "bl_lock_rotation": bl_lock_rotation,
-    "bl_emulated_lock_rotation": bl_emulated_lock_rotation,
-    "bl_emulated_lock_rotation_prohibit": bl_emulated_lock_rotation_prohibit,
-    "bl_emulated_lock_translation_free": bl_emulated_lock_translation_free,
-    "bl_emulated_lock_translation_pinned": bl_emulated_lock_translation_pinned,
+    "bl_lock_rotation_solve": bl_lock_rotation_solve,
+    "bl_lock_rotation_prohibit": bl_lock_rotation_prohibit,
+    "bl_lock_translation_free": bl_lock_translation_free,
+    "bl_lock_translation_pinned": bl_lock_translation_pinned,
     "bl_pdrd_anchor_release": bl_pdrd_anchor_release,
     "bl_pdrd_driven_translate": bl_pdrd_driven_translate,
     "bl_pdrd_driven_rotate_vertex": bl_pdrd_driven_rotate_vertex,
@@ -577,17 +606,15 @@ REGISTRY = {
     "bl_ftetwild_overrides": bl_ftetwild_overrides,
     "bl_project_rename_resync": bl_project_rename_resync,
 
-    # Tier 1.5: solver intersection feedback round-trip. Both rely on
-    # the PPF_EMULATED_FAIL_AT_FRAME (Rust) and PPF_EMULATED_VIOLATIONS
-    # (Python emulator) knobs; the second can run client-side only by
-    # injecting a synthetic ServerPolled.
-    "bl_intersection_records_roundtrip": bl_intersection_records_roundtrip,
+    # Tier 1.5: solver intersection feedback, client side. This one runs by
+    # injecting a synthetic ServerPolled, so it needs no solver-side fault
+    # injection to reach the overlay classification it asserts.
     "bl_violation_overlay_classification": bl_violation_overlay_classification,
 
     # The ADDON half of the intersection allowances: that the two group
     # checkboxes and the per-pin one reach the built session at all. The
-    # rig_intersection_allowances and rig_emulated_intersection scenarios
-    # cover what they mean once they get there, and neither loads Blender.
+    # rig_intersection_allowances scenario covers what they mean once they
+    # get there, and it does not load Blender.
     # It sits after the two entries above because it belongs with the
     # intersection cluster, and below their comment rather than inside it
     # because it drives an ordinary build and reads the session directory:
@@ -645,7 +672,7 @@ def _platform_supported(mod) -> bool:
     """True if *mod* declares no PLATFORMS attribute, or the current
     ``sys.platform`` matches one of its declared prefixes. Lets a
     scenario opt out of OSes where its connect path doesn't apply
-    (e.g. bl_connect_local on macOS/Windows, bl_connect_win_native on
+    (e.g. bl_connect_linux_native on macOS/Windows, bl_connect_win_native on
     Linux/macOS)."""
     plats = getattr(mod, "PLATFORMS", None)
     if plats is None:
@@ -653,32 +680,100 @@ def _platform_supported(mod) -> bool:
     return any(sys.platform.startswith(p) for p in plats)
 
 
-# Default backend set for a scenario that does not declare ``BACKENDS``.
-# The rig grew up against the emulated CPU-stub solver, and the bulk of
-# the physics scenarios assert on emulator-specific behavior (frozen
-# frames via ``PPF_EMULATED_STEP_MS=0``, ``PPF_EMULATED_ELASTIC`` ARAP
-# steps, ``PPF_EMULATED_FAIL_AT_FRAME`` fault injection). Those do not
-# reproduce on the real CUDA solver, so the conservative default is
-# emulated-only: a scenario runs on a real-GPU job ONLY if it explicitly
-# opts in with ``BACKENDS = ("emulated", "real")`` (or ``("real",)``).
-_DEFAULT_BACKENDS = ("emulated",)
+# THERE IS NO DEFAULT BACKEND, and an undeclared scenario is an ERROR.
+#
+# A default would let a scenario be selected for a backend nobody had
+# established it against, and the inherited claim would be invisible in the
+# scenario's own source. Every scenario names in its ``BACKENDS`` tuple the
+# backend it was RUN against, and one that names none is refused at import
+# rather than quietly acquiring a claim its author never made.
+#
+# Nor is there a stand-in backend to default to. Every backend this rig can
+# select computes real physics; none of them is a no-op that reports a pass
+# without simulating.
+
+
+# Backends this rig can target. `real` is a backend that computes real physics,
+# which is CUDA, Metal or the Rust CPU backend depending on what the tree was
+# built for; `runtests` reports which one a run actually used.
+SELECTABLE_BACKENDS = ("real",)
+
+
+class BackendUnavailable(RuntimeError):
+    """Raised when a run asks for a backend the rig cannot target.
+
+    Carries the reason in its message so the caller can print it verbatim
+    instead of restating it at each call site."""
+
+
+def resolve_backend(backend: str) -> str:
+    """Return *backend* if the rig can target it, else raise.
+
+    This is the single gate on backend NAMES. It exists because argparse
+    ``choices=`` answers an unknown backend with "invalid choice", which
+    reads as a typo rather than as a name this rig cannot target."""
+    if backend not in SELECTABLE_BACKENDS:
+        raise BackendUnavailable(
+            f"backend {backend!r} is not a backend this rig knows. "
+            f"Selectable: {', '.join(SELECTABLE_BACKENDS)}"
+        )
+    return backend
+
+
+def backend_unsupported_reason(mod, backend: str) -> str | None:
+    """``None`` if *mod* can run against *backend*, else why it cannot.
+
+    A reason, not a bool: a scenario dropped from a selection has to be
+    reportable by name, or a suite that lost its backend prints a smaller
+    green summary that nobody diffs.
+
+    A scenario that declares NOTHING is refused rather than defaulted. There is
+    no default to fall back on, and inventing one here would hand the scenario a
+    claim its author never made; see the note above ``SELECTABLE_BACKENDS``."""
+    declared = getattr(mod, "BACKENDS", None)
+    if declared is None:
+        return (
+            "declares no BACKENDS. Every scenario must name the backend it was "
+            "RUN against, because there is no default: add "
+            "``BACKENDS = (\"real\",)`` once it has actually been run."
+        )
+    declared = tuple(declared)
+    if backend in declared:
+        return None
+    return (
+        f"declares BACKENDS={declared!r}, which does not include {backend!r}"
+    )
 
 
 def _backend_supported(mod, backend: str) -> bool:
-    """True if *mod* supports the requested solver *backend*.
-
-    ``backend`` is ``"emulated"`` (the free-runner default) or ``"real"``
-    (the AWS GPU jobs, which build and run the real CUDA solver). A
-    scenario opts into the real backend by declaring
-    ``BACKENDS = ("emulated", "real")``; otherwise it is treated as
-    emulated-only (see ``_DEFAULT_BACKENDS``)."""
-    backends = getattr(mod, "BACKENDS", _DEFAULT_BACKENDS)
-    return backend in backends
+    """True if *mod* supports the requested solver *backend*."""
+    return backend_unsupported_reason(mod, backend) is None
 
 
-def server_only_names(backend: str = "emulated") -> list[str]:
+def unrunnable_names(backend: str) -> dict[str, str]:
+    """Registered scenarios this platform could host but *backend* cannot,
+    mapped to the reason.
+
+    Platform-gated scenarios are NOT in here: a macOS-only scenario on
+    Linux is a routing fact that predates any backend, while an entry here
+    is coverage the rig has lost."""
+    out: dict[str, str] = {}
+    for n, m in REGISTRY.items():
+        if not _platform_supported(m):
+            continue
+        reason = backend_unsupported_reason(m, backend)
+        if reason is not None:
+            out[n] = reason
+    return out
+
+
+def server_only_names(backend: str) -> list[str]:
     """Names of scenarios that don't require Blender. Useful for CI
-    runs on hosts without a Blender install."""
+    runs on hosts without a Blender install.
+
+    ``backend`` is required: there is no default backend to fall back on,
+    and inventing one is how a caller ends up selecting a suite it did not
+    ask for."""
     return [
         n for n, mod in REGISTRY.items()
         if not getattr(mod, "NEEDS_BLENDER", False)
@@ -692,13 +787,13 @@ def get(name: str):
     return REGISTRY.get(name)
 
 
-def all_names(backend: str = "emulated") -> list[str]:
+def all_names(backend: str) -> list[str]:
     """Scenario names runnable on this platform against *backend*.
 
-    ``backend`` defaults to ``"emulated"`` so existing callers (and the
-    free-runner macOS job) get the full emulated suite. The AWS GPU jobs
-    pass ``"real"`` to get only the backend-agnostic subset plus any
-    real-only smokes."""
+    ``backend`` is REQUIRED and has no default: a default would select
+    whatever it happened to name and report that as if it were the suite.
+    Callers say what they target, and ``unrunnable_names`` says what that
+    costs."""
     return [
         n for n, m in REGISTRY.items()
         if _platform_supported(m) and _backend_supported(m, backend)

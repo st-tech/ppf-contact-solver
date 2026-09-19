@@ -5,12 +5,13 @@
 #
 # Stop Server has to stop the server, and only the socket can say so.
 #
-# ``LocalBackend.stop_server`` kills the co-located ``ppf-cts-server`` by
-# shelling out: ``lsof -ti tcp:<port>`` into ``kill``, a second pass into
-# ``kill -9``, then ``pkill -f 'ppf-cts-server .*--port <port>'``. Every
-# step of that is best effort and its outcome is discarded. The trailing
-# ``true`` makes the shell exit 0 whether or not a process died,
-# ``exec_command`` hands back a dict nobody inspects, and
+# ``LinuxNativeBackend.stop_server`` and its macOS twin end the co-located
+# ``ppf-cts-server``. When the addon spawned it they terminate the Popen
+# handle; when the addon ADOPTED one (a Blender restart, an addon reload, or
+# the rig, which owns the server and sets ``PPF_<PLATFORM>_NATIVE_NO_SPAWN``)
+# they hand the port to ``core/server_kill.py``, which finds the listener with
+# ``lsof -ti tcp:<port>``, sends SIGTERM, then SIGKILL to a survivor. Every
+# step of that is best effort and its outcome is discarded, and
 # ``effect_runner._do_stop_server`` clears the response cache and
 # dispatches ``ServerStopped`` unconditionally right after, which is the
 # single event ``transitions.py`` turns into ``server=UNKNOWN``. So every
@@ -73,9 +74,10 @@ from . import REPO_ROOT_POSIX
 NEEDS_BLENDER = True
 # Server lifecycle only: no scene, no build, no solve, so the verdict is
 # the same against either solver binary.
-BACKENDS = ("emulated", "real")
-# ``LocalBackend`` is the co-located path on Linux and macOS, and its
-# stop_server is what this pins. Windows runs WIN_NATIVE, whose
+BACKENDS = ("real",)
+# ``LinuxNativeBackend`` and ``MacNativeBackend`` are the co-located path on
+# Linux and macOS, and their stop_server is what this pins. Windows runs
+# WIN_NATIVE, whose
 # stop_server terminates a Popen handle or falls back to ``taskkill``,
 # and neither ``lsof`` nor ``pkill`` exists there.
 PLATFORMS = ("linux", "darwin")
@@ -115,7 +117,7 @@ try:
         # engine state, so what comes back is what the socket did.
         # The socket is closed on every path: an open fd on this port
         # would list Blender under `lsof -ti tcp:<port>`, which is the
-        # set LocalBackend.stop_server kills.
+        # set the native backend's stop_server kills.
         info = {"connected": False, "answered": False,
                 "protocol_version": "", "status": "", "error": ""}
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -165,7 +167,7 @@ try:
                 info["pids"] = [type(exc).__name__ + ": " + str(exc)]
         return info
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=PROJECT_NAME, timeout=30.0)
     dh.log("connected on port " + str(SERVER_PORT))
 

@@ -6,9 +6,6 @@ Cusick fabric-drape experiment in the solver and measures each SHELL preset's
 **Drape Coefficient (DC)**, so the shipped `bend` and `young-mod` numbers are
 tied to published textile data rather than chosen by eye.
 
-The sections below document the full methodology and its primary-source
-grounding.
-
 ## The Cusick drape test
 
 In the physical test (Cusick 1965, 1968; standardized as BS 5058 / ISO 9073-9),
@@ -64,9 +61,12 @@ To inspect a single settled drape mesh offline, use `dump_mesh.py`.
 
 ## Running it
 
-This MUST run on a real CUDA GPU host. The emulated backend (macOS / any
-non-CUDA host) has NO real physics, so the DC it reports is meaningless and is
-only a plumbing smoke test.
+A calibrated DC MUST come from a real CUDA GPU host. The Rust CPU backend
+(`--features cpu`) computes real physics, from the same neutral kernels, at
+about 30x the wall clock, so it can smoke this pipeline but is not what a
+calibration figure should be taken from. Every backend computes the same
+physics, so a figure differing between them is a defect rather than a property
+of the host.
 
 On a CUDA host, from the worktree root, with the real CUDA backend built
 (`cargo build --release`, default features) and the project Python environment:

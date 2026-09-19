@@ -24,6 +24,7 @@ from .events import (
     DisconnectRequested,
     ExecRequested,
     FetchRequested,
+    KillServerRequested,
     QueryRequested,
     ReceiveDataRequested,
     ResumeRequested,
@@ -99,6 +100,8 @@ class CommunicatorFacade:
         server_port=DEFAULT_SERVER_PORT,
         keepalive_interval=DEFAULT_SSH_KEEPALIVE_INTERVAL,
         proxy_jump=None,
+        device="GPU",
+        gpu_backend="AUTO",
     ):
         """Open an SSH connection, optionally through one or more jump hosts.
 
@@ -107,6 +110,11 @@ class CommunicatorFacade:
         empty the ``ProxyJump`` entry the ssh config gives for *host* is used,
         so an alias that is only reachable from a bastion connects with
         nothing typed into the panel. Raises ValueError on a malformed spec.
+
+        *device* and *gpu_backend* are the same two answers the native connects
+        carry, and they ride here for the same reason: they name WHICH BUILD on
+        the solver host a run uses, and the launch that applies them happens
+        after this call.
         """
         from .ssh_config import resolve_jump_chain, resolve_ssh_config
 
@@ -138,28 +146,63 @@ class CommunicatorFacade:
                     }
                     for hop in jumps
                 ],
+                "device": device,
+                "gpu_backend": gpu_backend,
             },
             server_port=server_port,
         ))
 
-    def connect_docker(self, container, path, server_port=DEFAULT_SERVER_PORT):
+    def connect_docker(
+        self,
+        container,
+        path,
+        server_port=DEFAULT_SERVER_PORT,
+        device="GPU",
+        gpu_backend="AUTO",
+    ):
+        # Same contract as `connect_ssh`; see the note there.
         self._dispatch_and_tick(ConnectRequested(
             backend_type="docker",
-            config={"container": container, "path": path},
+            config={
+                "container": container,
+                "path": path,
+                "device": device,
+                "gpu_backend": gpu_backend,
+            },
             server_port=server_port,
         ))
 
-    def connect_local(self, path, server_port=DEFAULT_SERVER_PORT):
-        self._dispatch_and_tick(ConnectRequested(
-            backend_type="local",
-            config={"path": path},
-            server_port=server_port,
-        ))
-
-    def connect_win_native(self, path, port=DEFAULT_SERVER_PORT):
+    def connect_win_native(
+        self, path, port=DEFAULT_SERVER_PORT, device="GPU", gpu_backend="AUTO"
+    ):
+        # `device` rides in `config` beside the path because both are answers
+        # about WHICH SERVER to start, and the effect runner reads them
+        # together. It defaults to GPU so every existing caller, and every
+        # `.blend` saved before the property existed, keeps its behavior.
+        # `gpu_backend` is the second half of that answer where a root holds
+        # more than one GPU build, and defaults to the automatic rule.
         self._dispatch_and_tick(ConnectRequested(
             backend_type="win_native",
-            config={"path": path},
+            config={"path": path, "device": device, "gpu_backend": gpu_backend},
+            server_port=port,
+        ))
+
+    def connect_mac_native(self, path, port=DEFAULT_SERVER_PORT, device="GPU"):
+        # Same contract as `connect_win_native`; see the note there.
+        self._dispatch_and_tick(ConnectRequested(
+            backend_type="mac_native",
+            config={"path": path, "device": device},
+            server_port=port,
+        ))
+
+    def connect_linux_native(
+        self, path, port=DEFAULT_SERVER_PORT, device="GPU", gpu_backend="AUTO"
+    ):
+        # Same contract as `connect_win_native`, and it carries the same two
+        # answers: a Linux x86_64 distribution ships CUDA and ROCm together.
+        self._dispatch_and_tick(ConnectRequested(
+            backend_type="linux_native",
+            config={"path": path, "device": device, "gpu_backend": gpu_backend},
             server_port=port,
         ))
 
@@ -178,28 +221,56 @@ class CommunicatorFacade:
     def is_server_launching(self) -> bool:
         return self._engine.state.server == Server.LAUNCHING
 
+    def is_server_stopping(self) -> bool:
+        return self._engine.state.server == Server.STOPPING
+
     def is_aborting(self) -> bool:
         return self._engine.state.activity == Activity.ABORTING
 
     # -- server lifecycle --
 
-    def start_server(self, cuda_device=AUTOMATIC, cuda_device_uuid=""):
+    def start_server(
+        self, cuda_device=AUTOMATIC, cuda_device_uuid="", device="", gpu_backend=""
+    ):
+        # `device` and `gpu_backend` name which BUILD a remote server comes out
+        # of. They are read at Start Server rather than held from connect,
+        # because that is when the panel's rows have been drawn against the
+        # solver host's own listing and the artist has had a chance to move
+        # them. Empty keeps whatever the backend holds.
         self._dispatch_and_tick(StartServerRequested(
             cuda_device=cuda_device,
             cuda_device_uuid=cuda_device_uuid,
+            device=device,
+            gpu_backend=gpu_backend,
         ))
 
     def refresh_solver_host_gpus(self):
-        """Re-enumerate the connected solver host's GPUs.
+        """Re-enumerate the connected solver host's GPUs and solver builds.
 
-        Not an event: it changes no application state, it refills the cache the
-        GPU dropdown reads, and it has to run on the worker thread that owns
-        the connection rather than in the operator that asked for it.
+        Not an event: it changes no application state, it refills the two
+        caches the panel reads, and it has to run on the worker thread that
+        owns the connection rather than in the operator that asked for it.
+
+        BOTH ARE REFRESHED BY THE ONE BUTTON, because both answer "what can
+        this solver host run" and an artist who just built a backend there, or
+        just freed a GPU, means the same thing by pressing it.
         """
         self._runner.probe_solver_host_gpus()
+        self._runner.probe_solver_host_builds()
 
     def stop_server(self):
         self._dispatch_and_tick(StopServerRequested())
+
+    def kill_server(self):
+        """End the server through the live backend, whatever the engine
+        believes about it. Leaves the state the way Stop Server does: connected
+        to the host, server UNKNOWN, so Start Server is the next step."""
+        self._dispatch_and_tick(KillServerRequested())
+
+    @property
+    def last_kill_report(self):
+        """What the most recent stop or kill found and did, or ``None``."""
+        return self._runner.last_kill_report
 
     # -- solver operations --
 
@@ -372,10 +443,11 @@ class CommunicatorFacade:
     def normalized_remote_root(self) -> str:
         """Remote root with any trailing slash stripped, ``''`` when unset.
 
-        Only win_native normalizes the root at connect time; the ssh,
-        docker, and local backends pass the raw user-typed path through,
-        so a trailing slash would yield a double slash when joined into
-        an f-string. Callers also treat ``''`` as "not connected".
+        Only the native backends, win_native, mac_native and linux_native,
+        normalize the root at connect time; the ssh and docker backends pass
+        the raw user-typed path through, so a trailing slash would yield a
+        double slash when joined into an f-string. Callers also treat
+        ``''`` as "not connected".
         """
         return self.connection.remote_root.rstrip("/")
 

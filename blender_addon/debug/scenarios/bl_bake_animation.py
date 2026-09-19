@@ -61,6 +61,11 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import json
@@ -78,7 +83,7 @@ SERVER_PORT = <<SERVER_PORT>>
 def _wipe_scene_state():
     # Remove every connection / group / assigned object so the second
     # subtest starts from a clean slate. Also disconnect the addon
-    # client so the second connect_local doesn't see a stale session.
+    # client so the second connect doesn't see a stale session.
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
@@ -135,7 +140,7 @@ try:
                 transition="LINEAR")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
         data=data_bytes, param=param_bytes,
@@ -305,7 +310,7 @@ try:
     mutation_mod._raw_create_pin(rod_group._uuid, curve_obj.name, "AllPin")
 
     data_bytes_b, param_bytes_b = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root_b.state.project_name)
     dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
         data=data_bytes_b, param=param_bytes_b,

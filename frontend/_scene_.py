@@ -57,7 +57,7 @@ from ._utils_ import Utils
 
 # Aggregate rigid-mode lock modes, mirroring the solver's
 # `TranslationLockMode` / `RotationLockMode` in
-# `crates/ppf-cts-solver/src/cpp/data.hpp` and its Rust twin in
+# `crates/ppf-cts-solver/src/kernels/data_records.hpp` and its Rust twin in
 # `data.rs`. Written to bin/translation_lock_mode.bin and
 # bin/rotation_lock_mode.bin as uint32.
 #
@@ -109,7 +109,8 @@ class EnumColor(Enum):
 
 
 # `VertexProp::intersect_policy` bits. Mirrored from
-# `crates/ppf-cts-solver/src/data.rs` (and `cpp/data.hpp`), which is where the
+# `crates/ppf-cts-solver/src/data.rs` and
+# `crates/ppf-cts-solver/src/kernels/data_records.hpp`, which is where the
 # solver reads them; keep the three in step.
 _INTERSECT_ALLOW_SELF = 1 << 0
 _INTERSECT_ALLOW_INTER_OBJECT = 1 << 1

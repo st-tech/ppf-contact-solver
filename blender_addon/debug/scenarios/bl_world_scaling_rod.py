@@ -12,7 +12,7 @@
 # world_scaling.
 #
 # A kinematic (fully pinned) drive is used rather than a gravity droop
-# because the CUDA-free emulator's implicit ARAP step does not deform
+# because the CPU backend's implicit ARAP step does not deform
 # ROD chains under gravity (only kinematic pins move them).
 
 from __future__ import annotations
@@ -23,7 +23,13 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""

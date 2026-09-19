@@ -14,7 +14,7 @@ use ppf_cts_core::state::{Build, ServerState, Solver};
 
 /// Build the always-present base fields: status, data, frame,
 /// initialized, error, crash_kind, violations, root, upload_id, hashes,
-/// protocol_version, hardware, git_branch.
+/// protocol_version, hardware, git_branch, solver_target_dir, solver_backend.
 pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value> {
     let mut m: Map<String, Value> = Map::new();
     m.insert("status".into(), Value::String(state.status_string().into()));
@@ -45,6 +45,18 @@ pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value
     m.insert(
         "git_branch".into(),
         Value::String(config.git_branch.clone()),
+    );
+    // Which build this server's runs use. An add-on attaching to a server it
+    // did not start compares this against the build its own device selection
+    // resolves to, because nothing else it can observe says which solver a
+    // run on this server will execute.
+    m.insert(
+        "solver_target_dir".into(),
+        Value::String(config.solver_target_dir.clone()),
+    );
+    m.insert(
+        "solver_backend".into(),
+        Value::String(config.solver_backend.clone()),
     );
     m
 }

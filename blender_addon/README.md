@@ -20,7 +20,7 @@ blender_addon/
 │   ├── output.py            # Shared response-printing helpers
 │   ├── main.py              # General CLI (status, tools, call, exec, reload, ...)
 │   └── perf.py              # Profiler CLI (enable, disable, reset, report, sample)
-├── example_profile.toml     # Connection profile presets (SSH, Docker, local, Windows)
+├── example_profile.toml     # Connection profile presets (SSH, Docker, native)
 ├── example_material_profile.toml  # Material presets (Flag, Cotton, Silk, Denim, Rubber, Steel, Rope, Static)
 ├── example_scene_profile.toml     # Scene presets (Default, Windy, HighRes, SlowMotion, ZeroGravity)
 ├── core/                    # Communication, encoding, protocol, utilities
@@ -122,7 +122,7 @@ Both support: `contact_gap`, `friction`, and animation keyframes (position chang
 
 ### Simulation Workflow
 
-1. **Connect** to remote solver (SSH/Docker/Local/Windows)
+1. **Connect** to the solver host (SSH, Docker, or a native connection on the machine Blender runs on)
 2. **Start server** on remote (`ppf-cts-server --port <port>`)
 3. **Transfer** mesh geometry and parameters (`encode_obj` + `encode_param`, CBOR envelopes per `crates/ppf-cts-formats`)
 4. **Build** solver data structures
@@ -152,13 +152,20 @@ Functions (all in `core/transform.py`, re-exported by `core/utils.py` and `core/
 
 | Type | Enum Value | Transport | Requirements |
 |------|-----------|-----------|-------------|
-| Local | `LOCAL` | Direct filesystem | None |
 | SSH | `CUSTOM` | paramiko SSHClient | paramiko |
 | SSH Command | `COMMAND` | paramiko (parsed from command string) | paramiko |
 | Docker | `DOCKER` | docker-py | docker |
 | Docker over SSH | `DOCKER_SSH` | paramiko + docker exec | paramiko |
 | Docker over SSH Command | `DOCKER_SSH_COMMAND` | paramiko (parsed) + docker exec | paramiko |
 | Windows Native | `WIN_NATIVE` | subprocess (auto-detects Python/CUDA) | None |
+| macOS Native | `MAC_NATIVE` | subprocess (Metal build on this machine) | None |
+| Linux Native | `LINUX_NATIVE` | subprocess (CUDA, ROCm, or CPU build on this machine) | None |
+
+The three native types reach a server on the machine Blender runs on and start it themselves. Each takes a **Solver Path**, either a repo checkout (`target/release/`) or an unpacked distribution, which carries one directory per backend (`target/cuda/release/`, `target/rocm/release/`, `target/cpu/release/`), each holding a `.ppf-backend` marker naming what it was built with. The scene properties are `win_native_path`, `mac_native_path`, and `linux_native_path`.
+
+Enum slot 0, the retired `LOCAL` type, is never reused: Blender stores the item number in the `.blend`. A scene saved with it is moved onto this platform's native type by `core/migrate_renames.py` `migrate_retired_connection()`, which carries the saved `local_path` onto the native path field, and `core/profile.py` does the same for a profile file that names `Local` or carries a `local_path` key.
+
+**Compute Device** (GPU / CPU) and **GPU Backend** (Automatic / CUDA / ROCm) apply to every type, and both name which build directory under the root the server is started from. A native connection reads those directories off this machine's filesystem, so the panel draws the rows before connecting. A remote connection cannot: `core/remote_builds.py` asks the solver host once per connection which directories under the root hold a server and what each marker says, so the rows appear after connecting, and the Refresh button beside the GPU dropdown re-reads both the GPU list and the build listing. A selection the host cannot serve is refused by name at Start Server.
 
 ---
 
@@ -172,12 +179,15 @@ Functions (all in `core/transform.py`, re-exported by `core/utils.py` and `core/
 
 The `Communicator` class manages all remote operations in a background daemon thread. It uses 5 domain-specific `RLock`s (alphabetical acquire order to prevent deadlocks): `animation`, `connection`, `data`, `status`, `task`.
 
-**Connection methods** (all use internal `_queue_connection_task()` helper for lock management):
-- `connect_ssh(host, port, username, key_path, path, container, server_port=9090, keepalive_interval=30)`
-- `connect_docker(container, path, server_port=9090)`
-- `connect_local(path, server_port=9090)`
-- `connect_win_native(path, port)` - auto-detects dev vs bundle layout for Python/CUDA paths
+**Connection methods** (each dispatches a `ConnectRequested` event; `core/effect_runner.py` opens the connection on its worker thread):
+- `connect_ssh(host, port, username, key_path, path, container=None, server_port=9090, keepalive_interval=30, proxy_jump=None, device="GPU", gpu_backend="AUTO")`
+- `connect_docker(container, path, server_port=9090, device="GPU", gpu_backend="AUTO")`
+- `connect_win_native(path, port=9090, device="GPU", gpu_backend="AUTO")` - auto-detects dev vs bundle layout for Python/CUDA paths
+- `connect_mac_native(path, port=9090, device="GPU")`
+- `connect_linux_native(path, port=9090, device="GPU", gpu_backend="AUTO")`
 - `disconnect()` - dispatches to type-specific disconnect
+
+`device` and `gpu_backend` are accepted on every type, remote ones included. They select the build directory the server is launched from, and they are applied at Start Server rather than at connect.
 
 **Solver control:**
 - `build()` - queries `{"request": "build"}`
@@ -189,14 +199,14 @@ The `Communicator` class manages all remote operations in a background daemon th
 - `abort()` - sets interrupt flag, clears animation frames
 
 **Server lifecycle:**
-- `start_server()` - creates shell script that runs `nohup ./target/release/ppf-cts-server --port <port>`, monitors `progress.log` for `SERVER_READY` marker (16s timeout)
+- `start_server()` - on a remote type, writes a shell script that exports `CARGO_TARGET_DIR` for the resolved build directory and runs `nohup <resolved>/ppf-cts-server --port <port>`, then polls `progress.log` for the `SERVER_READY` marker and for a socket the client can reach (16s timeout). The three natives spawn the server as a child process instead, since there is no shell on the other side of them, and wait on the same 16s bound
 - `stop_server()` - runs `pkill -f ppf-cts-server`, polls until stopped
 
 **Data transfer** (both use `open_server_channel()` from protocol.py for SSH/socket abstraction):
-- `data_send(remote_path, data, message)` - local: direct file write; remote: socket with `socket_data_send()`
-- `data_receive(remote_path, message)` - local: direct file read; remote: socket with `socket_data_receive()`
+- `data_send(remote_path, data, message)` - native: direct file write; remote: socket with `socket_data_send()`
+- `data_receive(remote_path, message)` - native: direct file read; remote: socket with `socket_data_receive()`
 
-**Task processing:** Background daemon thread runs `_process_task()` in a loop. Supported task names: `connect_ssh`, `connect_docker`, `connect_local`, `connect_win_native`, `disconnect_*`, `start_server`, `stop_server`, `exec`, `query`, `build`, `run`, `resume`, `fetch`, `data_send`, `data_receive`.
+**Effect processing:** `core/transitions.py` decides what to do and `core/effect_runner.py` does it, with I/O effects handed to a daemon worker thread that dispatches result events back into the engine queue. A connection request carries a `backend_type` of `ssh`, `docker`, `win_native`, `mac_native`, or `linux_native`, which `core/backends.py` `create_backend()` turns into the matching backend object.
 
 **Status update (`_update_status`):** Maps server response status strings to `RemoteStatus` enum. Auto-fetches latest animation frame during simulation. Detects simulation completion, failure, and protocol version mismatch.
 
@@ -209,7 +219,7 @@ The `Communicator` class manages all remote operations in a background daemon th
 **Constants:** `PROTOCOL_VERSION` (string, see source of truth in this file), `HEADER_TEXT_CMD = b"TCMD"`, `HEADER_BINARY_DATA = b"BDAT"`, `HEADER_JSON_DATA = b"JSON"`, `DEFAULT_CHUNK_SIZE = 32 * 1024`
 
 **Functions:**
-- `open_server_channel(connection)` - factory that returns a connected socket (local/docker) or SSH channel depending on connection type; used by `send_query`, `_data_send`, `_data_receive`
+- `open_server_channel(connection)` - factory that returns a connected socket (native/docker) or SSH channel depending on connection type; used by `send_query`, `_data_send`, `_data_receive`
 - `format_traffic(bytes_per_second) -> str` - formats as "B/s", "KB/s", or "MB/s"
 - `exec_command(command, connection, shell=False, cwd=None) -> {exit_code, stdout[], stderr[]}` - dispatches to SSH channel / Docker exec_run / subprocess based on connection type
 - `send_query(args, connection, project_name, chunk_size) -> (response_dict, server_running)` - sends `TCMD` + flattened args, reads JSON response via `open_server_channel`
@@ -268,9 +278,11 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 
 - `connect_ssh(host, port, username, key_path, path, container, keepalive_interval, server_port, exec_fn) -> ConnectionInfo` - uses paramiko SSHClient with compress=True, validates Docker container if specified
 - `connect_docker(container, path, server_port) -> ConnectionInfo` - uses docker.from_env(), starts container if not running
-- `connect_local(path, server_port) -> ConnectionInfo`
-- `connect_win_native(root, port) -> (ConnectionInfo, subprocess.Popen)` - auto-detects dev layout (`build-win-native/python/`) vs bundle layout (`root/python/`), sets PATH/PYTHONPATH/CUDA_PATH, launches subprocess
-- `validate_remote_path(path, exec_fn)` - checks the built `ppf-cts-server` binary exists at path (typically `target/release/ppf-cts-server` under the checkout)
+- `connect_win_native(root, port, device="GPU", project_name="", gpu_backend="AUTO") -> (ConnectionInfo, None)` - auto-detects dev layout (`build-win-native/python/`) vs bundle layout (`root/python/`), sets PATH/PYTHONPATH/CUDA_PATH. Connecting does not start the server; Start Server does, which is what lets a device and a GPU be picked in between
+- `connect_mac_native(root, port, device="GPU", project_name="") -> (ConnectionInfo, None)`
+- `connect_linux_native(root, port, device="GPU", project_name="", gpu_backend="AUTO") -> (ConnectionInfo, None)`
+- `win_native_server_binary(root, device, gpu_backend, probe)` / `mac_native_server_binary(...)` / `linux_native_server_binary(...)` - the `ppf-cts-server` under a native root for that selection, or `None`. A directory is a valid root exactly when this returns a path, so the spawn path and the panel's validity label share one answer. `resolve_win_native_root(selected)`, `resolve_mac_native_root(selected)` and `resolve_linux_native_root(selected)` walk up from a subdirectory the artist picked; `native_path_check(backend_type, root, device, gpu_backend)` returns the refusal text, naming the folder, the device it holds instead, or the GPU backends it does hold
+- `remote_server_binary(root, listing, device, gpu_backend)`, `remote_target_dir(server_binary)`, `remote_not_found_message(root, listing, device, gpu_backend)` - the same resolution rule applied to the listing `core/remote_builds.py` took from the solver host, used by the remote launch
 
 #### `async_op.py` - Modal Operator Base
 
@@ -303,7 +315,7 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 
 #### `profile.py` - TOML Profile System
 
-Mapping dicts: `PROFILE_TYPE_MAP` (7 connection types), `_SSH_STATE_FIELDS` (11 fields), `_SCENE_PARAM_FIELDS` (21 fields), `_MATERIAL_PARAM_FIELDS` (24 fields), `_OP_FIELDS` (20 fields).
+Mapping dicts: `PROFILE_TYPE_MAP` (8 connection types), `_RETIRED_PROFILE_TYPES` / `_RETIRED_PROFILE_KEYS` (a `Local` type and a `local_path` key land on this platform's native), `_SSH_STATE_FIELDS` (11 fields), `_SCENE_PARAM_FIELDS` (21 fields), `_MATERIAL_PARAM_FIELDS` (24 fields), `_OP_FIELDS` (20 fields).
 
 Functions: `load_profiles(path) -> dict`, `get_profile_names(path) -> list[str]`, `apply_profile(profile, ssh_state) -> bool`, `read_connection_profile(ssh_state) -> dict`, `apply_scene_profile(profile, state) -> bool`, `read_scene_profile(state) -> dict`, `apply_material_profile(profile, object_group) -> bool`, `read_material_profile(object_group, include_pins=False) -> dict`, `read_pin_operations(pin_item) -> dict`, `apply_pin_operations(profile, pin_item)`, `save_profile_entry(path, entry_name, data)`.
 
@@ -338,12 +350,15 @@ State is split across three files for maintainability:
 | `username` | StringProperty | "" | SSH username |
 | `key_path` | StringProperty (FILE_PATH) | "~/.ssh/id_ed25519" or "~/.ssh/id_rsa" | SSH key |
 | `docker_path` | StringProperty | "/root/ppf-contact-solver" | Container working path, where the published image puts the solver |
-| `local_path` | StringProperty (DIR_PATH) | "" | Local solver path |
-| `server_type` | EnumProperty | "CUSTOM" | LOCAL/CUSTOM/COMMAND/DOCKER/DOCKER_SSH/DOCKER_SSH_COMMAND/WIN_NATIVE |
+| `server_type` | EnumProperty | "CUSTOM" | CUSTOM/COMMAND/DOCKER/DOCKER_SSH/DOCKER_SSH_COMMAND/WIN_NATIVE/MAC_NATIVE/LINUX_NATIVE |
 | `command` | StringProperty | "ssh -p xxx root@zzz" | SSH command string |
 | `container` | StringProperty | "ppf-contact-solver" | Docker container name, as the README `docker run --name` creates it |
 | `ssh_remote_path` | StringProperty | "" | Remote solver path |
 | `win_native_path` | StringProperty (DIR_PATH) | "" | Windows solver root |
+| `mac_native_path` | StringProperty (DIR_PATH) | "" | macOS solver root |
+| `linux_native_path` | StringProperty (DIR_PATH) | "" | Linux solver root: a repo checkout or an unpacked distribution |
+| `native_device` | EnumProperty | "GPU" | GPU/CPU, which build the server runs. Read for every connection type, native and remote |
+| `native_gpu_backend` | EnumProperty | "AUTO" | AUTO/CUDA/ROCM, which accelerator to run where the root holds more than one GPU build |
 | `docker_port` | IntProperty | 9090 | Server port (min 1024, max 65535) |
 
 **State PropertyGroup (scene-level simulation parameters):**
@@ -526,7 +541,7 @@ Registers persistent Blender timer that calls `console.process_messages()` and `
 
 ### `ui/dynamics/` - Scene & Group Configuration
 
-#### `dynamics/panels.py` - Main Configuration Panels
+#### `ui/dynamics/panels.py` - Main Configuration Panels
 
 **Panel `MAIN_PT_SceneConfiguration`** (bl_idname `SSH_PT_ObjectGroupsManager`):
 
@@ -548,13 +563,13 @@ All parameters shown directly (no outer collapsible box):
 
 **Panel `SNAPMERGE_PT_SnapAndMerge`** (default closed): Object A/B dropdowns with snap button, merge pairs list with remove button. Stitch stiffness shown for every supported soft-stitch pair (shell-shell, shell-solid, rod-shell, rod-solid, rod-rod, solid-solid). Missing frames warning shown below Clear Animation when remote has unfetched frames (hidden during simulation).
 
-#### `dynamics/utils.py` - Shared Dynamics Helpers
+#### `ui/dynamics/utils.py` - Shared Dynamics Helpers
 
 - `get_group_from_index(scene, group_index) -> ObjectGroup | None` - returns active group at slot index, or None
 - `reset_object_display(obj)` - resets object color to white and disables wireframe overlays
 - `cleanup_pin_vertex_groups_for_object(group, object_uuid)` - removes pin references for a specific object (by UUID)
 
-#### `dynamics/group_ops.py` - Group Operators
+#### `ui/dynamics/group_ops.py` - Group Operators
 
 | Operator | bl_idname | Description |
 |----------|-----------|-------------|
@@ -567,7 +582,7 @@ All parameters shown directly (no outer collapsible box):
 
 **Persistent handler:** `_cleanup_deleted_objects` runs on `depsgraph_update_post` to remove stale references from assigned_objects, pin_vertex_groups, and merge_pairs when objects are deleted.
 
-#### `dynamics/dyn_param_ops.py` - Dynamic Parameter Operators
+#### `ui/dynamics/dyn_param_ops.py` - Dynamic Parameter Operators
 
 | Operator | bl_idname | Description |
 |----------|-----------|-------------|
@@ -576,7 +591,7 @@ All parameters shown directly (no outer collapsible box):
 | AddDynParamKeyframe | `scene.add_dyn_param_keyframe` | Adds keyframe at current scene frame. Rejects duplicate frames. Initializes values from global params. Sorts by frame. |
 | RemoveDynParamKeyframe | `scene.remove_dyn_param_keyframe` | Removes selected keyframe. Cannot remove initial (index 0) keyframe. |
 
-#### `dynamics/invisible_collider_ops.py` - Invisible Collider Operators
+#### `ui/dynamics/invisible_collider_ops.py` - Invisible Collider Operators
 
 | Operator | bl_idname | Description |
 |----------|-----------|-------------|
@@ -585,7 +600,7 @@ All parameters shown directly (no outer collapsible box):
 | AddColliderKeyframe | `scene.add_collider_keyframe` | Adds keyframe at current scene frame. Copies base position/radius. Sorts by frame. |
 | RemoveColliderKeyframe | `scene.remove_collider_keyframe` | Removes selected keyframe. Cannot remove initial (index 0). |
 
-#### `dynamics/pin_ops.py` - Pin Operators
+#### `ui/dynamics/pin_ops.py` - Pin Operators
 
 | Operator | bl_idname | Description |
 |----------|-----------|-------------|
@@ -602,7 +617,7 @@ All parameters shown directly (no outer collapsible box):
 | PickCenterFromSelected | `object.pick_center_from_selected` | Sets ABSOLUTE center from centroid of selected vertices in Edit Mode (for SPIN or SCALE) |
 | PickVertexCenter | `object.pick_vertex_center` | Sets VERTEX center from a single selected vertex in Edit Mode (for SPIN or SCALE) |
 
-#### `dynamics/overlay.py`, `overlay_geometry.py`, `overlay_labels.py` - 3D Viewport Overlays
+#### `ui/dynamics/overlay.py`, `overlay_geometry.py`, `overlay_labels.py` - 3D Viewport Overlays
 
 Split across three files:
 - **`overlay.py`**: Cache management (`_overlay_cache`), draw callback dispatch, `apply_object_overlays()`, registration
@@ -627,11 +642,11 @@ Registered as POST_VIEW and POST_PIXEL draw handlers.
 
 **`apply_object_overlays()`**: Resets all mesh colors to white, then applies group colors for groups with `show_overlay_color`. Ensures solid shading `color_type = "OBJECT"`.
 
-#### `dynamics/profile_ops.py` - Profile Operators
+#### `ui/dynamics/profile_ops.py` - Profile Operators
 
 16 operators for scene, material, and pin profile management (Open/Clear/Reload/Save for each). Plus copy/paste for material params and pin operations using module-level clipboard dicts (`_material_clipboard`, `_pin_ops_clipboard`).
 
-#### `dynamics/ui_lists.py` - Custom UIList Renderers
+#### `ui/dynamics/ui_lists.py` - Custom UIList Renderers
 
 - `OBJECT_UL_AssignedObjectsList` - type-aware icons (MESH_CUBE, OUTLINER_OB_SURFACE, VIEW_ORTHO, OBJECT_ORIGIN), inclusion toggle, missing object detection
 - `OBJECT_UL_PinVertexGroupsList` - displays `[ObjectName][VGName]`, GROUP_VERTEX icon, missing detection
@@ -837,7 +852,7 @@ Thread-safe bridge: HTTP thread posts tasks via `post_mcp_task(task_type, args) 
 
 #### `mcp/handlers/` - Categorized Handlers
 
-**connection.py** (12 handlers): `connect_ssh(host, username, key_path, remote_path, port=22, container=None)`, `connect_docker(container, path)`, `connect_local(path)`, `connect_win_native(path, port=9090)`, `disconnect()`, `connect()` (uses current settings), `start_remote_server()`, `stop_remote_server()`, `is_remote_server_running()`, `get_remote_status()`, `update_remote_status()`, `get_connection_info()`.
+**connection.py** (16 handlers): `connect_ssh(host, username, key_path, remote_path, port=22, container=None, proxy_jump=None)`, `connect_docker(container, path, port=9090)`, `connect_win_native(path, port=9090, gpu_backend="")`, `connect_mac_native(path, port=9090)`, `connect_linux_native(path, port=9090, gpu_backend="")`, `disconnect()`, `connect()` (uses current settings), `start_remote_server()`, `stop_remote_server()`, `is_remote_server_running()`, `get_remote_status()`, `update_remote_status()`, `get_connection_info()`, `list_solver_gpus()`, `refresh_solver_gpus()` (re-reads the GPU list and the build listing), `set_solver_gpu(uuid=None, index=None)`.
 
 **group.py** (17 handlers): `create_group()`, `delete_group(uuid)`, `delete_all_groups()`, `duplicate_group(uuid)`, `rename_group(uuid, name)`, `bake_group_animation(uuid, object_name)`, `bake_group_single_frame(uuid, object_name)`, `set_object_included(uuid, object_name, included)`, `get_active_groups()`, `add_objects_to_group(uuid, object_names)`, `remove_object_from_group(uuid, object_name)`, `remove_all_objects_from_group(uuid)`, `get_group_objects(uuid)`, `set_group_type(uuid, type)`, `set_group_material_properties(uuid, properties)` (atomic updates with contact mode validation), `add_pin_vertex_group(uuid, identifier)` (accepts `"object::vgroup"` or `"[object][vgroup]"`), `remove_pin_vertex_group(uuid, identifier)`.
 
@@ -965,7 +980,7 @@ Profiler CLI (`blender_addon/debug/perf.py`) exposes `enable`, `disable`, `reset
 
 ### TOML Profiles
 
-**Connection profiles** (`example_profile.toml`): Presets for SSH, Docker, local, and Windows connections with all credentials and paths.
+**Connection profiles** (`example_profile.toml`): Presets for SSH, Docker, and native connections with all credentials and paths. A profile's `type` is mapped to `server_type` by `PROFILE_TYPE_MAP` in `core/profile.py`, which also accepts the retired `Local` type and `local_path` key and lands them on this platform's native type.
 
 **Material profiles** (`example_material_profile.toml`): Presets including Flag (shell, young=100, density=0.1), Cotton (shell, young=50), Silk (shell, young=30), Denim (shell+solid+rod hybrid), Rubber (solid, neohookean, density=1100), Steel (solid, young=200000), Rope (rod, young=10000), Static.
 

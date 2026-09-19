@@ -40,6 +40,11 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 _DRIVER_TEMPLATE = r"""
 import os

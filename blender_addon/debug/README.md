@@ -12,7 +12,7 @@ Two unrelated tool families share this directory:
    `probe.py`, `scenarios/`). Spawns its own Blender + server
    processes per worker, runs end-to-end integration scenarios
    against the real production pipeline (real `frontend` module,
-   real Rust solver built with `--features emulated`), and writes
+   real Rust solver built with `cargo build --release`), and writes
    pass/fail reports. See [`TEST_RIG.md`](TEST_RIG.md) for details.
 
 The two families share nothing at runtime: the rig does not connect to
@@ -67,30 +67,36 @@ python blender_addon/debug/perf.py disable
 
 The rig runs without a live Blender. It spawns its own Blender and
 server processes in per-worker temp dirs, drives them through the
-addon's public API, and validates end-to-end behavior. It does not
-require a CUDA GPU: the Rust binary built with `--features emulated`
-stubs the CUDA FFI and applies kinematic constraints in pure Rust,
-producing a `vert_*.bin` stream that's bit-for-bit comparable to a
-real run for the pin-driven motion the scenarios exercise.
+addon's public API, and validates end-to-end behavior.
 
-The rig is invoked through the `runtests` subcommand of `main.py`:
+**It requires a backend that computes real physics**, which is CUDA on a CUDA
+host, Metal on macOS, or the Rust CPU backend
+(`cargo build --release --features cpu`, about 30x the wall clock). Every
+scenario declares `BACKENDS = ("real",)` and runs against whichever one the
+tree was built for.
+
+The rig is invoked through the `runtests` subcommand of `main.py`.
+`--backend` is REQUIRED and has no default, because a default would label
+every invocation that omitted it as having targeted something it did not, and
+a scenario that declares no `BACKENDS` is refused rather than defaulted.
 
 ```sh
-# All scenarios, sequential.
-.venv/bin/python blender_addon/debug/main.py runtests
+# Every scenario this backend can run, sequential. Also prints, by name,
+# the scenarios it cannot run and why.
+.venv/bin/python blender_addon/debug/main.py runtests --backend real
 
 # Parallel, four workers.
-.venv/bin/python blender_addon/debug/main.py runtests --parallel 4
+.venv/bin/python blender_addon/debug/main.py runtests --backend real --parallel 4
 
 # A specific subset.
-.venv/bin/python blender_addon/debug/main.py runtests \
-    bl_overlay_invalidation bl_save_resume
+.venv/bin/python blender_addon/debug/main.py runtests --backend real \
+    bl_overlay_invalidation bl_timeline_statistics
 
-# List every registered scenario.
-.venv/bin/python blender_addon/debug/main.py runtests --list
+# List the runnable scenarios (stdout); the unrunnable ones go to stderr.
+.venv/bin/python blender_addon/debug/main.py runtests --backend real --list
 
 # Stability shake-out.
-.venv/bin/python blender_addon/debug/main.py runtests \
+.venv/bin/python blender_addon/debug/main.py runtests --backend real \
     --parallel 4 --repeat 3
 ```
 
@@ -98,14 +104,19 @@ Useful environment knobs:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PPF_EMULATED_STEP_MS` | `1000` | Wall-clock ms per solver step. Tests use `100`. |
 | `PPF_DEBUG_ROOT` | `$TMPDIR/ppf-debug` | Where worker dirs are created. |
 | `PPF_BLENDER_BIN` | (auto) | Override Blender binary path. |
+
+The `PPF_EMULATED_*` knobs (`STEP_MS`, `ELASTIC`, `FAIL_AT_FRAME`,
+`SAND`, `VIOLATIONS`) are gone with the backend that read them. One
+left set in a script is an inert variable nothing consumes, which
+makes a scenario pass with its pacing or fault injection silently
+absent: delete it rather than leave it.
 
 Each run drops a `report.json` plus per-worker artifacts (server logs,
 Blender stdout/stderr, `scenario_result.json`) under
 `$PPF_DEBUG_ROOT/<run-id>/`. On failure the worker dir is preserved so
 you can inspect it; on success it is removed.
 
-For the full reference (scenario catalog, knobs, troubleshooting, the
-emulated-Rust contract), see [`TEST_RIG.md`](TEST_RIG.md).
+For the full reference (scenario catalog, knobs, troubleshooting), see
+[`TEST_RIG.md`](TEST_RIG.md).

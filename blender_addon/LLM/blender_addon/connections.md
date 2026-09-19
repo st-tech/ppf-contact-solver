@@ -1,6 +1,6 @@
 # Connections
 
-This document condenses the Blender add-on connection docs: the Connections overview (index.md), and the per-backend pages for Local, SSH, Docker, Windows Native, and Connection Profiles.
+This document condenses the Blender add-on connection docs: the Connections overview (index.md), and the per-backend pages for SSH, Docker, Windows Native, macOS Native, Linux Native, and Connection Profiles.
 
 ## Overview
 
@@ -8,13 +8,14 @@ The add-on talks to a solver process over one of several transports. Pick the on
 
 | Type | Use when | See |
 | ---- | -------- | --- |
-| **Local** | Solver runs on the same machine as Blender | Local |
 | **SSH** | Solver runs on a remote Linux host, credentials entered as fields | SSH |
 | **SSH Command** | Same as SSH, but configured by pasting an `ssh ...` shell command | SSH |
 | **Docker** | Solver runs inside a container on the local Docker daemon | Docker |
 | **Docker over SSH** | Solver runs inside a container on a remote Docker host | Docker |
 | **Docker over SSH Command** | Docker-over-SSH configured from a shell `ssh ...` command | Docker |
 | **Windows Native** | Solver runs as a Windows subprocess using a bundled Python + CUDA | Windows |
+| **macOS Native** | Solver runs as a macOS subprocess against the local Metal build | macOS |
+| **Linux Native** | Solver runs as a Linux subprocess on the Blender machine, from a checkout or an unpacked distribution | Linux Native |
 
 All types share the same server-side TCP protocol (see `PROTOCOL_VERSION` in `core/protocol.py` for the current wire version) and the same UI flow in the panel: **Connect** -> **Start Server** -> transfer data -> **Run** -> **Fetch**.
 
@@ -29,7 +30,68 @@ Starting a solver session is two button presses:
 
 The panel stays responsive while this happens, the actual work runs on a background thread and the UI polls it several times a second.
 
-Every backend works this way, Windows Native included: **Connect** opens the transport and does not start anything, and **Start Server** starts the solver server. If a `ppf-cts-server` from a previous session is still on the port, **Start Server** attaches to it instead of launching a second one.
+Every backend works this way, the three native types included: **Connect** opens the transport and does not start anything, and **Start Server** starts the solver server. If a `ppf-cts-server` from a previous session is still on the port, **Start Server** attaches to it instead of launching a second one.
+
+### Choosing the build: Compute Device and GPU Backend
+
+Every build of the solver links exactly one backend, and each one lives in its
+own directory, so choosing GPU or CPU is choosing which build directory the
+server comes from. Two rows in the Backend Communicator make that choice, and
+they apply to every connection type.
+
+**Compute Device** picks `GPU` or `CPU`. The GPU build is the accelerated one
+(CUDA or ROCm on Windows and Linux, Metal on macOS); the CPU build needs no GPU
+and is substantially slower. The row accepts a change where both builds are
+there, and also while the selection names a build that is absent, so a folder
+holding only the CPU build does not lock the row on `GPU`. It is closed when the
+selection is the one build present, since there is nowhere else to move it. It
+is never changed for you: a device that is not there is refused by name, never
+substituted.
+
+**GPU Backend** picks `Automatic`, `CUDA` or `ROCm`, and is drawn only where
+there is something to pick: the root or the solver host holds more than one GPU
+build, or a saved choice names a build that is not there. `Automatic` takes the
+only GPU build present, or where there are several, CUDA before ROCm. On a
+native connection it also skips a build whose solver reports no usable device,
+because that solver is on this machine and is run to ask; on a remote connection
+nothing is run to ask, so `Automatic` takes the first of those present and a
+host holding both is worth naming explicitly.
+
+A directory that a build wrote carries a `.ppf-backend` marker naming the
+backend in it, and that marker is what the add-on reads. Every backend links the
+same executable name, so the directory alone is not evidence of what it holds; a
+directory with no marker, which is the shape of a distribution packaged without
+one, is read by its layout instead.
+
+**On the three native types the rows are drawn before you connect**, because the
+builds are on the machine Blender runs on and the panel resolves them from the
+filesystem while you edit **Solver Path**.
+
+**On the remote types (SSH, SSH Command, Docker, Docker over SSH, Docker over
+SSH Command) they appear after you connect.** The builds are on the solver host,
+so the add-on asks that host once per connection for a listing of the build
+directories under the configured path, and draws the rows from the listing.
+Before connecting there is nothing to ask, which is why the rows are not there
+yet. The refresh button beside the **GPU** dropdown re-asks for both the GPU list
+and the build listing, so a backend built on the host during the session appears
+after pressing it. If the listing command fails, the reason is printed under the
+rows and the rows stay, because what the host holds is then unknown rather than
+known to be nothing.
+
+The selection is applied at **Start Server**, so the rows stay editable while
+connected as long as the server is stopped: **Stop Server**, pick, **Start
+Server** moves the solver onto another build without reconnecting. A selection
+the solver host cannot serve is refused by name at **Start Server**, and the
+three refusals are distinct: the folder holds no solver at all, it holds the
+other device's build, or it holds GPU builds and not the accelerator that was
+asked for. Only the first is a reason to change the path.
+
+The launch names the build directory as well as the binary: the resolved
+`ppf-cts-server` is started, and `CARGO_TARGET_DIR` is exported to the directory
+it came out of so the build worker loads the matching `_ppf_cts_py` cdylib.
+Without that, the server and the solve it drives can come from different builds,
+and nothing reports the split, because each binary answers `--backend` honestly
+about itself and neither is asked about the other.
 
 ### Choosing a GPU
 
@@ -42,7 +104,11 @@ One mechanism serves every backend. **Connect** enumerates the solver host by
 running `nvidia-smi` through the connection, so the list belongs to the machine
 that will run the server rather than to the workstation. The row appears only
 once connected, since before that there is no list to offer. The refresh button
-beside it re-reads it. **Start Server** applies the choice.
+beside it re-reads it, and the solver host's build listing with it. **Start
+Server** applies the choice.
+
+The row is drawn only while **Compute Device** is `GPU`. A CPU server opens no
+device, so with `CPU` selected there is nothing for the dropdown to name.
 
 The row stays editable while connected as long as the server is stopped, so
 **Stop Server**, pick another card, **Start Server** moves a solver without
@@ -92,19 +158,21 @@ Connect opens the configured transport (SSH session, Docker client, or a local s
 
 **Start Server step**
 
-On Unix-family backends (Local, SSH, Docker, Docker over SSH) the add-on writes a small launch script to `/tmp/start_server.sh` and runs it. The script invokes:
+On the remote backends (SSH, SSH Command, Docker, Docker over SSH, Docker over SSH Command) the add-on writes a small launch script to `/tmp/start_server.sh` and runs it. The script changes to the configured directory, exports `CARGO_TARGET_DIR` when the build it resolved sits in a cargo target directory, and invokes:
 
 ```sh
-nohup bash -c '[ -f $HOME/.local/share/ppf-cts/venv/bin/activate ] && source $HOME/.local/share/ppf-cts/venv/bin/activate; ./target/release/ppf-cts-server --port <port>' > server.log 2>&1 &
+nohup bash -c '[ -f $HOME/.local/share/ppf-cts/venv/bin/activate ] && source $HOME/.local/share/ppf-cts/venv/bin/activate; <resolved build dir>/ppf-cts-server --port <port>' > server.log 2>&1 &
 ```
 
-Inside a Docker container the server is launched with `--host 0.0.0.0` so the published port mapping reaches it; on Local and SSH it binds to `127.0.0.1`.
+The binary is the one the **Compute Device** and **GPU Backend** selection resolves against the solver host's build listing (see Choosing the build), not a fixed path.
 
-When a GPU is picked, its enumerated UUID is assigned to `CUDA_VISIBLE_DEVICES` in front of that server command. Using the UUID avoids any difference between nvidia-smi's numeric ordering and CUDA's. Windows Native sets the same variable in the process environment it spawns the server with. The solver never calls `cudaSetDevice`, so it runs on device 0 of whatever CUDA can see, which is what makes restricting the visible set the whole mechanism.
+Inside a Docker container the server is launched with `--host 0.0.0.0` so the published port mapping reaches it; on SSH and on a native connection it binds to `127.0.0.1`.
+
+When a GPU is picked, its enumerated UUID is assigned to `CUDA_VISIBLE_DEVICES` in front of that server command. Using the UUID avoids any difference between nvidia-smi's numeric ordering and CUDA's. Windows Native and Linux Native set the same variable in the process environment they spawn the server with. The solver never calls `cudaSetDevice`, so it runs on device 0 of whatever CUDA can see, which is what makes restricting the visible set the whole mechanism.
 
 The server writes `SERVER_STARTING` and `SERVER_READY` markers to `progress.log` in the working directory. The UI tails that file and waits up to **16 seconds** for `SERVER_READY`. If a line containing `ERROR` or `FAILED` appears first, the wait aborts with that message; on plain timeout, the panel prints the last 20 lines of `server.log`.
 
-Windows Native spawns `ppf-cts-server.exe` as a child process instead of writing a launch script, since there is no shell on the other side of it. See Windows - Under the hood.
+The three native types spawn the server as a child process instead of writing a launch script, since there is no shell on the other side of them. See Windows Native - Under the hood and Linux Native - Under the hood.
 
 **Docker port pre-launch check**
 
@@ -114,65 +182,86 @@ Before **Start Server** on Docker-over-SSH, the add-on checks that the configure
 
 The add-on cannot publish a port on an existing container; this has to be fixed on the container side (for example by re-running `docker run -p` or editing `compose.yaml`).
 
-## Local
+## Linux Native
 
-The solver runs on the same **Linux** machine as Blender. This is the simplest backend and the right default for single-workstation development. On Windows, use the Windows Native backend instead; macOS is not supported as a solver backend (the solver requires CUDA).
+The solver runs as a subprocess on the same **Linux** machine as Blender. The
+add-on launches it and talks to it over a local TCP socket, with no SSH and no
+Docker in between. On Windows the equivalent is the Windows Native backend, and
+on macOS the macOS Native backend, which runs the local Metal build.
 
 ### When to use it
 
-- You are running Blender on Linux with a local NVIDIA GPU and a working solver checkout.
+- You are running Blender on Linux with either the extracted Linux distribution or a solver checkout you built, on a local GPU or on the CPU build.
 - You are iterating on solver code and want the fastest possible disconnect/reconnect turnaround.
 - You do not want to pay the cost of SSH or Docker for every transfer.
 
 ### Setup
 
-1. Set **Server Type** to `Local`.
-2. Fill **Local Path** with the solver checkout (the directory that contains the built `ppf-cts-server` binary, typically under `target/release/`).
-3. Set **Project Name** on the main panel.
-4. Click **Connect**. The add-on checks that the `ppf-cts-server` binary exists at the path you gave it.
-5. Click **Start Server**. The panel waits a few seconds for the server to report that it is ready.
+1. Set **Server Type** to `Linux Native`.
+2. Set **Solver Path** to the solver root: the folder that holds `target/release/ppf-cts-server`, or `target/cuda/release`, `target/rocm/release` or `target/cpu/release`. An extracted Linux distribution and a checkout you built have the same shape, because the distribution ships each backend in the `target/<backend>/release` directory it was built in, so one rule accepts both. The distribution's `bin/` holds the backend library and ffmpeg and never a server, so it is not a root.
+3. If you pick a subdirectory (`target`, `target/release`, `target/cuda/release`, or the distribution's `bin`), the add-on walks up to the real root and the panel names the root it resolved to.
+4. Pick **Compute Device**, and **GPU Backend** where the root holds more than one GPU build. Both rows read the folder as you set it, so they are usable before you connect. See Choosing the build.
+5. Set **Project Name** on the main panel.
+6. Click **Connect**. The add-on checks that the root holds the build your selection names, and refuses the connection if it does not, rather than reporting a connection and leaving the failure to Start Server.
+7. Click **Start Server**. The panel waits a few seconds for the server to report that it is ready.
 
-Figure: Backend Communicator with **Server Type** set to `Local`. Only **Path** and **Project Name** show up; no SSH, Docker, or Windows-native fields. **Connect** is highlighted.
+Figure: Backend Communicator with **Server Type** set to `Linux Native`. **Solver Path**, the **Compute Device** row and **Project Name** show up; no SSH, Docker, or Windows-native fields. **Connect** is highlighted.
 
-TIP: If you ran the solver's installer, it may have created a Python virtual environment at `$HOME/.local/share/ppf-cts/venv`. When the add-on finds that venv it activates it automatically before launching the server, you do not need to do anything.
+TIP: The interpreter the build worker runs under belongs to the root you selected, and the add-on names it for you: a distribution's own `python/bin/python3` when the root ships one, otherwise the developer virtual environment at `$HOME/.local/share/ppf-cts/venv`. There is nothing to activate by hand.
 
 ### Fields
 
 | Field | Description |
 | ----- | ----------- |
-| Local Path | Filesystem path to the solver checkout, for example `~/ppf-contact-solver`. Empty until you fill it in. |
+| Solver Path | Filesystem path to the solver root, an extracted Linux distribution or a checkout you built, for example `~/ppf-contact-solver`. Empty until you fill it in. |
+| Compute Device | Whether the GPU or the CPU build under the root runs. See Choosing the build. |
+| GPU Backend | Which accelerator runs when Compute Device is GPU and the root holds more than one GPU build. See Choosing the build. |
 | GPU | Which CUDA device the solver runs on. See Choosing a GPU. |
 | Server Port | TCP port for `ppf-cts-server`. Default `9090`; range 1024-65535. |
 
 ### Dependencies
 
-Local mode requires neither `paramiko` nor `docker-py`. The main panel's **Install Paramiko** and **Install Docker** buttons are only relevant for SSH and Docker modes.
+Linux Native mode requires neither `paramiko` nor `docker-py`. The main panel's **Install Paramiko** and **Install Docker** buttons are only relevant for SSH and Docker modes.
 
 `cbor2` is required for **all** backends: it encodes the scene on the Blender side before every Transfer, so the dependency is independent of the transport. This is unlike `paramiko` (needed only for SSH and Docker-over-SSH) and `docker-py` (needed only for Docker). `cbor2` ships as a per-ABI wheel in `blender_manifest.toml` and installs automatically when the extension is installed through Blender; if that wheel is missing (e.g. the add-on was copied in manually or carried over by a settings migration without reinstalling its wheels), the main panel shows an **Install cbor2 to Add-on Directory** button as a recovery path.
 
 ### Troubleshooting
 
-- **"Remote path not found (.../ppf-cts-server)"** - the path you entered does not contain the built `ppf-cts-server` binary. Point it at the checkout root that has `target/release/ppf-cts-server`, not the `src/` subdirectory.
+- **"ppf-cts-server not found under \<root\>"** - the folder holds no solver in any accepted layout. Point **Solver Path** at the folder that has `target/release/ppf-cts-server` in it, or `target/cuda/release`, `target/rocm/release` or `target/cpu/release`. For a downloaded release that is the extracted distribution root, not the folder you extracted it into; the walk above goes up from your selection, never down into it.
+- **"... holds the CPU build ... and no GPU build"** (or the reverse) - the path is right and the selection is not. Set **Compute Device** to the device that is there.
+- **"... holds these GPU builds: cuda, and no rocm build"** (or the reverse) - the root holds GPU builds, and not the accelerator **GPU Backend** names. The message lists the ones that are there; pick one of those, or `Automatic`.
+- **"No GPU build in this folder has a usable device"** - every GPU build under the root was asked at Start Server and none found a device it can run on. The message names what each one reported. Set **Compute Device** to `CPU` to run without a GPU.
+- **"A solver server is already running on port ..., and its runs use the build in ..."** - a `ppf-cts-server` left over from an earlier session holds the port and runs a different build from the one selected. The message names both directories and the way out: **Force Terminate Process**, or connect with the device that matches, **Stop Server**, and connect again.
 - **Server startup timed out.** - the solver launched but did not report readiness within 16 seconds. Check `server.log` inside the solver directory; the panel also prints the last 20 lines when the timeout fires.
-- **Port already in use.** - another solver (or a stale `ppf-cts-server` process) is already bound to the port. Click **Stop Server** first, or change the Server Port.
+- **Port already in use.** - something that is not a `ppf-cts-server` is bound to the port. Change the **Server Port**, or free it.
 
 UNDER THE HOOD:
 
-**Launch script**
+**Launch**
 
-Local mode launches the `ppf-cts-server` binary with a small bash script (`nohup`, then the binary). That is the same launch path the SSH and Docker backends use. The script is `bash`-only, which is why Local mode is Linux-only; Windows goes through the Windows Native backend and macOS is not supported (the solver requires CUDA).
+Linux Native spawns the resolved `ppf-cts-server` as a child process with `--port <port>`, working directory at the solver root, and its output appended to `server.log` in that root. It writes no launch script and starts no shell. Redirection goes to a real file rather than a pipe: with a pipe the add-on owns the read end and never drains it, and once the OS buffer fills the server's worker threads block in a write syscall and it appears wedged.
+
+**The environment the server is given**
+
+- `CARGO_TARGET_DIR` names the build directory the selection resolved to, so the build worker loads the cdylib from the same build the server came from. An inherited value is dropped for a layout that is not a cargo target directory rather than guessed at.
+- `PYTHONPATH` begins with the root, so the build worker can import the bundled `frontend` package.
+- `PPF_CTS_BUILD_PYTHON` names the interpreter for the build worker, `<root>/python/bin/python3` in a distribution and `$HOME/.local/share/ppf-cts/venv/bin/python` for a checkout. An inherited value wins, since someone who set it meant it.
+- `VIRTUAL_ENV` is set only when that interpreter really is a virtual environment, and cleared otherwise, so a venv active in the shell that launched Blender cannot contradict the interpreter actually chosen.
+- `CUDA_VISIBLE_DEVICES` carries the GPU choice, by UUID. See Choosing a GPU.
+
+No library search path is set. Every binary this project ships on Linux finds its backend library through its own RPATH, which the loader searches before `LD_LIBRARY_PATH`, and the distribution is built that way so it does not depend on what a shell exports.
+
+**Attaching to a server that is already there**
+
+If a `ppf-cts-server` is already answering on the port (Blender was restarted while the previous session's server kept running), **Start Server** attaches to it instead of launching a second one. What it compares is the build directory the running server reports its runs take the solver from, so a server running a build other than the one **Compute Device** names is refused rather than adopted.
 
 **Shared port field**
 
-The **Server Port** field is the same underlying property for every connection type. The label in profile TOML files is `docker_port` for historical reasons, even on Local connections.
-
-**Virtual environment activation**
-
-Local mode reuses the same launch script as the SSH and Docker backends: it sources `$HOME/.local/share/ppf-cts/venv/bin/activate` if that file exists, otherwise the script runs the binary without activating any venv (so the build worker spawned by `ppf-cts-server` resolves `python3` from the system `PATH`). The solver's own install scripts are responsible for creating the venv; the add-on never creates or modifies it.
+The **Server Port** field is the same underlying property for every connection type. In profile TOML files it is written as `docker_port`, whatever the type.
 
 **File transfer fast path**
 
-On local connections, file transfers copy directly on disk instead of going through the solver TCP socket: no pickle overhead, and much faster than the SSH or Docker paths. The trade-off is cosmetic: the panel does not display a bandwidth figure while a local transfer is in progress. That is expected on this backend.
+On a Linux Native connection, file transfers copy directly on disk instead of going through the solver TCP socket: no pickle overhead, and much faster than the SSH or Docker paths. The trade-off is cosmetic: the panel does not display a bandwidth figure while such a transfer is in progress. That is expected on this backend.
 
 ## SSH
 
@@ -200,6 +289,8 @@ Figure: Backend Communicator with **Server Type** set to `SSH`. **Host**, **Port
 | Key Path | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
 | Proxy Jump | `""` | Jump host to tunnel through, in `ssh -J` form: `[user@]host[:port]`, comma separated for a chain. Empty uses the alias's `ProxyJump` from `~/.ssh/config`. See Jump hosts. |
 | Remote Path | `""` | Remote solver directory, e.g. `/root/ppf-contact-solver` (must contain the built `ppf-cts-server` binary). |
+| Compute Device | `GPU` | Which build on the REMOTE host runs, the GPU one or the CPU one. The build listing is read from that host, so the row is offered once connected. See Choosing the build. |
+| GPU Backend | `Automatic` | Which accelerator runs when Compute Device is GPU. Offered once connected, and only where the remote root holds more than one GPU build. See Choosing the build. |
 | GPU | `Automatic` | Which CUDA device on the REMOTE host the solver runs on. The list is read from that host, so it is offered once connected. See Choosing a GPU. |
 | Server Port | `9090` | Port on the remote host where `ppf-cts-server` listens. |
 
@@ -355,6 +446,7 @@ Figure: Two stacked block diagrams showing the Docker local topology (add-on, da
 3. Leave **Container Path** at its default, `/root/ppf-contact-solver`, which is where the published image puts the built `ppf-cts-server`. Change it only if the solver lives elsewhere inside the container.
 4. Set **Server Port** to the TCP port `ppf-cts-server` listens on inside the container.
 5. Click **Connect**. If the container exists but is stopped, the add-on starts it for you. A missing container is reported as an error.
+6. Once connected, pick **Compute Device**. The published image carries both builds, the CUDA one in `target/release` and the CPU one in `target/cpu/release`, so both rows are offered: GPU needs the container to have been started with `--gpus all`, and CPU runs without a GPU at all and is substantially slower. The choice is applied at Start Server.
 
 Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**, **Container Path**, and **Docker Port** replace the SSH fields. The **Install Docker-Py** banner appears when the vendored module is missing. **Connect** is highlighted.
 
@@ -364,6 +456,8 @@ Figure: Backend Communicator with **Server Type** set to `Docker`. **Container**
 | ----- | ----------- |
 | Container | Docker container name. Must already exist. Defaults to `ppf-contact-solver`, the name the README `docker run` creates. |
 | Container Path | Working directory inside the container (contains the built `ppf-cts-server` binary). Defaults to `/root/ppf-contact-solver`, where the published image puts it. |
+| Compute Device | Whether the GPU or the CPU build inside the container runs. The build listing is read inside the container, so the row is offered once connected. See Choosing the build. |
+| GPU Backend | Which accelerator runs when Compute Device is GPU. Offered once connected, and only where the container holds more than one GPU build. See Choosing the build. |
 | GPU | Which CUDA device the solver runs on, as the CONTAINER sees them. A container started without `--gpus all` sees a subset of its host's cards, and the list is read inside it. See Choosing a GPU. |
 | Server Port | Port inside the container where `ppf-cts-server` listens. |
 
@@ -421,7 +515,7 @@ Fix this on the container side by re-running `docker run -p 9090:9090` (or editi
 
 **Server startup path**
 
-Both Docker modes use the same Unix server-launch path as the SSH and Local backends (see Connections - Under the hood): a small script inside the container launches `ppf-cts-server` on the configured port and the UI waits up to 16 s for readiness.
+Both Docker modes use the same Unix server-launch path as the SSH backends (see Connections - Under the hood): a small script inside the container launches the resolved `ppf-cts-server` on the configured port and the UI waits up to 16 s for readiness.
 
 ## Windows Native
 
@@ -472,7 +566,7 @@ Connect picks one of two layouts by looking for `python.exe`:
     cuda/bin/*.dll
   target/release/
     ppf-cts-server.exe       # Rust server binary
-  src/cpp/build/lib/
+  src/kernels/build/lib/
 ```
 
 Used when you built the server from source. The Python interpreter for the build worker is `build-win-native\python\python.exe`, `CUDA_PATH` is set to `build-win-native\cuda`, and the launcher prepends, in order, `build-win-native\python`, `target\release`, `src\cpp\build\lib`, and `build-win-native\cuda\bin` to `PATH`.
@@ -543,11 +637,11 @@ NOTE: The Save button does not preserve comments or formatting in the TOML file.
 
 The sections below describe the on-disk layout for reference. Remember that this file is **generated by the Save icon**, not authored by hand. Open it in an editor only to inspect, diff, or share entries; round-tripping through the Save button is the supported edit path.
 
-Each profile is a top-level table. The table name is free-form (quote it if it contains spaces or other non-bare characters). Inside the table, one required discriminator and up to eleven connection fields:
+Each profile is a top-level table. The table name is free-form (quote it if it contains spaces or other non-bare characters). Inside the table, one required discriminator and the connection fields below:
 
 | TOML key | Notes |
 | -------- | ----- |
-| `type` | Required. One of `Local`, `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`. |
+| `type` | Required. One of `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`, `macOS Native`, `Linux Native`. |
 | `host` | SSH host / alias. |
 | `port` | SSH port. |
 | `username` | SSH user. |
@@ -556,11 +650,14 @@ Each profile is a top-level table. The table name is free-form (quote it if it c
 | `container` | Docker container name. |
 | `remote_path` | Remote solver directory for SSH. |
 | `docker_path` | Solver directory inside a Docker container. |
-| `local_path` | Local solver directory. |
 | `win_native_path` | Windows solver root. |
+| `mac_native_path` | macOS solver root. |
+| `linux_native_path` | Linux solver root. |
 | `solver_gpu` | CUDA device index for the solver server, or `-1` to set no `CUDA_VISIBLE_DEVICES`. |
 | `solver_gpu_uuid` | Stable UUID of the selected GPU. Written with `solver_gpu`; preferred when the host reorders indices. |
 | `docker_port` | Server TCP port (1024-65535). |
+
+A profile that names `type = "Local"` still loads. It is applied as the native type of the platform reading it (`Linux Native` on Linux, `Windows Native` on Windows, `macOS Native` on macOS), and a `local_path` beside it lands on that type's path key, unless the profile already carries a value for that key. A profile file is something you wrote and keep, so a name the panel no longer offers is mapped rather than rejected.
 
 Unknown keys are silently ignored, so it is safe to sprinkle comments or future additions in the file.
 
@@ -568,9 +665,9 @@ Unknown keys are silently ignored, so it is safe to sprinkle comments or future 
 
 ```toml
 # connections.toml -- one entry per environment
-[Local]
-type = "Local"
-local_path = "~/ppf-contact-solver"
+[Workstation Linux]
+type = "Linux Native"
+linux_native_path = "~/ppf-contact-solver"
 docker_port = 9090
 
 [LocalDocker]
@@ -627,7 +724,7 @@ The same TOML machinery drives **scene profiles** and **material profiles** else
 
 Three MCP tools run commands against whichever host the active connection points at:
 
-- `execute_shell_command(shell_command, use_shell=True)`: free-form shell command on the solver host (Local: the Blender machine; SSH and Docker: the remote host or its container; Windows Native: the Windows solver host). Use this when no dedicated tool covers the task.
+- `execute_shell_command(shell_command, use_shell=True)`: free-form shell command on the solver host (Windows Native, macOS Native and Linux Native: the machine Blender runs on; SSH and Docker: the remote host or its container). Use this when no dedicated tool covers the task.
 - `execute_server_command(server_script)`: a `--key value` argument string sent as a TCMD query to the running `ppf-cts-server`. Narrower than the shell tool; reach for it when the solver exposes the subcommand on its TCMD surface.
 - `git_pull_remote()`, `compile_project()`, `install_paramiko()`, `install_docker()`: dedicated wrappers for the most common remote operations. Prefer these over re-typing the shell command.
 
@@ -650,4 +747,4 @@ UNDER THE HOOD:
 
 **`type` validation**
 
-The `type` value in each TOML entry must exactly match one of the server-type strings listed in the **File format** table. Any other value is rejected at load time.
+The `type` value in each TOML entry must exactly match one of the server-type strings listed in the **File format** table, or the retired `Local`, which loads as this platform's native type. Any other value is rejected at load time.

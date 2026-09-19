@@ -38,14 +38,17 @@ proptest = "1"
 
 [features]
 default = []
-# Workspace-level source of truth for the `emulated` flag. The root
-# `ppf-contact-solver` crate gates its C++/CUDA build path on it, and
-# `ppf-cts-server` gates the in-process kinematic emulator path on it.
-# Both crates declare `emulated = ["ppf-cts-core/emulated"]` so a single
-# toggle here cascades everywhere; this prevents the two definitions
-# from drifting out of sync. Defining it here is useful even though
-# ppf-cts-core has no `#[cfg(feature = "emulated")]` of its own today.
-emulated = []
+# Workspace-level source of truth for the `cpu` flag, on the same footing as
+# `ppf-cts-solver` selects the Rust CPU backend with it, and
+# this crate's `check_gpu` reads it so a CPU build is not asked for an NVIDIA
+# device it neither has nor needs. Dependents declare
+# `cpu = ["ppf-cts-core/cpu"]` so one toggle cascades.
+cpu = []
+# Workspace-level source of truth for the `rocm` flag, on the same footing as
+# `cpu` above. `check_gpu` reads it so a ROCm build is not asked for an NVIDIA
+# device it neither has nor needs, which is exactly what the CUDA arm would do:
+# it shells out to `nvidia-smi` for every non-macOS build that is not `cpu`.
+rocm = []
 
 [[bench]]
 name = "rasterizer"

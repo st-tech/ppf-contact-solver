@@ -5,7 +5,7 @@
 #
 # world_scaling SCALE-INVARIANCE for a free-vertex SHELL drape. A grid
 # pinned along its +y edge sags under gravity (free verts deform, the
-# pinned edge holds) -- exactly the bl_emulated_elastic_drape scene. We
+# pinned edge holds) -- exactly the bl_elastic_drape scene. We
 # run it once at base size (world_scaling=1) and once at 10x size
 # (world_scaling=0.1) and assert the 10x run reproduces 10x the base
 # run's per-frame positions. This is the core promise of world_scaling
@@ -21,9 +21,13 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
-# Free vertices need the emulator's implicit ARAP step to actually
-# deform; step pacing 0 ms keeps the unit run fast.
-KNOBS = {"PPF_EMULATED_ELASTIC": "1", "PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""

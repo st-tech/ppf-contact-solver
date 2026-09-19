@@ -79,8 +79,7 @@ try:
     )
 except ImportError:
     pytest.skip(
-        "frontend._rust extension not built; run `cargo build` or "
-        "`cargo build-emul` first",
+        "frontend._rust extension not built; run `cargo build --release` first",
         allow_module_level=True,
     )
 

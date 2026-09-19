@@ -1088,7 +1088,7 @@ def _encode_obj_inner(context, scene, state, data):
                     # value locked on the object at Convert time (the seeding
                     # spacing was derived from it), so render and contact agree.
                     info["radius"] = float(
-                        obj.get("ppf_grain_radius", group.sand_grain_radius)
+                        obj.get("grain_radius", group.sand_grain_radius)
                     )
                 else:
                     info["face"] = tri

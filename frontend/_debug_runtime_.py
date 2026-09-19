@@ -9,7 +9,7 @@
 # rig (or any caller that sets ``PPF_CTS_DATA_ROOT``), production
 # behaviors that assume a real GPU + the canonical
 # ``~/.local/share/ppf-cts/...`` data root need to be relaxed so the
-# emulated solver and per-worker shadow trees work. This module owns
+# per-worker shadow trees work. This module owns
 # those overrides so ``build_worker`` doesn't reach into the
 # ``frontend`` package's private attrs at runtime.
 #
@@ -35,7 +35,7 @@ def install_debug_patches() -> None:
     import frontend  # type: ignore
 
     # ``Utils.check_gpu`` raises when nvidia-smi is missing; the
-    # emulated solver doesn't need it. Same for ``get_driver_version``,
+    # rig doesn't need it. Same for ``get_driver_version``,
     # whose return value is checked against a min-version floor.
     frontend.Utils.check_gpu = staticmethod(lambda: None)
     frontend.Utils.get_driver_version = staticmethod(lambda: 999)

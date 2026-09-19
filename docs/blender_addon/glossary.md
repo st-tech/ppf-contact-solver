@@ -293,6 +293,11 @@ documentation, grouped by subject and alphabetized within each group.
 : A connection type where the solver runs on the same host as Blender,
   reached over a loopback socket. See [Local](connections/local.md).
 
+**macOS Native connection**
+: A connection type where the solver runs directly as a subprocess on an
+  Apple-silicon Mac, on Metal, with no SSH or Docker. See
+  {ref}`macOS Native <macos-native>`.
+
 **MCP resource**
 : A read-only asset exposed by the [MCP server](integrations/mcp.md) via
   `resources/read`, covering live scene snapshots (`blender://scene/current`)
@@ -334,10 +339,10 @@ documentation, grouped by subject and alphabetized within each group.
   security note in [MCP Server](integrations/mcp.md).
 
 **`ppf-cts-server`**
-: The Rust solver binary (`ppf-cts-server` on Linux,
+: The Rust solver binary (`ppf-cts-server` on Linux and macOS,
   `ppf-cts-server.exe` on Windows) launched on the remote side (or as a
-  local subprocess for Windows Native) that listens for work over TCP on
-  the configured port (default 9090). Built from the `ppf-cts-server`
+  local subprocess for the two native types) that listens for work over
+  TCP on the configured port (default 9090). Built from the `ppf-cts-server`
   crate, which wraps the algorithmic core in `ppf-cts-core`.
 
 **Session ID**

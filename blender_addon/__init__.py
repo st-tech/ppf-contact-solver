@@ -97,13 +97,12 @@ def _disconnect_at_exit():
     """atexit hook: clear addon-side connection state on Blender
     shutdown.
 
-    On Linux/macOS the server is started externally and survives the
-    addon. On Windows native the addon spawns ``ppf-cts-server.exe``,
-    but disconnect is a no-op (see ``WinNativeBackend.disconnect``):
-    the server stays running so a new Blender attaches to it instead
-    of colliding with the orphan listen socket the solver subprocess
-    keeps alive. Users who want the server gone on exit click Stop
-    first.
+    Where the server is started externally (a rig orchestrator or a dev
+    shell) it survives the addon on its own. Where the addon spawned it
+    (``WinNativeBackend``, ``MacNativeBackend`` and ``LinuxNativeBackend``)
+    disconnect is a no-op, so the server also stays up and a new Blender
+    attaches to it rather than colliding with the port it still holds.
+    Users who want the server gone on exit click Stop first.
     """
     _safe_disconnect()
 
@@ -118,10 +117,18 @@ def _reconcile_manifest_on_load(*_args):
     """
     # Renamed properties first: a stranded legacy key (e.g. the pre-rename fps
     # flag) otherwise leaves the scene reading a default that silently changes
-    # its simulation time base.
+    # its simulation time base. The retired Local connection is the same kind of
+    # stranding through an enum item number rather than a key.
     try:
-        from .core.migrate_renames import migrate_renamed_state_props
-        moved = migrate_renamed_state_props()
+        from .core.migrate_renames import (
+            migrate_renamed_state_props,
+            migrate_retired_connection,
+        )
+        moved = "; ".join(
+            part
+            for part in (migrate_renamed_state_props(), migrate_retired_connection())
+            if part
+        )
         if moved:
             from .models.console import console
             console.write(f"[auto-migrate] {moved}")

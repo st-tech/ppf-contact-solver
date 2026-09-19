@@ -1,0 +1,53 @@
+# File: build-win-native/scripts/wheel-build-requirements.txt
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# The build tools scripts\source-wheel.py builds a wheel with, installed with
+# --require-hashes into a throwaway environment and used with
+# --no-build-isolation, so a build requirement cannot float to whatever the
+# index serves that day. The set covers both packages the Windows build makes
+# from source: triangle builds with Cython and setuptools, and tetgen with
+# scikit-build-core, nanobind, CMake and Ninja. The versions are those that
+# satisfied every package's build-system requirements on 2026-09-15, and each hash
+# is the sha256 PyPI publishes for that file.
+#
+# EVERY ARCHITECTURE AND INTERPRETER THE SCRIPT RUNS FOR HAS ITS FILE LISTED.
+# pip picks the one wheel that matches the interpreter and checks it against this
+# list, so a missing platform is a hash failure rather than a fall back to an
+# sdist: ARM64 runs python-build-standalone 3.12, and x64 is exercised with the
+# NuGet CPython 3.11 build.bat links PyO3 against. exceptiongroup, tomli and
+# typing-extensions are scikit-build-core's dependencies below Python 3.11 only;
+# they are listed for the 3.11 interpreter and pip skips them on 3.12.
+#
+# To move a pin, take the version and every file hash from
+# https://pypi.org/pypi/<name>/<version>/json together, and rebuild both wheels
+# with scripts\source-wheel.py before committing.
+cython==3.3.0 \
+    --hash=sha256:dce56c26d388f00a19426371b6926bf2f77c5c03b71d5273e4556c68be98c2dd \
+    --hash=sha256:8566ea804cfc265f5e9dda71d1b716aa24ee4c3423a5da4b28a248a78c33e3f9 \
+    --hash=sha256:333449cc0350baedee5a6af27929eac8a71eac4ec59333c45ff476b33c6c660d \
+    --hash=sha256:9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
+scikit-build-core==1.0.3 \
+    --hash=sha256:ae95427b7d3c14a6cf8bbfd4d901f6138ab64c99e20cbe8ea7d75cd26093f085
+nanobind==3.0.1 \
+    --hash=sha256:4b49491fe8bf483a5e0342125b8fe56237e490ba642c7e296170b8cd256a7764
+cmake==4.4.3 \
+    --hash=sha256:c0d2ccd8f83605fedfd688bb37b4cb4008a7ddf6c32321b9c804168031a3cc74 \
+    --hash=sha256:708ad6b662ee89d3eb2eac02a1afba20ca653139cbe769fed046124d0c6bc050
+ninja==1.13.2 \
+    --hash=sha256:1db9852e528efa7702f5123969f86678663e46d57ff28ab13f5fd84d64a85fb1 \
+    --hash=sha256:1293f4078278b70d0ee4b6cc8f3a9e030656c9b2f59909970343c4fe76070118
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+exceptiongroup==1.3.1 ; python_version < "3.11" \
+    --hash=sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598
+tomli==2.4.1 ; python_version < "3.11" \
+    --hash=sha256:5ee18d9ebdb417e384b58fe414e8d6af9f4e7a0ae761519fb50f721de398dd4e \
+    --hash=sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe
+typing-extensions==4.16.0 ; python_version < "3.11" \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

@@ -30,10 +30,34 @@ pub enum ExtraError {
     OpenFailed { path: String, error: String },
     #[error("failed to read mesh file '{path}': {error}")]
     ReadFailed { path: String, error: String },
-    #[error(
-        "git is not found in PATH. The bundled distribution includes MinGit, \
-         but it may not be in PATH. Please ensure you're running from start.bat \
-         or add mingit/cmd to your PATH. For manual installation: choco install git"
+    // ONE MESSAGE PER PLATFORM, because the repair differs: the Windows
+    // distribution ships MinGit, while the macOS and Linux ones ship no git and
+    // the user installs it. Naming MinGit or start.bat on a platform that has
+    // neither sends the reader looking for something that was never there.
+    #[cfg_attr(
+        windows,
+        error(
+            "git is not found in PATH. The bundled distribution includes MinGit, \
+             but it may not be in PATH. Please ensure you're running from start.bat \
+             or add mingit/cmd to your PATH. For manual installation: choco install git"
+        )
+    )]
+    #[cfg_attr(
+        target_os = "macos",
+        error(
+            "git is not found in PATH. This example clones a repository, which \
+             needs git. Install the Xcode command line tools, which carry it: \
+             xcode-select --install"
+        )
+    )]
+    #[cfg_attr(
+        not(any(windows, target_os = "macos")),
+        error(
+            "git is not found in PATH. This example clones a repository, which \
+             needs git, and the Linux distribution does not ship one. Install it \
+             with the system package manager, for example: sudo apt install git, \
+             or: sudo dnf install git"
+        )
     )]
     GitNotFound,
     #[error("git command failed: {0}")]
@@ -329,9 +353,17 @@ mod tests {
     fn git_error_strings_match_python_substring() {
         let m = format!("{}", ExtraError::GitNotFound);
         assert!(m.contains("git is not found in PATH"));
-        assert!(m.contains("MinGit"));
-        assert!(m.contains("start.bat"));
-        assert!(m.contains("choco install git"));
+        if cfg!(windows) {
+            assert!(m.contains("MinGit"));
+            assert!(m.contains("start.bat"));
+            assert!(m.contains("choco install git"));
+        } else if cfg!(target_os = "macos") {
+            assert!(m.contains("xcode-select --install"));
+            assert!(!m.contains("MinGit"));
+        } else {
+            assert!(m.contains("apt install git"));
+            assert!(!m.contains("MinGit"));
+        }
     }
 
     #[test]

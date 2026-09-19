@@ -128,4 +128,4 @@ def test_smoke_session():
 def test_smoke_utils():
     assert isinstance(_rust.solver_busy(), bool)
     assert isinstance(_rust.process_name(), str)
-    assert isinstance(_rust.get_cache_dir(), str)
+    assert isinstance(_rust.get_cache_dir(str(REPO_ROOT)), str)

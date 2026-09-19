@@ -62,6 +62,10 @@ fn _ppf_cts_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // fail fast when a compiled module built from a different source tree is
     // loaded, which imports cleanly but can produce incorrect results.
     m.add("__build_manifest_dir__", env!("CARGO_MANIFEST_DIR"))?;
+    // The digest of the formats and core sources this module was built from.
+    // The frontend compares it with a solver's `--probe` answer before a run
+    // takes its solver from a directory other than this module's.
+    m.add("__source_stamp__", ppf_cts_formats::SOURCE_STAMP)?;
     // Numeric kernels
     m.add_function(wrap_pyfunction!(kernels::check_wall_violations_single, m)?)?;
     m.add_function(wrap_pyfunction!(kernels::frame_mapping, m)?)?;

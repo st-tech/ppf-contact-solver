@@ -28,7 +28,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
-MANIFEST_FILENAME = ".ppf_manifest.json"
+MANIFEST_FILENAME = ".manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 
 
@@ -112,7 +112,7 @@ def save_manifest(blend_path: str, manifest: ProjectManifest) -> None:
     # Temp-file + rename for atomicity — a partial write would leave
     # the old manifest intact and be ignored.
     dir_ = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=dir_, prefix=".ppf_manifest.", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=dir_, prefix=".manifest.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(payload)

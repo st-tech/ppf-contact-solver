@@ -33,7 +33,7 @@ use super::quat::{axis_angle_to_quat, quat_to_mat3, Vec3};
 /// dynamics group. This is the single source of truth for the cap.
 ///
 /// MUST stay equal to the GPU-side `#define MAX_COLLISION_WINDOWS` in
-/// `crates/ppf-cts-solver/src/cpp/main/main.cu`: the Rust side writes a
+/// `crates/ppf-cts-solver/src/kernels/main/main.cu`: the Rust side writes a
 /// flat window table with stride `MAX_COLLISION_WINDOWS * 2` floats per
 /// group and the kernel reads back with the same stride, so a mismatch
 /// silently corrupts the simulation. The solver's collision-window table

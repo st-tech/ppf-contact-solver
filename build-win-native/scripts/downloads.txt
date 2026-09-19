@@ -9,26 +9,65 @@
 # that both cmd (via scripts\load-downloads.bat) and bash (via
 # `set -a; . scripts/downloads.txt; set +a`) can read it without a parser.
 #
-# Two kinds of entry. A fetched archive pairs URL_* with FILE_*; a cloned
-# repository pairs URL_*_GIT with the tag to check out, and has no FILE_*.
-# To bump a tool version edit that entry's lines together, then run
-# scripts\check-downloads.bat to confirm the new pointer is reachable before
-# the next warmup. No URL belongs in any other file.
+# Three kinds of entry. A fetched archive pairs URL_* with FILE_*, and with
+# SHA256_* where its content is pinned; a cloned repository pairs URL_*_GIT
+# with the tag or commit to check out, and has no FILE_*. An entry that differs
+# by architecture carries a suffix, _X64 or _ARM64, on every one of its keys,
+# and scripts\platform.bat copies this host's set onto the unsuffixed names;
+# a missing suffix for this host is an error there, never a fall back to the
+# other architecture's file. To bump a tool version edit that entry's lines
+# together, then run scripts\check-downloads.bat to confirm the new pointer is
+# reachable before the next warmup. No URL belongs in any other file.
+#
+# A VALUE MAY CARRY A `%` ESCAPE, and URL_PYTHON_ARM64 does (`%2B` for `+`).
+# Every consumer reads these by NAME for that reason: a value passed through
+# `call` is percent-expanded a second time, which rewrites the escape.
 
+# 7-Zip extracts the CUDA installer, so it is fetched only where CUDA is built.
 URL_7ZIP=https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.exe
 FILE_7ZIP=7z2408-x64.exe
 
-URL_MINGIT=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip
-FILE_MINGIT=MinGit-2.47.1-64-bit.zip
+# The two digests are the ones Git for Windows publishes in the release notes of
+# v2.47.1.windows.1, read through the GitHub releases API on 2026-09-15.
+URL_MINGIT_X64=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip
+FILE_MINGIT_X64=MinGit-2.47.1-64-bit.zip
+SHA256_MINGIT_X64=50b04b55425b5c465d076cdb184f63a0cd0f86f6ec8bb4d5860114a713d2c29a
+URL_MINGIT_ARM64=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-arm64.zip
+FILE_MINGIT_ARM64=MinGit-2.47.1-arm64.zip
+SHA256_MINGIT_ARM64=fc5747e187a70147404a94da104dc9f6005a3d45a78a56dbfa132075ad4a45e4
 
 URL_CUDA=https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_572.61_windows.exe
 FILE_CUDA=cuda_12.8.1_572.61_windows.exe
 
-URL_RUSTUP=https://win.rustup.rs/x86_64
-FILE_RUSTUP=rustup-init.exe
+# A moving pointer to the current rustup-init, so there is no digest to pin; the
+# host triple that `rustc -vV` reports after the install is checked instead.
+# The ARM64 installer is what makes rustup choose aarch64-pc-windows-msvc as the
+# host: the x64 one runs under emulation on Windows on ARM and installs an x64
+# toolchain there.
+URL_RUSTUP_X64=https://win.rustup.rs/x86_64
+FILE_RUSTUP_X64=rustup-init.exe
+URL_RUSTUP_ARM64=https://win.rustup.rs/aarch64
+FILE_RUSTUP_ARM64=rustup-init-aarch64.exe
 
-URL_PYTHON=https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip
-FILE_PYTHON=python-3.11.9-embed-amd64.zip
+# THE TWO ARCHITECTURES SHIP DIFFERENT INTERPRETERS, and warmup.bat installs each
+# its own way. x64 keeps the python.org embeddable distribution, plus the NuGet
+# CPython that PyO3 links against because the embeddable one carries no
+# libs\python3.lib. python.org publishes no embeddable build for ARM64 that
+# carries import libraries either, so ARM64 takes python-build-standalone's
+# install_only archive, which holds python312.dll, libs\python3.lib and
+# include\ in one tree and serves both roles; it is the same distribution and
+# CPython version (3.12.14) the Linux and macOS bundles ship.
+#
+# SHA256_PYTHON_X64 was computed from the file warmup.bat had downloaded from
+# python.org, which publishes no SHA256 for 3.11.9. SHA256_PYTHON_ARM64 is the
+# digest GitHub records for the release asset, read through its API on
+# 2026-09-15.
+URL_PYTHON_X64=https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip
+FILE_PYTHON_X64=python-3.11.9-embed-amd64.zip
+SHA256_PYTHON_X64=009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b
+URL_PYTHON_ARM64=https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-pc-windows-msvc-install_only.tar.gz
+FILE_PYTHON_ARM64=cpython-3.12.14-20260901-aarch64-pc-windows-msvc-install_only.tar.gz
+SHA256_PYTHON_ARM64=4e852236277eb8f7105cbe0f5adf45592f521af238bc0f700c351856e2c2e41a
 
 URL_GET_PIP=https://bootstrap.pypa.io/get-pip.py
 FILE_GET_PIP=get-pip.py
@@ -38,7 +77,9 @@ FILE_GET_PIP=get-pip.py
 # loop that silently produced no MSVC toolchain (no setup_x64.bat), which
 # only surfaced two build steps later. ba48b0a3 (2026-04-14) is the last
 # good revision, verified end-to-end (setup_x64.bat produced, cl.exe usable).
-# Verify any new SHA on a Windows host before bumping.
+# Verify any new SHA on a Windows host before bumping. That revision accepts
+# --host and --target from x64, x86 and arm64 and names its environment script
+# setup_<target>.bat, which is what warmup.bat asks for on ARM64.
 URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/ba48b0a3d9ea05c6caa5e583eda60fa7510da4bc/portable-msvc.py
 FILE_PORTABLE_MSVC=portable-msvc.py
 
@@ -63,6 +104,25 @@ WINDOWS_SDK_VERSION=26100
 URL_EIGEN=https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip
 FILE_EIGEN=eigen-3.4.0.zip
 
+# THE ROCm SDK, fetched only where ROCm is a backend. AMD's "TheRock"
+# self-contained Windows distribution, multiarch form, which carries hipcc and the
+# offload toolchain for every target in crates/ppf-cts-compute/rocm/rocm_arch.txt
+# and the HIP runtime (bin\amdhip64_7.dll) the distribution redistributes. Version
+# 10.0.0 is the DISTRIBUTION version: it carries HIP 7.15.26333 and AMD clang 23.
+#
+# AMD PUBLISHES NO DIGEST AND NO SIGNATURE FOR THIS CHANNEL (a .sha256, .sha256sum,
+# .sig or .asc beside the tarball answers 404). SHA256_ROCM_SDK was computed from
+# the bytes fetched on 2026-09-13, and re-computed on Windows over a copy of them
+# with the same result. It detects corruption and a changed file behind an
+# unchanged name; it proves nothing about origin, which a signed channel would.
+#
+# WINDOWS HAS NO ARM64 ENTRY HERE, BECAUSE AMD PUBLISHES NONE: the channel lists
+# Windows distributions for x86_64 only. scripts\platform.bat refuses rocm on
+# ARM64 with that reason.
+URL_ROCM_SDK=https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-multiarch-10.0.0.tar.gz
+FILE_ROCM_SDK=therock-dist-windows-multiarch-10.0.0.tar.gz
+SHA256_ROCM_SDK=ebe454fe9ad663655177462187a4c86c72fd0537638f6cbea34660ddebf40056
+
 URL_MSYS2=https://github.com/msys2/msys2-installer/releases/download/2024-12-08/msys2-base-x86_64-20241208.sfx.exe
 FILE_MSYS2=msys2-base-x86_64-20241208.sfx.exe
 
@@ -80,3 +140,29 @@ FFMPEG_VERSION=7.1
 
 # Git repository (cloned, not downloaded as archive)
 URL_X264_GIT=https://code.videolan.org/videolan/x264.git
+# The commit the Linux slim ffmpeg (.github/workflows/scripts/make-slim-ffmpeg.sh)
+# checks out. x264 publishes no release tags, and that ffmpeg is GPL through
+# x264, so a distribution shipping it has to name the exact source it was built
+# from. Taken from the default branch on 2026-09-14; the commit is dated
+# 2025-09-10.
+X264_COMMIT=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+
+# zlib, linked STATICALLY into the Linux slim ffmpeg so the binary needs no
+# shared libz on the machine it lands on. The hash is the one GitHub publishes
+# for this release asset.
+URL_ZLIB=https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+FILE_ZLIB=zlib-1.3.2.tar.gz
+SHA256_ZLIB=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+
+# FRONTEND PACKAGES BUILT FROM UPSTREAM SOURCE, on an architecture PyPI carries
+# no wheel for. scripts\source-wheel.py fetches each at the COMMIT below, never
+# at a tag, since a tag can move, and builds it unmodified. triangle's pair is
+# the pair build-linux-native/scripts/downloads.txt pins. triangle's C core is its
+# `c` submodule, and TRIANGLE_C_COMMIT is the commit the triangle tree records
+# for it, which the build checks. tetgen carries its C++ source in its own tree.
+URL_TRIANGLE_GIT=https://github.com/drufat/triangle
+TRIANGLE_COMMIT=595b43eb6682992a0b1012b9671bf860c0e6ae56
+URL_TRIANGLE_C_GIT=https://github.com/drufat/triangle-c
+TRIANGLE_C_COMMIT=8b9e1046e5cddab1298d3204f10c93665836cf99
+URL_TETGEN_GIT=https://github.com/pyvista/tetgen
+TETGEN_COMMIT=c039698cf4cce5c671b281c003dbc6cd8e58acc3

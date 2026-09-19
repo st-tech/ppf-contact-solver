@@ -17,10 +17,13 @@
 #     its version with it, so the message has to name updating a side rather
 #     than only restarting, and it has to reach the panel, not just the
 #     Console.
-#   * Stop Server on the SSH and Docker backends kills by process name. The
-#     command runs inside `/bin/sh -c '...'`, whose own command line holds the
-#     pattern, so a `pkill -f` match includes the shell issuing it. And a
-#     server still answering after the grace period is not a stop that worked.
+#   * Stop Server on the SSH and Docker backends ends the server on the
+#     backend's OWN port, never every ppf-cts-server on the host, because a
+#     solver host can be shared. The command runs inside `/bin/sh -c '...'`,
+#     whose own command line holds the pattern, so the candidates a `-f`
+#     match returns are filtered through `ps -o comm=`, which the issuing
+#     shell fails. And a server still answering after the grace period is not
+#     a stop that worked.
 #   * The cbor2 recovery button runs `ensurepip` first. Every failure worth
 #     naming there (a read-only Python install, a stripped ensurepip, a proxy)
 #     is described in the child's stderr, so the message has to carry it.
@@ -37,7 +40,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Pure reporting logic; no solver is involved.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''
@@ -118,7 +121,43 @@ try:
     record("matching_version_sets_no_error", not ok_state.error,
            {"error": ok_state.error})
 
-    # ---- Stop Server kills by process name, not by command line ----
+    # ---- the mismatch does not outlive the server it accused ----
+    # Detecting it stops that server, so the next poll is the empty-response
+    # path. `version_ok` used to survive that path, and `to_remote_status`
+    # reads it ahead of the server states, so the panel went on reporting
+    # Protocol Version Mismatch about a process that was already gone and
+    # `can_operate` stayed false; Disconnect was the only way out, which is
+    # why reconnecting looked like the fix. The state is built here rather
+    # than taken from the engine so the assertion does not depend on whether
+    # this worker happens to be connected.
+    state_mod = __import__(pkg + ".core.state",
+                           fromlist=["AppState", "Phase", "Server"])
+    status_mod = __import__(pkg + ".core.status", fromlist=["RemoteStatus"])
+    online = state_mod.AppState(phase=state_mod.Phase.ONLINE,
+                                server=state_mod.Server.RUNNING)
+    mismatched_state, _ = transitions.transition(
+        online, events.ServerPolled(response=mismatched))
+    gone_state, _ = transitions.transition(
+        mismatched_state, events.ServerPolled(response={}))
+    record("mismatch_state_is_not_operable",
+           mismatched_state.can_operate is False,
+           {"can_operate": mismatched_state.can_operate})
+    record("server_gone_clears_the_mismatch",
+           gone_state.version_ok is True,
+           {"version_ok": gone_state.version_ok})
+    record("server_gone_reports_the_server_not_the_version",
+           gone_state.to_remote_status()
+           == status_mod.RemoteStatus.SERVER_NOT_RUNNING,
+           {"status": gone_state.to_remote_status().name})
+    record("server_gone_keeps_the_diagnosis",
+           "0.0.0-not-the-addons" in gone_state.error
+           and protocol.PROTOCOL_VERSION in gone_state.error,
+           {"error": gone_state.error})
+    record("mismatch_names_start_server_as_the_next_step",
+           "Start Server" in mismatched_state.error,
+           {"error": mismatched_state.error})
+
+    # ---- Stop Server ends the server on this backend's port, and only it ----
     runner = facade.runner
     saved_backend = runner._backend
     saved_project = runner._project_name
@@ -128,12 +167,25 @@ try:
         runner._project_name = "stop_reporting"
         runner._do_stop_server()
         facade.tick()
-        kill = [c for c in stopped.commands if "pkill" in c]
-        record("stop_matches_the_process_name",
-               kill and "pkill -x ppf-cts-server" in kill[0],
+        kill = [c for c in stopped.commands if "ppf-cts-server" in c]
+        cmd = kill[0] if kill else ""
+        # 9090 is _RecordingBackend.server_port. Asserting the NUMBER, not
+        # just that some port was substituted, is what catches a kill that
+        # carries a default or a stale port instead of this backend's.
+        record("stop_scopes_the_kill_to_the_backends_port",
+               len(kill) == 1 and "PORT=9090;" in cmd and "--port $PORT" in cmd,
                {"commands": stopped.commands})
-        record("stop_does_not_match_its_own_command_line",
-               all(" -f " not in c for c in kill), {"commands": kill})
+        # The regression this guards: a host-wide sweep ends every user's
+        # server on a shared solver host. There is no spelling of that which
+        # does not name the process alone, so the absence of one is the test.
+        record("stop_runs_no_host_wide_sweep",
+               bool(cmd) and "pkill" not in cmd and "killall" not in cmd,
+               {"command": cmd})
+        # What makes the `-f` match safe: `pgrep -f` matches the issuing
+        # shell's own command line too, and only the `ps -o comm=` filter
+        # keeps it (and any other mere mention) out of the kill.
+        record("stop_filters_candidates_by_process_name",
+               "ps -o comm=" in cmd, {"command": cmd})
         record("clean_stop_reports_no_error", not runner._engine.state.error,
                {"error": runner._engine.state.error})
 

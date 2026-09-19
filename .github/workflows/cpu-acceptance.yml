@@ -1,0 +1,247 @@
+# File: cpu-acceptance.yml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# The CPU backend's acceptance list, measured on x86_64 and on aarch64 from a
+# source checkout. Each leg builds the release CPU backend and answers items 2
+# to 6 of that list, with evidence it uploads:
+#
+#   2. the host baseline the build recorded (PPF_HOST_BASELINE_BUILT) and the
+#      flags the compiler actually received, both read from the solver build
+#      script's own output, which cc prints with CC_ENABLE_DEBUG_OUTPUT;
+#   3. fused multiply-add instructions PRESENT in the shared bodies' shim and
+#      ABSENT in isect_ffi, counted with objdump;
+#   4. the solver's release tests at RAYON_NUM_THREADS=1 and at the runner's core
+#      count, with the two pass lists required to be identical;
+#   5. every simulating example producing moving output under --fast-check, and
+#      disp_at_5 over repeated short runs of a set of scenes, which the compare
+#      job lays side by side for the two architectures;
+#   6. examples/cpu_contact_fixture.py, the penetration fixture with its
+#      contact-disabled control.
+#
+# Item 7, the distribution's smoke test and license files, is release.yml's.
+# The fixture's two fault-injected controls need a scratch build of the solver and
+# are not run here.
+
+name: CPU acceptance (x86_64 and aarch64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenes:
+        description: 'Notebooks for the fast-check pass, space separated; all for every simulating example'
+        required: true
+        type: string
+        default: 'all'
+      envelope_scenes:
+        description: 'Notebooks for the repeated short runs that measure disp_at_5; none to skip'
+        required: true
+        type: string
+        default: 'drape hang roller domino codim plastic yarn'
+      repeat:
+        description: 'Runs per notebook in the disp_at_5 pass'
+        required: true
+        type: string
+        default: '2'
+
+jobs:
+  measure:
+    name: CPU acceptance (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            fused: '\b(vfmadd|vfmsub|vfnmadd|vfnmsub)[0-9a-z]*\b'
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            fused: '\b(fmadd|fmsub|fnmadd|fnmsub)\b'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUNBUFFERED: '1'
+      REPORT: ${{ github.workspace }}/acceptance-report
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Confirm the runner's architecture
+        run: |
+          set -euo pipefail
+          [ "$(uname -m)" = "${{ matrix.arch }}" ] || { echo "ERROR: this runner is $(uname -m)"; exit 1; }
+          mkdir -p "$REPORT"
+          { uname -a; nproc; python --version; rustc -vV; } | tee "$REPORT/runner.txt"
+
+      # The frontend packages every provisioning path installs, read from
+      # warmup.py rather than restated. triangle has no aarch64 wheel, so that leg
+      # builds it from the pinned source the Linux distribution uses, with
+      # contraction off and checked, and every other package must arrive as a
+      # binary wheel.
+      - name: Install the frontend packages
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python - > "$RUNNER_TEMP/requirements.txt" <<'PY'
+          import runpy
+          ns = runpy.run_path("warmup.py")
+          print("\n".join(ns["python_packages"]() + ns["tetra_packages"]()))
+          PY
+          FIND_LINKS=()
+          if [ "${{ matrix.arch }}" = aarch64 ]; then
+            bash build-linux-native/scripts/source-wheel.sh "$(command -v python)" triangle "$RUNNER_TEMP/wheels"
+            FIND_LINKS=(--find-links "$RUNNER_TEMP/wheels")
+            cp "$RUNNER_TEMP"/wheels/*.sources.txt "$REPORT/" || true
+          fi
+          python -m pip install --only-binary=:all: "${FIND_LINKS[@]}" -r "$RUNNER_TEMP/requirements.txt"
+          python -m pip freeze > "$REPORT/pip-freeze.txt"
+
+      - name: Build the release CPU backend
+        env:
+          CC_ENABLE_DEBUG_OUTPUT: '1'
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR=target/cpu cargo build --release --features cpu
+
+      # ITEM 2. The build script prints the baseline it recorded as a rustc-env
+      # line, and cc prints every compiler invocation into the same output file,
+      # so both halves are read off the one build that produced the binary.
+      - name: The recorded host baseline and the flags the compiler received
+        run: |
+          set -euo pipefail
+          mapfile -t OUTPUTS < <(grep -l 'PPF_HOST_BASELINE_BUILT' target/cpu/release/build/ppf-cts-solver-*/output)
+          [ "${#OUTPUTS[@]}" -eq 1 ] || { echo "ERROR: expected one solver build output, found ${#OUTPUTS[@]}"; exit 1; }
+          OUT="${OUTPUTS[0]}"
+          BUILT="$(sed -n 's/^cargo:rustc-env=PPF_HOST_BASELINE_BUILT=//p' "$OUT")"
+          RUNNING="$(grep -a '^running: ' "$OUT" || true)"
+          COMPILES="$(printf '%s\n' "$RUNNING" | grep -c 'ffp-contract=fast' || true)"
+          printf 'recorded baseline: %s\ncompiler invocations with -ffp-contract=fast: %s\n' "$BUILT" "$COMPILES" | tee "$REPORT/baseline.txt"
+          [ "$COMPILES" -gt 0 ] || { echo "ERROR: no shared-body compile received -ffp-contract=fast"; exit 1; }
+          case "${{ matrix.arch }}" in
+            x86_64)
+              [ "$BUILT" = "x86-64-v3" ] || { echo "ERROR: recorded baseline $BUILT, expected x86-64-v3"; exit 1; }
+              printf '%s\n' "$RUNNING" | grep 'ffp-contract=fast' | grep -q -- '-march=x86-64-v3' \
+                || { echo "ERROR: the shared bodies were not compiled with -march=x86-64-v3"; exit 1; } ;;
+            aarch64)
+              [ "$BUILT" = "none" ] || { echo "ERROR: recorded baseline $BUILT, expected none"; exit 1; }
+              if printf '%s\n' "$RUNNING" | grep 'ffp-contract=fast' | grep -E -- '-m(cpu|arch)='; then
+                echo "ERROR: a shared-body compile received a CPU or architecture flag, and the recorded baseline is none"
+                exit 1
+              fi ;;
+          esac
+          printf '%s\n' "$RUNNING" | grep 'ffp-contract=fast' | head -3 >> "$REPORT/baseline.txt"
+
+      # ITEM 3.
+      - name: Fused instructions in the shim and in isect_ffi
+        run: |
+          set -euo pipefail
+          mapfile -t SHIM < <(find target/cpu/release/build -name libppf_kernels.a)
+          mapfile -t ISECT < <(find target/cpu/release/build -name libisect_ffi.a)
+          [ "${#SHIM[@]}" -eq 1 ] && [ "${#ISECT[@]}" -eq 1 ] || {
+            echo "ERROR: expected one libppf_kernels.a and one libisect_ffi.a, found ${#SHIM[@]} and ${#ISECT[@]}"; exit 1; }
+          SHIM_LINES="$(objdump -d --no-show-raw-insn "${SHIM[0]}" | wc -l)"
+          SHIM_FUSED="$(objdump -d --no-show-raw-insn "${SHIM[0]}" | grep -cE '${{ matrix.fused }}' || true)"
+          ISECT_LINES="$(objdump -d --no-show-raw-insn "${ISECT[0]}" | wc -l)"
+          ISECT_FUSED="$(objdump -d --no-show-raw-insn "${ISECT[0]}" | grep -cE '${{ matrix.fused }}' || true)"
+          printf 'shim: %s fused in %s disassembly lines\nisect_ffi: %s fused in %s lines\n' \
+            "$SHIM_FUSED" "$SHIM_LINES" "$ISECT_FUSED" "$ISECT_LINES" | tee "$REPORT/fused.txt"
+          [ "$SHIM_LINES" -gt 1000 ] && [ "$ISECT_LINES" -gt 100 ] || { echo "ERROR: a disassembly came back nearly empty"; exit 1; }
+          [ "$SHIM_FUSED" -gt 0 ] || { echo "ERROR: the shim carries no fused instruction, so it is a non-contracting oracle"; exit 1; }
+          [ "$ISECT_FUSED" -eq 0 ] || { echo "ERROR: isect_ffi carries fused instructions and its predicate is pinned off"; exit 1; }
+
+      # ITEM 4.
+      - name: Release tests at one thread and at the core count
+        run: |
+          set -euo pipefail
+          for threads in 1 default; do
+            if [ "$threads" = 1 ]; then export RAYON_NUM_THREADS=1; else unset RAYON_NUM_THREADS; fi
+            CARGO_TARGET_DIR=target/cpu cargo test --release -p ppf-cts-solver --no-default-features --features cpu \
+              2>&1 | tee "$REPORT/tests-threads-$threads.log"
+            grep -aE '^test .* \.\.\. (ok|ignored)$' "$REPORT/tests-threads-$threads.log" | LC_ALL=C sort > "$REPORT/tests-threads-$threads.list"
+          done
+          wc -l "$REPORT"/tests-threads-*.list
+          [ -s "$REPORT/tests-threads-1.list" ] || { echo "ERROR: the one-thread run listed no test"; exit 1; }
+          diff "$REPORT/tests-threads-1.list" "$REPORT/tests-threads-default.list"
+          echo "The two pass lists are identical."
+
+      # ITEM 6.
+      - name: The penetration fixture and its contact-disabled control
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" PYTHONPATH="$GITHUB_WORKSPACE" \
+            python examples/cpu_contact_fixture.py 2>&1 | tee "$REPORT/contact-fixture.log"
+          grep -q 'cpu contact fixture: PASS' "$REPORT/contact-fixture.log"
+
+      # ITEM 5, first half.
+      - name: Every example moves under --fast-check
+        env:
+          SCENES: ${{ inputs.scenes }}
+        run: |
+          set -euo pipefail
+          ONLY=()
+          EXPECT=(--expect-all)
+          if [ "$SCENES" != all ]; then
+            # shellcheck disable=SC2206 # a space-separated list of notebook stems
+            ONLY=(--only $SCENES)
+            EXPECT=()
+          fi
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python examples/run_suite.py --backend cpu --fast-check \
+            --python "$(command -v python)" --data-root "$RUNNER_TEMP/ppf-data" --timeout 3600 \
+            --out "$REPORT/fast-check.json" "${ONLY[@]}" 2>&1 | tee "$REPORT/fast-check.log" || true
+          python .github/workflows/scripts/cpu-acceptance-report.py fast-check "$REPORT/fast-check.json" "${EXPECT[@]}"
+
+      # ITEM 5, second half: the measurement the compare job reads.
+      - name: Repeated short runs for disp_at_5
+        if: inputs.envelope_scenes != 'none'
+        env:
+          SCENES: ${{ inputs.envelope_scenes }}
+          REPEAT: ${{ inputs.repeat }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # a space-separated list of notebook stems
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python examples/run_suite.py --backend cpu --frames 6 \
+            --repeat "$REPEAT" --python "$(command -v python)" --data-root "$RUNNER_TEMP/ppf-data-frames" \
+            --timeout 3600 --out "$REPORT/frames.json" --only $SCENES 2>&1 | tee "$REPORT/frames.log" || true
+          [ -s "$REPORT/frames.json" ] || { echo "ERROR: the short runs wrote no report"; exit 1; }
+
+      - name: Upload the acceptance report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpu-acceptance-${{ matrix.arch }}
+          path: ${{ env.REPORT }}
+          retention-days: 14
+
+  compare:
+    name: disp_at_5 on the two architectures
+    needs: measure
+    if: always() && inputs.envelope_scenes != 'none'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: cpu-acceptance-x86_64
+          path: x86_64
+
+      - uses: actions/download-artifact@v6
+        with:
+          name: cpu-acceptance-aarch64
+          path: aarch64
+
+      - name: Lay the two measurements side by side
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/scripts/cpu-acceptance-report.py compare \
+            --x86 x86_64/frames.json --arm aarch64/frames.json | tee -a "$GITHUB_STEP_SUMMARY"

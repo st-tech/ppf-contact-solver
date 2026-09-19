@@ -27,9 +27,13 @@ if exist "%SRC%\frontend" (
     set EXAMPLES_DIR=%SRC%\examples
     set FAST_CHECK_DIR=%BUILD_WIN%\fast_check
     set INJECT_SCRIPT=%BUILD_WIN%\inject_fast_check.py
-    set BIN_DIR=%SRC%\crates\ppf-cts-solver\src\cpp\build\lib
+    REM Where a checkout's backend library sits for either GPU backend, and the
+    REM ROCm SDK's runtime beside it. A directory that does not exist is skipped
+    REM by the DLL search, so a CUDA tree is unaffected by the ROCm entries.
+    set BIN_DIR=%SRC%\crates\ppf-cts-compute\cuda\build\lib;%SRC%\crates\ppf-cts-compute\rocm\build\lib;%BUILD_WIN%\rocm\bin
     set MINGIT_DIR=%BUILD_WIN%\mingit\cmd
     set PYTHONPATH=%SRC%
+    set TREE_ROOT=%SRC%
     REM Find examples.txt - first try source location, then local directory
     set EXAMPLES_TXT=%SRC%\.github\workflows\scripts\examples.txt
     if not exist "!EXAMPLES_TXT!" (
@@ -46,6 +50,29 @@ if exist "%SRC%\frontend" (
     set BIN_DIR=!DIST!\bin
     set MINGIT_DIR=!DIST!\mingit\cmd
     set PYTHONPATH=!DIST!
+    set TREE_ROOT=!DIST!
+)
+
+REM NOTHING IS PINNED WHERE A GPU BACKEND IS BUILT. Each backend has its own
+REM target\<backend>, the frontend searches them, and which one a run uses is
+REM resolved when it starts (frontend.get_backend), exactly as the launchers
+REM leave it. A tree holding ONLY the CPU build is the one case with nothing to
+REM resolve, and naming it keeps the frontend from searching for a GPU build that
+REM was never made.
+REM
+REM KEYED ON THE GPU BUILDS THEMSELVES, never on target\release: a distribution
+REM carrying several backends has no such directory, so testing for one would set
+REM this variable on a GPU machine and run every check on the CPU backend, at
+REM roughly 30x the wall clock, with nothing saying so.
+set "HAS_GPU_BUILD="
+for %%B in (cuda rocm metal) do (
+    if exist "!TREE_ROOT!\target\%%B\release\ppf-contact-solver.exe" set "HAS_GPU_BUILD=1"
+)
+if not defined HAS_GPU_BUILD (
+    if exist "!TREE_ROOT!\target\cpu\release\ppf-contact-solver.exe" (
+        set "CARGO_TARGET_DIR=!TREE_ROOT!\target\cpu"
+        echo This tree holds only the CPU build: CARGO_TARGET_DIR=!TREE_ROOT!\target\cpu
+    )
 )
 
 set PYTHON=%PYTHON_DIR%\python.exe

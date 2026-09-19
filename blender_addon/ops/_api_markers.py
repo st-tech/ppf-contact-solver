@@ -1,10 +1,11 @@
 """Markers for the public Blender Python API.
 
-The ``docs/generate_blender_api_reference.py`` generator looks for these
-decorator names *literally* in the AST of ``api.py``.  Import aliases are
+The ``docs/generate_blender_api_reference.py`` generator walks the
+``blender_addon/ops/api/`` package without importing it and looks for these
+decorator names *literally* in the AST of each module.  Import aliases are
 rejected by the generator so the source of truth is always the bare name.
 
-Both decorators are no-ops at runtime — they exist only to mark intent.
+Both decorators are no-ops at runtime: they exist only to mark intent.
 """
 
 

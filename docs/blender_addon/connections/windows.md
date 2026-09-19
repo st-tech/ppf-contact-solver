@@ -29,7 +29,9 @@ bundled directory; there is no contamination of the host to clean up.
 
 ## When to Use It
 
-- User workstations running Blender on Windows with a local NVIDIA GPU.
+- User workstations running Blender on Windows with a local NVIDIA or
+  AMD GPU, or with no usable GPU at all, where the CPU build runs
+  instead.
 - Bundled deployments that ship the solver next to the add-on.
 - Reproducible test rigs where you want the exact shipped Python +
   CUDA, not whatever the system has.
@@ -38,13 +40,14 @@ bundled directory; there is no contamination of the host to clean up.
 
 1. Set **Type** to `Windows Native`.
 2. Set **Solver Path** to the root of your solver install. This is
-   the directory that contains `ppf-cts-server.exe` under
-   `target\release\` (developer build) or under `bin\` (shipped
-   bundle), plus either a `python\` subfolder (redistributable
-   bundle) or a `build-win-native\python\` subfolder (developer build).
-   Picking a subfolder such as `target\release`, `bin`, or `python` is
-   fine: the add-on walks up to the real root and names the one it
-   used.
+   the directory that contains `ppf-cts-server.exe`, in any of the
+   layouts a build produces: `target\release\`, a per-backend
+   `target\cuda\release\` / `target\rocm\release\`,
+   `target\cpu\release\`, or `bin\`. It also needs either a
+   `python\` subfolder (shipped distribution) or a
+   `build-win-native\python\` subfolder (developer build). Picking a
+   subfolder such as `target\release`, `bin`, or `python` is fine: the
+   add-on walks up to the real root and names the one it used.
 3. Click **Connect**. The add-on resolves the solver root and refuses
    one with no `ppf-cts-server.exe` under it. Connecting does not start
    the server.
@@ -76,7 +79,9 @@ fields. **Connect** is highlighted.
 
 | Field | Description |
 | ----- | ----------- |
-| Solver Path | Root directory containing `ppf-cts-server.exe` (under `target\release\` for a developer build, or under `bin\` for a bundle) plus either `python\` (bundle) or `build-win-native\python\` (dev). A subfolder of it is accepted and resolved upward to the real root. |
+| Solver Path | Root directory containing `ppf-cts-server.exe` (under `target\release\`, a per-backend `target\cuda\release\` or `target\rocm\release\`, `target\cpu\release\`, or `bin\`) plus either `python\` (shipped distribution) or `build-win-native\python\` (dev). A subfolder of it is accepted and resolved upward to the real root. |
+| Compute Device | `GPU` or `CPU`, which build of the solver to run. Always drawn, so you can see which builds are there, and disabled only when the one build present is the one already selected. `CPU` needs no GPU and is substantially slower. **Connect** refuses a device the folder has no build for by name rather than running the other one. |
+| GPU Backend | `Automatic`, `CUDA`, or `ROCm`, drawn only when the folder holds more than one GPU build (a Windows x64 distribution carries CUDA and ROCm together) or when a saved choice names a build the folder does not hold. `Automatic` takes the only GPU build present, or, where there are several, the first whose solver reports a usable device, CUDA before ROCm. |
 
 ## Troubleshooting
 
@@ -89,9 +94,10 @@ fields. **Connect** is highlighted.
 - **`Embedded Python not found ...`** - the add-on could not find a
   Python runtime under the root. Either rebuild the dev tree, or
   download and unpack the bundle zip.
-- **CUDA DLL load errors** - on the shipped bundle, the solver relies
-  on the system CUDA runtime. Install a matching CUDA version, or
-  switch to the developer build which ships its own CUDA.
+- **CUDA DLL load errors** - the shipped distribution carries the CUDA
+  runtime in `bin\`, so the CUDA toolkit does not have to be
+  installed. Check that the NVIDIA driver is present and up to date,
+  or set **Compute Device** to `CPU` to run without a GPU.
 - **`Port N is in use`** - something is already bound to the configured
   server port and it is not a `ppf-cts-server` the add-on recognizes.
   Use the **Force Terminate Process** button shown next to the error to
@@ -121,29 +127,37 @@ Start Server picks one of two layouts by looking for `python.exe`:
     python/python.exe
     cuda/bin/*.dll
   target/release/          # ppf-cts-server.exe and other Rust binaries
-  src/cpp/build/lib/
+  target/cuda/release/     # one directory per backend build.bat builds
+  crates/ppf-cts-compute/cuda/build/lib/
 ```
 
-Used when you built the solver from source. The `ppf-cts-server.exe`
-binary lives at `target\release\ppf-cts-server.exe`. The Python
-interpreter is `build-win-native\python\python.exe`, `CUDA_PATH` is set
-to `build-win-native\cuda`, and the launcher prepends, in order,
-`build-win-native\python`, `target\release`, `src\cpp\build\lib`, and
+Used when you built the solver from source. `build-win-native\build.bat`
+builds each backend into its own `target\<backend>` directory, and a
+plain `cargo build --release -p ppf-cts-server` puts one in
+`target\release`. The Python interpreter is
+`build-win-native\python\python.exe`, `CUDA_PATH` is set to
+`build-win-native\cuda`, and the launcher prepends, in order, the
+directory the resolved `ppf-cts-server.exe` came out of,
+`build-win-native\python`, `target\release`,
+`crates\ppf-cts-compute\cuda\build\lib`, and
 `build-win-native\cuda\bin` to `PATH`.
 
 #### Bundle layout
 
 ```text
 <root>/
-  bin/                     # ppf-cts-server.exe and native shared libraries
+  bin/                     # each GPU backend's library, the runtime it loads, ffmpeg
   python/python.exe
+  target/cuda/release/     # ppf-cts-server.exe, one directory per backend shipped
+  target/cpu/release/
 ```
 
-Used by a shipped redistributable. The `ppf-cts-server.exe` binary lives
-at `bin\ppf-cts-server.exe`. The Python interpreter is
-`root\python\python.exe`, `CUDA_PATH` is not set (CUDA is expected on
-the system `PATH`), and the launcher prepends `root\python`, `root\bin`,
-and `root\target\release`.
+Used by a shipped distribution. The Python interpreter is
+`root\python\python.exe`, `CUDA_PATH` is not set, and the launcher
+prepends the directory the resolved `ppf-cts-server.exe` came out of,
+then `root\python`, `root\bin`, and `root\target\release`. The backend
+library each solver loads sits in `root\bin`, which is why that
+directory is on the search path.
 
 If neither interpreter is present, Start Server fails with:
 

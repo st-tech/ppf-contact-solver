@@ -1,0 +1,3509 @@
+# File: release.yml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Every self-contained distribution this project publishes, built and verified
+# here and attached to ONE release. A reader of the release page sees one entry
+# carrying every operating system and architecture rather than three entries to
+# scroll between, and a user downloading for one machine picks a single asset.
+#
+#   Linux   x86_64   CUDA, ROCm and the CPU backend
+#           aarch64  CUDA and the CPU backend
+#   Windows x86_64   CUDA, ROCm and the CPU backend
+#           aarch64  the CPU backend alone, because neither NVIDIA nor AMD
+#                    publishes a Windows-on-ARM toolkit
+#   macOS   aarch64  Metal and the CPU backend
+#
+# Each backend lives in its own target/<backend>/release inside the archive, and
+# which one a run uses is resolved when the run starts, so one archive serves an
+# NVIDIA machine and an AMD one.
+#
+# `target` PICKS THE OPERATING SYSTEMS. `All` builds every one; `Windows`,
+# `macOS` or `Linux` builds that one alone, for a change that cannot affect the
+# others. A platform that is not selected has its jobs SKIPPED, and the release
+# job treats a skipped platform as absent rather than as a failure, so a
+# single-platform run publishes a release carrying that platform's assets.
+#
+# `Test` BUILDS NOTHING AND PUBLISHES A PLACEHOLDER RELEASE IN MINUTES. Every
+# platform job is skipped; one small job uploads five placeholder archives
+# under the exact artifact names and file names the platform jobs produce,
+# and the release job then runs UNCHANGED against them: the download by
+# pattern, the label table, the tag, the release, and a final read-back that
+# the published release carries exactly the five labeled assets. The stamp
+# is `test-<time>`, so the release is distinguishable at a glance and the
+# release-hygiene sweep trims it. A publish-step defect that would otherwise
+# surface three hours into a real run surfaces here in about two minutes.
+#
+# THE VERSION IS STAMPED ONCE, by the `version` job, and every platform takes it
+# from there. Three workflows each stamping their own from the clock is what this
+# file replaces: two dispatched in the same minute carried one version, and the
+# second to reach its publish step met `Reference already exists (HTTP 422)` with
+# every build and verification green and its archives already uploaded. One
+# stamp for one release makes that collision unrepresentable rather than handled.
+#
+# Every platform's jobs run CONCURRENTLY. They share only the version job, so
+# the wall clock of an `All` run is the slowest platform rather than the sum.
+#
+# The jobs, by platform:
+#
+#   version        the stamp every archive carries, computed once.
+#   Linux          build-linux, build-linux-arm64 (AlmaLinux 8 containers, so
+#                  every binary is linked against glibc 2.28), verify-floor and
+#                  verify-floor-arm64 (the archive in a fresh container with no
+#                  compiler and no GPU), the GPU verification inside build-linux, and verify-linux-arm64
+#                  (EC2 GPU instances started from a PLAIN Ubuntu image with
+#                  only the NVIDIA driver, which is the whole of what a user is
+#                  assumed to have).
+#   Windows        build-windows (an EC2 compute instance builds CUDA and ROCm,
+#                  an EC2 GPU instance verifies) and
+#                  build-win-nogpu (a GitHub-hosted ARM64 runner, CPU).
+#   macOS          build-macos and verify-macos.
+#   release        tag and publish, a short job with a fresh token, attaching
+#                  every archive the selected platforms produced.
+#
+# THE ROCm BACKEND ships inside both x86_64 distributions and no AMD GPU is
+# reachable from CI or the dev boxes, so nothing here runs a ROCm kernel: its
+# device code is covered by the build's static checks and by rocm.yml's
+# NVIDIA-platform run, and each x86_64 verification exercises the CUDA backend of
+# the same archive.
+#
+# Every verification uploads its report directory, so a failure is diagnosable
+# from the artifacts alone without reading the run log.
+
+name: Build Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Operating systems to build and publish'
+        required: true
+        type: choice
+        default: 'All'
+        options:
+          - All
+          - Windows
+          - macOS
+          - Linux
+          - Test
+      dry_run:
+        description: 'Dry run (build and verify only, no release)'
+        required: true
+        type: boolean
+        default: true
+      # MINUTES A TEST RUN WAITS BEFORE PUBLISHING, so a commit can be pushed
+      # to the branch meanwhile and the publish then runs from a commit that
+      # is no longer the branch head, which is the state every real run is in
+      # after an hour of building and no Test run ever reached in its two
+      # minutes. Measured 2026-09-17: every refused real publish tagged a
+      # commit the branch had moved past; every accepted one, Test or real,
+      # tagged the head. Only Test reads it.
+      hold_before_publish:
+        description: 'Test only: minutes to wait before publishing (push a commit meanwhile to probe a non-head publish)'
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '3'
+      run_extension_release:
+        description: 'Build Release Add-on After Success (run the extension release when the build succeeds)'
+        required: true
+        type: boolean
+        default: false
+      region:
+        description: 'AWS Region for the GPU verifications'
+        required: true
+        default: 'ap-northeast-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - ap-northeast-1
+      cuda_scenes:
+        description: 'Example notebooks run on the Linux x86_64 GPU, space separated; all for the whole suite, none to skip'
+        required: true
+        type: string
+        default: 'all'
+      cpu_scenes:
+        description: 'Example notebooks run on the CPU in the glibc 2.28 container, for x86_64 and aarch64; none to skip'
+        required: true
+        type: string
+        default: 'drape'
+      cuda_scenes_arm64:
+        description: 'Example notebooks run on the aarch64 instance''s T4G, space separated; all for the whole suite, none to skip'
+        required: true
+        type: string
+        default: 'drape'
+
+jobs:
+  # ============================================================
+  # THE STAMP EVERY ARCHIVE CARRIES, computed once. Every platform's jobs
+  # take it from here, so all of one release's assets share one version and
+  # no two of them can disagree about which release they belong to.
+  # ============================================================
+  version:
+    name: Stamp the release
+    runs-on: ubuntu-latest
+    # The tag is created here (the step below records why), so this job
+    # writes the repository; every build job stays at contents: read.
+    permissions:
+      contents: write
+    outputs:
+      VERSION: ${{ steps.version.outputs.VERSION }}
+      DRY_RUN: ${{ steps.version.outputs.DRY_RUN }}
+    steps:
+      - name: Get version and mode
+        id: version
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          VERSION="$(TZ='Asia/Tokyo' date '+%Y-%m-%d-%H-%M')"
+          # A Test run publishes placeholders, and its tag says so: the only
+          # thing that differs from a real run is this prefix, which every
+          # later step carries through unchanged.
+          if [ "$TARGET" = "Test" ]; then
+            VERSION="test-$VERSION"
+          fi
+          {
+            echo "VERSION=$VERSION"
+            echo "DRY_RUN=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+          echo "Dry run: $DRY_RUN"
+
+      # THE VERSION TAG IS CREATED NOW, WHILE THIS COMMIT IS THE BRANCH HEAD,
+      # NOT AN HOUR LATER WHEN THE ARCHIVES ARE READY. GITHUB_TOKEN may create
+      # a tag on the commit a branch currently points at and is refused one on
+      # a commit the branch has been pushed past: `403 Resource not accessible
+      # by integration`, from `POST /git/refs` and from `POST /releases` with a
+      # target alike. Measured 2026-09-17 on the Test target: the publish from
+      # 9834badc4 succeeded when nothing was pushed (2026-09-17-13-37) and was
+      # refused when one commit landed during a three-minute hold (run
+      # 35183693259); every refused real publish (35171308223, 35176901186)
+      # had been pushed past during its hour of building, and every accepted
+      # one, from dev or from a two-minute Test run, had not. A publish job
+      # cannot control what is pushed while the builds run, so the ref is
+      # taken at the only moment it is certainly allowed, and the publish job
+      # adds a release to the tag that exists.
+      #
+      # A RUN THAT THEN FAILS KEEPS ITS TAG, AND THAT IS THE POINT. The publish
+      # step can fail on something that is not ours: a 500 from
+      # uploads.github.com discarded a five-archive release once, with the same
+      # payload that had published four times the same day. Deleting the tag
+      # there costs a rebuild of every platform, because re-running the failed
+      # job finds no tag and refuses. Keeping it makes that re-run the cheap
+      # fix it should be. The tag an abandoned run leaves behind is a ref with
+      # no release, which the repository's release-hygiene sweep removes in
+      # bulk along with the ephemeral releases it already trims.
+      #
+      # THE TAG MAY ALREADY EXIST, because the version is a minute stamp: two
+      # dispatches in the same minute carry one version. One on THIS commit
+      # is such a pair and proceeds; one on a DIFFERENT commit is refused,
+      # since the release would carry archives never built from one source.
+      # An annotated tag's ref names the tag OBJECT, so it is dereferenced.
+      #
+      # THE LOOKUP IS JUDGED BY gh's EXIT STATUS, NEVER BY WHETHER IT PRINTED:
+      # on a missing ref `gh api` exits 1 and writes the 404 body to STDOUT
+      # even under --jq (measured on run 35078070344, which read that JSON as
+      # a tag object id). A sha that is not forty hex digits is refused too.
+      - name: Create the version tag at the branch head
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          is_sha() { case "$1" in *[!0-9a-f]*|"") return 1 ;; esac; [ "${#1}" -eq 40 ]; }
+          if EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$VERSION" \
+              --jq '.object.sha' 2>/dev/null); then
+            is_sha "$EXISTING" || { echo "ERROR: the ref lookup answered '$EXISTING', not a sha"; exit 1; }
+            if POINTS_AT=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/$EXISTING" \
+                --jq '.object.sha' 2>/dev/null); then
+              is_sha "$POINTS_AT" || { echo "ERROR: the tag object answered '$POINTS_AT', not a sha"; exit 1; }
+            else
+              POINTS_AT="$EXISTING"
+            fi
+            if [ "$POINTS_AT" = "$GITHUB_SHA" ]; then
+              echo "Tag $VERSION already exists at $GITHUB_SHA."
+            else
+              echo "ERROR: tag $VERSION already exists and names $POINTS_AT, not this run's $GITHUB_SHA."
+              echo "       Two commits cannot share one version. Re-dispatch to stamp a new one."
+              exit 1
+            fi
+          else
+            HEAD_NOW="$(gh api "repos/$GITHUB_REPOSITORY/branches/$GITHUB_REF_NAME" --jq .commit.sha || echo unknown)"
+            echo "creating tag $VERSION at $GITHUB_SHA ($GITHUB_REF_NAME is at $HEAD_NOW)"
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/$VERSION" -f sha="$GITHUB_SHA" --jq '.ref + " -> " + .object.sha'
+          fi
+
+  # ============================================================
+  # LINUX
+  # ============================================================
+  # ============================================================
+  # PHASE 1: Build, on a compute instance, verified beside it on a GPU one
+  # ============================================================
+  # THE LINUX x86_64 BUILD RUNS ON A COMPUTE INSTANCE, AND ITS VERIFICATION
+  # ON A GPU INSTANCE LAUNCHED BESIDE IT. The build is container-build.sh
+  # inside almalinux:8.10, exactly as it ran on the GitHub-hosted runner;
+  # only the machine changed. Measured on that runner (4 vCPU, run
+  # 35096146404): the three cargo builds alone took 12m14s + 18m34s + 5m09s
+  # of a 47 minute job, and the verification job after it another 39, of
+  # which 11 were the 645 MB archive crossing an ec2-instance-connect
+  # tunnel. Now a c7i.8xlarge (32 vCPU) builds while the g6e takes its
+  # driver, the builder pushes the archive to the verifier's private address
+  # (the security group admits TCP 22, and one key pair serves both
+  # instances), the verification runs detached through the same
+  # launch-verify.sh / poll-verify.sh / wait-verify.sh it always did, and the
+  # runner's own download of the archive for the publish job and the floor
+  # check overlaps it. The Windows x64 job has the same shape.
+  build-linux:
+    name: Build and Package Linux x86_64 (AlmaLinux 8)
+    if: ${{ inputs.target == 'All' || inputs.target == 'Linux' }}
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      AWS_REGION: ${{ inputs.region }}
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      BUILD_IMAGE: almalinux:8.10
+      # Where the checkout is mounted inside the container. bundle.sh searches
+      # every shipped file for this path as text, so it has to be distinctive:
+      # a path like /src occurs inside unrelated source paths and buries a hit.
+      BUILD_MOUNT: /opt/ppf-release-build/ppf-contact-solver
+      BUILD_INSTANCE_TYPE: c7i.16xlarge
+      VERIFY_INSTANCE_TYPE: g6e.2xlarge
+      DRIVER_MIN_BRANCH: 570
+      CUDA_SCENES: ${{ inputs.cuda_scenes }}
+      TUNNEL: .github/workflows/scripts/linux/tunnel.sh
+    outputs:
+      VERSION: ${{ steps.version.outputs.VERSION }}
+      DRY_RUN: ${{ steps.version.outputs.DRY_RUN }}
+      DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+      ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+    steps:
+      - name: Name the distribution
+        id: version
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+          DRY_RUN: ${{ needs.version.outputs.DRY_RUN }}
+        run: |
+          # The directory and the archive carry one stamped name, so two
+          # releases unpack side by side. bundle.sh takes it from
+          # PPF_LINUX_DIST_NAME and the archive is this stem plus .tar.gz.
+          DIST_NAME="ppf-contact-solver-${VERSION}-linux-x86_64"
+          {
+            echo "VERSION=$VERSION"
+            echo "DRY_RUN=$DRY_RUN"
+            echo "DIST_NAME=$DIST_NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+          echo "Dry run: $DRY_RUN"
+          echo "Distribution directory: $DIST_NAME"
+
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+
+      - name: Assert this ref carries the Linux build scripts
+        run: |
+          set -euo pipefail
+          if [ ! -x build-linux-native/bundle.sh ]; then
+            echo "ERROR: this ref (${GITHUB_REF_NAME}) has no build-linux-native/bundle.sh."
+            echo "       Dispatch this workflow against a ref that carries it."
+            exit 1
+          fi
+
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # A PLAIN Ubuntu image from Canonical, not the Deep Learning AMI, which
+      # carries CUDA toolkits and would let a missing library resolve anyway.
+      - name: Find the Ubuntu 24.04 AMI and the network resources
+        run: |
+          set -euo pipefail
+          AMI_ID=$(aws ec2 describe-images \
+            --owners 099720109477 \
+            --filters \
+              "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" \
+              "Name=state,Values=available" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: no Ubuntu 24.04 AMI in $AWS_REGION"
+            exit 1
+          fi
+          echo "AMI: $AMI_ID"
+          echo "AMI_ID=$AMI_ID" >> "$GITHUB_ENV"
+
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" \
+            --query 'Vpcs[0].VpcId' --region "$AWS_REGION" --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"
+            exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" \
+            --query 'Subnets[].SubnetId' --region "$AWS_REGION" --output text)
+          [ -n "$SUBNET_IDS" ] || { echo "ERROR: no subnet in github-actions-vpc"; exit 1; }
+          for SUBNET in $SUBNET_IDS; do echo "::add-mask::$SUBNET"; done
+          echo "SUBNET_IDS=$SUBNET_IDS" >> "$GITHUB_ENV"
+
+          SG_ID=$(aws ec2 describe-security-groups \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" \
+            --query 'SecurityGroups[0].GroupId' --region "$AWS_REGION" --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found"
+            exit 1
+          fi
+          echo "::add-mask::$SG_ID"
+          echo "SG_ID=$SG_ID" >> "$GITHUB_ENV"
+
+          EICE_ID=$(aws ec2 describe-instance-connect-endpoints \
+            --filters "Name=state,Values=create-complete" \
+            --query 'InstanceConnectEndpoints[0].InstanceConnectEndpointId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$EICE_ID" = "None" ] || [ -z "$EICE_ID" ]; then
+            echo "ERROR: no EC2 Instance Connect Endpoint in $AWS_REGION"
+            exit 1
+          fi
+
+
+      - name: Create a key pair
+        run: |
+          set -euo pipefail
+          KEY_NAME="linux-release-$(date +%Y%m%d%H%M%S)-${GITHUB_RUN_ID}"
+          echo "::add-mask::$KEY_NAME"
+          aws ec2 create-key-pair --key-name "$KEY_NAME" --query 'KeyMaterial' \
+            --region "$AWS_REGION" --output text > /tmp/ec2key
+          chmod 600 /tmp/ec2key
+          echo "KEY_NAME=$KEY_NAME" >> "$GITHUB_ENV"
+
+      - name: Launch the build instance
+        run: |
+          set -uo pipefail
+          INSTANCE_ID=""
+          for SUBNET in $SUBNET_IDS; do
+            if OUT=$(aws ec2 run-instances \
+                --image-id "$AMI_ID" \
+                --instance-type "$BUILD_INSTANCE_TYPE" \
+                --key-name "$KEY_NAME" \
+                --subnet-id "$SUBNET" \
+                --security-group-ids "$SG_ID" \
+                --associate-public-ip-address \
+                --user-data file://.github/workflows/scripts/linux/user-data-build.sh \
+                --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=150,VolumeType=gp3,DeleteOnTermination=true}" \
+                --tag-specifications \
+                  "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-linux-build-${VERSION}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxBundleBuild},{Key=Workflow,Value=${GITHUB_WORKFLOW}},{Key=RunId,Value=${GITHUB_RUN_ID}},{Key=Version,Value=${VERSION}}]" \
+                  "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-linux-build-${VERSION}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxBundleBuild}]" \
+                --instance-initiated-shutdown-behavior terminate \
+                --query 'Instances[0].InstanceId' \
+                --region "$AWS_REGION" --output text 2>&1); then
+              INSTANCE_ID="$OUT"
+              break
+            fi
+            case "$OUT" in
+              *InsufficientInstanceCapacity* | *Unsupported*)
+                echo "No $BUILD_INSTANCE_TYPE capacity in one subnet; trying the next." ;;
+              *)
+                echo "$OUT"
+                echo "ERROR: run-instances failed for a reason other than capacity"
+                exit 1 ;;
+            esac
+          done
+          [ -n "$INSTANCE_ID" ] || { echo "ERROR: no subnet had $BUILD_INSTANCE_TYPE capacity"; exit 1; }
+          echo "BUILD_INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "build instance: $INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+      - name: Launch the verification instance
+        run: |
+          set -uo pipefail
+          INSTANCE_ID=""
+          for SUBNET in $SUBNET_IDS; do
+            if OUT=$(aws ec2 run-instances \
+                --image-id "$AMI_ID" \
+                --instance-type "$VERIFY_INSTANCE_TYPE" \
+                --key-name "$KEY_NAME" \
+                --subnet-id "$SUBNET" \
+                --security-group-ids "$SG_ID" \
+                --associate-public-ip-address \
+                --user-data file://.github/workflows/scripts/linux/user-data-verify.sh \
+                --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+                --tag-specifications \
+                  "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-linux-verify-${VERSION}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxBundleVerification},{Key=Workflow,Value=${GITHUB_WORKFLOW}},{Key=RunId,Value=${GITHUB_RUN_ID}},{Key=Version,Value=${VERSION}}]" \
+                  "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-linux-verify-${VERSION}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxBundleVerification}]" \
+                --instance-initiated-shutdown-behavior terminate \
+                --query 'Instances[0].InstanceId' \
+                --region "$AWS_REGION" --output text 2>&1); then
+              INSTANCE_ID="$OUT"
+              break
+            fi
+            case "$OUT" in
+              *InsufficientInstanceCapacity* | *Unsupported*)
+                echo "No $VERIFY_INSTANCE_TYPE capacity in one subnet; trying the next." ;;
+              *)
+                echo "$OUT"
+                echo "ERROR: run-instances failed for a reason other than capacity"
+                exit 1 ;;
+            esac
+          done
+          [ -n "$INSTANCE_ID" ] || { echo "ERROR: no subnet had $VERIFY_INSTANCE_TYPE capacity"; exit 1; }
+          echo "VERIFY_INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "verification instance: $INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+      - name: Wait for SSH on the build instance, and for Docker
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+        run: |
+          set -uo pipefail
+          . "$TUNNEL"
+          wait_for_ssh 45
+          trap close_tunnel EXIT
+          open_tunnel
+          # user-data-build.sh installs Docker at first boot and leaves this
+          # marker; a fresh instance usually has it before ssh answers.
+          remote 'for i in $(seq 1 60); do [ -f ~/docker_ready ] && exit 0; sleep 5; done; echo "docker never became ready"; exit 1'
+          remote 'docker info >/dev/null && echo "docker ready"'
+
+      - name: Transfer the repository and start the build, detached
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+          ls -lh /tmp/repo.tar.gz
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote /tmp/repo.tar.gz .github/workflows/scripts/linux/launch-build.sh \
+            .github/workflows/scripts/linux/poll-build.sh ubuntu@localhost:
+          remote "bash launch-build.sh $(printf '%q ' "$BUILD_MOUNT" "$BUILD_IMAGE" "$DIST_NAME")"
+
+
+      - name: Wait for SSH on the verification instance
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          wait_for_ssh 45
+
+
+      # The driver's kernel module is loaded by a reboot rather than by
+      # modprobe, because the fallback install path can bring a newer kernel.
+      - name: Install the NVIDIA driver only, and reboot
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote .github/workflows/scripts/linux/install-nvidia-driver.sh ubuntu@localhost:
+          remote "bash install-nvidia-driver.sh $DRIVER_MIN_BRANCH"
+          remote "sudo systemctl reboot" || true
+          close_tunnel
+          sleep 60
+          wait_for_ssh 45
+          open_tunnel
+          remote "nvidia-smi"
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      # THE BUILD IS POLLED, NOT WAITED ON, through wait-verify.sh pointed at
+      # poll-build.sh. A window is under the tunnel's one hour cap and the
+      # credential is refreshed between windows; the build is about a third of
+      # a window on this instance, so the second exists for a slow one.
+      - name: Wait for the build (window 1)
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          WAIT_POLL: bash poll-build.sh
+          WAIT_RC_VAR: BUILD_RC
+          WAIT_LABEL: build
+        run: bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: env.BUILD_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for the build (window 2)
+        if: env.BUILD_RC == ''
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          WAIT_POLL: bash poll-build.sh
+          WAIT_RC_VAR: BUILD_RC
+          WAIT_LABEL: build
+        run: bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: always() && env.BUILD_INSTANCE_ID != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Collect the build logs
+        if: always() && env.BUILD_INSTANCE_ID != ''
+        continue-on-error: true
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+        run: |
+          set -uo pipefail
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          mkdir -p ci-logs
+          if open_tunnel; then
+            from_remote "$BUILD_MOUNT/ci-logs/*.log" ci-logs/ || echo "no ci-logs on the instance"
+            from_remote build/build.log ci-logs/container.log || echo "no container log on the instance"
+          fi
+          ls -la ci-logs || true
+
+      - name: Upload build logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-build-logs-${{ steps.version.outputs.VERSION }}
+          path: ci-logs/*.log
+          retention-days: 7
+
+      - name: Require a passing build
+        run: |
+          case "${BUILD_RC:-}" in
+            0)  echo "The container build passed." ;;
+            "") echo "ERROR: the build did not report inside its windows"; exit 1 ;;
+            *)  echo "ERROR: container-build.sh exited $BUILD_RC; the build logs artifact has its output"; exit 1 ;;
+          esac
+
+      # One archive whose single top entry is the stamped directory. tar keeps
+      # the executable bits and the interpreter's symbolic links, which a zip
+      # made on Linux does not reliably carry. Made where the files are.
+      - name: Create the release archive on the build instance
+        id: archive
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+        run: |
+          set -euo pipefail
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          ARCHIVE="${DIST_NAME}.tar.gz"
+          remote "cd '$BUILD_MOUNT/build-linux-native/dist' && tar -czf \"\$HOME/$ARCHIVE\" '$DIST_NAME'"
+          SIZE="$(remote "stat -c %s \"\$HOME/$ARCHIVE\"" | tr -d '[:space:]')"
+          echo "$ARCHIVE: $SIZE bytes"
+          # A GitHub release asset is limited to 2 GiB.
+          if [ "$SIZE" -ge 2147483648 ]; then
+            echo "ERROR: $ARCHIVE is $SIZE bytes, over the 2 GiB release asset limit"
+            exit 1
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      # THE ARCHIVE REACHES THE VERIFICATION INSTANCE DIRECTLY, over the VPC,
+      # with the key pair both instances were launched with; the builder holds
+      # the key for this one step. What this replaces is the archive's trip to
+      # the runner and back up through two tunnels, 11 minutes each way.
+      - name: Hand the archive to the verification instance over the VPC
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+        run: |
+          set -euo pipefail
+          VERIFY_IP=$(aws ec2 describe-instances \
+            --instance-ids "$VERIFY_INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+            --region "$AWS_REGION" --output text)
+          case "$VERIFY_IP" in
+            ""|None) echo "ERROR: the verification instance has no private address"; exit 1 ;;
+          esac
+          echo "verification instance private address: $VERIFY_IP"
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote /tmp/ec2key ubuntu@localhost:verify-key
+          remote "chmod 600 ~/verify-key && time scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i ~/verify-key \"\$HOME/$ARCHIVE\" ubuntu@$VERIFY_IP:~/; rc=\$?; rm -f ~/verify-key; exit \$rc"
+
+      - name: Start the verification, detached
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+          ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+          DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+        run: |
+          set -euo pipefail
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote build-linux-native/scripts/verify-distribution.sh \
+            .github/workflows/scripts/linux/launch-verify.sh \
+            .github/workflows/scripts/linux/poll-verify.sh ubuntu@localhost:
+          # cuda, because this instance has an NVIDIA GPU: a distribution that
+          # also carries ROCm is verified here against the backend this machine
+          # can actually run, and the other one's device code is covered by
+          # build.sh's static checks.
+          remote "bash launch-verify.sh $(printf '%q ' "$ARCHIVE" "$DIST_NAME" "$CUDA_SCENES" cuda)"
+
+      # This download runs WHILE the verification runs on the other instance:
+      # 645 MB through the tunnel, measured at about 11 minutes, against a
+      # verification of about 23.
+      - name: Download the release archive
+        env:
+          INSTANCE_ID: ${{ env.BUILD_INSTANCE_ID }}
+          ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+        run: |
+          set -euo pipefail
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          from_remote "$ARCHIVE" .
+          ls -lh "$ARCHIVE"
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terminate the build instance
+        run: |
+          aws ec2 terminate-instances --instance-ids "$BUILD_INSTANCE_ID" --region "$AWS_REGION"
+          echo "build instance termination requested"
+
+
+      - name: Upload distribution archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-bundle-${{ steps.version.outputs.VERSION }}
+          path: ${{ steps.archive.outputs.ARCHIVE }}
+          # Already compressed.
+          compression-level: 0
+          retention-days: 7
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # THE WAIT IS SPLIT INTO WINDOWS WITH A RE-AUTHENTICATION BETWEEN THEM.
+      # The verification runs detached on the instance, so no connection has to
+      # outlive the 60 minute tunnel cap; the credentials that open a tunnel
+      # last an hour as well, so each window stays under it.
+      - name: Wait for the verification (window 1)
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: env.VERIFY_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Wait for the verification (window 2)
+        if: env.VERIFY_RC == ''
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: env.VERIFY_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Wait for the verification (window 3)
+        if: env.VERIFY_RC == ''
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+
+      - name: Re-authenticate AWS credentials
+        if: always() && env.VERIFY_INSTANCE_ID != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Collect the verification report
+        if: always() && env.VERIFY_INSTANCE_ID != ''
+        continue-on-error: true
+        env:
+          INSTANCE_ID: ${{ env.VERIFY_INSTANCE_ID }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          mkdir -p verify-report
+          if open_tunnel; then
+            from_remote verify/report verify-report/ || echo "no report directory on the instance"
+            from_remote verify/verify.log verify-report/ || echo "no verify.log on the instance"
+            remote "uname -a; cat /etc/os-release; nvidia-smi; dpkg -l | grep -i -E 'nvidia|cuda'" \
+              > verify-report/instance.txt 2>&1 || true
+          fi
+          if [ -f verify-report/report/report.txt ]; then
+            cat verify-report/report/report.txt
+          fi
+
+
+      - name: Upload the verification report
+        if: always() && env.VERIFY_INSTANCE_ID != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verify-gpu-${{ steps.version.outputs.VERSION }}
+          path: verify-report
+          retention-days: 7
+
+
+      - name: Require a passing verification
+        run: |
+          if [ -z "${VERIFY_RC:-}" ]; then
+            echo "ERROR: the verification never wrote an exit code within the three windows"
+            exit 1
+          fi
+          if [ "$VERIFY_RC" != "0" ]; then
+            echo "ERROR: verify-distribution.sh exited $VERIFY_RC; the report artifact names each failed check"
+            exit 1
+          fi
+          echo "The distribution verified on a GPU instance with only the NVIDIA driver."
+
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Cleanup - terminate both instances and delete the key pair
+        if: always()
+        continue-on-error: true
+        run: |
+          for ID in "${BUILD_INSTANCE_ID:-}" "${VERIFY_INSTANCE_ID:-}"; do
+            if [ -n "$ID" ]; then
+              aws ec2 terminate-instances --instance-ids "$ID" --region "$AWS_REGION" || true
+            fi
+          done
+          # Also anything this run launched that a cancellation kept out of
+          # the environment.
+          ORPHANS=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunId,Values=${GITHUB_RUN_ID}" \
+                      "Name=tag:Purpose,Values=LinuxBundleBuild,LinuxBundleVerification" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --region "$AWS_REGION" --output text || true)
+          if [ -n "$ORPHANS" ]; then
+            # shellcheck disable=SC2086 # a space-separated id list
+            aws ec2 terminate-instances --instance-ids $ORPHANS --region "$AWS_REGION" || true
+          fi
+          if [ -n "${KEY_NAME:-}" ]; then
+            aws ec2 delete-key-pair --key-name "$KEY_NAME" --region "$AWS_REGION" || true
+          fi
+          rm -f /tmp/ec2key
+
+  # ============================================================
+  # PHASE 2c: an aarch64 GPU instance with only the NVIDIA driver
+  # ============================================================
+
+  build-linux-arm64:
+    name: Build and Package Linux aarch64 (AlmaLinux 8)
+    if: ${{ inputs.target == 'All' || inputs.target == 'Linux' }}
+    needs: version
+    # A GitHub-hosted arm64 runner. The AlmaLinux 8 image is multi-architecture,
+    # so the build runs natively in the same container, on the same glibc 2.28
+    # floor, as the x86_64 one. build-linux-native/scripts/platform.sh gives this
+    # host the CUDA and CPU backends, the CUDA one from NVIDIA's linux-sbsa
+    # archives.
+    runs-on: ubuntu-24.04-arm
+    # The CUDA device link on two vCPUs is the long pole.
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_IMAGE: almalinux:8.10
+    outputs:
+      DIST_NAME: ${{ steps.name.outputs.DIST_NAME }}
+      ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+
+    steps:
+      - name: Name the distribution
+        id: name
+        env:
+          VERSION: ${{ needs.version.outputs.VERSION }}
+        run: |
+          DIST_NAME="ppf-contact-solver-${VERSION}-linux-aarch64"
+          echo "DIST_NAME=$DIST_NAME" >> "$GITHUB_OUTPUT"
+          echo "Distribution directory: $DIST_NAME"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Assert this ref and this runner can build for aarch64
+        run: |
+          set -euo pipefail
+          if [ ! -f build-linux-native/scripts/platform.sh ]; then
+            echo "ERROR: this ref (${GITHUB_REF_NAME}) has no build-linux-native/scripts/platform.sh,"
+            echo "       so its Linux build is x86_64 only. Dispatch against a ref that carries it."
+            exit 1
+          fi
+          if [ "$(uname -m)" != "aarch64" ]; then
+            echo "ERROR: this runner reports $(uname -m), and this job builds on aarch64"
+            exit 1
+          fi
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h / /mnt || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null
+          df -h / /mnt || true
+          free -h
+
+      - name: Build and package inside AlmaLinux 8
+        env:
+          PPF_LINUX_DIST_NAME: ${{ steps.name.outputs.DIST_NAME }}
+          BUILD_MOUNT: /opt/ppf-release-build/ppf-contact-solver
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$GITHUB_WORKSPACE:$BUILD_MOUNT" \
+            -e BUILD_MOUNT \
+            -e PPF_LINUX_DIST_NAME \
+            -e PPF_LINUX_MAX_GLIBC=2.28 \
+            -e PPF_LINUX_MAX_GLIBCXX=3.4.25 \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
+            "$BUILD_IMAGE" bash "$BUILD_MOUNT/.github/workflows/scripts/linux/container-build.sh"
+
+      - name: Upload build logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-build-logs-arm64-${{ needs.version.outputs.VERSION }}
+          path: ci-logs/*.log
+          retention-days: 7
+
+      - name: Create release archive
+        id: archive
+        env:
+          DIST_NAME: ${{ steps.name.outputs.DIST_NAME }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="${DIST_NAME}.tar.gz"
+          tar -C build-linux-native/dist -czf "$ARCHIVE" "$DIST_NAME"
+          SIZE="$(stat -c %s "$ARCHIVE")"
+          ls -lh "$ARCHIVE"
+          if [ "$SIZE" -ge 2147483648 ]; then
+            echo "ERROR: $ARCHIVE is $SIZE bytes, over the 2 GiB release asset limit"
+            exit 1
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload distribution archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-bundle-arm64-${{ needs.version.outputs.VERSION }}
+          path: ${{ steps.archive.outputs.ARCHIVE }}
+          compression-level: 0
+          retention-days: 7
+
+  # ============================================================
+  # PHASE 2a: the glibc floor, no GPU
+  # ============================================================
+  verify-floor:
+    name: Verify on glibc 2.28 with no compiler and no GPU
+    if: ${{ inputs.target == 'All' || inputs.target == 'Linux' }}
+    needs: [version, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLOOR_IMAGE: almalinux:8.10
+      DIST_NAME: ${{ needs.build-linux.outputs.DIST_NAME }}
+      ARCHIVE: ${{ needs.build-linux.outputs.ARCHIVE }}
+      CPU_SCENES: ${{ inputs.cpu_scenes }}
+    steps:
+      # For verify-distribution.sh only; nothing is built here.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download distribution archive
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-bundle-${{ needs.build-linux.outputs.VERSION }}
+
+      - name: Unpack the distribution
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/floor"
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/floor"
+          ls -la "$RUNNER_TEMP/floor/$DIST_NAME"
+
+      # The image is asked, not assumed: the floor is the C library it carries,
+      # and the claim is that nothing a build would bring is present.
+      - name: Confirm the container is the floor and carries no toolchain
+        run: |
+          set -euo pipefail
+          docker run --rm "$FLOOR_IMAGE" bash -c '
+            set -u
+            getconf GNU_LIBC_VERSION
+            [ "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28" ] || { echo "ERROR: not glibc 2.28"; exit 1; }
+            bad=0
+            for tool in cc gcc g++ c++ clang nvcc; do
+              if command -v "$tool" >/dev/null 2>&1; then echo "ERROR: $tool is present"; bad=1; fi
+            done
+            if command -v python3 >/dev/null 2>&1; then
+              echo "note: the image has $(command -v python3); the launcher never uses it, and the python-env check says which interpreter ran"
+            fi
+            exit "$bad"'
+
+      - name: Run the verification in the floor container
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$RUNNER_TEMP/floor:/floor" \
+            -v "$GITHUB_WORKSPACE/build-linux-native/scripts/verify-distribution.sh:/opt/verify-distribution.sh:ro" \
+            "$FLOOR_IMAGE" bash /opt/verify-distribution.sh "/floor/$DIST_NAME" /floor/report \
+              --cpu-scenes "$CPU_SCENES"
+
+      - name: Upload the floor report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verify-floor-${{ needs.build-linux.outputs.VERSION }}
+          path: ${{ runner.temp }}/floor/report
+          retention-days: 7
+
+  verify-floor-arm64:
+    name: Verify aarch64 on glibc 2.28 with no compiler and no GPU
+    if: ${{ inputs.target == 'All' || inputs.target == 'Linux' }}
+    needs: [version, build-linux-arm64]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      FLOOR_IMAGE: almalinux:8.10
+      DIST_NAME: ${{ needs.build-linux-arm64.outputs.DIST_NAME }}
+      ARCHIVE: ${{ needs.build-linux-arm64.outputs.ARCHIVE }}
+      CPU_SCENES: ${{ inputs.cpu_scenes }}
+    steps:
+      # For verify-distribution.sh only; nothing is built here.
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download distribution archive
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-bundle-arm64-${{ needs.version.outputs.VERSION }}
+
+      - name: Unpack the distribution
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/floor"
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/floor"
+          ls -la "$RUNNER_TEMP/floor/$DIST_NAME"
+
+      - name: Confirm the container is the aarch64 floor and carries no toolchain
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 "$FLOOR_IMAGE" bash -c '
+            set -u
+            uname -m
+            [ "$(uname -m)" = "aarch64" ] || { echo "ERROR: not aarch64"; exit 1; }
+            getconf GNU_LIBC_VERSION
+            [ "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28" ] || { echo "ERROR: not glibc 2.28"; exit 1; }
+            bad=0
+            for tool in cc gcc g++ c++ clang nvcc; do
+              if command -v "$tool" >/dev/null 2>&1; then echo "ERROR: $tool is present"; bad=1; fi
+            done
+            exit "$bad"'
+
+      - name: Run the verification in the floor container
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$RUNNER_TEMP/floor:/floor" \
+            -v "$GITHUB_WORKSPACE/build-linux-native/scripts/verify-distribution.sh:/opt/verify-distribution.sh:ro" \
+            "$FLOOR_IMAGE" bash /opt/verify-distribution.sh "/floor/$DIST_NAME" /floor/report \
+              --cpu-scenes "$CPU_SCENES"
+
+      - name: Upload the floor report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verify-floor-arm64-${{ needs.version.outputs.VERSION }}
+          path: ${{ runner.temp }}/floor/report
+          retention-days: 7
+
+  # The aarch64 twin of the x86_64 verification (which now runs inside build-linux), on a Graviton instance carrying an NVIDIA
+  # T4G. The T4G is compute capability 7.5, which cuda_arch.txt ships a cubin for,
+  # so the aarch64 distribution's CUDA backend runs on it exactly as a user's
+  # would. Its instances carry a Purpose tag of their own, so each job's cleanup
+  # terminates only what that job launched.
+  verify-linux-arm64:
+    name: Verify aarch64 on a GPU instance with only the NVIDIA driver
+    if: ${{ inputs.target == 'All' || inputs.target == 'Linux' }}
+    needs: [version, build-linux-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      AWS_REGION: ${{ inputs.region }}
+      INSTANCE_TYPE: g5g.xlarge
+      DRIVER_MIN_BRANCH: 570
+      DIST_NAME: ${{ needs.build-linux-arm64.outputs.DIST_NAME }}
+      ARCHIVE: ${{ needs.build-linux-arm64.outputs.ARCHIVE }}
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      CUDA_SCENES: ${{ inputs.cuda_scenes_arm64 }}
+      TUNNEL: .github/workflows/scripts/linux/tunnel.sh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download distribution archive
+        uses: actions/download-artifact@v6
+        with:
+          name: linux-bundle-arm64-${{ needs.version.outputs.VERSION }}
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      # A PLAIN arm64 Ubuntu image from Canonical, for the reason verify-linux
+      # gives: nothing on it may supply a CUDA library the distribution lacks.
+      - name: Find the arm64 Ubuntu 24.04 AMI and the network resources
+        run: |
+          set -euo pipefail
+          AMI_ID=$(aws ec2 describe-images \
+            --owners 099720109477 \
+            --filters \
+              "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*" \
+              "Name=state,Values=available" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: no arm64 Ubuntu 24.04 AMI in $AWS_REGION"
+            exit 1
+          fi
+          echo "AMI: $AMI_ID"
+          echo "AMI_ID=$AMI_ID" >> "$GITHUB_ENV"
+
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" \
+            --query 'Vpcs[0].VpcId' --region "$AWS_REGION" --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"
+            exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" \
+            --query 'Subnets[].SubnetId' --region "$AWS_REGION" --output text)
+          [ -n "$SUBNET_IDS" ] || { echo "ERROR: no subnet in github-actions-vpc"; exit 1; }
+          for SUBNET in $SUBNET_IDS; do echo "::add-mask::$SUBNET"; done
+          echo "SUBNET_IDS=$SUBNET_IDS" >> "$GITHUB_ENV"
+
+          SG_ID=$(aws ec2 describe-security-groups \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" \
+            --query 'SecurityGroups[0].GroupId' --region "$AWS_REGION" --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found"
+            exit 1
+          fi
+          echo "::add-mask::$SG_ID"
+          echo "SG_ID=$SG_ID" >> "$GITHUB_ENV"
+
+          EICE_ID=$(aws ec2 describe-instance-connect-endpoints \
+            --filters "Name=state,Values=create-complete" \
+            --query 'InstanceConnectEndpoints[0].InstanceConnectEndpointId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$EICE_ID" = "None" ] || [ -z "$EICE_ID" ]; then
+            echo "ERROR: no EC2 Instance Connect Endpoint in $AWS_REGION"
+            exit 1
+          fi
+
+      - name: Create a key pair
+        run: |
+          set -euo pipefail
+          KEY_NAME="linux-release-verify-arm64-$(date +%Y%m%d%H%M%S)-${GITHUB_RUN_ID}"
+          echo "::add-mask::$KEY_NAME"
+          aws ec2 create-key-pair --key-name "$KEY_NAME" --query 'KeyMaterial' \
+            --region "$AWS_REGION" --output text > /tmp/ec2key
+          chmod 600 /tmp/ec2key
+          echo "KEY_NAME=$KEY_NAME" >> "$GITHUB_ENV"
+
+      - name: Launch the verification instance
+        run: |
+          set -uo pipefail
+          INSTANCE_ID=""
+          for SUBNET in $SUBNET_IDS; do
+            if OUT=$(aws ec2 run-instances \
+                --image-id "$AMI_ID" \
+                --instance-type "$INSTANCE_TYPE" \
+                --key-name "$KEY_NAME" \
+                --subnet-id "$SUBNET" \
+                --security-group-ids "$SG_ID" \
+                --associate-public-ip-address \
+                --user-data file://.github/workflows/scripts/linux/user-data-verify.sh \
+                --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+                --tag-specifications \
+                  "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-linux-verify-arm64-${VERSION}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxArm64BundleVerification},{Key=Workflow,Value=${GITHUB_WORKFLOW}},{Key=RunId,Value=${GITHUB_RUN_ID}},{Key=Version,Value=${VERSION}}]" \
+                  "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-linux-verify-arm64-${VERSION}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=LinuxArm64BundleVerification}]" \
+                --instance-initiated-shutdown-behavior terminate \
+                --query 'Instances[0].InstanceId' \
+                --region "$AWS_REGION" --output text 2>&1); then
+              INSTANCE_ID="$OUT"
+              break
+            fi
+            case "$OUT" in
+              *InsufficientInstanceCapacity* | *Unsupported*)
+                echo "No $INSTANCE_TYPE capacity in one subnet; trying the next." ;;
+              *)
+                echo "$OUT"
+                echo "ERROR: run-instances failed for a reason other than capacity"
+                exit 1 ;;
+            esac
+          done
+          [ -n "$INSTANCE_ID" ] || { echo "ERROR: no subnet had $INSTANCE_TYPE capacity"; exit 1; }
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "Instance: $INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+
+      - name: Wait for SSH
+        run: |
+          set -uo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          wait_for_ssh 45
+
+      - name: Install the NVIDIA driver only, and reboot
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote .github/workflows/scripts/linux/install-nvidia-driver.sh ubuntu@localhost:
+          remote "bash install-nvidia-driver.sh $DRIVER_MIN_BRANCH"
+          remote "sudo systemctl reboot" || true
+          close_tunnel
+          sleep 60
+          wait_for_ssh 45
+          open_tunnel
+          remote "uname -m; nvidia-smi"
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Transfer the archive and start the verification, detached
+        run: |
+          set -euo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          open_tunnel
+          to_remote "$ARCHIVE" build-linux-native/scripts/verify-distribution.sh \
+            .github/workflows/scripts/linux/launch-verify.sh \
+            .github/workflows/scripts/linux/poll-verify.sh ubuntu@localhost:
+          # cuda, because this instance has an NVIDIA GPU: a distribution that
+          # also carries ROCm is verified here against the backend this machine
+          # can actually run, and the other one's device code is covered by
+          # build.sh's static checks.
+          remote "bash launch-verify.sh $(printf '%q ' "$ARCHIVE" "$DIST_NAME" "$CUDA_SCENES" cuda)"
+
+      - name: Wait for the verification (window 1)
+        run: bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: env.VERIFY_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for the verification (window 2)
+        if: env.VERIFY_RC == ''
+        run: bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: env.VERIFY_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for the verification (window 3)
+        if: env.VERIFY_RC == ''
+        run: bash .github/workflows/scripts/linux/wait-verify.sh 45
+
+      - name: Re-authenticate AWS credentials
+        if: always() && env.INSTANCE_ID != ''
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Collect the verification report
+        if: always() && env.INSTANCE_ID != ''
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # shellcheck source=.github/workflows/scripts/linux/tunnel.sh
+          . "$TUNNEL"
+          trap close_tunnel EXIT
+          mkdir -p verify-report
+          if open_tunnel; then
+            from_remote verify/report verify-report/ || echo "no report directory on the instance"
+            from_remote verify/verify.log verify-report/ || echo "no verify.log on the instance"
+            remote "uname -a; cat /etc/os-release; nvidia-smi; dpkg -l | grep -i -E 'nvidia|cuda'" \
+              > verify-report/instance.txt 2>&1 || true
+          fi
+          if [ -f verify-report/report/report.txt ]; then
+            cat verify-report/report/report.txt
+          fi
+
+      - name: Upload the verification report
+        if: always() && env.INSTANCE_ID != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verify-gpu-arm64-${{ needs.version.outputs.VERSION }}
+          path: verify-report
+          retention-days: 7
+
+      - name: Require a passing verification
+        run: |
+          if [ -z "${VERIFY_RC:-}" ]; then
+            echo "ERROR: the verification never wrote an exit code within the three windows"
+            exit 1
+          fi
+          if [ "$VERIFY_RC" != "0" ]; then
+            echo "ERROR: verify-distribution.sh exited $VERIFY_RC; the report artifact names each failed check"
+            exit 1
+          fi
+          echo "The aarch64 distribution verified on a GPU instance with only the NVIDIA driver."
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup - terminate the instance and delete the key pair
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${INSTANCE_ID:-}" ]; then
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" || true
+          fi
+          ORPHANS=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunId,Values=${GITHUB_RUN_ID}" \
+                      "Name=tag:Purpose,Values=LinuxArm64BundleVerification" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --region "$AWS_REGION" --output text || true)
+          if [ -n "$ORPHANS" ]; then
+            # shellcheck disable=SC2086 # a space-separated id list
+            aws ec2 terminate-instances --instance-ids $ORPHANS --region "$AWS_REGION" || true
+          fi
+          if [ -n "${KEY_NAME:-}" ]; then
+            aws ec2 delete-key-pair --key-name "$KEY_NAME" --region "$AWS_REGION" || true
+          fi
+          rm -f /tmp/ec2key
+
+  # ============================================================
+  # WINDOWS
+  # ============================================================
+  build-windows:
+    name: Build and Release Windows Bundle
+    if: ${{ inputs.target == 'All' || inputs.target == 'Windows' }}
+    needs: version
+    runs-on: ubuntu-latest
+    # THE JOB IS TWO INSTANCES RUNNING SIDE BY SIDE: a compute instance that
+    # builds and bundles, and a GPU instance, launched at the same time, that
+    # verifies the archive the way a user unpacks it. The archive crosses
+    # between them over the VPC, and the runner's own download of it for the
+    # publish job overlaps the verification. Measured before this shape, one
+    # g6e.2xlarge did everything in series in 139 minutes (run 35096146404).
+    #
+    # THIS JOB PROVISIONS BOTH GPU TOOLKITS, because the x64 distribution
+    # carries CUDA, ROCm and the CPU backend together. Measured: the CUDA-only
+    # predecessor took 119.8 minutes (run 34992900145), and a rehearsal on the
+    # same g6e.2xlarge class, with both toolkits already unpacked, took about 10
+    # minutes for the CUDA library and 11 for the ROCm one, before three cargo
+    # builds; CI adds the SDK's 4.5 GB download and its unpack on top. So the
+    # bound is roughly twice what is measured, and it is stated rather than left
+    # to GitHub's own 6 hour ceiling, which an unbounded job reaches with its EC2
+    # instance still running.
+    timeout-minutes: 300
+    # Read by the release job, which cannot see this job's step outputs.
+    outputs:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      DRY_RUN: ${{ needs.version.outputs.DRY_RUN }}
+    permissions:
+      id-token: write
+      contents: write
+
+    env:
+      # Selectable because the toolchain this build downloads is served by a
+      # CDN whose copies are not equally good: an MSVC .cab that failed its
+      # manifest hash twice in us-east-2 verified clean from ap-northeast-1,
+      # so the region is the difference between a build and a dead run. That is
+      # also why the default is ap-northeast-1, which every workflow that
+      # launches an instance now shares; all three choices stay available.
+      AWS_REGION: ${{ inputs.region }}
+      # TWO INSTANCES, SIZED FOR WHAT EACH DOES. The build needs the CUDA and
+      # ROCm toolkits and cores, not a GPU: nothing in build.bat or bundle.bat
+      # opens a device (the one GPU-related gate is a static `dumpbin
+      # /dependents`, and `--backend` reads a string out of the loaded
+      # library), so it runs on a compute instance with eight times the cores
+      # of the g6e.2xlarge it used to share with the verification. The
+      # verification is the GPU half and stays on the g6e.
+      BUILD_INSTANCE_TYPE: c7i.16xlarge
+      VERIFY_INSTANCE_TYPE: g6e.2xlarge
+      WORKDIR: C:\ppf-contact-solver
+      USER: Administrator
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS authentication
+        run: |
+          echo "Testing AWS authentication..."
+          aws sts get-caller-identity
+          echo "AWS Region: $AWS_REGION"
+          echo "Build instance type: $BUILD_INSTANCE_TYPE, verification instance type: $VERIFY_INSTANCE_TYPE"
+          echo "Version: ${{ needs.version.outputs.VERSION }}"
+
+      - name: Find Windows Server 2025 AMI
+        id: ami
+        run: |
+          echo "Finding latest Windows Server 2025 AMI..."
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Windows_Server-2025-English-Full-Base-*" \
+              "Name=state,Values=available" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Windows Server 2025 AMI not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "Found AMI: $AMI_ID"
+
+      - name: Get github-actions-vpc subnet and security group
+        id: vpc
+        run: |
+          echo "Getting github-actions-vpc..."
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=github-actions-vpc" \
+            --query 'Vpcs[0].VpcId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+          echo "VPC: $VPC_ID"
+
+          echo "Getting subnet in github-actions-vpc..."
+          SUBNET_ID=$(aws ec2 describe-subnets \
+            --filters "Name=vpc-id,Values=$VPC_ID" \
+            --query 'Subnets[0].SubnetId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: No subnet found in github-actions-vpc"
+            exit 1
+          fi
+          echo "::add-mask::$SUBNET_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "Subnet: $SUBNET_ID"
+
+          echo "Getting github-actions-sg security group..."
+          SG_ID=$(aws ec2 describe-security-groups \
+            --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" \
+            --query 'SecurityGroups[0].GroupId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc"
+            exit 1
+          fi
+          echo "::add-mask::$SG_ID"
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+          echo "Security Group: $SG_ID"
+
+          echo "Getting EC2 Instance Connect Endpoint..."
+          EICE_ID=$(aws ec2 describe-instance-connect-endpoints \
+            --filters "Name=state,Values=create-complete" \
+            --query 'InstanceConnectEndpoints[0].InstanceConnectEndpointId' \
+            --region "$AWS_REGION" \
+            --output text)
+          if [ "$EICE_ID" = "None" ] || [ -z "$EICE_ID" ]; then
+            echo "ERROR: EC2 Instance Connect Endpoint not found in region $AWS_REGION"
+            exit 1
+          fi
+          echo "::add-mask::$EICE_ID"
+          echo "EICE_ID=$EICE_ID" >> $GITHUB_OUTPUT
+          echo "EICE: $EICE_ID"
+
+      - name: Generate unique identifiers
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "RANDOM_SUFFIX=$RANDOM_SUFFIX" >> $GITHUB_OUTPUT
+          echo "Timestamp: $TIMESTAMP"
+
+      - name: Create key pair for build instance
+        id: keypair
+        run: |
+          KEY_NAME="win-release-build-${{ steps.ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
+          echo "::add-mask::$KEY_NAME"
+          echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
+          aws ec2 create-key-pair \
+            --key-name "$KEY_NAME" \
+            --query 'KeyMaterial' \
+            --region "$AWS_REGION" \
+            --output text > /tmp/ec2key
+          chmod 600 /tmp/ec2key
+          echo "Created key pair: $KEY_NAME"
+
+      - name: Create Windows user data script
+        run: |
+          # Use standard SSH port 22 since we're using EICE tunnels
+          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+          echo "User data script created with SSH port 22"
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          echo "Launching Windows EC2 instance..."
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+            --instance-type "$BUILD_INSTANCE_TYPE" \
+            --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+            --subnet-id "${{ steps.vpc.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data file:///tmp/user-data.ps1 \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
+              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Instance launched: $INSTANCE_ID"
+
+      - name: Wait for instance to be running
+        run: |
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Instance is running"
+
+      # ============================================================
+      # THE VERIFICATION INSTANCE IS LAUNCHED NOW, NOT AFTER THE BUILD. It
+      # boots and takes its driver while the build instance is being prepared,
+      # so by the time the archive exists it has been ready for an hour. Its
+      # steps below are the same ones that used to run after the build; only
+      # their position moved. Measured before the move: launch, SSH wait and
+      # driver install came to about eight minutes on the critical path.
+      # ============================================================
+
+      - name: Generate verification instance identifiers
+        id: verify-ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 6)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "RANDOM_SUFFIX=$RANDOM_SUFFIX" >> $GITHUB_OUTPUT
+          echo "Verification Timestamp: $TIMESTAMP"
+
+      - name: Create key pair for verification instance
+        id: verify-keypair
+        run: |
+          KEY_NAME="win-release-verify-${{ steps.verify-ids.outputs.TIMESTAMP }}-${{ github.run_id }}"
+          echo "::add-mask::$KEY_NAME"
+          echo "KEY_NAME=$KEY_NAME" >> $GITHUB_OUTPUT
+          aws ec2 create-key-pair \
+            --key-name "$KEY_NAME" \
+            --query 'KeyMaterial' \
+            --region "$AWS_REGION" \
+            --output text > /tmp/verify-ec2key
+          chmod 600 /tmp/verify-ec2key
+          echo "Created verification key pair: $KEY_NAME"
+
+      - name: Launch verification instance
+        id: verify-instance
+        run: |
+          echo "Launching verification Windows instance (minimal setup - driver only)..."
+          # Use standard SSH port 22 since we're using EICE tunnels
+          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/verify-user-data.ps1
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+            --instance-type "$VERIFY_INSTANCE_TYPE" \
+            --key-name "${{ steps.verify-keypair.outputs.KEY_NAME }}" \
+            --subnet-id "${{ steps.vpc.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data file:///tmp/verify-user-data.ps1 \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
+              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "Verification instance launched: $INSTANCE_ID"
+
+      - name: Wait for SSH via EICE tunnel
+        run: |
+          echo "Waiting for SSH to be ready via EICE tunnel..."
+          MAX_SSH_ATTEMPTS=60
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SSH_ATTEMPTS ]; do
+            # Start EICE tunnel
+            aws ec2-instance-connect open-tunnel \
+              --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --local-port 2222 \
+              --region "$AWS_REGION" &
+            TUNNEL_PID=$!
+            sleep 3
+
+            if ssh -p 2222 -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -i /tmp/ec2key Administrator@localhost "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
+              echo "SSH connection established!"
+              kill $TUNNEL_PID 2>/dev/null || true
+              break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SSH_ATTEMPTS ]; then
+              echo "Failed to establish SSH connection"
+              exit 1
+            fi
+            echo "SSH not ready (attempt $ATTEMPT/$MAX_SSH_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+          echo "Waiting for SSH setup completion..."
+          MAX_SETUP_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SETUP_ATTEMPTS ]; do
+            aws ec2-instance-connect open-tunnel \
+              --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --local-port 2222 \
+              --region "$AWS_REGION" &
+            TUNNEL_PID=$!
+            sleep 3
+
+            if ssh -p 2222 -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i /tmp/ec2key Administrator@localhost \
+              "if (Test-Path C:\\ssh_ready.txt) { echo READY } else { echo NOT_READY }" 2>/dev/null | grep -q READY; then
+              echo "SSH setup complete!"
+              kill $TUNNEL_PID 2>/dev/null || true
+              break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SETUP_ATTEMPTS ]; then
+              echo "SSH setup timed out, continuing anyway..."
+              break
+            fi
+            echo "SSH setup not complete (attempt $ATTEMPT/$MAX_SETUP_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+      - name: Wait for verification instance to be running
+        run: |
+          echo "Waiting for verification instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Verification instance is running"
+
+      - name: Wait for verification instance SSH via EICE tunnel
+        run: |
+          echo "Waiting for SSH to be ready on verification instance..."
+          MAX_SSH_ATTEMPTS=60
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SSH_ATTEMPTS ]; do
+            aws ec2-instance-connect open-tunnel \
+              --instance-id "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+              --local-port 2223 \
+              --region "$AWS_REGION" &
+            TUNNEL_PID=$!
+            sleep 3
+
+            if ssh -p 2223 -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -o BatchMode=yes -i /tmp/verify-ec2key Administrator@localhost "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
+              echo "SSH connection established!"
+              kill $TUNNEL_PID 2>/dev/null || true
+              break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SSH_ATTEMPTS ]; then
+              echo "Failed to establish SSH connection"
+              exit 1
+            fi
+            echo "SSH not ready (attempt $ATTEMPT/$MAX_SSH_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+          echo "Waiting for SSH setup completion..."
+          MAX_SETUP_ATTEMPTS=30
+          ATTEMPT=0
+          while [ $ATTEMPT -lt $MAX_SETUP_ATTEMPTS ]; do
+            aws ec2-instance-connect open-tunnel \
+              --instance-id "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+              --local-port 2223 \
+              --region "$AWS_REGION" &
+            TUNNEL_PID=$!
+            sleep 3
+
+            if ssh -p 2223 -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i /tmp/verify-ec2key Administrator@localhost \
+              "if (Test-Path C:\\ssh_ready.txt) { echo READY } else { echo NOT_READY }" 2>/dev/null | grep -q READY; then
+              echo "SSH setup complete!"
+              kill $TUNNEL_PID 2>/dev/null || true
+              break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            ATTEMPT=$((ATTEMPT + 1))
+            if [ $ATTEMPT -eq $MAX_SETUP_ATTEMPTS ]; then
+              echo "SSH setup timed out, continuing anyway..."
+              break
+            fi
+            echo "SSH setup not complete (attempt $ATTEMPT/$MAX_SETUP_ATTEMPTS), waiting 30s..."
+            sleep 30
+          done
+
+      - name: Install NVIDIA driver on verification instance
+        run: |
+          echo "Installing NVIDIA driver only (this will take a few minutes)..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --local-port 2223 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          scp -P 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/verify-ec2key .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1
+          ssh -p 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/verify-ec2key Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Create archive of repository
+        run: |
+          echo "Creating repository archive..."
+          git archive --format=zip --output=/tmp/repo.zip HEAD
+
+      - name: Transfer repository to instance
+        run: |
+          echo "Transferring repository to instance..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key /tmp/repo.zip Administrator@localhost:C:/source.zip
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key Administrator@localhost \
+            "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run warmup.bat
+        run: |
+          echo "Running warmup.bat..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      # THE OIDC CREDENTIAL LASTS ONE HOUR AND THE REMOTE WORK BELOW FILLS IT,
+      # SO EVERY STEP THAT OPENS A TUNNEL REFRESHES FIRST. `aws
+      # ec2-instance-connect open-tunnel` authenticates when it opens, it runs
+      # in the BACKGROUND, and its exit status is never checked, so an expired
+      # credential does not report itself as one: the tunnel never binds port
+      # 2222, and the ssh that follows reports `connect to host localhost port
+      # 2222: Connection refused`, which reads as the Windows instance being
+      # down rather than as the credential.
+      #
+      # Measured on run 35069498252, where the credential was 60m17s old when
+      # the headless smoke test opened its tunnel:
+      #
+      #   aws: [ERROR]: An error occurred (RequestExpired) when calling the
+      #   DescribeInstances operation: Request has expired.
+      #   ssh: connect to host localhost port 2222: Connection refused
+      #
+      # The x64 distribution carries both CUDA and ROCm, so warmup, build, the
+      # server build and bundle together occupy close to the whole hour, and
+      # the margin at the last of them decides the run: run 35056934927 reached
+      # that same step at 59m32s and passed. A refresh costs about one second.
+      #
+      # This one also serves `Collect build.log (on failure)` below, which
+      # opens its own tunnel after build.bat: without it, a build that fails
+      # late loses the log that explains why.
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run build.bat
+        run: |
+          echo "Running build.bat..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      # WITHOUT THIS A WINDOWS BUILD FAILURE IS UNDIAGNOSABLE FROM ANYWHERE BUT
+      # THE RUN LOG, and the run log is exactly what a developer on a network
+      # that cannot reach `results-receiver.actions.githubusercontent.com` does
+      # not have: the API answers `/logs` with a 302 to a host outside the VPC,
+      # so the redirect times out rather than serving. `build.bat` re-launches
+      # itself through PowerShell and tees everything into
+      # `build-win-native\build.log`, and that file dies with the instance a
+      # few steps below. Copying it out on failure turns "step 19 failed" into
+      # the compiler's own words, fetchable through the artifacts API.
+      #
+      # `if: failure()` and `continue-on-error`, so this can only ADD
+      # information: a build that succeeded skips it, and a copy that itself
+      # fails must not replace the build's exit code with its own.
+      - name: Collect build.log (on failure)
+        if: failure()
+        continue-on-error: true
+        run: |
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key \
+            Administrator@localhost:C:/ppf-contact-solver/build-win-native/build.log \
+            /tmp/win-build.log || echo "build.log was not present" > /tmp/win-build.log
+          kill $TUNNEL_PID 2>/dev/null || true
+          echo "--- last 200 lines ---"
+          tail -200 /tmp/win-build.log || true
+
+      - name: Upload build.log (on failure)
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: /tmp/win-build.log
+          retention-days: 7
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run bundle.bat
+        run: |
+          echo "Running bundle.bat..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
+            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && bundle.bat /nopause'"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Clean up test artifacts
+        run: |
+          echo "Cleaning up test artifacts..."
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key Administrator@localhost \
+            "powershell -Command \"Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\local' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\cache' -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force 'C:\\ppf-contact-solver\\build-win-native\\dist\\export' -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -Path 'C:\\ppf-contact-solver\\build-win-native\\dist' -Recurse -Include '*.pyc','*.pyo' | Remove-Item -Force -ErrorAction SilentlyContinue\""
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create release archive
+        run: |
+          echo "Creating release archive..."
+          VERSION="${{ needs.version.outputs.VERSION }}"
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
+            "powershell -Command \"Compress-Archive -Path 'C:\\ppf-contact-solver\\build-win-native\\dist\\*' -DestinationPath 'C:\\ppf-contact-solver-${VERSION}-win64.zip' -Force\""
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ============================================================
+      # THE ARCHIVE REACHES THE VERIFICATION INSTANCE DIRECTLY, NOT THROUGH
+      # THE RUNNER. Both instances sit in one subnet of the CI VPC, whose
+      # security group admits TCP 22, so the build instance can scp the
+      # archive to the verifier's private address at VPC speed. What this
+      # replaced was two serial hops through ec2-instance-connect tunnels:
+      # 17 minutes measured to bring the 400 MB archive down to the runner
+      # (run 35096146404), and about as long to push it back up. The runner
+      # still downloads the archive for the publish job, but it does so
+      # below, WHILE the verification runs, so that copy is off the path.
+      #
+      # push-archive.ps1 holds the verifier's private key for this one step
+      # and deletes it in every exit path; its header records the ACL that
+      # Windows OpenSSH needs before it accepts a pushed key.
+      # ============================================================
+      - name: Hand the archive to the verification instance over the VPC
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.VERSION }}"
+          VERIFY_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' \
+            --region "$AWS_REGION" --output text)
+          case "$VERIFY_IP" in
+            ""|None) echo "ERROR: the verification instance has no private address"; exit 1 ;;
+          esac
+          echo "verification instance private address: $VERIFY_IP"
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
+          sleep 3
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key \
+            /tmp/verify-ec2key Administrator@localhost:C:/verify-key
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key \
+            .github/workflows/scripts/win/push-archive.ps1 Administrator@localhost:C:/push_archive.ps1
+          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -i /tmp/ec2key Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/push_archive.ps1 -Archive C:/ppf-contact-solver-${VERSION}-win64.zip -Key C:/verify-key -Target $VERIFY_IP"
+
+      # The verification runs DETACHED (launch-verify.ps1 records why and
+      # how), which is what lets the archive download below overlap it.
+      - name: Start the verification, detached
+        run: |
+          set -euo pipefail
+          echo "${{ steps.verify-instance.outputs.INSTANCE_ID }}" > /tmp/verify_instance_id.txt
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --local-port 2223 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
+          sleep 3
+          for f in run-verify launch-verify poll-verify; do
+            scp -P 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/verify-ec2key \
+              ".github/workflows/scripts/win/$f.ps1" "Administrator@localhost:C:/${f//-/_}.ps1"
+          done
+          ssh -p 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/verify-ec2key Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/launch_verify.ps1"
+
+      # This download runs WHILE the verification runs on the other instance.
+      # It is the slowest single transfer in the job (17 minutes measured for
+      # 400 MB through the tunnel) and the verification takes about twenty,
+      # so the two now overlap instead of following each other.
+
+      - name: Download release archive
+        run: |
+          echo "Downloading release archive..."
+          VERSION="${{ needs.version.outputs.VERSION }}"
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --local-port 2222 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -i /tmp/ec2key "Administrator@localhost:C:/ppf-contact-solver-${VERSION}-win64.zip" ./
+          kill $TUNNEL_PID 2>/dev/null || true
+          ls -lh "ppf-contact-solver-${VERSION}-win64.zip"
+      - name: Re-authenticate for build instance cleanup
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terminate build instance
+        run: |
+          echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 terminate-instances \
+            --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Build instance termination requested"
+
+      - name: Delete build instance key pair
+        run: |
+          echo "Deleting build instance key pair: ${{ steps.keypair.outputs.KEY_NAME }}"
+          aws ec2 delete-key-pair --key-name "${{ steps.keypair.outputs.KEY_NAME }}" --region "$AWS_REGION" || true
+
+      # ============================================================
+      # PHASE 2: the clean-environment verification's verdict
+      # ============================================================
+      # The wait is the rig's wait-rig.sh with its six knobs pointed at the
+      # verification instance, so the two detached Windows jobs share one
+      # poller. A window is shorter than the tunnel's one hour session cap,
+      # and the re-authentication between windows is for the credential that
+      # opens a tunnel, which lasts an hour as well. Measured, fast-check-all
+      # on a clean instance takes about twenty minutes, so the second window
+      # exists for a slow instance and is normally skipped.
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for the verification (window 1)
+        env:
+          WAIT_INSTANCE_ID_FILE: /tmp/verify_instance_id.txt
+          WAIT_KEY_FILE: /tmp/verify-ec2key
+          WAIT_POLL_SCRIPT: C:/poll_verify.ps1
+          WAIT_LOCAL_PORT: "2223"
+          WAIT_RC_VAR: VERIFY_RC
+          WAIT_LABEL: verify
+        run: bash .github/workflows/scripts/win/wait-rig.sh 40
+
+      - name: Re-authenticate AWS credentials
+        if: env.VERIFY_RC == ''
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for the verification (window 2)
+        if: env.VERIFY_RC == ''
+        env:
+          WAIT_INSTANCE_ID_FILE: /tmp/verify_instance_id.txt
+          WAIT_KEY_FILE: /tmp/verify-ec2key
+          WAIT_POLL_SCRIPT: C:/poll_verify.ps1
+          WAIT_LOCAL_PORT: "2223"
+          WAIT_RC_VAR: VERIFY_RC
+          WAIT_LABEL: verify
+        run: bash .github/workflows/scripts/win/wait-rig.sh 30
+
+      # Both logs are copied out whatever the verdict: verify.log is every
+      # line the two batch files printed, and fast-check-results.log is the
+      # per-example table fast-check-all.bat writes beside itself.
+      - name: Re-authenticate AWS credentials
+        if: always()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Collect the verification logs
+        if: always()
+        continue-on-error: true
+        run: |
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --local-port 2223 \
+            --region "$AWS_REGION" &
+          TUNNEL_PID=$!
+          sleep 3
+          scp -P 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/verify-ec2key \
+            Administrator@localhost:C:/ci/verify.log ./verify.log 2>/dev/null || echo "verify.log was not present"
+          scp -P 2223 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/verify-ec2key \
+            Administrator@localhost:C:/bundle/fast-check-results.log ./verify-fast-check-results.log 2>/dev/null \
+            || echo "fast-check-results.log was not present"
+          kill $TUNNEL_PID 2>/dev/null || true
+          if [ -f ./verify-fast-check-results.log ]; then
+            echo "=== Verification Instance Test Results ==="
+            cat ./verify-fast-check-results.log
+          fi
+          if [ -f ./verify.log ]; then
+            echo "=== verify.log (last 60 lines) ==="
+            tail -60 ./verify.log
+          fi
+
+      - name: Upload the verification logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-verify-${{ needs.version.outputs.VERSION }}
+          path: |
+            verify.log
+            verify-fast-check-results.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # A window that ran out is a failure, not a pass: VERIFY_RC is only ever
+      # written by a poll that saw the exit file, so its absence means the
+      # verification never reported.
+      - name: Require a passing verification
+        run: |
+          case "${VERIFY_RC:-}" in
+            0)  echo "The clean-environment verification passed." ;;
+            "") echo "ERROR: the verification did not report inside its windows"; exit 1 ;;
+            *)  echo "ERROR: the verification failed with exit code $VERIFY_RC"; exit 1 ;;
+          esac
+
+      - name: Terminate verification instance
+        run: |
+          echo "Terminating verification instance: ${{ steps.verify-instance.outputs.INSTANCE_ID }}"
+          aws ec2 terminate-instances \
+            --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+            --region "$AWS_REGION"
+          echo "Verification instance termination initiated"
+
+      - name: Delete verification instance key pair
+        run: |
+          echo "Deleting verification instance key pair: ${{ steps.verify-keypair.outputs.KEY_NAME }}"
+          aws ec2 delete-key-pair --key-name "${{ steps.verify-keypair.outputs.KEY_NAME }}" --region "$AWS_REGION" || true
+
+      # ============================================================
+      # PHASE 3: hand the verified bundle to the publish job
+      # ============================================================
+      #
+      # THE PUBLISH STEPS ARE A SEPARATE JOB, AND THAT IS NOT TIDINESS. A job's
+      # GITHUB_TOKEN is refused a write once the job has run long enough, and
+      # this one reaches its end about two hours in. Measured twice, on the same
+      # commit and the same code as the macOS build, whose publish job ran on
+      # a fresh token about twenty minutes in and succeeds:
+      #
+      #   2026-09-10  git push of the tag  refused (workflows permission)
+      #   2026-09-11  POST /git/refs       403 Resource not accessible by integration
+      #
+      # Both jobs were granted an IDENTICAL permission set that run
+      # (`Actions: write, Contents: write, Metadata: read`), which is what rules
+      # out a permissions cause and leaves the token's age. So the bundle is
+      # handed over as an artifact and published by a short job that starts with
+      # a token of its own.
+      - name: Upload the verified bundle for the publish job
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-bundle-zip
+          path: ppf-contact-solver-${{ needs.version.outputs.VERSION }}-win64.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-duration-seconds: 21600
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup - Terminate Instances
+        if: always()
+        continue-on-error: true
+        run: |
+          # Terminate build instance if known
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Terminating build instance: ${{ steps.instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+          fi
+          # Terminate verification instance if known
+          if [ -n "${{ steps.verify-instance.outputs.INSTANCE_ID }}" ]; then
+            echo "Terminating verification instance: ${{ steps.verify-instance.outputs.INSTANCE_ID }}"
+            aws ec2 terminate-instances \
+              --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
+              --region "$AWS_REGION" || true
+          fi
+          # Fallback: Find and terminate any instances tagged with this run ID
+          # This catches instances launched but not captured in step outputs (e.g., on cancellation)
+          echo "Searching for any orphaned instances from this run..."
+          ORPHANED_INSTANCES=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:RunId,Values=${{ github.run_id }}" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' \
+            --region "$AWS_REGION" \
+            --output text || echo "")
+          if [ -n "$ORPHANED_INSTANCES" ]; then
+            echo "Found orphaned instances: $ORPHANED_INSTANCES"
+            aws ec2 terminate-instances \
+              --instance-ids $ORPHANED_INSTANCES \
+              --region "$AWS_REGION" || true
+          else
+            echo "No orphaned instances found"
+          fi
+
+      - name: Cleanup - Delete Key Pairs
+        if: always()
+        continue-on-error: true
+        run: |
+          # Delete build instance key pair
+          if [ -n "${{ steps.keypair.outputs.KEY_NAME }}" ]; then
+            echo "Deleting build key pair: ${{ steps.keypair.outputs.KEY_NAME }}"
+            aws ec2 delete-key-pair --key-name "${{ steps.keypair.outputs.KEY_NAME }}" --region "$AWS_REGION" || true
+          fi
+          # Delete verification instance key pair
+          if [ -n "${{ steps.verify-keypair.outputs.KEY_NAME }}" ]; then
+            echo "Deleting verification key pair: ${{ steps.verify-keypair.outputs.KEY_NAME }}"
+            aws ec2 delete-key-pair --key-name "${{ steps.verify-keypair.outputs.KEY_NAME }}" --region "$AWS_REGION" || true
+          fi
+
+      - name: Cleanup - Remove Local SSH Keys
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -f /tmp/ec2key /tmp/verify-ec2key
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Release Build Summary"
+          echo "- Version: ${{ needs.version.outputs.VERSION }}"
+          echo "- Region: $AWS_REGION"
+          echo "- Build instance type: $BUILD_INSTANCE_TYPE"
+          echo "- Verification instance type: $VERIFY_INSTANCE_TYPE"
+          echo "- Build Instance ID: ${{ steps.instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo "- Verification Instance ID: ${{ steps.verify-instance.outputs.INSTANCE_ID || 'Not launched' }}"
+          echo ""
+          echo "## Workflow Phases"
+          echo "1. Build Phase: Compiled on instance with CUDA 12.8 and build tools"
+          echo "2. Verification Phase: Tested on clean instance with only NVIDIA driver"
+          echo "3. Release Phase: the release job publishes every platform's archives"
+
+  # ====================================================================
+  # THE WINDOWS BUILD THAT NEEDS NO GPU: ARM64, with the CPU backend alone.
+  # Neither NVIDIA nor AMD publishes an ARM64 Windows toolkit, which
+  # platform.bat refuses by name, so this builds on a GitHub-hosted ARM64
+  # runner and proves what such a host can: build-win-native's own gates (the
+  # machine type of every PE image and the import smoke gate), then an example
+  # scene on the distribution's CPU backend, judged by the frames it writes,
+  # from the archive as a user unpacks it.
+  #
+  # The x64 ROCm backend is no longer built here: it ships inside the x64
+  # distribution the EC2 job builds, beside CUDA, and that job runs its gates.
+  #
+  # The archive is named without the version, which this job does not know:
+  # the release job gives it the shared stamp, so every asset of one release
+  # carries one version.
+  # ====================================================================
+  build-win-nogpu:
+    name: Build and Package Windows ${{ matrix.name }}
+    if: ${{ inputs.target == 'All' || inputs.target == 'Windows' }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ARM64
+            runner: windows-11-arm
+            backends: cpu
+            # platform.bat's PPF_WIN_DIST_SUFFIX for these backends.
+            suffix: windows-arm64
+    env:
+      PPF_WIN_BACKENDS: ${{ matrix.backends }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Disk
+        shell: pwsh
+        run: Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free -AutoSize
+
+      - name: Run warmup.bat
+        shell: cmd
+        working-directory: build-win-native
+        run: warmup.bat /nopause
+
+      - name: Run build.bat
+        shell: cmd
+        working-directory: build-win-native
+        run: build.bat /nopause
+
+      - name: Run bundle.bat
+        shell: cmd
+        working-directory: build-win-native
+        run: bundle.bat /nopause
+
+      # Archived BEFORE any scene runs, since a run writes its session and
+      # cache into the distribution it runs from.
+      - name: Create the archive
+        shell: pwsh
+        run: |
+          $archive = "ppf-contact-solver-${{ matrix.suffix }}.zip"
+          Compress-Archive -Path 'build-win-native\dist\*' -DestinationPath $archive -Force
+          $size = (Get-Item $archive).Length
+          Write-Host "$archive is $size bytes"
+          # A GitHub release asset is limited to 2 GiB.
+          if ($size -ge 2147483648) { Write-Error "$archive is over the 2 GiB release asset limit"; exit 1 }
+
+      - name: Run an example scene on the CPU backend of the unpacked archive
+        shell: pwsh
+        run: |
+          $unpacked = Join-Path $env:RUNNER_TEMP 'unpacked'
+          Expand-Archive -Path "ppf-contact-solver-${{ matrix.suffix }}.zip" -DestinationPath $unpacked -Force
+          & .github/workflows/scripts/win/smoke-distribution.ps1 -Dist $unpacked -Scenes drape
+          exit $LASTEXITCODE
+
+      - name: Upload the archive for the publish job
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-bundle-${{ matrix.suffix }}
+          path: ppf-contact-solver-${{ matrix.suffix }}.zip
+          retention-days: 7
+          # Already compressed.
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload the build logs (on failure)
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-build-logs-${{ matrix.suffix }}
+          path: build-win-native/*.log
+          retention-days: 7
+
+  # ============================================================
+  # macOS
+  # ============================================================
+# The macOS jobs launch nothing. The Windows
+# release rents an EC2 instance because GitHub offers no Windows host with an
+# NVIDIA GPU; macOS needs no such detour, since the runner IS the target: Apple
+# Silicon with a Metal device. So every AWS step of that workflow (OIDC, the AMI
+# and VPC lookups, key pairs, Instance Connect tunnels, driver installation and
+# the termination sweep) has no counterpart here, and the region input goes with
+# them.
+#
+# The three phases of the Windows build survive, mapped onto jobs:
+#
+#   build-macos    provision, compile and package.
+#   verify-macos   a SECOND runner, which is where the clean environment comes
+#                  from: a fresh runner has never built this tree, so it stands
+#                  in for the second EC2 instance the Windows workflow launches.
+
+  # ============================================================
+  # PHASE 1: Build
+  # ============================================================
+  build-macos:
+    name: Build and Package macOS
+    if: ${{ inputs.target == 'All' || inputs.target == 'macOS' }}
+    needs: version
+    # Pinned to macos-15 rather than macos-latest, and the reason is the same
+    # one both-backends.yml gives: a macOS 14 guest mis-runs Metal, and Metal
+    # never faults on a bad read, so that guest is a silent-wrong-answer
+    # environment. A release distribution must not be built or exercised on one.
+    runs-on: macos-15
+    # Generous because this job pays for everything at once and a release runs
+    # rarely: provisioning, an uncached compile of the whole workspace, and the
+    # packaging step. A timeout here discards all of it.
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      DRY_RUN: ${{ needs.version.outputs.DRY_RUN }}
+      ARCHIVE: ${{ steps.archive.outputs.ARCHIVE }}
+      DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+
+    steps:
+      - name: Get version and mode
+        id: version
+        run: |
+          VERSION="${{ needs.version.outputs.VERSION }}"
+          DRY_RUN="${{ needs.version.outputs.DRY_RUN }}"
+          # THE FOLDER AND THE ZIP CARRY THE SAME NAME, DERIVED ONCE HERE.
+          # `ditto --keepParent` puts the directory's own name at the top of
+          # the archive, so a folder called `ppf-contact-solver` expands over
+          # the previous download every time and a person holding two releases
+          # cannot tell them apart. bundle.sh takes the name from
+          # PPF_MAC_DIST_NAME, and the archive is this stem plus `.zip`, so the
+          # two agree by construction rather than by two places being edited
+          # together.
+          DIST_NAME="ppf-contact-solver-${VERSION}-macos-arm64"
+          echo "DIST_NAME=$DIST_NAME" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+          echo "Dry run: $DRY_RUN"
+          echo "Distribution directory: $DIST_NAME"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # The runner's own python3 is externally managed, so a pip install against
+      # it is refused, and macOS ships 3.9, which the frontend's PEP 604 unions
+      # do not parse. warmup.sh needs an interpreter it may build a venv with,
+      # and PPF_CTS_PYTHON below points it at this one rather than leaving it to
+      # the PATH search.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # A workflow_dispatch is only dispatchable when the file sits on the
+      # DEFAULT branch, while the scripts it drives arrive with the macOS port,
+      # so the two can be on different refs and the run takes its checkout from
+      # the ref it was dispatched with. Say that plainly here rather than
+      # letting `cd build-mac-native` fail with a bare "No such file".
+      - name: Assert this ref carries the macOS build scripts
+        run: |
+          set -euo pipefail
+          if [ ! -x build-mac-native/build.sh ]; then
+            echo "ERROR: this ref (${{ github.ref_name }}) has no build-mac-native/build.sh."
+            echo "       Dispatch this workflow against a ref that carries the macOS"
+            echo "       build directory. The workflow file itself only has to be on the"
+            echo "       default branch for the dispatch to be accepted."
+            exit 1
+          fi
+          echo "build-mac-native present on ${{ github.ref_name }}"
+
+      - name: Assert this runner selects the Metal backend
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version || true
+          SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          echo "macOS SDK: $SDK"
+          if [ ! -d "$SDK/System/Library/Frameworks/Metal.framework" ]; then
+            echo "ERROR: the macOS SDK at $SDK carries no Metal.framework, so"
+            echo "       build.rs cannot select the Metal backend and this job"
+            echo "       would package something else."
+            exit 1
+          fi
+          # The shader compiler is a separately downloadable component, and full
+          # Xcode does not imply it. Ask by INVOKING it: `xcrun --find metal`
+          # resolves whether or not the component is installed, so a check that
+          # only looks for the binary reports a toolchain that cannot run.
+          if xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal shader compiler: present"
+          else
+            echo "Metal shader compiler: absent (build.sh's shader pre-compile will skip)"
+          fi
+
+      - name: Run warmup.sh
+        run: |
+          set -euo pipefail
+          # Name the interpreter explicitly rather than leaving warmup.sh to its
+          # PATH search, so a runner image that puts a different python3 first
+          # cannot quietly build the environment with it.
+          export PPF_CTS_PYTHON="$(command -v python3.12 || command -v python3)"
+          echo "Provisioning with $PPF_CTS_PYTHON"
+          cd build-mac-native
+          set -o pipefail
+          ./warmup.sh 2>&1 | tee "$RUNNER_TEMP/warmup.log"
+
+      # NO cargo cache, matching both-backends.yml. The question a release build
+      # answers is whether these sources still compile into a shippable
+      # distribution, and a restored target/ answers it with a build that may
+      # not have run.
+      - name: Run build.sh
+        run: |
+          set -euo pipefail
+          cd build-mac-native
+          # Tee'd because Actions log TEXT is not reachable from every host that
+          # drives this workflow, while artifacts are. A failing step whose
+          # output only exists in the run log cannot be diagnosed from there,
+          # so the log is uploaded beside the distribution instead.
+          set -o pipefail
+          ./build.sh 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      # Ask the artifact what it is rather than inferring it from the path. A
+      # binary that reports anything but `metal` means the backend selection
+      # went somewhere else, and shipping it would be the quiet kind of wrong.
+      # Ask the artifact what it is rather than inferring it from the path. A
+      # binary that reports anything but `metal` means the backend selection
+      # went somewhere else, and shipping it would be the quiet kind of wrong.
+      #
+      # BOTH BACKENDS ARE ASKED, because build.sh now builds two. They link the
+      # same executable name into two target directories, so the DIRECTORY is
+      # the only thing distinguishing them and the directory is a convention;
+      # this is the evidence. Mixing them up would ship a distribution whose CPU
+      # device runs Metal, or the reverse, with every path saying otherwise.
+      - name: Assert each built solver is the backend its directory claims
+        run: |
+          set -euo pipefail
+          for PAIR in "target/release:metal" "target/cpu/release:cpu"; do
+            DIR="${PAIR%:*}"
+            WANT="${PAIR##*:}"
+            BACKEND="$(./$DIR/ppf-contact-solver --backend)"
+            echo "$DIR reports: $BACKEND"
+            [ "$BACKEND" = "$WANT" ] || {
+              echo "ERROR: expected the $WANT backend in $DIR, got '$BACKEND'"
+              exit 1
+            }
+          done
+
+      - name: Run bundle.sh
+        env:
+          # What the directory is called, and so what a person gets after
+          # unzipping. bundle.sh defaults to the unstamped name for a local
+          # build; a release stamps it. See "Get version and mode" above.
+          PPF_MAC_DIST_NAME: ${{ steps.version.outputs.DIST_NAME }}
+        run: |
+          set -euo pipefail
+          cd build-mac-native
+          # Tee'd because Actions log TEXT is not reachable from every host that
+          # drives this workflow, while artifacts are. A failing step whose
+          # output only exists in the run log cannot be diagnosed from there,
+          # so the log is uploaded beside the distribution instead.
+          set -o pipefail
+          ./bundle.sh 2>&1 | tee "$RUNNER_TEMP/bundle.log"
+
+      # NO EXAMPLE SWEEP HERE, and its absence is a decision rather than an
+      # omission. A GitHub macOS runner is virtualized and presents an "Apple
+      # Paravirtual device", which does not report MTLGPUFamilyApple7; the
+      # solver requires that family (ppf-cts-core/cpp/metal_probe.mm), so
+      # check_gpu refuses at session.start() and every scene fails in about a
+      # second. Measured on run 34087299276, where all of them did.
+      #
+      # The gate has no bypass on purpose: a device that cannot support the
+      # family cannot be trusted to compute the right answer, and forcing it
+      # would be the silent-wrong-answer class this project does not ship. So
+      # this workflow proves the distribution BUILDS and is SELF-CONTAINED,
+      # which is what a runner can answer, and the evidence that it SIMULATES
+      # comes from real Apple Silicon: bl_mac_native_real_solve drives a scene
+      # through the macOS Native backend on a physical Mac, and
+      # examples/run_suite.py --fail-fast is what a person runs there.
+
+      - name: Upload build logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: mac-build-logs-${{ needs.version.outputs.VERSION }}
+          path: ${{ runner.temp }}/*.log
+          retention-days: 7
+
+      # build-mac-native/dist holds exactly one thing, the distribution
+      # directory, so --keepParent makes that directory the archive's single
+      # top-level entry: a person who unpacks this gets the stamped folder with
+      # the launcher inside it rather than a dist/ wrapper to descend through,
+      # and two releases unzip side by side instead of onto each other.
+      # ditto is what carries the per-file signatures across the round trip,
+      # which is the property verify-macos reads back.
+      - name: Create release archive
+        id: archive
+        run: |
+          set -euo pipefail
+          DIST_NAME="${{ steps.version.outputs.DIST_NAME }}"
+          ARCHIVE="${DIST_NAME}.zip"
+          # --keepParent carries the directory's own name into the archive, so
+          # this expands to $DIST_NAME rather than to a generic folder.
+          ditto -c -k --keepParent "build-mac-native/dist/$DIST_NAME" "$ARCHIVE"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_OUTPUT
+          ls -lh "$ARCHIVE"
+
+      # The artifact name stays macos-bundle-<version>: it is an identifier the
+      # verify and release jobs address this upload by, and renaming it would
+      # churn three call sites to no effect on what ships.
+      - name: Upload distribution archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-bundle-${{ needs.version.outputs.VERSION }}
+          path: ${{ steps.archive.outputs.ARCHIVE }}
+          retention-days: 7
+
+  # ============================================================
+  # PHASE 2: Clean Environment Verification
+  # A second runner, which has never built this tree: no target/, no cargo
+  # registry, no build-mac-native/dist. That absence is the whole test. The
+  # property bundle.sh claims is that it rewrote every Mach-O load command so
+  # nothing points back into the build tree, and the way to find out is to run
+  # the binaries where that tree does not exist. A load command that escaped
+  # cannot resolve here, so a distribution that runs is a distribution that is
+  # self contained.
+  # ============================================================
+  verify-macos:
+    name: Verify the Distribution on a Clean Runner
+    if: ${{ inputs.target == 'All' || inputs.target == 'macOS' }}
+    needs: [version, build-macos]
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      # THE DIRECTORY THE ARCHIVE EXPANDS TO, named once by build-macos. Every
+      # path below is inside it, and it carries the release's stamp, so it
+      # cannot be written literally here without the two drifting apart.
+      DIST_NAME: ${{ needs.build-macos.outputs.DIST_NAME }}
+    steps:
+      - name: Download distribution archive
+        uses: actions/download-artifact@v6
+        with:
+          name: macos-bundle-${{ needs.version.outputs.VERSION }}
+
+      - name: Confirm this runner holds no build tree
+        run: |
+          set -euo pipefail
+          echo "Runner: $(sw_vers -productVersion) $(uname -m)"
+          for STALE in "$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/build-mac-native/dist"; do
+            if [ -e "$STALE" ]; then
+              echo "ERROR: $STALE exists, so this runner is not a clean environment"
+              exit 1
+            fi
+          done
+          echo "No build tree present, which is what makes the checks below mean something."
+
+      - name: Extract the distribution
+        run: |
+          set -euo pipefail
+          ARCHIVE="${{ needs.build-macos.outputs.ARCHIVE }}"
+          ditto -x -k "$ARCHIVE" extracted
+          echo "Archive top level:"
+          ls -la extracted
+          echo "--- the distribution directory ---"
+          ls -la extracted/$DIST_NAME
+          echo "--- target/release ---"
+          ls -la extracted/$DIST_NAME/target/release
+
+      # THE LAYOUT IS ASKED OF THE EXTRACTED COPY, not of the build tree, so
+      # every answer here is about the bytes a user receives. The launcher is
+      # checked first because it is the product: a person runs
+      # ./ppf-contact-solver and nothing else.
+      - name: Verify the distribution layout
+        run: |
+          set -euo pipefail
+          PKG="extracted/$DIST_NAME"
+          # THE EXECUTABLE BIT HAS TO SURVIVE THE ARCHIVE ROUND TRIP. Without
+          # it ./ppf-contact-solver answers "Permission denied", which reads as
+          # a broken download rather than as a packaging defect, and this is
+          # the only place that can tell the two apart. It fails rather than
+          # warns, because the release would be unusable.
+          [ -x "$PKG/ppf-contact-solver" ] || {
+            echo "ERROR: $PKG/ppf-contact-solver is not executable after the"
+            echo "       archive round trip, so a person who unpacks this"
+            echo "       release cannot run it."
+            exit 1
+          }
+          # TWO FILES IN THIS DISTRIBUTION CARRY THE BASENAME
+          # ppf-contact-solver. The one at the root is the launcher, a shell
+          # script, and is what a person runs; target/release/ppf-contact-solver
+          # is the solver, a Mach-O the frontend runs per scene. This is the
+          # assertion that says which one is at the root. A Mach-O here would
+          # start a solver with no arguments.
+          [ "$(head -c 2 "$PKG/ppf-contact-solver")" = '#!' ] || {
+            echo "ERROR: $PKG/ppf-contact-solver does not begin with '#!', so"
+            echo "       the file at the root of the distribution is not the"
+            echo "       launcher script."
+            exit 1
+          }
+          # The launcher is the whole product, so its syntax is read on a
+          # machine that never generated it as well as on the one that did.
+          bash -n "$PKG/ppf-contact-solver"
+          echo "Launcher: executable, starts with #!, parses"
+          for ENTRY in config.sh \
+                       README.txt \
+                       THIRD_PARTY_LICENSES.txt \
+                       bin/libppfbe_metal.dylib \
+                       bin/ppf_entries.metallib \
+                       python/bin/python3 \
+                       frontend \
+                       examples \
+                       crates \
+                       target/release/ppf-contact-solver \
+                       target/release/ppf-cts-server \
+                       target/release/lib_ppf_cts_py.dylib \
+                       target/release/.ppf-backend \
+                       target/cpu/release/ppf-contact-solver \
+                       target/cpu/release/ppf-cts-server \
+                       target/cpu/release/lib_ppf_cts_py.dylib \
+                       target/cpu/release/.ppf-backend \
+                       .ppf-selfcontained \
+                       .git/branch_name.txt; do
+            [ -e "$PKG/$ENTRY" ] || {
+              echo "ERROR: $PKG/$ENTRY is missing from the distribution"
+              exit 1
+            }
+            echo "  present: $ENTRY"
+          done
+
+      # THE PAYLOAD IS arm64 BY CONSTRUCTION, and this reads that back off the
+      # extracted copy rather than trusting the claim bundle.sh printed. A
+      # universal file that escaped the thinning pass is dead weight a user
+      # downloads and cannot run, and the assertion here is independent of the
+      # one the build made about its own output.
+      - name: Assert the extracted payload is arm64 only
+        run: |
+          set -euo pipefail
+          # THE C LOCALE IS A CORRECTNESS SETTING HERE, NOT A PREFERENCE, and
+          # it is the same measured defect bundle.sh names at its own locale
+          # line: the interpreter tree carries files whose names and contents
+          # are not valid UTF-8, and under a UTF-8 locale sed answers such a
+          # byte with "RE error: illegal byte sequence" and EXITS, closing the
+          # pipe feeding it. The discovery then comes back SHORT and this step
+          # certifies a payload it never read. In the C locale a byte is a byte
+          # and nothing aborts.
+          export LC_ALL=C
+          PKG="extracted/$DIST_NAME"
+          # No name filter: a filter on *.dylib, *.so or the executable bit is
+          # faster and can miss a file, and missing one is the silent failure
+          # this exists to catch. The sed cuts at ": Mach-O", which is safe
+          # because no path in the payload carries that substring.
+          MACHO_LIST="$(find "$PKG" -type f -print0 \
+              | xargs -0 file -- \
+              | sed -n 's/: *Mach-O .*$//p')"
+          COUNT="$(printf '%s\n' "$MACHO_LIST" | grep -c . || true)"
+          # THE COUNT IS PRINTED BEFORE THE VERDICT. A zero count is a failed
+          # extraction, not a clean payload: this archive certainly carries a
+          # solver, a backend library and an interpreter, so nothing to walk
+          # means the walk is what broke.
+          echo "Mach-O files in the extracted payload: $COUNT"
+          [ "$COUNT" -gt 0 ] || {
+            echo "ERROR: the Mach-O discovery found nothing under $PKG, so the"
+            echo "       extraction or the discovery failed. A gate reporting"
+            echo "       clean over nothing is the mistake this refuses to make."
+            exit 1
+          }
+          BAD=0
+          # A HERESTRING FEEDS THIS LOOP RATHER THAN A PIPE, because a pipe
+          # runs the loop in a subshell and BAD comes back zero however many
+          # files failed there. bundle.sh's short-walk guard keeps a herestring
+          # for a neighboring reason.
+          while IFS= read -r MACHO; do
+            [ -n "$MACHO" ] || continue
+            # lipo -archs answers for a thin file as well as a fat one, so this
+            # is a read rather than a try-and-recover.
+            ARCHS="$(lipo -archs "$MACHO" 2>/dev/null || true)"
+            ARCHS="$(printf '%s' "$ARCHS" | tr -s ' ' ' ' | sed 's/^ *//; s/ *$//')"
+            if [ -z "$ARCHS" ]; then
+              echo "ERROR: lipo could not read the architectures of"
+              echo "       ${MACHO#"$PKG/"}, so this step can make no statement"
+              echo "       about a file the walk says is Mach-O."
+              BAD=$((BAD + 1))
+            elif [ "$ARCHS" != "arm64" ]; then
+              echo "ERROR: ${MACHO#"$PKG/"} reports architectures '$ARCHS'"
+              BAD=$((BAD + 1))
+            fi
+          done <<< "$MACHO_LIST"
+          [ "$BAD" -eq 0 ] || {
+            echo "ERROR: the architecture check failed on $BAD of $COUNT Mach-O"
+            echo "       files, named above. This distribution is arm64 by"
+            echo "       construction, so a file carrying another slice is dead"
+            echo "       weight a user downloads and cannot run, and a file lipo"
+            echo "       cannot read is one this step can say nothing about."
+            exit 1
+          }
+          echo "Every Mach-O in the payload is arm64 only."
+
+      # THE LAUNCHER ANSWERS ON A MACHINE THAT NEVER GENERATED IT. --help is
+      # the probe because it returns before any interpreter is started: it
+      # costs no Python and no server, and it still exercises the launcher's
+      # own self-resolution, its payload checks and its sourcing of config.sh.
+      - name: Run the launcher's help on the clean runner
+        run: |
+          set -euo pipefail
+          OUT="$(extracted/$DIST_NAME/ppf-contact-solver --help)"
+          printf '%s\n' "$OUT"
+          printf '%s\n' "$OUT" | grep -q 'PPF_CTS_VENV' || {
+            echo "ERROR: the launcher's --help does not name PPF_CTS_VENV, so"
+            echo "       the file at the root of the distribution is not the"
+            echo "       help text bundle.sh generates."
+            exit 1
+          }
+          echo "Launcher answered --help with status 0."
+
+      # THE GATEKEEPER PATH, WHICH USED TO BE THE ONE RISK NO STEP REACHED. A
+      # release is signed but not notarized, so a copy a person downloads
+      # through a browser is marked com.apple.quarantine and every Mach-O in
+      # it is refused when it loads. The launcher clears that mark on its own
+      # folder before it starts anything, and this is where that is checked.
+      #
+      # THE MARK IS SET HERE RATHER THAN WAITED FOR, because an artifact
+      # download sets none: that is why every other step in this job runs the
+      # payload happily. Setting it is what makes this runner stand in for a
+      # browser. `-s` sets it on a symbolic link itself, matching how an
+      # unarchiver propagates it, and it is what puts the launcher's own -s
+      # walk under test rather than a walk over regular files only.
+      #
+      # WHAT THIS CANNOT REACH is a mark set by a real browser onto a real
+      # download. The attribute is the same; the transport is not exercised.
+      - name: Assert the launcher clears a quarantined copy
+        run: |
+          set -euo pipefail
+          PKG="extracted/$DIST_NAME"
+          xattr -w -s -r com.apple.quarantine \
+            '0083;00000000;com.apple.Safari;00000000-0000-0000-0000-000000000000' "$PKG"
+          MARKED="$(find "$PKG" -xattrname com.apple.quarantine | wc -l | tr -d ' ')"
+          TOTAL="$(find "$PKG" | wc -l | tr -d ' ')"
+          echo "marked $MARKED of $TOTAL entries"
+          # A COUNT IS PRINTED BEFORE ANY VERDICT, the same rule the arm64 walk
+          # above follows: if marking did nothing, everything below would pass
+          # over a payload that was never under test.
+          [ "$MARKED" -gt 1 ] || {
+            echo "ERROR: marking the distribution reached $MARKED entries, so"
+            echo "       this step would certify a clearing that had nothing"
+            echo "       to clear."
+            exit 1
+          }
+          # --help IS THE PROBE because the clearing runs before it: it returns
+          # without starting an interpreter, so this asks about the launcher's
+          # own behavior and nothing else.
+          OUT="$("$PKG/ppf-contact-solver" --help)"
+          # Not `printf ... | head`: under pipefail a producer that outgrows
+          # head's count dies on the closed pipe and fails the step.
+          head -n 4 <<< "$OUT"
+          printf '%s\n' "$OUT" | grep -q 'quarantined' || {
+            echo "ERROR: the launcher did not say it was clearing the download"
+            echo "       mark. It is meant to print one line before it starts,"
+            echo "       so a person can see what was changed on their copy."
+            exit 1
+          }
+          LEFT="$(find "$PKG" -xattrname com.apple.quarantine | wc -l | tr -d ' ')"
+          echo "entries still marked: $LEFT"
+          [ "$LEFT" -eq 0 ] || {
+            echo "ERROR: $LEFT of $MARKED entries are still marked. Every Mach-O"
+            echo "       here is assessed when it LOADS, so a partial clearing"
+            echo "       starts the launcher and then fails at the first import."
+            find "$PKG" -xattrname com.apple.quarantine | head -10
+            exit 1
+          }
+          # AND THE PAYLOAD RUNS AFTERWARD, which is the property the clearing
+          # exists to produce rather than a restatement of the count above.
+          ./"$PKG"/target/release/ppf-contact-solver --backend
+          "$PKG/python/bin/python3" -c 'print("shipped interpreter runs after clearing")'
+          # THE SECOND RUN SAYS NOTHING. A launcher that printed this on every
+          # start would train a reader to ignore the one line that reports a
+          # change to their own download.
+          OUT2="$("$PKG/ppf-contact-solver" --help)"
+          if printf '%s\n' "$OUT2" | grep -q 'quarantined'; then
+            echo "ERROR: the launcher reported clearing the mark on a copy that"
+            echo "       carried none."
+            exit 1
+          fi
+          echo "Launcher cleared a quarantined copy, and said so exactly once."
+
+      # THE INTERPRETER THE DISTRIBUTION CARRIES IS THE ONE THAT RUNS, which is
+      # the whole claim of a self-contained directory. The runner's own python
+      # is irrelevant here and is not consulted: this asks the shipped binary
+      # directly, and imports the two packages that decide whether the launcher
+      # can reach JupyterLab at all. No GPU is involved, so this runs on a
+      # runner that cannot execute Metal.
+      - name: Verify the shipped interpreter runs and carries its packages
+        run: |
+          set -euo pipefail
+          PKG="extracted/$DIST_NAME"
+          PY="$PKG/python/bin/python3"
+          [ -x "$PY" ] || { echo "ERROR: no shipped interpreter at $PY"; exit 1; }
+          echo "shipped: $("$PY" -c 'import sys; print(sys.version.split()[0], sys.executable)')"
+          echo "runner:  $(python3 -c 'import sys; print(sys.version.split()[0])')"
+          "$PY" -c 'import jupyterlab, sys; print("jupyterlab", jupyterlab.__version__)'
+          PYTHONPATH="$PKG" "$PY" -c 'import frontend; print("frontend imports")'
+
+      # The signature has to survive the archive round trip, or a user's first
+      # run meets Gatekeeper instead of the solver. codesign reads the
+      # extracted copy, so this fails if ditto did not carry the metadata.
+      - name: Verify code signatures survived archiving
+        run: |
+          set -euo pipefail
+          cd extracted/$DIST_NAME
+          for MACHO in target/release/ppf-contact-solver \
+                       target/release/ppf-cts-server \
+                       target/cpu/release/ppf-contact-solver \
+                       target/cpu/release/ppf-cts-server \
+                       bin/libppfbe_metal.dylib; do
+            [ -f "$MACHO" ] || { echo "ERROR: $MACHO missing from the distribution"; exit 1; }
+            echo "--- $MACHO ---"
+            codesign --verify --strict --verbose=2 "$MACHO"
+          done
+
+      # No load command may name the directory the distribution was built in.
+      # The run below is the real proof, but naming the offender first turns a
+      # dynamic loader failure into a readable one.
+      - name: Assert no load command points into a build tree
+        run: |
+          set -euo pipefail
+          cd extracted/$DIST_NAME
+          FOUND=0
+          for MACHO in target/release/ppf-contact-solver \
+                       target/release/ppf-cts-server \
+                       target/release/lib_ppf_cts_py.dylib \
+                       target/cpu/release/ppf-contact-solver \
+                       target/cpu/release/ppf-cts-server \
+                       target/cpu/release/lib_ppf_cts_py.dylib \
+                       bin/libppfbe_metal.dylib; do
+            [ -f "$MACHO" ] || continue
+            echo "=== $MACHO ==="
+            otool -L "$MACHO" || true
+            otool -l "$MACHO" | grep -A2 LC_RPATH || true
+            if otool -L "$MACHO" | grep -Ei 'build-mac-native/(build|dist)|/target/release/build/|/Users/runner/work/[^ ]*/target'; then
+              echo "ERROR: $MACHO still references a build tree path"
+              FOUND=1
+            fi
+          done
+          [ "$FOUND" -eq 0 ] || exit 1
+          echo "No build-tree references found."
+
+      # The self-containment proof. On a runner with no build tree, a binary
+      # whose backend dylib or shader library still resolved through that tree
+      # cannot start, so reaching `metal` here is the answer the phase exists
+      # for. It is also the same question the Windows verification asks by
+      # running the payload on a box carrying only a driver.
+      - name: Run the shipped solvers on the clean runner
+        run: |
+          set -euo pipefail
+          cd extracted/$DIST_NAME
+          # BOTH, and each against the marker shipped beside it rather than
+          # against a literal here. The marker is what `frontend.backend_of`
+          # reads and what the add-on's GPU/CPU selector believes, so a marker
+          # disagreeing with its own binary would send a device choice to the
+          # wrong solver on a user's machine while every path looked right.
+          for DIR in target/release target/cpu/release; do
+            BACKEND="$(./$DIR/ppf-contact-solver --backend)"
+            MARKER="$(cat "$DIR/.ppf-backend" | tr -d '[:space:]')"
+            echo "$DIR: binary says '$BACKEND', marker says '$MARKER'"
+            [ "$BACKEND" = "$MARKER" ] || {
+              echo "ERROR: $DIR/.ppf-backend claims '$MARKER' and the binary"
+              echo "       there reports '$BACKEND'."
+              exit 1
+            }
+          done
+          # And the accelerated one is the one the distribution is named for.
+          [ "$(./target/release/ppf-contact-solver --backend)" = "metal" ] || {
+            echo "ERROR: target/release does not hold the metal backend"
+            exit 1
+          }
+          [ "$(./target/cpu/release/ppf-contact-solver --backend)" = "cpu" ] || {
+            echo "ERROR: target/cpu/release does not hold the cpu backend"
+            exit 1
+          }
+
+      # The server is a separate Mach-O with its own load commands, and it is
+      # the binary the Blender add-on's macOS Native backend launches, so its
+      # self-containment is worth its own answer rather than being assumed from
+      # the solver's.
+      - name: Run the shipped server on the clean runner
+        run: |
+          set -euo pipefail
+          cd extracted/$DIST_NAME
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "target/release/ppf-cts-server loaded and answered --help"
+          # The CPU directory's own server, which is the binary the add-on
+          # spawns when the artist picks CPU. It is a separate Mach-O with its
+          # own load commands, so its self-containment is its own answer.
+          ./target/cpu/release/ppf-cts-server --help >/dev/null
+          echo "target/cpu/release/ppf-cts-server loaded and answered --help"
+
+      # THE UNINSTALL PROPERTY, CHECKED RATHER THAN CLAIMED. Everything this
+      # program writes is meant to live inside the folder it was unpacked
+      # into, so removing that folder removes all of it. The way to find out
+      # is to run the frontend with HOME pointed at an empty directory and
+      # then look at what appeared there: a path that escaped shows up as a
+      # file under the fake home, and nowhere else.
+      #
+      # The frontend is asked for the paths it would USE rather than driving a
+      # solve, because no Metal device is available on this runner (the reason
+      # the build job ships no example sweep). That is enough: these two
+      # resolvers are what decide where sessions and cached meshes land.
+      - name: Assert the distribution writes nothing outside itself
+        run: |
+          set -euo pipefail
+          PKG="$PWD/extracted/$DIST_NAME"
+          FAKE_HOME="$PWD/fake-home"
+          mkdir -p "$FAKE_HOME"
+          # One line, semicolon separated: a multi-line -c script inside a
+          # YAML block scalar has to be indented to stay inside it, and an
+          # indented Python body is a syntax error.
+          PROBE='from frontend import App, get_cache_dir; print("data:", App.get_data_dirpath()); print("cache:", get_cache_dir())'
+          OUT="$(cd "$PKG" && env HOME="$FAKE_HOME" PYTHONPATH="$PKG" \
+            "$PKG/python/bin/python3" -c "$PROBE")"
+          printf '%s\n' "$OUT"
+          # A HERESTRING RATHER THAN A PIPE, for the reason bundle.sh gives at
+          # its own short-walk guard: a pipe runs the loop in a subshell, so a
+          # variable set inside it does not survive and an exit reaches only
+          # that subshell. This one happens to be the last stage of its
+          # pipeline today, which is exactly the kind of accident that stops
+          # being true when a line is added after it.
+          BAD=0
+          while IFS= read -r LINE; do
+            [ -n "$LINE" ] || continue
+            P="${LINE#*: }"
+            case "$P" in
+              "$PKG"/*) ;;
+              *)
+                echo "ERROR: $LINE"
+                echo "       That path is outside the distribution, so deleting"
+                echo "       the folder would not remove it."
+                BAD=$((BAD + 1))
+                ;;
+            esac
+          done <<< "$OUT"
+          [ "$BAD" -eq 0 ] || exit 1
+          # And nothing may have been created under the fake home while asking.
+          if [ -n "$(find "$FAKE_HOME" -mindepth 1 -print -quit)" ]; then
+            echo "ERROR: the frontend created something under a fresh HOME:"
+            find "$FAKE_HOME" -mindepth 1 | head -20
+            exit 1
+          fi
+          echo "Every resolved path is inside the distribution, and HOME is untouched."
+
+      - name: Verification summary
+        run: |
+          echo "## Distribution verification PASSED"
+          echo "The launcher is executable, parses and answers --help; every"
+          echo "Mach-O in the payload is arm64 only; signatures are intact after"
+          echo "archiving; no load command names a build tree; both binaries"
+          echo "run on a runner that never built them; and every path the"
+          echo "frontend resolves is inside the distribution, so deleting the"
+          echo "folder is a complete uninstall."
+
+  # ============================================================
+  # TEST: five placeholder archives under the real artifact and file names,
+  # so the release job below can be exercised end to end without a build.
+  # Each is a small, valid archive holding one text file that names itself
+  # as a placeholder. The Windows ARM64 archive is uploaded WITHOUT the
+  # version in its name, as build-win-nogpu uploads it, so the rename the
+  # release job performs is exercised too.
+  # ============================================================
+  test-bundles:
+    name: Upload placeholder archives (Test)
+    if: ${{ inputs.target == 'Test' }}
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    steps:
+      - name: Make the placeholders
+        run: |
+          set -euo pipefail
+          mkdir -p work && cd work
+          printf 'PLACEHOLDER for release.yml target=Test, version %s. Not a distribution.\n' "$VERSION" > PLACEHOLDER.txt
+          tar -czf "ppf-contact-solver-${VERSION}-linux-x86_64.tar.gz" PLACEHOLDER.txt
+          tar -czf "ppf-contact-solver-${VERSION}-linux-aarch64.tar.gz" PLACEHOLDER.txt
+          zip -q "ppf-contact-solver-${VERSION}-win64.zip" PLACEHOLDER.txt
+          zip -q "ppf-contact-solver-windows-arm64.zip" PLACEHOLDER.txt
+          zip -q "ppf-contact-solver-${VERSION}-macos-arm64.zip" PLACEHOLDER.txt
+          ls -l
+      - uses: actions/upload-artifact@v6
+        with:
+          name: linux-bundle-${{ needs.version.outputs.VERSION }}
+          path: work/ppf-contact-solver-${{ needs.version.outputs.VERSION }}-linux-x86_64.tar.gz
+          retention-days: 1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: linux-bundle-arm64-${{ needs.version.outputs.VERSION }}
+          path: work/ppf-contact-solver-${{ needs.version.outputs.VERSION }}-linux-aarch64.tar.gz
+          retention-days: 1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-bundle-zip
+          path: work/ppf-contact-solver-${{ needs.version.outputs.VERSION }}-win64.zip
+          retention-days: 1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-bundle-windows-arm64
+          path: work/ppf-contact-solver-windows-arm64.zip
+          retention-days: 1
+      - uses: actions/upload-artifact@v6
+        with:
+          name: macos-bundle-${{ needs.version.outputs.VERSION }}
+          path: work/ppf-contact-solver-${{ needs.version.outputs.VERSION }}-macos-arm64.zip
+          retention-days: 1
+
+  # ==================================================================
+  # PUBLISH. One release carrying every archive the selected platforms
+  # produced. Short by design, and with a token of its own: an earlier
+  # Windows release failed at this step with the bundle already built and
+  # every step before it green, so nothing expensive happens here.
+  # ==================================================================
+  release:
+    name: Publish the release
+    needs:
+      - version
+      - build-linux
+      - verify-floor
+      - build-linux-arm64
+      - verify-floor-arm64
+      - verify-linux-arm64
+      - build-windows
+      - build-win-nogpu
+      - build-macos
+      - verify-macos
+      - test-bundles
+    # A SKIPPED PLATFORM IS NOT A FAILURE, AND A PLAIN `needs:` CANNOT SAY SO.
+    # `target` selects which operating systems run, so the jobs of the others
+    # report `skipped`, and a job that merely needs them is skipped with them:
+    # every run except `All` would publish nothing. `always()` runs this job
+    # whatever the others did, and the guard below then refuses only on a real
+    # failure or a cancellation. `version` is required to have SUCCEEDED,
+    # because every asset name is built from its stamp.
+    if: >-
+      always()
+      && !cancelled()
+      && needs.version.result == 'success'
+      && !contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Dispatching release-extension.yml when that option is checked.
+      actions: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+      DRY_RUN: ${{ needs.version.outputs.DRY_RUN }}
+    steps:
+      # A CHECKOUT, BECAUSE `gh` INFERS THE REPOSITORY FROM A GIT REMOTE.
+      # `gh release create` shells out to git, and a job that only downloads
+      # artifacts has no `.git` at all, so the call dies with "failed to run
+      # git: fatal: not a git repository" AFTER the tag has been created,
+      # leaving a tag with no release. The `--repo` arguments below are kept as
+      # well and are not redundant: they state the intent at each call, and they
+      # keep the step correct if this checkout is ever removed as an
+      # optimization, which is exactly the reasoning that produced that bug.
+      - uses: actions/checkout@v5
+
+      # EVERY BUNDLE ARTIFACT, WHICHEVER PLATFORMS RAN. A platform that was not
+      # selected uploaded nothing, so its archives are simply absent here, which
+      # is what lets a single-platform run publish that platform alone.
+      - name: Download the archives the selected platforms produced
+        uses: actions/download-artifact@v6
+        with:
+          pattern: '*-bundle-*'
+          merge-multiple: true
+          path: assets
+
+      # THE ARCHIVE NAMES ARE NORMALIZED AND LABELED IN ONE PLACE, and an
+      # archive no row matches STOPS the release. A distribution whose name
+      # drifted would otherwise be published unlabeled, or silently left out of
+      # a release that still looked complete.
+      #
+      # One row per archive this project ships. The label is what a reader sees
+      # on the release page, and it names the ARCHITECTURE and every backend
+      # inside, so a user picks by what their machine has rather than by
+      # guessing what a file name implies.
+      #
+      # THE LABELS SPELL THE ARCHITECTURE UNIFORMLY AND THE FILE NAMES DO NOT,
+      # on purpose. The archives spell 64-bit ARM three ways (`linux-aarch64`,
+      # `windows-arm64`, `macos-arm64`) because each build glue names its own
+      # output, and a published asset name is a LINK: renaming one silently
+      # breaks every reference to an existing release, which is why
+      # build-win-native/scripts/platform.bat records that its x64 archive keeps
+      # the name it has always been published under. So the file names are left
+      # exactly as each bundler writes them and only the labels are made
+      # consistent, since a label is read rather than fetched.
+      - name: Collect and label the assets
+        id: assets
+        run: |
+          set -euo pipefail
+          cd assets
+          # The ARM64 Windows archive is built with no version in its name,
+          # because the runner that builds it names it before the stamp is in
+          # scope. Give it the same shape as every other asset.
+          if [ -f "ppf-contact-solver-windows-arm64.zip" ]; then
+            mv "ppf-contact-solver-windows-arm64.zip" \
+               "ppf-contact-solver-${VERSION}-windows-arm64.zip"
+          fi
+          declare -A LABEL=(
+            ["linux-x86_64.tar.gz"]="Linux (x86_64, CPU, NVIDIA or AMD driver)"
+            ["linux-aarch64.tar.gz"]="Linux (aarch64, CPU or NVIDIA driver)"
+            ["win64.zip"]="Windows (x86_64, CPU, NVIDIA or AMD driver)"
+            ["windows-arm64.zip"]="Windows (aarch64, CPU)"
+            ["macos-arm64.zip"]="macOS (aarch64, CPU or Metal)"
+          )
+          ASSETS=()
+          for file in ppf-contact-solver-*; do
+            [ -f "$file" ] || continue
+            matched=""
+            for suffix in "${!LABEL[@]}"; do
+              case "$file" in
+                *"-${suffix}") matched="$suffix"; break ;;
+              esac
+            done
+            if [ -z "$matched" ]; then
+              echo "ERROR: $file matches no label row, so this release would"
+              echo "       carry an asset nobody can identify. Add a row to"
+              echo "       this step, or fix the name the bundler wrote."
+              exit 1
+            fi
+            ASSETS+=("$file#${LABEL[$matched]}")
+            echo "  $file"
+            echo "      ${LABEL[$matched]}"
+          done
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "ERROR: no archive was downloaded, so there is nothing to"
+            echo "       publish. Every selected platform's build must upload"
+            echo "       its bundle artifact."
+            exit 1
+          fi
+          printf '%s\n' "${ASSETS[@]}" > /tmp/ppf-assets.txt
+          echo "count=${#ASSETS[@]}" >> "$GITHUB_OUTPUT"
+
+      # THE TAG IS CREATED THROUGH THE REFS API, NOT BY `git push`. A push
+      # carrying the GITHUB_TOKEN is a GitHub App push, and GitHub refuses one
+      # that presents a workflow file differing from the repository's current
+      # state, which needs a `workflows` permission a GITHUB_TOKEN cannot be
+      # granted:
+      #
+      #   ! [remote rejected] <tag> -> <tag> (refusing to allow a GitHub App to
+      #     create or update workflow `.github/workflows/blender.yml` without
+      #     `workflows` permission)
+      #
+      # The condition is not the tagged commit's own diff: it is whether the
+      # BRANCH HAS MOVED to a different version of a workflow file since the run
+      # started, so a long release is the one that hits it. The commit being
+      # tagged is ALREADY on the remote, so nothing here needs to create or
+      # update a file: it needs a ref. `POST /git/tags` then `POST /git/refs`
+      # creates exactly that, is not subject to the push restriction, and does
+      # not care how far the branch has moved.
+      # THE TAG WAS CREATED BY THE `version` JOB at the run's start (its step
+      # records why); here it must exist and name this commit, or nothing is
+      # published. The lookup is judged by gh's exit status (same step).
+      - name: Confirm the version tag names this commit
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          is_sha() { case "$1" in *[!0-9a-f]*|"") return 1 ;; esac; [ "${#1}" -eq 40 ]; }
+          EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$VERSION" --jq '.object.sha' 2>/dev/null) \
+            || { echo "ERROR: tag $VERSION does not exist; the version job creates it at the run's start"; exit 1; }
+          is_sha "$EXISTING" || { echo "ERROR: the ref lookup answered '$EXISTING', not a sha"; exit 1; }
+          if POINTS_AT=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/$EXISTING" --jq '.object.sha' 2>/dev/null); then
+            is_sha "$POINTS_AT" || { echo "ERROR: the tag object answered '$POINTS_AT', not a sha"; exit 1; }
+          else
+            POINTS_AT="$EXISTING"
+          fi
+          [ "$POINTS_AT" = "$GITHUB_SHA" ] \
+            || { echo "ERROR: tag $VERSION names $POINTS_AT, not this run's $GITHUB_SHA"; exit 1; }
+          echo "Tag $VERSION names $GITHUB_SHA."
+
+      # THE PROBE FOR A NON-HEAD PUBLISH (the input's comment records why):
+      # a Test run waits here while a commit is pushed to the branch, and the
+      # step after it then publishes from a commit the branch has moved past,
+      # the state every real run is in after an hour of building.
+      - name: Hold before publishing (Test probe)
+        if: env.DRY_RUN != 'true' && inputs.target == 'Test' && inputs.hold_before_publish != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOLD_MINUTES: ${{ inputs.hold_before_publish }}
+        run: |
+          set -euo pipefail
+          echo "this run's commit: $GITHUB_SHA"
+          echo "branch head now:   $(gh api "repos/$GITHUB_REPOSITORY/branches/$GITHUB_REF_NAME" --jq .commit.sha)"
+          echo "holding $HOLD_MINUTES minute(s) for a push to $GITHUB_REF_NAME"
+          sleep "$((HOLD_MINUTES * 60))"
+          echo "branch head after: $(gh api "repos/$GITHUB_REPOSITORY/branches/$GITHUB_REF_NAME" --jq .commit.sha)"
+
+      - name: Create GitHub Release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < /tmp/ppf-assets.txt
+          cd assets
+          # THE RELEASE MAY ALREADY EXIST, the same-minute pair the tag step admits.
+          # `gh release create` refuses an existing tag, so the archives are
+          # ADDED to it. Not `--clobber`: it deletes the existing asset before
+          # uploading and its own help says a failed upload loses the original,
+          # so a duplicate asset name is a real conflict and fails loudly.
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # THE RELEASE EXISTS, SO UPLOAD ONLY WHAT IT DOES NOT ALREADY CARRY.
+            # Two ways to arrive here. The same-minute pair the tag step admits,
+            # where the other run published some of these; and a RE-RUN of this
+            # job after a later step failed, where this job already published
+            # all of them. Uploading a name the release carries fails, so
+            # without this the re-run that the kept tag makes possible would
+            # stop on the first archive it had already uploaded.
+            #
+            # STILL NOT `--clobber`, which deletes the existing asset before
+            # uploading and, by its own help, loses the original if that upload
+            # fails. A present asset is left exactly as it is.
+            #
+            # A NAME THAT MATCHES WITH A DIFFERENT SIZE IS A REAL CONFLICT and
+            # is not skipped: the tag guard above pins this version to one
+            # commit, so an archive of the same name must be the same archive,
+            # and a size that disagrees means an assumption here is wrong.
+            # Uploading it fails loudly, which is what should happen.
+            mapfile -t PRESENT < <(
+              gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" \
+                --json assets \
+                --jq '.assets[] | select(.state == "uploaded") | "\(.name)\t\(.size)"'
+            )
+            MISSING=()
+            for asset in "${ASSETS[@]}"; do
+              name="$(basename "$asset")"
+              size="$(stat -c %s "$asset")"
+              skip=0
+              for row in "${PRESENT[@]}"; do
+                [ "$row" = "$name"$'\t'"$size" ] && { skip=1; break; }
+              done
+              if [ "$skip" = "1" ]; then
+                echo "Already published, left untouched: $name ($size bytes)"
+              else
+                MISSING+=("$asset")
+              fi
+            done
+            if [ "${#MISSING[@]}" -eq 0 ]; then
+              echo "Release $VERSION already carries every archive; nothing to upload."
+            else
+              echo "Release $VERSION exists; adding ${#MISSING[@]} archive(s) to it."
+              gh release upload "$VERSION" --repo "$GITHUB_REPOSITORY" "${MISSING[@]}"
+            fi
+          else
+            # The tag exists (the step above), so no --target: a target
+            # would ask the API to create the tag on a commit the branch may
+            # have moved past, which is the refusal the version job avoids.
+            gh release create "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "ZOZO's Contact Solver $VERSION" \
+              --generate-notes \
+              "${ASSETS[@]}"
+          fi
+
+      # THE PUBLISHED RELEASE IS READ BACK, on a Test run, and must carry
+      # exactly the five assets with exactly the labels the table assigns.
+      # This is the whole point of the target: the assertion is on what
+      # GitHub shows, not on what this job believes it uploaded.
+      - name: Verify the published placeholder release
+        if: env.DRY_RUN != 'true' && inputs.target == 'Test'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[] | "\(.name)\t\(.label)"' | sort > /tmp/got.txt
+          {
+            printf 'ppf-contact-solver-%s-linux-aarch64.tar.gz\tLinux (aarch64, CPU or NVIDIA driver)\n' "$VERSION"
+            printf 'ppf-contact-solver-%s-linux-x86_64.tar.gz\tLinux (x86_64, CPU, NVIDIA or AMD driver)\n' "$VERSION"
+            printf 'ppf-contact-solver-%s-macos-arm64.zip\tmacOS (aarch64, CPU or Metal)\n' "$VERSION"
+            printf 'ppf-contact-solver-%s-win64.zip\tWindows (x86_64, CPU, NVIDIA or AMD driver)\n' "$VERSION"
+            printf 'ppf-contact-solver-%s-windows-arm64.zip\tWindows (aarch64, CPU)\n' "$VERSION"
+          } | sort > /tmp/want.txt
+          if ! diff -u /tmp/want.txt /tmp/got.txt; then
+            echo "ERROR: the published release does not carry the five expected labeled assets"
+            exit 1
+          fi
+          echo "The placeholder release $VERSION carries all five assets with the expected labels."
+
+      - name: Dry run summary
+        if: env.DRY_RUN == 'true'
+        run: |
+          set -euo pipefail
+          echo "## DRY RUN COMPLETE"
+          echo "Every selected platform built and verified. No release was created."
+          echo "The archives are retained as this run's bundle artifacts:"
+          ls -lh assets/
+
+      - name: Build Release Add-on (trigger extension release on success)
+        if: success() && inputs.run_extension_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release-extension.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f dry_run="$DRY_RUN"
+
+  # ============================================================
+  # A TAG WITHOUT A RELEASE IS RETRACTED. The `version` job tags the commit
+  # at the run's start (its step records why), so a run that fails or is
+  # canceled before publishing would leave a version tag that names no
+  # release. This job runs whatever happened and deletes the tag unless the
+  # release job published; a tag whose release exists is kept whatever the
+  # release job reported, since deleting it would orphan the release.
+  # ============================================================
+  # ============================================================
+  # CLEANUP THAT DOES NOT DEPEND ON HOW ANY JOB ENDED: every instance tagged
+  # with this run id is terminated and this run's key pairs are deleted,
+  # after the EC2 jobs however they ended. Each job's own cleanup step is
+  # skipped when GitHub force-terminates the job (blender.yml's `cleanup`
+  # job records the run that showed it); a job under `always()` still runs
+  # then. Only a force-cancel of the whole RUN skips this too, which the
+  # instances' eight-hour self-destruct covers.
+  # ============================================================
+  cleanup:
+    name: Terminate every instance of this run
+    runs-on: ubuntu-latest
+    needs: ['build-linux', 'verify-linux-arm64', 'build-windows']
+    if: always()
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.region }}
+          role-duration-seconds: 3600
+
+      - name: Terminate instances and delete key pairs tagged with this run
+        env:
+          REGION: ${{ inputs.region }}
+        run: |
+          set -uo pipefail
+          IDS=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunId,Values=${{ github.run_id }}" "Name=tag:ManagedBy,Values=GitHubActions" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' --region "$REGION" --output text | tr '\t' ' ')
+          if [ -n "$IDS" ]; then
+            echo "terminating: $IDS"
+            aws ec2 terminate-instances --instance-ids $IDS --region "$REGION" --output text
+          else
+            echo "no instance of run ${{ github.run_id }} is left."
+          fi
+          KEYS=$(aws ec2 describe-key-pairs --filters "Name=key-name,Values=*-${{ github.run_id }}" \
+            --query 'KeyPairs[].KeyName' --region "$REGION" --output text | tr '\t' ' ')
+          for k in $KEYS; do
+            echo "deleting key pair $k"
+            aws ec2 delete-key-pair --key-name "$k" --region "$REGION" || true
+          done

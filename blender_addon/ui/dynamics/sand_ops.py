@@ -160,11 +160,11 @@ def seed_inside_eroded(obj, radius, extra_spacing, rng_seed=0):
 
 
 def _build_sand_material():
-    """Create (or reuse) the PPF_Sand material with per-grain color variation."""
-    mat = bpy.data.materials.get("PPF_Sand")
+    """Create (or reuse) the Sand material with per-grain color variation."""
+    mat = bpy.data.materials.get("Sand")
     if mat is not None:
         return mat
-    mat = bpy.data.materials.new("PPF_Sand")
+    mat = bpy.data.materials.new("Sand")
     mat.use_nodes = True
     nt = mat.node_tree
     bsdf = nt.nodes.get("Principled BSDF")
@@ -196,11 +196,11 @@ def _build_sand_material():
 
 
 def _build_particle_mesh_node_group(grain_radius, material):
-    """Create (or rebuild) the PPF_ParticleMesh geometry node group."""
-    ng = bpy.data.node_groups.get("PPF_ParticleMesh")
+    """Create (or rebuild) the ParticleMesh geometry node group."""
+    ng = bpy.data.node_groups.get("ParticleMesh")
     if ng is not None:
         bpy.data.node_groups.remove(ng)
-    ng = bpy.data.node_groups.new("PPF_ParticleMesh", "GeometryNodeTree")
+    ng = bpy.data.node_groups.new("ParticleMesh", "GeometryNodeTree")
     ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
     ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
     nd = ng.nodes
@@ -230,8 +230,8 @@ def build_and_commit_particle_mesh(obj, radius, extra_spacing=0.0, rng_seed=0):
     ``extra_spacing`` is the gap added beyond touching (0 = densest). The grain
     count is whatever fills the volume at that separation. Replaces ``obj.data``
     with a faceless mesh of N loose vertices, adds the "Particle Mesh"
-    geometry-nodes modifier, and stamps the ``ppf_particle_mesh`` /
-    ``ppf_seed_count`` / ``ppf_grain_radius`` custom properties. Returns N.
+    geometry-nodes modifier, and stamps the ``particle_mesh`` /
+    ``seed_count`` / ``grain_radius`` custom properties. Returns N.
     """
     cloud, _stats = seed_inside_eroded(obj, radius, extra_spacing, rng_seed)
     grain_radius = float(radius)
@@ -253,9 +253,9 @@ def build_and_commit_particle_mesh(obj, radius, extra_spacing=0.0, rng_seed=0):
         mod = obj.modifiers.new("Particle Mesh", "NODES")
     mod.node_group = ng
 
-    obj["ppf_particle_mesh"] = 1
-    obj["ppf_seed_count"] = n
-    obj["ppf_grain_radius"] = grain_radius
+    obj["particle_mesh"] = 1
+    obj["seed_count"] = n
+    obj["grain_radius"] = grain_radius
     return n
 
 
@@ -275,7 +275,7 @@ def _is_convertible_solid_mesh(obj):
     return (
         selected
         and len(obj.data.polygons) > 0
-        and not obj.get("ppf_particle_mesh")
+        and not obj.get("particle_mesh")
     )
 
 

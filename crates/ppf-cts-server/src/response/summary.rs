@@ -42,10 +42,11 @@ const BAKED_LOG_CHANNELS: &[(&str, &str)] =
 /// Hand-pinned filenames for the six channels rendered in the live
 /// "Realtime Statistics" panel. The docstring harvester can mis-route
 /// a panel cell to a non-existent file when configuration drifts;
-/// pinning keeps the panel resilient to that. The names are stable
-/// on-disk artefacts of `cpp/main/main.cu`: if any of them gets
-/// renamed the constant has to follow, but that's a deliberate
-/// change, not a parser inference.
+/// pinning keeps the panel resilient to that. The names are the
+/// stream files the solver driver writes (`log::mark` and
+/// `log::Section` in `crates/ppf-cts-solver/src/driver/log.rs`): if
+/// any of them gets renamed the constant has to follow, but that's a
+/// deliberate change, not a parser inference.
 pub const LIVE_SUMMARY_CHANNELS: [(&str, &str); 12] = [
     (CHANNEL_NAMES[0], "time_per_frame.out"),
     (CHANNEL_NAMES[1], "advance.out"),
@@ -53,21 +54,21 @@ pub const LIVE_SUMMARY_CHANNELS: [(&str, &str); 12] = [
     (CHANNEL_NAMES[3], "advance.newton_steps.out"),
     (CHANNEL_NAMES[4], "advance.iter.out"),
     (CHANNEL_NAMES[5], "advance.max_sigma.out"),
-    // Written by `logging.push("matrix assembly")` in cpp/main/main.cu
-    // (m_name "advance", spaces -> underscores), one entry per Newton
-    // iteration; averaged over the latest step.
+    // Written by `log::mark("advance", "matrix_assembly", ...)` in the
+    // solver driver, one entry per Newton iteration; averaged over the
+    // latest step.
     (CHANNEL_NAMES[6], "advance.matrix_assembly.out"),
     // Advanced fractional step size (ratio in (0, 1]) and the dynamic
     // contact-Hessian memory-usage ratio ([0, 1]); both written once per
-    // step via `logging.mark` in cpp/main/main.cu.
+    // step via `log::mark` in the solver driver.
     (CHANNEL_NAMES[7], "advance.toi_advanced.out"),
     (CHANNEL_NAMES[8], "advance.dyn_consumed.out"),
     // PCG solve wall-clock, one entry per Newton iteration; averaged
     // over the latest step.
     (CHANNEL_NAMES[9], "advance.linsolve.out"),
     // Line-search wall-clock (CCD + strain-limit CCD), written by
-    // `logging.push("line search")` in cpp/main/main.cu, one entry per
-    // Newton iteration; averaged over the latest step.
+    // `log::mark("advance", "line_search", ...)` in the solver driver, one
+    // entry per Newton iteration; averaged over the latest step.
     (CHANNEL_NAMES[10], "advance.line_search.out"),
     // Line-search time of impact (ratio in (0, 1]), written once per
     // Newton iteration via `logging.mark("toi", ...)`; averaged over the

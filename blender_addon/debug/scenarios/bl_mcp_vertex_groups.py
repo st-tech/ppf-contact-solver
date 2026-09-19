@@ -61,7 +61,7 @@ NEEDS_BLENDER = True
 PLATFORMS = ("linux", "win32")
 # No solver, no build and no connection: bpy datablock calls and the add-on's
 # own HTTP server, so the assertions hold identically on either backend.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

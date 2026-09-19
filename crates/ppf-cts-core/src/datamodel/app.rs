@@ -67,6 +67,11 @@ pub enum AppPathError {
     NoSessionWithName { name: String },
 }
 
+/// The branch segment used when nothing on disk names a branch. The
+/// data directory is then `git-unknown`, which is what a tree carrying
+/// no version control resolves to.
+const UNKNOWN_BRANCH: &str = "unknown";
+
 /// Read `{base_dir}/.git/branch_name.txt` if present and non-empty.
 /// This is the file the addon writes during release packaging; in dev
 /// the file does not exist and we fall through to `git branch
@@ -82,6 +87,16 @@ fn read_branch_file(base_dir: &Path) -> Option<String> {
     }
 }
 
+/// True when `base_dir` carries a `.git` entry of any kind. A plain
+/// checkout has a directory there and a linked worktree has a file
+/// holding a `gitdir:` pointer, so both have to count, and a test for a
+/// directory alone would report every worktree as having no repository.
+/// `symlink_metadata` also answers for a dangling symlink, where
+/// `exists()` reports nothing.
+fn has_git_entry(base_dir: &Path) -> bool {
+    fs::symlink_metadata(base_dir.join(".git")).is_ok()
+}
+
 /// `git branch --show-current` in `base_dir`, falling back to
 /// `"unknown"` on either subprocess error or an empty branch name.
 fn git_current_branch(base_dir: &Path) -> String {
@@ -93,23 +108,90 @@ fn git_current_branch(base_dir: &Path) -> String {
         Ok(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if s.is_empty() {
-                "unknown".to_string()
+                UNKNOWN_BRANCH.to_string()
             } else {
                 s
             }
         }
-        _ => "unknown".to_string(),
+        _ => UNKNOWN_BRANCH.to_string(),
     }
+}
+
+/// Resolve the branch segment for `base_dir`. The order is the branch
+/// file, then a git query, then `"unknown"`. The query itself is taken
+/// as `query_git` so a test can pin whether it is reached at all without
+/// running a subprocess.
+///
+/// `query_git` runs only when `base_dir` carries a `.git` entry, and
+/// that guard is a requirement rather than an optimization. The macOS
+/// application bundle ships no `.git`, so without the guard every
+/// `App.create(...)` in a notebook spawns `git` from a double-clicked
+/// GUI session. On a Mac that has no command line tools installed,
+/// `/usr/bin/git` is the developer tools shim, and invoking it there
+/// presents the "install the command line developer tools" dialog, which
+/// the application must never put in front of a user. The guard gives up
+/// nothing in exchange: `git branch --show-current` outside a repository
+/// fails, so the query would return the same `"unknown"` this arm
+/// returns directly.
+fn branch_for(base_dir: &Path, query_git: impl FnOnce(&Path) -> String) -> String {
+    if let Some(name) = read_branch_file(base_dir) {
+        return name;
+    }
+    if !has_git_entry(base_dir) {
+        return UNKNOWN_BRANCH.to_string();
+    }
+    query_git(base_dir)
+}
+
+/// The file a PACKAGED tree carries at its root to say it keeps its own
+/// state.
+///
+/// WHY A MARKER RATHER THAN AN OS TEST OR AN ENVIRONMENT VARIABLE.
+/// Windows already roots everything at the tree, and the macOS and Linux
+/// distributions want the same property for the same reason: a person who
+/// downloaded a folder should be able to remove it and have nothing of this
+/// program left behind. What must NOT change is a developer CHECKOUT, where
+/// `~/.local/share/ppf-cts` is the established data root and several machines'
+/// worth of tooling names it.
+///
+/// So the question is not "which OS is this" but "is this tree a packaged
+/// one", and only the packaging step knows. An environment variable would
+/// answer it for whoever the launcher starts and for nobody else, and that
+/// split is real rather than theoretical: the Blender add-on spawns the
+/// distribution's `ppf-cts-server` DIRECTLY, without going through the
+/// launcher, so a launcher-only answer would have one distribution keep its
+/// state in two places depending on how it was started.
+///
+/// A file at the tree root is the same answer to every entry point.
+pub const SELFCONTAINED_MARKER: &str = ".ppf-selfcontained";
+
+/// Whether `base_dir` is a packaged tree that keeps its own state.
+///
+/// The `.git/branch_name.txt` a distribution also ships is NOT reused for
+/// this. That file says which branch the tree was built from and is read by
+/// `branch_for`; letting it decide where state lands would tie two unrelated
+/// decisions together, so a later change to branch handling would silently
+/// move a user's data.
+pub fn is_selfcontained(base_dir: &Path) -> bool {
+    base_dir.join(SELFCONTAINED_MARKER).is_file()
+}
+
+/// Whether state for `base_dir` is rooted at the tree rather than at `$HOME`.
+///
+/// Windows has always rooted at the tree, so its behavior is unchanged and
+/// unconditional; elsewhere it is the packaged trees that do.
+fn state_rooted_at_tree(base_dir: &Path) -> bool {
+    cfg!(target_os = "windows") || is_selfcontained(base_dir)
 }
 
 /// Compose the platform-aware data directory. `home_dir` is
 /// `std::env::var_os("HOME")` (or `USERPROFILE` on Windows when
 /// callers prefer); we accept it explicitly so unit tests stay
 /// hermetic. The branch is resolved from `{base_dir}/.git/
-/// branch_name.txt` first, then `git branch --show-current`, then
-/// `"unknown"`.
+/// branch_name.txt` first, then `git branch --show-current` where
+/// `base_dir` carries a `.git` entry, then `"unknown"`.
 pub fn data_dirpath_for(base_dir: &Path, home_dir: Option<&Path>) -> PathBuf {
-    let branch = read_branch_file(base_dir).unwrap_or_else(|| git_current_branch(base_dir));
+    let branch = branch_for(base_dir, git_current_branch);
     compose_data_dir(base_dir, home_dir, &branch)
 }
 
@@ -118,7 +200,7 @@ pub fn data_dirpath_for(base_dir: &Path, home_dir: Option<&Path>) -> PathBuf {
 /// without invoking git.
 pub fn compose_data_dir(base_dir: &Path, home_dir: Option<&Path>, branch: &str) -> PathBuf {
     let segment = format!("git-{branch}");
-    if cfg!(target_os = "windows") {
+    if state_rooted_at_tree(base_dir) {
         base_dir
             .join("local")
             .join("share")
@@ -135,11 +217,13 @@ pub fn compose_data_dir(base_dir: &Path, home_dir: Option<&Path>, branch: &str) 
     }
 }
 
-/// Default cache directory: project-relative on Windows,
-/// `~/.cache/ppf-cts` elsewhere. Does not create the directory;
+/// Default cache directory: `{base_dir}/cache/ppf-cts` for a tree that keeps
+/// its own state (Windows, and any packaged tree carrying
+/// `SELFCONTAINED_MARKER`), `~/.cache/ppf-cts` otherwise. Does not create the
+/// directory;
 /// callers call `fs::create_dir_all` if they need it.
 pub fn default_cache_dir(base_dir: &Path, home_dir: Option<&Path>) -> PathBuf {
-    if cfg!(target_os = "windows") {
+    if state_rooted_at_tree(base_dir) {
         base_dir.join("cache").join("ppf-cts")
     } else {
         // The `/tmp` fallback is a test-only hermetic default; production
@@ -318,6 +402,64 @@ mod tests {
     }
 
     #[test]
+    fn a_packaged_tree_keeps_its_state_inside_itself() {
+        // THE PROPERTY THE MARKER BUYS: a person who downloaded a folder can
+        // remove it and have nothing of this program left behind, which is
+        // what the Windows distribution has always done and what the macOS one
+        // now does too.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        fs::write(base.join(SELFCONTAINED_MARKER), "").unwrap();
+        assert!(is_selfcontained(base));
+
+        let data = compose_data_dir(base, Some(Path::new("/home/u")), "feature-x");
+        assert_eq!(data, base.join("local/share/ppf-cts/git-feature-x"));
+        assert!(
+            !data.starts_with("/home/u"),
+            "a packaged tree still wrote into the home directory: {data:?}"
+        );
+
+        let cache = default_cache_dir(base, Some(Path::new("/home/u")));
+        assert_eq!(cache, base.join("cache/ppf-cts"));
+        assert!(
+            !cache.starts_with("/home/u"),
+            "a packaged tree still cached into the home directory: {cache:?}"
+        );
+    }
+
+    #[test]
+    fn a_checkout_is_unchanged_by_the_marker_mechanism() {
+        // The other half, and the one worth pinning: a developer checkout has
+        // no marker, and `~/.local/share/ppf-cts` is the data root several
+        // machines' worth of tooling names. Adding the mechanism must not move
+        // it.
+        if cfg!(target_os = "windows") {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        assert!(!is_selfcontained(base));
+        assert_eq!(
+            compose_data_dir(base, Some(Path::new("/home/u")), "feature-x"),
+            PathBuf::from("/home/u/.local/share/ppf-cts/git-feature-x")
+        );
+        assert_eq!(
+            default_cache_dir(base, Some(Path::new("/home/u"))),
+            PathBuf::from("/home/u/.cache/ppf-cts")
+        );
+    }
+
+    #[test]
+    fn a_marker_that_is_a_directory_does_not_count() {
+        // `is_file` rather than `exists`, so a directory someone created with
+        // that name does not silently relocate a user's data.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        fs::create_dir_all(base.join(SELFCONTAINED_MARKER)).unwrap();
+        assert!(!is_selfcontained(base));
+    }
+
+    #[test]
     fn read_branch_file_round_trips() {
         let tmp = tempfile::tempdir().unwrap();
         let git = tmp.path().join(".git");
@@ -336,6 +478,68 @@ mod tests {
         fs::create_dir_all(&git).unwrap();
         fs::write(git.join("branch_name.txt"), "   \n").unwrap();
         assert!(read_branch_file(tmp.path()).is_none());
+    }
+
+    /// The macOS application bundle ships no `.git`, and a `git` spawn
+    /// from a double-clicked session can raise the command line tools
+    /// installer on the user's Mac. The query closure panics, so this
+    /// test fails loudly if the resolution ever reaches it.
+    #[test]
+    fn branch_for_never_queries_git_without_a_git_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let branch = branch_for(tmp.path(), |_: &Path| {
+            panic!("git must not be queried when base_dir carries no .git entry")
+        });
+        assert_eq!(branch, "unknown");
+    }
+
+    /// The same arm read through the public entry point every
+    /// `App.create(...)` reaches, so the bundle's data directory is
+    /// `git-unknown` and no subprocess runs to decide it.
+    #[test]
+    fn data_dirpath_for_without_a_git_entry_is_the_unknown_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = data_dirpath_for(tmp.path(), Some(Path::new("/home/u")));
+        assert!(dir.ends_with("git-unknown"), "{dir:?}");
+    }
+
+    /// A stamped branch file still wins, and it wins without a query
+    /// even though the `.git` directory holding it is present.
+    #[test]
+    fn branch_for_prefers_the_branch_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = tmp.path().join(".git");
+        fs::create_dir_all(&git).unwrap();
+        fs::write(git.join("branch_name.txt"), "release/2026-05\n").unwrap();
+        let branch = branch_for(tmp.path(), |_: &Path| {
+            panic!("the branch file must be preferred over a git query")
+        });
+        assert_eq!(branch, "release/2026-05");
+    }
+
+    /// Every developer and CI checkout has a `.git` directory, and the
+    /// query still runs there.
+    #[test]
+    fn branch_for_queries_git_in_a_checkout() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        let branch = branch_for(tmp.path(), |_: &Path| "feature-x".to_string());
+        assert_eq!(branch, "feature-x");
+    }
+
+    /// A linked worktree spells `.git` as a file holding a `gitdir:`
+    /// pointer rather than as a directory. It is a repository like any
+    /// other, so the query runs there too.
+    #[test]
+    fn branch_for_queries_git_in_a_linked_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join(".git"),
+            "gitdir: /repo/.git/worktrees/feature\n",
+        )
+        .unwrap();
+        let branch = branch_for(tmp.path(), |_: &Path| "feature".to_string());
+        assert_eq!(branch, "feature");
     }
 
     #[test]

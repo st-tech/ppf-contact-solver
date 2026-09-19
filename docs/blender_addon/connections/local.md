@@ -2,11 +2,13 @@
 
 The solver runs on the same machine as Blender, with no SSH or Docker
 layer in between. On Windows, use the [Windows Native](windows.md)
-backend instead. Linux needs an NVIDIA GPU and CUDA; on Apple Silicon
-it is the Metal build of the solver that runs, and its macOS bundle
-lays the binary out at `target/release/ppf-cts-server` (inside
-`ppf-contact-solver.app/Contents/Resources`) exactly as a Linux
-checkout does, so Local mode reaches that too.
+backend instead, and on an Apple-silicon Mac the
+{ref}`macOS Native <macos-native>` type, which clears the Gatekeeper
+quarantine mark and names the interpreter a Metal distribution ships.
+
+On Linux the solver runs on an NVIDIA GPU through CUDA, on an AMD GPU
+through ROCm, or on the CPU build, which needs no GPU and is
+substantially slower.
 
 :::{warning}
 Not recommended for day-to-day workstations. The Linux installation performed
@@ -82,11 +84,15 @@ SSH and Docker modes.
 
 ## Troubleshooting
 
-- **"Remote path not found (.../ppf-cts-server)"** - the add-on looked
-  for `<Path>/target/release/ppf-cts-server` and did not find it. Point
-  **Path** at the checkout root (the directory that *contains*
-  `target/`), not at `target/release/` itself, and make sure the solver
-  has been built there.
+- **"ppf-cts-server not found under ... in any layout"** - the add-on
+  looked under **Path** for a server in every layout a build produces
+  (`target/release/`, a per-backend `target/<backend>/release/`,
+  `target/cpu/release/`, `bin/`, `bin-cpu/`) and found none; the message
+  lists them. Point **Path** at the checkout root (the directory that
+  *contains* `target/`), not at `target/release/` itself, and make sure
+  the solver has been built there. **Start Server on Remote** launches
+  `target/release/ppf-cts-server`, so that is the layout to build into
+  for this mode.
 - **Server startup timed out.** - the solver
   launched but did not report readiness within 16 seconds. Check
   `server.log` inside the solver directory; the panel also prints the last
@@ -107,8 +113,6 @@ Local mode launches the server with a bash script (`nohup`, `source
 launch path the SSH and Docker backends use. The script is `bash`-only,
 which is why Local mode needs a bash shell on the solver machine;
 Windows has none and goes through the Windows Native backend instead.
-macOS has bash, and the Metal build of the solver uses the same
-`target/release/` layout, so Local mode works there as well.
 
 **Shared port field**
 

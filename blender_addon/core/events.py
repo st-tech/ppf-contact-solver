@@ -24,8 +24,8 @@ class Event:
 
 @dataclass(frozen=True)
 class ConnectRequested(Event):
-    """User requested a connection (SSH, Docker, local, win_native)."""
-    backend_type: str = ""       # "ssh" | "docker" | "local" | "win_native"
+    """User requested a connection (SSH, Docker, local, win_native, mac_native)."""
+    backend_type: str = ""       # "ssh" | "docker" | "local" | "win_native" | "mac_native"
     config: dict = field(default_factory=dict)
     server_port: int = 0
 
@@ -89,10 +89,22 @@ class StartServerRequested(Event):
     launch identity, or ``gpu_devices.AUTOMATIC`` plus an empty UUID to set
     nothing. They ride the event rather than being stored at connect because
     the panel lets the selection change between Stop and the next Start.
+
+    ``device`` and ``gpu_backend`` ride it for the SAME reason, and only a
+    REMOTE connection reads them. They name which BUILD on the solver host the
+    server comes out of, the panel draws those rows once a connection is up,
+    and a value stored at connect would leave a row the artist can move and
+    that changes nothing. A native connection is different: its device is
+    settled when the connection is made, because the connect itself refuses a
+    root that holds no build for it, and the backend keeps that answer for its
+    own restart path. Empty means "whatever the backend already holds", which
+    is what every caller that names no device gets.
     """
 
     cuda_device: int = -1
     cuda_device_uuid: str = ""
+    device: str = ""
+    gpu_backend: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,19 @@ class ServerLaunched(Event):
 @dataclass(frozen=True)
 class StopServerRequested(Event):
     """User requested remote server stop."""
+
+
+@dataclass(frozen=True)
+class KillServerRequested(Event):
+    """User pressed Force Terminate Process while connected.
+
+    Differs from ``StopServerRequested`` in its guard only: Stop is accepted
+    while the server is RUNNING or LAUNCHING, Kill whenever the connection is
+    up and idle, because the case it exists for is a server the engine does
+    not know about (Start Server refused because a stale one holds the port,
+    or a server left by an earlier session that the attach path did not
+    take). Both run ``DoStopServer``.
+    """
 
 
 @dataclass(frozen=True)

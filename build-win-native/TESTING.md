@@ -47,7 +47,7 @@ cd ~/ppf-contact-solver
 zip -rq /tmp/repo.zip . -x '.git/*' -x 'target/*' -x 'build-win-native/downloads/*' \
     -x 'build-win-native/python/*' -x 'build-win-native/rust/*' -x 'build-win-native/msvc/*' \
     -x 'build-win-native/cuda/*' -x 'build-win-native/7zip/*' -x 'build-win-native/mingit/*' \
-    -x 'build-win-native/dist/*' -x 'crates/ppf-cts-solver/src/cpp/build/*'
+    -x 'build-win-native/dist/*' -x 'crates/ppf-cts-solver/src/kernels/build/*'
 
 # Transfer to the build instance
 scp /tmp/repo.zip win-build:C:/source.zip
@@ -103,11 +103,14 @@ build.bat /nopause
 This performs:
 1. Downloads Eigen 3.4.0 (if not present)
 2. Sets up MSVC environment (from portable installation)
-3. Builds CUDA library (`libsimbackend_cuda.dll`) using nvcc directly
-4. Builds the Rust workspace via `cargo build --release`, producing
+3. Builds each GPU backend's library: `libsimbackend_cuda.dll` with
+   nvcc, `libppfbe_rocm.dll` with hipcc
+4. Builds the Rust workspace once for each backend in
+   `PPF_WIN_BACKENDS`, via `cargo build --release --features <backend>`
+   into `target\<backend>`, producing
    `ppf-cts-server.exe` (the Rust solver host the addon spawns and
    talks to over a CBOR socket; defined by the `ppf-cts-server`
-   crate) and `ppf-contact-solver.exe` (the CUDA solver driver
+   crate) and `ppf-contact-solver.exe` (the solver driver
    binary, defined by the `ppf-cts-solver` crate; binary name is
    pinned via `[[bin]]` so launchers keep working). The library
    crates `ppf-cts-core` (data model, state machine, numeric kernels)
@@ -116,9 +119,10 @@ This performs:
 5. Creates launcher scripts
 
 Build outputs:
-- `crates\ppf-cts-solver\src\cpp\build\lib\libsimbackend_cuda.dll` - CUDA backend DLL
-- `target\release\ppf-cts-server.exe` - Rust solver host (current addon target)
-- `target\release\ppf-contact-solver.exe` - CUDA solver driver binary
+- `crates\ppf-cts-compute\cuda\build\lib\libsimbackend_cuda.dll` - CUDA backend DLL
+- `crates\ppf-cts-compute\rocm\build\lib\libppfbe_rocm.dll` - ROCm backend DLL
+- `target\<backend>\release\ppf-cts-server.exe` - Rust solver host, one per backend
+- `target\<backend>\release\ppf-contact-solver.exe` - solver driver binary, one per backend
 
 ### 1.5 Create the Bundle
 
@@ -128,9 +132,9 @@ bundle.bat /nopause
 ```
 
 This creates a self-contained distribution in `build-win-native\dist\` containing:
-- `target\release\ppf-cts-server.exe` - Rust solver host (the Blender addon's `WIN_NATIVE` backend)
-- `target\release\ppf-contact-solver.exe` - CUDA solver driver binary
-- `bin\` - DLLs (libsimbackend_cuda.dll, cudart64_12.dll)
+- `target\<backend>\release\ppf-cts-server.exe` - Rust solver host, one per backend (the Blender addon's `WIN_NATIVE` backend)
+- `target\<backend>\release\ppf-contact-solver.exe` - solver driver binary, one per backend
+- `bin\` - DLLs (libsimbackend_cuda.dll and cudart64_12.dll; libppfbe_rocm.dll and the HIP runtime where ROCm ships)
 - `python\` - Embedded Python environment
 - `mingit\` - MinGit for repository cloning
 - `frontend\` - Python frontend module
@@ -316,7 +320,7 @@ This removes:
 
 ## CI/CD Reference
 
-The automated GitHub Actions workflow (`.github/workflows/release-win.yml`) performs these same steps:
+The automated GitHub Actions workflow (`.github/workflows/release.yml`) performs these same steps:
 
 1. Launches a fresh Windows EC2 instance (NVIDIA driver only)
 2. Transfers source and runs warmup/build/bundle (all tools installed locally)

@@ -20,8 +20,8 @@
 //!     solver) sees a live solver's lock as held.
 //!   * [`pid_alive`]: is THIS specific PID alive? Always keyed off
 //!     `RunStatus.pid`, never the global process-name scan, so a second
-//!     unrelated solver (e.g. another run sharing the host) cannot
-//!     suppress one project's crash detection.
+//!     unrelated solver (two checkouts of this project running side by
+//!     side, for instance) cannot suppress one project's crash detection.
 //!
 //! The verdict gates on BOTH agreeing.
 
@@ -124,8 +124,8 @@ mod sys {
 // GetExitCodeProcess. std::fs::File handles are non-inheritable by
 // default on Windows, so there is no FD_CLOEXEC analogue to set.
 //
-// NOTE: this path compiles only on Windows; verify on a native
-// Windows build before relying on the crash-detection behavior.
+// NOTE: this path compiles only on Windows, so a build on any other host
+// never type-checks it.
 // ---------------------------------------------------------------------------
 #[cfg(windows)]
 mod sys {

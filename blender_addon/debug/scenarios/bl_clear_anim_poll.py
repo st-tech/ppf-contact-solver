@@ -66,6 +66,12 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it. The sweep that had
+# failed it loaded a DIFFERENT tree's addon through the shared extension
+# symlink, so that verdict was about other code; against this tree it
+# passes unchanged.
+BACKENDS = ("real",)
+
 
 _DRIVER_TEMPLATE = r"""
 import bpy, os, time, traceback

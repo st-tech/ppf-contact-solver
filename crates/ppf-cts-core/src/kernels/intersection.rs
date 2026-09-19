@@ -8,7 +8,7 @@
 // The edge-triangle pierce predicate is NOT reimplemented here: it is a
 // single source of truth shared with the GPU contact kernels. The same
 // templated routine in the solver's C++ tree
-// (crates/ppf-cts-solver/src/cpp/contact/intersect_core.hpp) is
+// (crates/ppf-cts-solver/src/kernels/contact/intersect_core.hpp) is
 // instantiated for float on the device and for double here, reached via
 // the `extern "C"` shim in crates/ppf-cts-core/cpp/intersect_ffi.cpp
 // (compiled by build.rs). This module owns only the broad phase, the
@@ -53,12 +53,12 @@ const SEGMENT_2D_EPS_CROSS: f64 = 1e-14;
 
 extern "C" {
     /// Single source of truth for the edge-triangle pierce test, defined
-    /// in crates/ppf-cts-solver/src/cpp/contact/intersect_core.hpp and
+    /// in crates/ppf-cts-solver/src/kernels/contact/intersect_core.hpp and
     /// linked via the host shim compiled by build.rs. The device contact
     /// kernels call the same routine (instantiated for float); this is the
     /// double instantiation, so the host build-check runs it in f64. Each
     /// pointer addresses three contiguous `f64` coordinates.
-    fn ppf_isect_edge_triangle_intersect(
+    fn isect_edge_triangle_intersect(
         e0: *const f64,
         e1: *const f64,
         v0: *const f64,
@@ -83,7 +83,7 @@ fn edge_triangle_intersect(
     // frame; the C routine only reads three doubles from each and does not
     // retain them.
     unsafe {
-        ppf_isect_edge_triangle_intersect(
+        isect_edge_triangle_intersect(
             e0.as_ptr(),
             e1.as_ptr(),
             v0.as_ptr(),
@@ -230,7 +230,8 @@ fn triangles_coplanar_overlap(
 // "all N vertices are pinned by an allowing pin" means.
 
 /// `intersect_policy` bits. Mirrored in `ppf-cts-solver`'s `data.rs` and
-/// `cpp/data.hpp`, and in `frontend/_scene_.py`, which writes them.
+/// `src/kernels/contact/intersect_policy.hpp`, and in `frontend/_scene_.py`,
+/// which writes them.
 pub const INTERSECT_ALLOW_SELF: u8 = 1 << 0;
 pub const INTERSECT_ALLOW_INTER_OBJECT: u8 = 1 << 1;
 
@@ -273,10 +274,10 @@ impl<'a> VertexIntersectPolicy<'a> {
         }
     }
 
-    /// Mirror of `ppf_isect::intersection_tolerated`, which lives in
-    /// `crates/ppf-cts-solver/src/cpp/contact/intersect_policy.hpp` and which
-    /// the device testers and the emulator both call. Keep the two in step; a
-    /// divergence is a build that passes one gate and fails the other.
+    /// Mirror of `isect::intersection_tolerated`, which lives in
+    /// `crates/ppf-cts-solver/src/kernels/contact/intersect_policy.hpp` and which
+    /// the device visitors and the host ABI shim both call. Keep the two in
+    /// step; a divergence is a build that passes one gate and fails the other.
     fn tolerated(&self, a: &ElementSide, b: &ElementSide) -> bool {
         if self.is_inert() {
             return false;
@@ -376,7 +377,8 @@ fn find_edge_tri_intersections(
         // deforms, so an edge piercing a triangle of the SAME body is a
         // fixed, physically meaningless self-intersection that must be
         // tolerated even when the body starts self-tangled. Mirrors the
-        // device-side same_pdrd_body filter in contact.cu.
+        // device-side same_pdrd_body filter in
+        // ppf-cts-solver's kernels/contact/pair_filter.kernel.cpp.
         if edge_body_id != 0 && edge_body_id == tri_body_id[ti as usize] {
             return;
         }
@@ -434,7 +436,8 @@ pub struct IntersectionInput<'a> {
     /// the same nonzero id they belong to the same rigid body, which
     /// never deforms; an edge of one piercing the other is a fixed,
     /// physically meaningless self-intersection and is skipped. Mirrors
-    /// the device-side `same_pdrd_body` filter in contact.cu. `None`
+    /// the device-side `same_pdrd_body` filter in `ppf-cts-solver`'s
+    /// `kernels/contact/pair_filter.kernel.cpp`. `None`
     /// disables the rule (every triangle treated as body 0).
     pub tri_body_id: Option<&'a [i32]>,
     /// Per-VERTEX source-object identity in the same namespace as `verts`

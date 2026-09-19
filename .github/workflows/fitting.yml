@@ -309,8 +309,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -389,7 +389,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -570,6 +570,24 @@ jobs:
 
           kill $TUNNEL_PID 2>/dev/null || true
 
+      # THE OIDC CREDENTIAL LASTS ONE HOUR, AND EVERY ITERATION OPENS A TUNNEL
+      # OF ITS OWN, SO EACH ONE REFRESHES FIRST. `aws ec2-instance-connect
+      # open-tunnel` authenticates when it opens, runs in the BACKGROUND, and
+      # its exit status is never checked, so an expired credential does not
+      # report itself as one: the tunnel never binds port 2222 and the ssh
+      # that follows reports `connect to host localhost port 2222: Connection
+      # refused`, which reads as the instance being down. Measured on run
+      # 35069498252 (RequestExpired at 60m17s) against run 35056934927
+      # (passed at 59m32s). The instance wait, warmup and the CUDA build put
+      # the first iteration well into the hour, and ten iterations of one
+      # example can run for hours more. A refresh costs about one second.
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 1st iteration
         run: |
           echo "Running 1st iteration of ${EXAMPLE}"
@@ -585,6 +603,13 @@ jobs:
             ubuntu@localhost \
             "set -o pipefail && echo '1st' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_1.log"
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run 2nd iteration
         run: |
@@ -602,6 +627,13 @@ jobs:
             "set -o pipefail && echo '2nd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_2.log"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 3rd iteration
         run: |
           echo "Running 3rd iteration of ${EXAMPLE}"
@@ -617,6 +649,13 @@ jobs:
             ubuntu@localhost \
             "set -o pipefail && echo '3rd' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_3.log"
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run 4th iteration
         run: |
@@ -634,6 +673,13 @@ jobs:
             "set -o pipefail && echo '4th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_4.log"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 5th iteration
         run: |
           echo "Running 5th iteration of ${EXAMPLE}"
@@ -649,6 +695,13 @@ jobs:
             ubuntu@localhost \
             "set -o pipefail && echo '5th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_5.log"
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run 6th iteration
         run: |
@@ -666,6 +719,13 @@ jobs:
             "set -o pipefail && echo '6th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_6.log"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 7th iteration
         run: |
           echo "Running 7th iteration of ${EXAMPLE}"
@@ -681,6 +741,13 @@ jobs:
             ubuntu@localhost \
             "set -o pipefail && echo '7th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_7.log"
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run 8th iteration
         run: |
@@ -698,6 +765,13 @@ jobs:
             "set -o pipefail && echo '8th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_8.log"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 9th iteration
         run: |
           echo "Running 9th iteration of ${EXAMPLE}"
@@ -714,6 +788,13 @@ jobs:
             "set -o pipefail && echo '9th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_9.log"
           kill $TUNNEL_PID 2>/dev/null || true
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run 10th iteration
         run: |
           echo "Running 10th iteration of ${EXAMPLE}"
@@ -729,6 +810,14 @@ jobs:
             ubuntu@localhost \
             "set -o pipefail && echo '10th' > ${WORKDIR}/frontend/.CI && cd ${WORKDIR} && source ~/.local/share/ppf-cts/venv/bin/activate && python3 /tmp/${EXAMPLE}.py 2>&1 | tee /tmp/ci/run_10.log"
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Collect results
         if: success() || failure()
@@ -778,6 +867,14 @@ jobs:
           name: ci-${{ env.EXAMPLE }}
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()

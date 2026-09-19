@@ -138,12 +138,6 @@ class AppState:
     # exit out of STARTING (BUSY/SAVING/error), so a normal-paced run
     # never even touches it.
     starting_poll_guard: int = 0
-    # True when the connected server is an emulated (CPU stub, no CUDA)
-    # build. Mirrored from ``hardware.emulated`` on each status response;
-    # the Run operator warns before running on such a server because it
-    # produces no real physics. Preserved across responses that omit the
-    # hardware block (e.g. the minimal error-only reply).
-    emulated: bool = False
 
     # -- derived helpers (no mutation) --
 

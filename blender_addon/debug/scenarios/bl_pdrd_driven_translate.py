@@ -15,8 +15,8 @@
 # the exact call the panel's "Translate" button makes), encodes, decodes,
 # and asserts the move_by op round-trips with the right delta and timing.
 #
-# Encoding-only (the emulated backend has no rigid physics); the prescribed
-# motion is exercised on a real CUDA host.
+# Encoding-only by design; the prescribed motion itself is exercised by the
+# PDRD examples.
 
 from __future__ import annotations
 
@@ -25,6 +25,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

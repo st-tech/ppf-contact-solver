@@ -101,7 +101,8 @@ a static collider for it to drape over.
    to answer. Status advances to *Waiting for Data* once the server
    responds. If the port is already in use, click **Force Terminate
    Process** to release it; on the Local backend nothing attaches to an
-   existing `ppf-cts-server` (only Windows Native does that).
+   existing `ppf-cts-server` (only the two native types, Windows Native
+   and macOS Native, do that).
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups**
    panel, click **Create Group**, set the unlabelled type dropdown

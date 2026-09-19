@@ -1,6 +1,6 @@
 # Blender Python API reference
 
-This document tracks the bundled Python API surface exported from `blender_addon/ops/api/__init__.py` and its submodules. It catalogs every public class, method, property, and attribute on the ZOZO Contact Solver Python surface so an LLM can script the add-on after `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`.
+This document tracks the bundled Python API surface exported from `blender_addon/ops/api/__init__.py` and its submodules. It catalogs every public class, method, property, and attribute on ZOZO's Contact Solver Python surface so an LLM can script the add-on after `from bl_ext.user_default.ppf_contact_solver.ops.api import solver`.
 
 If you reached this file as MCP resource `llm://python_api_reference`, its sibling resources (`llm://index`, `llm://overview`, `llm://parameters`, and so on) cover the surrounding concepts. Call `resources/list` once and pick the matching URI; the full resource surface (URI scheme, list/read examples, error handling) is documented under the **Resources** section of `llm://integrations`.
 
@@ -47,7 +47,7 @@ Fallback: any operator registered under `bpy.ops.zozo_contact_solver.<name>()`, 
 
 ## Class: Solver
 
-Top-level entry point for the ZOZO Contact Solver.
+Top-level entry point for ZOZO's Contact Solver.
 
 Available as `solver` when imported via:
 
@@ -507,11 +507,53 @@ Accessed as `Solver.param`. Supports both get and set via attribute access. Writ
 
 `gravity` is an alias for `gravity_3d`.
 
-The attribute surface is intentionally proxy-based rather than a fixed method list: reads and writes are forwarded to the add-on's scene state and SSH/connection state. Stable day-to-day keys include simulation parameters such as `step_size`, `frame_count`, `frame_rate`, `gravity`, `wind_direction`, `wind_strength`, `air_density`, `air_friction`, `vertex_air_damp`, `project_name`, and connection parameters such as `host`, `port`, `username`, `key_path`, `local_path`, `docker_path`, `ssh_remote_path`, `server_type`, and `container`.
+The attribute surface is intentionally proxy-based rather than a fixed method list: reads and writes are forwarded to the add-on's scene state and SSH/connection state. Reading a name neither state carries raises `AttributeError`. Stable day-to-day keys include simulation parameters such as `step_size`, `frame_count`, `frame_rate`, `gravity`, `wind_direction`, `wind_strength`, `air_density`, `air_friction`, `vertex_air_damp`, `project_name`, and the connection parameters listed below.
 
 ```python
 solver.param.step_size = 0.004
 print(solver.param.gravity)
+```
+
+**Connection keys.** `server_type` selects where the solver server runs, and with it which of the other connection keys are read. It takes eight values, shown here with the label the panel's Type dropdown draws for each:
+
+| `server_type` | Panel label | Where the server runs | Other keys read |
+| ------------- | ----------- | --------------------- | --------------- |
+| `"CUSTOM"` | SSH | A machine reached over SSH | `host`, `port`, `username`, `key_path`, `proxy_jump`, `ssh_remote_path` |
+| `"COMMAND"` | SSH Command | The same, with the `ssh ...` invocation written out | `command`, `ssh_remote_path` |
+| `"DOCKER"` | Docker | A container reached through this machine's Docker daemon | `container`, `docker_path` |
+| `"DOCKER_SSH"` | Docker over SSH | A container on a machine reached over SSH | `host`, `port`, `username`, `key_path`, `proxy_jump`, `container`, `docker_path` |
+| `"DOCKER_SSH_COMMAND"` | Docker over SSH Command | The same, with the `ssh ...` invocation written out | `command`, `container`, `docker_path` |
+| `"WIN_NATIVE"` | Windows Native | This machine, in a build the add-on starts itself | `win_native_path` |
+| `"MAC_NATIVE"` | macOS Native | This machine, in a build the add-on starts itself | `mac_native_path` |
+| `"LINUX_NATIVE"` | Linux Native | This machine, in a build the add-on starts itself | `linux_native_path` |
+
+A `command` is parsed for the destination and the options the add-on acts on (`-p`, `-l`, `-i`, `-J`, and the matching `-o` settings), so the SSH Command types read no `host`, `port`, `username`, `key_path` or `proxy_jump` of their own.
+
+`port` is the SSH port, default `22`. The port the solver server itself listens on is `docker_port`, default `9090`, and every connection type reads it, the three native ones included.
+
+A `.blend` or a connection profile saved with the retired `Local` type opens on this platform's native type, with its directory carried onto `win_native_path`, `mac_native_path` or `linux_native_path` (a profile that also names the current field keeps that one). There is no `local_path` key.
+
+`native_device` and `native_gpu_backend` are read for every `server_type`, remote and native alike.
+
+- **`native_device`**: `"GPU"` (the default) or `"CPU"`. The choice picks which build directory the server is launched from, rather than a flag handed to one binary: a solver binary links exactly one backend, so the accelerated build and the portable one occupy separate directories under the connection's solver path, and `target/cpu/release` is where the CPU build sits. `"GPU"` runs the accelerated build, CUDA or ROCm on Windows and Linux and Metal on macOS. `"CPU"` runs the portable build, which needs no GPU and is substantially slower.
+- **`native_gpu_backend`**: `"AUTO"` (the default), `"CUDA"` or `"ROCM"`, read only while `native_device` is `"GPU"`. One solver path can hold more than one GPU build, in `target/cuda/release` and `target/rocm/release`, which is what a Windows x64 or Linux x86_64 distribution ships. `"AUTO"` takes the single GPU build present. Where several are, what it does depends on which machine they are on: a NATIVE connection asks each one's solver whether its device is usable and takes the first that says yes, CUDA before ROCm, while a REMOTE connection takes the first in that same order WITHOUT asking, because the solver that would answer is on the other machine and a launch is not run to ask. So on a remote host holding both builds, name the one you want rather than leaving it automatic.
+
+On a remote connection the device selection is applied when the server is started. Connecting lists those directories on the solver host once, recording which of them hold a server and what each one's `.ppf-backend` marker names, and the panel's refresh button lists them again. Start Server then launches the build the selection resolves to and exports `CARGO_TARGET_DIR` for it, so the build worker loads its cdylib from the same directory. A selection the solver host cannot serve is refused by name at Start Server rather than launching some other build.
+
+`solver_gpu_index` picks which GPU on the solver host the server runs on, `-1` setting no `CUDA_VISIBLE_DEVICES`. Start Server reads it together with `solver_gpu_uuid`, which is the identity the launch uses; the index is what the panel displays. It is read only while `native_device` is `"GPU"`: a CPU run sets no `CUDA_VISIBLE_DEVICES` whatever this holds, since naming a GPU for a binary with no CUDA in it would put a device in the console line and in none of the run.
+
+```python
+solver.param.server_type = "LINUX_NATIVE"
+solver.param.linux_native_path = "/home/user/ppf-contact-solver"
+solver.param.native_device = "CPU"
+solver.connect()
+```
+
+The `connect_*` handlers write a whole connection in one call, reached through the `Solver.__getattr__` passthrough, and each one initiates the connection as well: `connect_linux_native(path=..., port=..., gpu_backend=...)` and `connect_win_native` with the same three arguments, `connect_mac_native(path=..., port=...)`, `connect_ssh(host=..., username=..., key_path=..., remote_path=..., port=..., container=..., proxy_jump=...)`, and `connect_docker(container=..., path=..., port=...)`. None of them carries the compute device, so set `native_device` through `solver.param` before the call. Passing `container` to `connect_ssh` switches the type to `"DOCKER_SSH"`.
+
+```python
+solver.param.native_device = "GPU"
+solver.connect_linux_native(path="/home/user/ppf-contact-solver", gpu_backend="CUDA")
 ```
 
 Dynamic (keyframed) parameters are accessed via `dyn`:

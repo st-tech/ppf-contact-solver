@@ -130,9 +130,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(loops::scene_concat_i64_lists, m)?)?;
     m.add_function(wrap_pyfunction!(loops::scene_validate_cross_stitch_names, m)?)?;
     // Single source of truth for the collision-window cap, exported so the
-    // Python builder imports it instead of re-declaring the literal. Shared
-    // with the solver's collision-window table builder and the GPU-side
-    // `#define MAX_COLLISION_WINDOWS` in cpp/main/main.cu.
+    // Python builder imports it instead of re-declaring the literal. The
+    // solver's collision-window table builder reads the same constant: it
+    // writes the flat window table with stride `MAX_COLLISION_WINDOWS * 2`
+    // floats per group and passes that stride to the kernel that reads it.
     m.add(
         "MAX_COLLISION_WINDOWS",
         ppf_cts_core::datamodel::object::MAX_COLLISION_WINDOWS,

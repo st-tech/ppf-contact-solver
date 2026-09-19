@@ -15,7 +15,7 @@
 //
 // The trait is intentionally minimal so wire-protocol handlers,
 // debug runners, and tests can compose their own executor
-// (e.g. an emulator path that fakes solver IO).
+// (`CountingExecutor` below is one).
 
 use async_trait::async_trait;
 use ppf_cts_core::effects::Effect;
@@ -27,21 +27,19 @@ mod build;
 mod session;
 pub(crate) mod solver;
 
-// Pick the right solver-busy + terminate variants per build. The
-// emulated build runs under the test rig where many workers share the
-// same host; using the global scan would let one worker's solver kill
-// another's (the historical `Utils.busy` patch from server/emulator.py
-// addressed the same race on the python side). The check and the kill
-// must be selected as a matched pair: a descendant-only busy check
-// paired with a host-global kill would still SIGTERM every peer
-// worker's solver the moment our own descendant is detected, so we
-// also narrow the terminator to descendants under `emulated`.
-#[cfg(feature = "emulated")]
-use ppf_cts_core::utils::{
-    solver_busy_descendants_only as solver_busy_for_check,
-    terminate_solver_descendants_only as terminate_solver_for_kill,
-};
-#[cfg(not(feature = "emulated"))]
+pub use build::{solver_build, SolverBuild};
+
+// Host-global solver-busy check and terminator. These must stay a MATCHED
+// PAIR: a descendant-only check against a host-global kill would SIGTERM every
+// peer worker's solver the moment our own descendant is detected.
+//
+// Several workers on one host would let a global scan kill each other's
+// solvers, which is the same race `Utils.busy` hit on the python side.
+// `PPF_SOLVER_SCAN_DESCENDANTS` narrows both the check and the kill to this
+// process's own descendants, and it scopes BOTH: a worker that correctly
+// ignores a peer's solver but can still terminate it has fixed half the race.
+// The signal is a runtime one, since a real backend has no feature flag
+// standing in for "under a parallel runner".
 use ppf_cts_core::utils::{
     solver_busy as solver_busy_for_check, terminate_solver as terminate_solver_for_kill,
 };

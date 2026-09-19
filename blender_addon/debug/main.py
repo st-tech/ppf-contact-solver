@@ -166,10 +166,16 @@ def cmd_runtests(args):
     import orchestrator  # noqa: WPS433 — lazy by design
     import scenarios
 
-    if args.list:
-        for name in scenarios.all_names(args.backend):
-            print(name)
-        return
+    # One gate on the backend NAME, before anything is selected. A removed
+    # backend is refused here with the removal spelled out; it must never
+    # fall through to a selection that quietly comes back empty.
+    try:
+        backend = scenarios.resolve_backend(args.backend)
+    except scenarios.BackendUnavailable as exc:
+        print(f"runtests: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    unrunnable = scenarios.unrunnable_names(backend)
 
     knobs = {}
     for kv in args.knob or []:
@@ -179,7 +185,42 @@ def cmd_runtests(args):
         k, v = kv.split("=", 1)
         knobs[k] = v
 
-    names = args.scenarios or scenarios.all_names(args.backend)
+    if args.scenarios:
+        # An explicitly named scenario BYPASSES the selection filter, so
+        # this is the only place it can be caught. Refuse the whole run
+        # rather than dropping the name: a caller that asked for a
+        # scenario by name gets an answer about that scenario.
+        named_dead = {n: unrunnable[n] for n in args.scenarios
+                      if n in unrunnable}
+        if named_dead:
+            print(f"runtests: {len(named_dead)} named scenario(s) cannot run "
+                  f"on backend {backend!r}:", file=sys.stderr)
+            for name, reason in named_dead.items():
+                print(f"  {name}: {reason}", file=sys.stderr)
+            sys.exit(2)
+        names = list(args.scenarios)
+    else:
+        names = scenarios.all_names(backend)
+        _report_unrunnable(backend, unrunnable, stream=sys.stdout)
+
+    if args.shard:
+        try:
+            names = orchestrator.select_shard(names, args.shard)
+        except ValueError as exc:
+            print(f"runtests: --shard: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    if args.list:
+        # THE LIST IS THE SELECTION THAT WOULD RUN: the named scenarios or
+        # the whole set, after the shard. That makes `--list --shard I/N` a
+        # dispatch check that needs no build, no Blender and no packages: a
+        # rig instance handed only the source and an interpreter prints
+        # its share, and the shares can be checked to partition the set.
+        for name in names:
+            print(name)
+        _report_unrunnable(backend, unrunnable, stream=sys.stderr)
+        return
+
     kwargs = dict(
         knobs=knobs,
         keep_on_fail=not args.no_keep,
@@ -188,7 +229,8 @@ def cmd_runtests(args):
         parallel=args.parallel,
         repeat=args.repeat,
         report_path=args.report,
-        backend=args.backend,
+        backend=backend,
+        unrunnable=unrunnable,
     )
     if args.python is not None:
         kwargs["python"] = args.python
@@ -198,9 +240,34 @@ def cmd_runtests(args):
         "passed": summary["passed"],
         "failed": summary["failed"],
         "total": summary["total"],
+        # Carried into the printed summary on purpose. "total" counts what
+        # was SELECTED, so a suite that lost its backend would otherwise
+        # print a smaller, greener number with nothing to explain it.
+        "unrunnable": summary["unrunnable_count"],
     }, indent=2))
     if summary["failed"]:
         sys.exit(1)
+
+
+def _report_unrunnable(backend: str, unrunnable: dict, *, stream) -> None:
+    """Name every scenario this backend cannot host, and why.
+
+    Printed on every selection, not stashed in a report file: a scenario
+    that vanished with its backend has to be visible in the log the reader
+    is already looking at."""
+    if not unrunnable:
+        return
+    print(f"\n[rig] {len(unrunnable)} registered scenario(s) CANNOT RUN on "
+          f"backend {backend!r} and were not selected. This is lost "
+          f"coverage, not a pass:", file=stream)
+    by_reason: dict[str, list[str]] = {}
+    for name, reason in unrunnable.items():
+        by_reason.setdefault(reason, []).append(name)
+    for reason, names in by_reason.items():
+        print(f"  reason: {reason}", file=stream)
+        for name in sorted(names):
+            print(f"    {name}", file=stream)
+    print("", file=stream)
 
 
 def cmd_read(args):
@@ -290,7 +357,7 @@ def main():
 
     p_run = sub.add_parser(
         "runtests",
-        help="Run debug scenarios against an isolated emulated server.",
+        help="Run debug scenarios against an isolated solver server.",
     )
     p_run.add_argument(
         "scenarios", nargs="*",
@@ -299,12 +366,22 @@ def main():
     )
     p_run.add_argument("--list", action="store_true",
                       help="List registered scenarios and exit.")
+    p_run.add_argument("--shard", default="",
+                      help="I/N: run only every N-th scenario of the selection, "
+                           "starting at the I-th (0-based), in the registry's "
+                           "order; N hosts given 0/N .. N-1/N run it all once.")
+    # REQUIRED, and deliberately not `choices=`. There is no default
+    # backend, because a default would silently label every invocation
+    # that omitted it as having targeted something it did not. `choices=`
+    # is avoided so an unknown name answers through
+    # `scenarios.resolve_backend`, which says what this rig can target,
+    # rather than with argparse's "invalid choice", which reads as a typo.
     p_run.add_argument(
-        "--backend", choices=["emulated", "real"], default="emulated",
-        help="Solver backend the run targets. 'emulated' (default) is the "
-             "free-runner CPU stub and selects the full suite; 'real' is the "
-             "AWS GPU build and selects only backend-agnostic scenarios plus "
-             "real-only smokes (see the BACKENDS scenario gate).",
+        "--backend", required=True,
+        help="Solver backend the run targets. 'real' is a backend that "
+             "computes real physics, which is CUDA, Metal or the Rust CPU "
+             "backend depending on what the tree was built for (see the "
+             "BACKENDS scenario gate).",
     )
     p_run.add_argument(
         "--python",

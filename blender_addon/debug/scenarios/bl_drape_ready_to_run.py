@@ -13,9 +13,9 @@
 # What this scenario does:
 #   - Builds a 16x16 grid sheet pinned at its +x corners (the same
 #     shape as the project README's drape example, just smaller for
-#     the emulated runner).
+#     the runner).
 #   - Transfers + builds via the production ``prepare_upload`` path,
-#     waits for the emulated build to settle.
+#     waits for the build to settle.
 #   - Asserts ``SOLVER_OT_Run.poll`` returns True (Run is clickable),
 #     solver state is READY, and the server has echoed back the
 #     param + data hashes that ``prepare_upload`` shipped.
@@ -30,6 +30,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -53,7 +58,7 @@ def _build_drape_scene():
     # Wipe the default scene and create a minimal drape: a 16x16 grid
     # sheet pinned at the two +x corners, exactly the structure the
     # README's Blender Python example builds (just smaller for the
-    # emulated runner).
+    # runner).
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
@@ -101,7 +106,7 @@ try:
     dh.log(f"prepare_upload data_hash={pre_data_hash[:12]} "
            f"param_hash={pre_param_hash[:12]}")
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

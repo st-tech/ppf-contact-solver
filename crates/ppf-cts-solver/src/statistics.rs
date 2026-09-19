@@ -15,6 +15,34 @@ use ppf_cts_formats::statistics::{
 use crate::data::DataSet;
 use crate::mesh::MeshInfo;
 
+/// Whether this build actually RECORDS the per-object contact count.
+///
+/// IT IS A CLAIM ABOUT THE DISPATCHES RATHER THAN A SWITCH THAT CREATES THEM,
+/// and it is true because eleven device call sites deposit into
+/// `statistics_contact_count`: four in
+/// `kernels/contact/contact_narrow.kernel.cpp`, three in
+/// `kernels/contact/collision_narrow.kernel.cpp` and four in
+/// `kernels/contact/vertex_constraint.kernel.cpp`, each at an accepted
+/// contact's exit and each through a recorder in
+/// `kernels/contact/contact_statistics.kernel.cpp`. `driver::step` clears the
+/// counter once per Newton iteration ahead of the assembly passes and
+/// `driver::fetch` downloads it at the frame boundary, so the array the
+/// manifest below describes carries the last iteration's tally rather than a
+/// sum over the frame.
+///
+/// THE CHANNEL MUST NOT BE CLAIMED WHILE THIS IS FALSE. Dropping the eleven
+/// dispatches is licensed on its own: `driver/refusal.rs` states that a field
+/// carrying only telemetry needs no refusal, because a backend that records
+/// nothing into a statistics array "is missing a count, not solving a different
+/// problem". What that does not license is setting the validity bit anyway,
+/// which leaves a consumer unable to tell "this object touched nothing" from
+/// "nobody measured": the one bit carrying that distinction would be set either
+/// way, and the Blender panel would offer the channel and plot a flat zero. So
+/// both sites below, the per-object record and the manifest, take this same
+/// predicate.
+const CONTACT_COUNT_RECORDED: bool = true;
+
+
 pub struct TimelineStatistics {
     input: StatisticsInput,
     manifest: StatisticsManifest,
@@ -145,7 +173,7 @@ impl TimelineStatistics {
                 object_index: object.object_index,
                 ..Default::default()
             };
-            if !cfg!(feature = "emulated") {
+            if CONTACT_COUNT_RECORDED {
                 if let Some(&count) = dataset
                     .statistics_contact_count
                     .as_slice()
@@ -372,7 +400,10 @@ fn supported_channels(object: &ppf_cts_formats::statistics::StatisticsInputObjec
     if object.rod_range[1] > 0 {
         channels |= StatisticChannel::RodLength.bit() | StatisticChannel::LengthStretch.bit();
     }
-    if !cfg!(feature = "emulated") {
+    // THE MANIFEST MAKES THE SAME CLAIM THE RECORD DOES, so it takes the same
+    // predicate: a channel this build does not produce must be absent from
+    // both, or the panel offers it and plots the zeros.
+    if CONTACT_COUNT_RECORDED {
         channels |= StatisticChannel::ContactCount.bit();
     }
     channels

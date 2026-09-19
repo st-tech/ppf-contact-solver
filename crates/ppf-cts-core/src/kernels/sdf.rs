@@ -12,13 +12,15 @@
 // `sdf_types[i]` is 0 for sphere, 1 for capsule.
 //
 // Parallelism: rayon over the x-dimension of the grid (same as the
-// Python `prange` over `i`). The marching-cubes pass is intrinsically
+// Python `prange` over `i`), with four adjacent z samples per SIMD batch.
+// The marching-cubes pass is intrinsically
 // sequential because of the per-cube vertex deduplication (hashmap
 // keyed on (i, j, k, edge)).
 
 use std::collections::HashMap;
 
 use rayon::prelude::*;
+use wide::{f64x4, CmpGt, CmpLt};
 
 const SDF_SPHERE: i32 = 0;
 const SDF_CAPSULE: i32 = 1;
@@ -70,6 +72,37 @@ fn eval_min_at(x: f64, y: f64, z: f64, sdf_types: &[i32], sdf_params: &[f64]) ->
     min_dist
 }
 
+#[inline]
+fn eval_min_batch(x: f64, y: f64, z: f64x4, sdf_types: &[i32], sdf_params: &[f64]) -> f64x4 {
+    let mut min_dist = f64x4::splat(f64::INFINITY);
+    for (s, &t) in sdf_types.iter().enumerate() {
+        let p = &sdf_params[s * PARAMS_PER_SDF..(s + 1) * PARAMS_PER_SDF];
+        let pax = f64x4::splat(x - p[0]);
+        let pay = f64x4::splat(y - p[1]);
+        let paz = z - f64x4::splat(p[2]);
+        let d = if t == SDF_SPHERE {
+            (pax * pax + pay * pay + paz * paz).sqrt() - f64x4::splat(p[3])
+        } else {
+            let bax = f64x4::splat(p[3]);
+            let bay = f64x4::splat(p[4]);
+            let baz = f64x4::splat(p[5]);
+            let h = (pax * bax + pay * bay + paz * baz) / f64x4::splat(p[6]);
+            // Ordered comparisons preserve clamp's NaN and signed-zero behavior.
+            let zero = f64x4::splat(0.0);
+            let one = f64x4::splat(1.0);
+            let h = h.cmp_lt(zero).blend(zero, h);
+            let h = h.cmp_gt(one).blend(one, h);
+            let dx = pax - bax * h;
+            let dy = pay - bay * h;
+            let dz = paz - baz * h;
+            (dx * dx + dy * dy + dz * dz).sqrt() - f64x4::splat(p[7])
+        };
+        // Match the scalar union: ignore NaNs and keep the first equal distance.
+        min_dist = d.cmp_lt(min_dist).blend(d, min_dist);
+    }
+    min_dist
+}
+
 // ---------------------------------------------------------------------------
 // Grid eval.
 
@@ -91,13 +124,22 @@ pub fn eval_sdf_grid(
     let nz = zs.len();
     let total = nx * ny * nz;
     let mut grid = vec![0.0f64; total];
+    if total == 0 {
+        return grid;
+    }
 
     let stride_x = ny * nz;
     grid.par_chunks_mut(stride_x).enumerate().for_each(|(i, plane)| {
         let x = xs[i];
         for j in 0..ny {
             let y = ys[j];
-            for k in 0..nz {
+            let batched = nz / 4 * 4;
+            for k in (0..batched).step_by(4) {
+                let z = f64x4::new([zs[k], zs[k + 1], zs[k + 2], zs[k + 3]]);
+                let values = eval_min_batch(x, y, z, sdf_types, sdf_params).to_array();
+                plane[j * nz + k..j * nz + k + 4].copy_from_slice(&values);
+            }
+            for k in batched..nz {
                 let z = zs[k];
                 plane[j * nz + k] = eval_min_at(x, y, z, sdf_types, sdf_params);
             }
@@ -539,6 +581,162 @@ pub fn marching_cubes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scalar_grid(
+        xs: &[f64], ys: &[f64], zs: &[f64], types: &[i32], params: &[f64],
+    ) -> Vec<f64> {
+        let mut grid = vec![0.0; xs.len() * ys.len() * zs.len()];
+        if grid.is_empty() {
+            return grid;
+        }
+        grid.par_chunks_mut(ys.len() * zs.len()).enumerate().for_each(|(i, plane)| {
+            let x = xs[i];
+            for j in 0..ys.len() {
+                let y = ys[j];
+                for k in 0..zs.len() {
+                    let z = zs[k];
+                    plane[j * zs.len() + k] = eval_min_at(x, y, z, types, params);
+                }
+            }
+        });
+        grid
+    }
+
+    fn assert_grid_bits(xs: &[f64], ys: &[f64], zs: &[f64], types: &[i32], params: &[f64]) {
+        let expected = scalar_grid(xs, ys, zs, types, params);
+        let actual = eval_sdf_grid(xs, ys, zs, types, params);
+        assert_eq!(actual.len(), xs.len() * ys.len() * zs.len());
+        for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "grid[{i}]: {a} != {b}");
+        }
+    }
+
+    #[test]
+    fn batched_grid_matches_scalar() {
+        let xs = [-3.0, -0.0, 0.125, 2.0];
+        let ys = [-1.25, 0.0, 0.75];
+        let zs = [-4.0, -1.0, -0.0, 0.0, 0.125, 0.5, 1.0, 2.0, 5.0, 9.0, 11.0];
+        let types = [SDF_SPHERE, SDF_CAPSULE, -7, SDF_SPHERE];
+        let params = [
+            0.125, 0.25, -0.5, 0.75, 0.0, 0.0, 0.0, 0.0,
+            -1.0, 0.5, -2.0, 2.0, -1.0, 4.0, 21.0, 0.125,
+            0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 4.0, 0.5,
+            1.0, 2.0, 3.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        // All tail lengths, no primitives, and mixed/unknown primitive tags.
+        for nz in 0..=zs.len() {
+            for count in 0..=types.len() {
+                assert_grid_bits(&xs, &ys, &zs[..nz], &types[..count], &params[..count * 8]);
+            }
+        }
+        assert_grid_bits(&[], &ys, &zs, &types, &params);
+        assert_grid_bits(&xs, &[], &zs, &types, &params);
+    }
+
+    #[test]
+    fn batched_grid_preserves_exceptional_values() {
+        let coordinates = [
+            -0.0, 0.0, f64::MIN_POSITIVE, f64::from_bits(1),
+            -1.0, 1.0, f64::MAX, f64::NEG_INFINITY, f64::INFINITY, f64::NAN,
+        ];
+        let primitives = [
+            (SDF_SPHERE, [0.0; 8]),
+            (SDF_SPHERE, [0.0, 0.0, 0.0, -0.0, 0.0, 0.0, 0.0, 0.0]),
+            (SDF_SPHERE, [0.0, 0.0, 0.0, f64::NAN, 0.0, 0.0, 0.0, 0.0]),
+            (SDF_CAPSULE, [0.0; 8]),
+            (SDF_CAPSULE, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5]),
+            (SDF_CAPSULE, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, f64::NAN, 0.5]),
+            (SDF_CAPSULE, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.5]),
+        ];
+        for &(first_type, first) in &primitives {
+            for &(second_type, second) in &primitives {
+                let params: Vec<_> = first.into_iter().chain(second).collect();
+                assert_grid_bits(
+                    &coordinates, &coordinates, &coordinates,
+                    &[first_type, second_type], &params,
+                );
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn batched_grid_matches_random_scalar_samples(
+            xs in proptest::collection::vec(-100.0f64..100.0, 1..5),
+            ys in proptest::collection::vec(-100.0f64..100.0, 1..5),
+            zs in proptest::collection::vec(-100.0f64..100.0, 1..20),
+            primitives in proptest::collection::vec(
+                (0i32..3, proptest::array::uniform8(-10.0f64..10.0)), 0..12,
+            ),
+        ) {
+            let types: Vec<_> = primitives.iter().map(|(t, _)| *t).collect();
+            let params: Vec<_> = primitives.iter().flat_map(|(_, p)| *p).collect();
+            assert_grid_bits(&xs, &ys, &zs, &types, &params);
+        }
+    }
+
+    #[test]
+    #[ignore = "release-mode timing experiment; run with --ignored --nocapture"]
+    fn benchmark_grid_batching() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            pool.install(|| {
+                for n in [16, 65, 128] {
+                    let axis: Vec<_> = (0..n).map(|i| -2.0 + 4.0 * i as f64 / n as f64).collect();
+                    for (kind, count) in ["sphere", "capsule", "mixed"].into_iter()
+                        .flat_map(|kind| [1, 8, 32].map(|count| (kind, count)))
+                    {
+                        let types: Vec<_> = (0..count).map(|i| match kind {
+                            "sphere" => SDF_SPHERE,
+                            "capsule" => SDF_CAPSULE,
+                            _ => i % 2,
+                        }).collect();
+                        let params: Vec<_> = (0..count).flat_map(|i| {
+                            let c = i as f64 / count as f64;
+                            if types[i as usize] == SDF_SPHERE {
+                                [c, -c, c * 0.5, 0.25, 0.0, 0.0, 0.0, 0.0]
+                            } else {
+                                [c, -c, c * 0.5, 0.5, 0.25, -0.5, 0.5625, 0.125]
+                            }
+                        }).collect();
+                        assert_grid_bits(&axis, &axis, &axis, &types, &params);
+                        let run = |simd| {
+                            let f = if simd { eval_sdf_grid } else { scalar_grid };
+                            black_box(f(
+                                black_box(&axis), black_box(&axis), black_box(&axis),
+                                black_box(&types), black_box(&params),
+                            ));
+                        };
+                        run(false);
+                        run(true);
+                        let repeats = if n == 16 { 100 } else { 1 };
+                        let mut scalar = Vec::new();
+                        let mut simd = Vec::new();
+                        for round in 0..9 {
+                            for vector in [round % 2 == 0, round % 2 != 0] {
+                                let start = Instant::now();
+                                for _ in 0..repeats {
+                                    run(vector);
+                                }
+                                let elapsed = start.elapsed().as_secs_f64() * 1000.0 / repeats as f64;
+                                if vector { simd.push(elapsed); } else { scalar.push(elapsed); }
+                            }
+                        }
+                        scalar.sort_by(f64::total_cmp);
+                        simd.sort_by(f64::total_cmp);
+                        println!(
+                            "threads={threads} n={n} kind={kind} primitives={count} scalar_ms={:.4} simd_ms={:.4} speedup={:.3} scalar_range={:.4}..{:.4} simd_range={:.4}..{:.4}",
+                            scalar[4], simd[4], scalar[4] / simd[4],
+                            scalar[0], scalar[8], simd[0], simd[8],
+                        );
+                    }
+                }
+            });
+        }
+    }
 
     fn linspace(a: f64, b: f64, step: f64) -> Vec<f64> {
         let n = ((b - a) / step).floor() as usize + 1;

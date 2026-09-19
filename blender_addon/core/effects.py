@@ -30,7 +30,7 @@ class Effect:
 @dataclass(frozen=True)
 class DoConnect(Effect):
     """Open a connection to the remote host."""
-    backend_type: str = ""       # "ssh" | "docker" | "local" | "win_native"
+    backend_type: str = ""       # "ssh" | "docker" | "local" | "win_native" | "mac_native"
     config: dict = field(default_factory=dict)
     server_port: int = 0
 
@@ -55,10 +55,15 @@ class DoLaunchServer(Effect):
 
     ``cuda_device`` is the display index and ``cuda_device_uuid`` the stable
     launch identity. Automatic uses -1 and an empty UUID.
+
+    ``device`` and ``gpu_backend`` name which BUILD a remote server comes out
+    of, empty for "whatever the backend holds". See ``StartServerRequested``.
     """
 
     cuda_device: int = -1
     cuda_device_uuid: str = ""
+    device: str = ""
+    gpu_backend: str = ""
 
 
 @dataclass(frozen=True)

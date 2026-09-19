@@ -403,9 +403,7 @@ and scrubbing walks the run. Which rows appear depends on the object:
   to the same measure on the run's first frame, so `102%` beside a
   surface area means the sheet has stretched two percent since it
   started.
-- **Contact Count** is abbreviated past a thousand (`12K`, `1.5M`). An
-  emulated build counts no contacts, so on one of those the row reads
-  `N/A`.
+- **Contact Count** is abbreviated past a thousand (`12K`, `1.5M`).
 
 A frame that has not been fetched has no record: every row reads `N/A`
 and **Export CSV** is grayed out. **Clear Local Animation** deletes the
@@ -538,8 +536,9 @@ to the host where the original run lives.
 ### Port-in-Use on Reconnect
 
 When you restart Blender while a previous `ppf-cts-server` is still
-listening on the configured port (typical for Windows Native, where
-the add-on owns the spawn), **Connect** does not error out: the add-on
+listening on the configured port (typical for Windows Native and macOS
+Native, where the add-on owns the spawn), **Connect** does not error
+out: the add-on
 probes the port with a minimal TCMD ping, and if the response
 identifies a live `ppf-cts-server`, it attaches to that process
 instead of spawning a new one. Your previous run is still there,

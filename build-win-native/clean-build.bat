@@ -14,8 +14,9 @@ set BUILD_WIN=%BUILD_WIN:~0,-1%
 for %%I in ("%BUILD_WIN%\..") do set SRC=%%~fI
 
 echo.
-echo Removing C++/CUDA build output...
-if exist "%SRC%\crates\ppf-cts-solver\src\cpp\build" rmdir /S /Q "%SRC%\crates\ppf-cts-solver\src\cpp\build"
+echo Removing C++/CUDA and ROCm build output...
+if exist "%SRC%\crates\ppf-cts-compute\cuda\build" rmdir /S /Q "%SRC%\crates\ppf-cts-compute\cuda\build"
+if exist "%SRC%\crates\ppf-cts-compute\rocm\build" rmdir /S /Q "%SRC%\crates\ppf-cts-compute\rocm\build"
 
 echo Removing Rust build output...
 if exist "%SRC%\target" rmdir /S /Q "%SRC%\target"

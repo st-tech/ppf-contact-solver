@@ -12,51 +12,74 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// What the add-on's "Remote Hardware" block renders, one row per field that is
+/// present.
+///
+/// A FIELD THAT DOES NOT APPLY TO THIS BACKEND IS ABSENT, NOT "Unknown". Every
+/// GPU field here except the backend name describes an NVIDIA device, so on a
+/// Metal or CPU build they used to reach the panel as four rows reading
+/// `Unknown` and one headed `CUDA`, which says the server could not find its
+/// hardware when the truth is that the question does not arise. `Option` plus
+/// `skip_serializing_if` is what removes the row rather than filling it with a
+/// word the reader has to discount, and it leaves "Unknown" meaning what it
+/// should: a probe that applied and failed.
+///
+/// The add-on renders whatever keys arrive, in this order, so field order here
+/// is row order there.
 pub struct HardwareInfo {
-    #[serde(rename = "GPU")]
-    pub gpu: String,
+    /// Which backend this server's build targets: `cuda`, `metal`, `rocm` or
+    /// `cpu`.
+    ///
+    /// FIRST, AND ALWAYS PRESENT, because it is what tells a reader why the
+    /// rows below it are the ones they are. It also lets the add-on decide
+    /// whether a CUDA-shaped question applies at all, instead of inferring that
+    /// from its own connection type, which is right only for a locally
+    /// launched server.
+    #[serde(rename = "Backend")]
+    pub backend: String,
+    #[serde(rename = "GPU", default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<String>,
+    /// The Metal GPU family, for example `Apple8`. The analogue of the `SM`
+    /// row below, and absent for the same reason that one is: neither concept
+    /// exists on the other's backend.
+    #[serde(rename = "GPU Family", default, skip_serializing_if = "Option::is_none")]
+    pub gpu_family: Option<String>,
     /// CUDA index of the device the solver will run on, or -1 when no device
     /// could be resolved. The add-on compares it against the GPU it picked, so
     /// what it shows is the server's own answer rather than its own intent,
     /// which is the only thing that holds when the add-on attached to a server
-    /// it did not launch.
-    #[serde(rename = "GPU Index", default = "unknown_gpu_index")]
-    pub gpu_index: i64,
-    #[serde(rename = "VRAM")]
-    pub vram: String,
-    #[serde(rename = "CUDA")]
-    pub cuda: String,
-    #[serde(rename = "SM")]
-    pub sm: String,
+    /// it did not launch. Absent on backends that have no such index.
+    #[serde(rename = "GPU Index", default, skip_serializing_if = "Option::is_none")]
+    pub gpu_index: Option<i64>,
+    #[serde(rename = "VRAM", default, skip_serializing_if = "Option::is_none")]
+    pub vram: Option<String>,
+    #[serde(rename = "CUDA", default, skip_serializing_if = "Option::is_none")]
+    pub cuda: Option<String>,
+    #[serde(rename = "SM", default, skip_serializing_if = "Option::is_none")]
+    pub sm: Option<String>,
     #[serde(rename = "CPU")]
     pub cpu: String,
     #[serde(rename = "RAM")]
     pub ram: String,
-    /// True when the server was compiled with the `emulated` feature
-    /// (the CPU stub backend used by the test rig, no CUDA). The addon
-    /// reads this off every status response to warn before running a
-    /// simulation that would not produce real physics.
-    #[serde(rename = "emulated", default)]
-    pub emulated: bool,
-}
-
-/// Sentinel for "no CUDA device resolved", shared by the serde default and
-/// [`HardwareInfo::default`].
-fn unknown_gpu_index() -> i64 {
-    -1
 }
 
 impl Default for HardwareInfo {
+    /// The backend is filled from THIS build rather than left blank, so a
+    /// server that never ran a probe still names it correctly. CPU and RAM stay
+    /// "Unknown" because their probe applies on every backend and may fail; the
+    /// GPU fields start absent because on two of the three backends they never
+    /// become anything else.
     fn default() -> Self {
         Self {
-            gpu: "Unknown".into(),
-            gpu_index: unknown_gpu_index(),
-            vram: "Unknown".into(),
-            cuda: "Unknown".into(),
-            sm: "Unknown".into(),
+            backend: ppf_cts_core::utils::backend().name().into(),
+            gpu: None,
+            gpu_family: None,
+            gpu_index: None,
+            vram: None,
+            cuda: None,
+            sm: None,
             cpu: "Unknown".into(),
             ram: "Unknown".into(),
-            emulated: false,
         }
     }
 }
@@ -93,6 +116,13 @@ pub struct EngineConfig {
     /// uploads in its own tempdir without racing on a process-global
     /// env var.
     pub data_root: Option<PathBuf>,
+    /// The cargo target directory this server's runs take the solver from,
+    /// absolute, or empty when the build worker cannot be located. See
+    /// `executor::solver_build`, which fills it at startup.
+    pub solver_target_dir: String,
+    /// What the solver in `solver_target_dir` printed for `--backend`, or
+    /// empty when there is no solver there or it could not be asked.
+    pub solver_backend: String,
 }
 
 impl Default for EngineConfig {
@@ -105,6 +135,8 @@ impl Default for EngineConfig {
             accept_backoff_ms: 50,
             log_filenames: Vec::new(),
             data_root: None,
+            solver_target_dir: String::new(),
+            solver_backend: String::new(),
         }
     }
 }

@@ -20,12 +20,9 @@
 # SCHEDULE path is instead scaled once in the encoder and left alone by the
 # solver; see bl_world_scaling_velocity_schedule.) Because this is a single
 # frame-1 impulse followed by pure drift, the test also guards that the
-# emulator carries momentum across steps: a7ffd916's frame-time
-# interpolation zeroed it until the emulator curr->prev snapshot was gated
+# solver carries momentum across steps: a7ffd916's frame-time
+# interpolation zeroed it until the solver curr->prev snapshot was gated
 # off the elastic path.
-#
-# (The emulator integrates injected velocity only with its implicit
-# ARAP step enabled, hence PPF_EMULATED_ELASTIC=1.)
 
 from __future__ import annotations
 
@@ -35,7 +32,13 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_ELASTIC": "1", "PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""

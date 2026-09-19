@@ -5,11 +5,10 @@ against a freshly built Windows solver. Both test the same production
 code paths; one runs standalone, the other drives the full addon inside
 a headless Blender session.
 
-They were written to verify commit **24a9372d** ("Fix Windows-native
-backend, compile, and bundle") and are the regression guard if anyone
-touches `WinNativeBackend`, the three `win_native` branches in
-`blender_addon/core/effect_runner.py`, or anything in
-`build-win-native/bundle.bat` that changes what lands in the dist tree.
+They are the regression guard if anyone touches `WinNativeBackend`, the
+three `win_native` branches in `blender_addon/core/effect_runner.py`, or
+anything in `build-win-native/bundle.bat` that changes what lands in the
+dist tree.
 
 ## Layouts
 
@@ -26,14 +25,15 @@ exactly what these tests exercise.
 
 ## Prerequisites
 
-All of these run on the Windows box (`ssh win-build`). The host side
-needs none of them — the scripts are SSH-ed in.
+All of these run on the Windows machine, reached below as `win-build`.
+The host side needs none of them, since the scripts are SSH-ed in.
 
-1. **Build done.** `build.bat` has run and produced
-   `target/release/ppf-cts-server.exe` (the Rust solver host the addon
-   spawns and talks to over the CBOR socket) +
-   `crates/ppf-cts-solver/src/cpp/build/lib/libsimbackend_cuda.dll`
-   (the CUDA backend DLL the server loads).
+1. **Build done.** `build.bat` has run and produced, for each backend in
+   `PPF_WIN_BACKENDS`, `target\<backend>\release\ppf-cts-server.exe` (the Rust
+   solver host the addon spawns and talks to over the CBOR socket) +
+   `crates\ppf-cts-compute\cuda\build\lib\libsimbackend_cuda.dll` or
+   `crates\ppf-cts-compute\rocm\build\lib\libppfbe_rocm.dll` (the backend
+   library that server loads).
 2. **(Bundle tests)** `bundle.bat` has run and populated
    `build-win-native/dist/`.
 3. **(E2E tests)** Blender 5.0 at
@@ -148,18 +148,17 @@ ssh win-build 'rmdir /s /q C:\ppf-contact-solver\build-win-native\dist\session 2
 
 ## What these tests actually protect
 
-Regression coverage for the fixes landed in **24a9372d**:
+Regression coverage for the Windows-native backend:
 
 | Production change | Unit test covers | E2E test covers |
 |---|:---:|:---:|
 | `core/effect_runner.py:_do_validate_path` win_native branch (os.path.isfile) | — | ✓ |
 | `core/effect_runner.py:_do_stop_server` win_native branch (backend.stop_server()) | ✓ | ✓ |
 | `core/effect_runner.py:_count_remote_frames` win_native branch (glob.glob) | ✓ | — |
-| `core/backends.py:WinNativeBackend.stop_server` new method | ✓ | ✓ |
+| `core/backends.py:WinNativeBackend.stop_server` | ✓ | ✓ |
 | `core/connection.py:connect_win_native` layout autodetect (dev vs bundle) | ✓ | ✓ |
 | `ui/connection_ops.py` port threading | — | ✓ (via T2_PORT) |
-| `crates/ppf-cts-solver/src/cpp/main/main.cu` invalidate_inactive_aabbs linkage fix | — (just lets `build.bat` succeed) | — |
-| `build-win-native/bundle.bat` `server/` package copy | indirectly (bundle run fails without) | indirectly |
+| `build-win-native/bundle.bat` solver, server and cdylib copy | indirectly (bundle run fails without) | indirectly |
 
 If either test starts failing, check the table above to scope the
 regression before blaming the tests.

@@ -36,14 +36,19 @@ class ScenarioContext:
     timeout: float = 30.0
     log_path: str = ""
     artifacts: dict[str, Any] = field(default_factory=dict)
-    # Solver backend the run targets ("emulated" or "real"), as selected
-    # by ``runtests --backend``. A scenario registered for both reads this
-    # to assert the behavior its backend actually promises: the emulated
-    # stub skips contact assembly, so channels that only the real solver
-    # produces are absent there and present here.
-    backend: str = "emulated"
+    # Solver backend the run targets, as selected by
+    # ``runtests --backend``. A scenario reads this to assert the behavior
+    # its backend actually promises.
+    #
+    # The default is the non-backend sentinel "unset", NOT a backend name.
+    # A default here would label a run it never
+    # been removed; the orchestrator passes this field on every path, so a
+    # default that names a real backend only serves to mislabel a context
+    # built some other way. A scenario that branches on it should treat an
+    # unrecognized value as a bug, not as a backend.
+    backend: str = "unset"
     # Knobs propagated to the spawned server. The scenario can read these
-    # to gate behavior (e.g. solver_crash needs PPF_FAKE_SOLVER_CRASH_FRAME)
+    # to gate behavior (e.g. solver_crash needs FAKE_SOLVER_CRASH_FRAME)
     # without trying to introspect a foreign process's environment.
     knobs: dict[str, str] = field(default_factory=dict)
 

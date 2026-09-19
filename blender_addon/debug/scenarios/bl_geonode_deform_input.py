@@ -22,10 +22,10 @@
 #         PC2 frame 0 (scene frame 1) shows the deformed interior, not
 #         the flat rest mesh the gap-fill used to write.
 #   D. pinned_edge_not_double_counted:
-#         across the run the emulated kinematic pin lands at the
+#         across the run the kinematic pin lands at the
 #         captured wave amplitude, not ~2x it.
 #
-# The emulated solver moves only kinematic pins (free verts stay at the
+# The solver moves only kinematic pins (free verts stay at the
 # encoded initial), so every number here is deterministic on macOS
 # without a CUDA runtime.
 
@@ -37,6 +37,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 12
@@ -232,9 +237,9 @@ try:
     pin_item.has_captured_anim = True
     pin_ops._ensure_embedded_move_op(pin_item)
 
-    # ---- run the emulated solve --------------------------------------
+    # ---- run the solve --------------------------------------
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="geonode:build")
@@ -260,7 +265,7 @@ try:
     )
 
     # ---- D: pinned edge tracks the captured wave (single) ------------
-    # The emulated kinematic pin lands at the decoder's per-frame
+    # The kinematic pin lands at the decoder's per-frame
     # target. With initial == cache[0] the delta track telescopes to
     # the exact geometry-nodes wave, so the edge amplitude matches the
     # GN wave every frame. A double count would show ~2x; the rejected

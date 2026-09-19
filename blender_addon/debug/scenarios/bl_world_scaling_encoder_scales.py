@@ -23,11 +23,10 @@
 #     world_scaling to keep the scheduled launch physical.
 #
 # This rig encodes the SAME scene at world_scaling = 1 and = 10 and
-# inspects the decoded param to assert exactly those behaviors. It is the
-# contact-gap and velocity-scaling coverage the emulated solver cannot
-# provide: the CUDA-free emulator has no contact pipeline (gaps never
-# affect its output) and applies the vel.bin scaling on the solver side,
-# but the encoder's scaling math is observable directly here.
+# inspects the decoded param to assert exactly those behaviors. It reads the
+# ENCODER's scaling math directly, which is what makes the contact-gap and
+# velocity terms observable at all: in a solve they are consumed downstream
+# and only their effect on the output would show.
 #
 # Subtests:
 #   A. relative_gap_scales        - relative contact-gap goes 10x.
@@ -43,6 +42,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

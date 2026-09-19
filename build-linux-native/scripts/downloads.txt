@@ -1,0 +1,162 @@
+# File: build-linux-native/scripts/downloads.txt
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Single source of truth for every external download build-linux-native/
+# performs, except the ffmpeg sources (see below). Format is plain KEY=VALUE,
+# read by scripts/load-downloads.sh and probed by scripts/check-downloads.sh,
+# which warmup.sh runs BEFORE it fetches anything. No URL belongs in any other
+# file under build-linux-native/.
+#
+# A fetched file pairs URL_* with FILE_*, and carries SHA256_* when the thing
+# the URL names is immutable. warmup.sh checks SHA256_* against the file on
+# every run that provisions from it, whether this run downloaded the file or
+# found a copy already in downloads/. That is what lets a host with no route to
+# these hosts provision from a relayed downloads/ directory: an entry whose file
+# is present and matches its hash is not probed and not fetched. To bump a tool,
+# edit that entry's lines together, then run scripts/check-downloads.sh.
+#
+# THE FFMPEG SOURCES ARE NOT HERE. URL_FFMPEG_GIT, FFMPEG_TAG, URL_X264_GIT,
+# X264_COMMIT and the zlib entry live in build-win-native/scripts/downloads.txt,
+# which the Windows build and .github/workflows/scripts/make-slim-ffmpeg.sh
+# already read. A copy here is how two platforms come to pin different ffmpeg
+# revisions.
+
+# rustup's installer for Unix hosts. warmup.sh fetches it only when the host has
+# no cargo, and installs into build-linux-native/rust with CARGO_HOME and
+# RUSTUP_HOME pointed there.
+#
+# No SHA256_ on purpose: sh.rustup.rs serves whatever rustup released most
+# recently, so a pinned hash would go stale at rustup's next release. warmup.sh
+# deletes a failed transfer rather than leaving it in downloads/, because the
+# file is handed to sh and a truncated shell script runs the part that arrived.
+URL_RUSTUP=https://sh.rustup.rs
+FILE_RUSTUP=rustup-init.sh
+
+# PER-ARCHITECTURE ENTRIES carry an _X86_64 or _AARCH64 suffix on every key.
+# scripts/platform.sh selects the host's, and warmup.sh and bundle.sh read the
+# selected ones without the suffix (URL_PYTHON, FILE_PATCHELF). A host has no
+# fallback to another architecture's file, which it could not run.
+
+# The interpreter bundle.sh ships INSIDE the distribution, so a user needs no
+# Python of their own. A python-build-standalone install_only build, which is
+# relocatable by construction and needs glibc 2.17 or newer. Same series and
+# release as the macOS pin in build-mac-native/scripts/downloads.txt.
+#
+# The URL spells the version separator %2B and the filename spells the literal
+# + the extracted file carries; each spelling is the one its consumer needs.
+# Each SHA256 is the digest GitHub publishes for the asset; for x86_64 that is
+# also the file's line in the release's own SHA256SUMS asset.
+URL_PYTHON_X86_64=https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-x86_64-unknown-linux-gnu-install_only.tar.gz
+FILE_PYTHON_X86_64=cpython-3.12.14+20260901-x86_64-unknown-linux-gnu-install_only.tar.gz
+SHA256_PYTHON_X86_64=936c246dfdbbfa7cb22dd01814a21f582a892689fae96b06071a5e433baffa22
+
+URL_PYTHON_AARCH64=https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-unknown-linux-gnu-install_only.tar.gz
+FILE_PYTHON_AARCH64=cpython-3.12.14+20260901-aarch64-unknown-linux-gnu-install_only.tar.gz
+SHA256_PYTHON_AARCH64=b61b856c3e1a4fc65b8f6e6b0495ef975dd0924f90c59f3ea61b38a079173b84
+
+# patchelf, which bundle.sh uses to rewrite library search paths. A static
+# release binary; the hash is the digest GitHub publishes for this asset.
+URL_PATCHELF_X86_64=https://github.com/NixOS/patchelf/releases/download/0.19.1/patchelf-0.19.1-x86_64.tar.gz
+FILE_PATCHELF_X86_64=patchelf-0.19.1-x86_64.tar.gz
+SHA256_PATCHELF_X86_64=a6818fef80128fb354423234ecacdcca3e993913d774e5d8346bc63f70fed4cf
+
+URL_PATCHELF_AARCH64=https://github.com/NixOS/patchelf/releases/download/0.19.1/patchelf-0.19.1-aarch64.tar.gz
+FILE_PATCHELF_AARCH64=patchelf-0.19.1-aarch64.tar.gz
+SHA256_PATCHELF_AARCH64=a2f8f5add5910a521d35062adf2c9f55d75b65ae5508d290758787004054e702
+
+# nasm, the assembler x264 needs for its x86 code, built from source into
+# build-linux-native/nasm only on x86_64 and only when the host has no nasm 2.13
+# or newer. nasm.us publishes no checksum
+# file beside the archive, so this hash was computed from the file downloaded on
+# 2026-09-14 and pins that exact archive rather than certifying its origin.
+URL_NASM=https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz
+FILE_NASM=nasm-2.16.03.tar.xz
+SHA256_NASM=1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148
+
+# SOURCE-BUILT WHEELS. A frontend package this architecture has no binary wheel
+# for is built from its upstream source at a pinned commit by
+# scripts/source-wheel.sh, and its source is never copied into this repository.
+# scripts/platform.sh names which packages that is on each architecture. Every pin
+# is a COMMIT, because a tag can be moved, and a submodule's commit is pinned as
+# well and checked against the one its parent tree records. A repository pairs
+# URL_*_GIT with *_COMMIT and has no FILE_*.
+#
+# triangle, on aarch64: no release has published an aarch64 wheel, and its last
+# source distribution is 20200424. The commit is the v20250106 tag, the release
+# the frontend installs from PyPI on x86_64; TRIANGLE_C_COMMIT is the triangle-c
+# commit that tree records for its `c` submodule.
+URL_TRIANGLE_GIT=https://github.com/drufat/triangle
+TRIANGLE_COMMIT=595b43eb6682992a0b1012b9671bf860c0e6ae56
+URL_TRIANGLE_C_GIT=https://github.com/drufat/triangle-c
+TRIANGLE_C_COMMIT=8b9e1046e5cddab1298d3204f10c93665836cf99
+
+# THE CUDA 12.8 TOOLKIT, AS NVIDIA'S PER-COMPONENT REDISTRIBUTABLE ARCHIVES.
+#
+# One set per architecture, read only when CUDA is among the backends
+# (scripts/platform.sh): NVIDIA's linux-x86_64 platform, and linux-sbsa, its
+# aarch64 server platform (Grace, Ampere Altra and Graviton hosts). Each
+# component carries the _<ARCH_KEY> suffix of the architecture it runs on.
+#
+# warmup.sh extracts every URL_CUDA_*_<ARCH_KEY> entry for its host into
+# build-linux-native/cuda, with no installer and no root. They are the four
+# pieces .github/workflows/both-backends.yml installs by apt for the same build:
+# the compiler, the runtime headers and library, and cuobjdump and nvdisasm,
+# which the release build's FP64 SASS guard reads. Adding a component is adding
+# one entry per architecture here; warmup.sh iterates the URL_CUDA_ keys.
+#
+# The versions are the components of the CUDA 12.8.1 release. The hashes are
+# the sha256 fields of NVIDIA's redistrib_12.8.1.json manifest for these files.
+# The linux-sbsa hashes were read on 2026-09-15 from the verbatim copy of that
+# manifest nixpkgs keeps (pkgs/development/cuda-modules/_cuda/manifests/cuda/),
+# after its linux-x86_64 hashes were checked equal to the four pinned below, and
+# warmup.sh verifies every downloaded archive against them.
+URL_CUDA_NVCC_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.8.93-archive.tar.xz
+FILE_CUDA_NVCC_X86_64=cuda_nvcc-linux-x86_64-12.8.93-archive.tar.xz
+SHA256_CUDA_NVCC_X86_64=9961b3484b6b71314063709a4f9529654f96782ad39e72bf1e00f070db8210d3
+URL_CUDA_NVCC_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-sbsa/cuda_nvcc-linux-sbsa-12.8.93-archive.tar.xz
+FILE_CUDA_NVCC_AARCH64=cuda_nvcc-linux-sbsa-12.8.93-archive.tar.xz
+SHA256_CUDA_NVCC_AARCH64=dc0b713ce69fd921aa53ac68610717d126fc273a3c554b0465cf44d7e379f467
+
+URL_CUDA_CUDART_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.8.90-archive.tar.xz
+FILE_CUDA_CUDART_X86_64=cuda_cudart-linux-x86_64-12.8.90-archive.tar.xz
+SHA256_CUDA_CUDART_X86_64=8d566b5fe745c46842dc16945cf36686227536decd2302c372be86da37faca68
+URL_CUDA_CUDART_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-sbsa/cuda_cudart-linux-sbsa-12.8.90-archive.tar.xz
+FILE_CUDA_CUDART_AARCH64=cuda_cudart-linux-sbsa-12.8.90-archive.tar.xz
+SHA256_CUDA_CUDART_AARCH64=9e54c6686b193efa9642e7f6609ce78b064c5d576946478bcff4c024e1acdea7
+
+URL_CUDA_CUOBJDUMP_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-12.8.90-archive.tar.xz
+FILE_CUDA_CUOBJDUMP_X86_64=cuda_cuobjdump-linux-x86_64-12.8.90-archive.tar.xz
+SHA256_CUDA_CUOBJDUMP_X86_64=dbf41355a0f7a8aa491c1839a6c6ff8df02cdb6c6eefd66360543616c1b4980f
+URL_CUDA_CUOBJDUMP_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-sbsa/cuda_cuobjdump-linux-sbsa-12.8.90-archive.tar.xz
+FILE_CUDA_CUOBJDUMP_AARCH64=cuda_cuobjdump-linux-sbsa-12.8.90-archive.tar.xz
+SHA256_CUDA_CUOBJDUMP_AARCH64=8be3b7eb313c65353ccffdca94698c9f207e2889444ec1d38f41917654b6d234
+
+URL_CUDA_NVDISASM_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-x86_64/cuda_nvdisasm-linux-x86_64-12.8.90-archive.tar.xz
+FILE_CUDA_NVDISASM_X86_64=cuda_nvdisasm-linux-x86_64-12.8.90-archive.tar.xz
+SHA256_CUDA_NVDISASM_X86_64=8ac63f4079c47707ec958af3a97ceeb18194e16827a2766058f5872f6c3412ae
+URL_CUDA_NVDISASM_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-sbsa/cuda_nvdisasm-linux-sbsa-12.8.90-archive.tar.xz
+FILE_CUDA_NVDISASM_AARCH64=cuda_nvdisasm-linux-sbsa-12.8.90-archive.tar.xz
+SHA256_CUDA_NVDISASM_AARCH64=250ae30e878b0c4c1553e7c7f28c2c763902c807b5f493ebc16e6e10c71213f2
+
+# THE ROCm SDK, AS AMD'S TheRock DISTRIBUTION TARBALL.
+#
+# Read only when ROCm is among the backends (scripts/platform.sh), and x86_64
+# only: AMD publishes TheRock for x86_64 Linux and Windows hosts and nothing
+# else. It is the one version this project pins for both platforms. The
+# multiarch form carries the device libraries for every target rocm_arch.txt
+# names, and its runtime libraries find each other through $ORIGIN, which is what
+# lets bundle.sh ship them. warmup.sh unpacks it into build-linux-native/rocm.
+#
+# THIS CHANNEL PUBLISHES NO DIGEST AND NO SIGNATURE. The hash below was computed
+# on 2026-09-13 from the bytes fetched that day, which passed gzip -t, so it
+# detects a changed or truncated file and proves nothing about origin.
+#
+# ROCM_HIP_VERSION is the HIP release this SDK carries, which warmup.sh checks
+# hipcc against: the distribution version (10.0.0) and the HIP version (7.15)
+# are different numbers and only the second is printed by the compiler.
+URL_ROCM_SDK_X86_64=https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-multiarch-10.0.0.tar.gz
+FILE_ROCM_SDK_X86_64=therock-dist-linux-multiarch-10.0.0.tar.gz
+SHA256_ROCM_SDK_X86_64=1c5e807875d26a2470ecc7323daa5b5b9009208a55c3290ac255a909cde15fc6
+ROCM_HIP_VERSION=7.15

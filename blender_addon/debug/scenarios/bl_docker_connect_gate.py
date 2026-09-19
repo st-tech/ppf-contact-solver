@@ -53,7 +53,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Pure UI-gate and defaults logic; no solver is involved.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''

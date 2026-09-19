@@ -8,7 +8,7 @@
 #
 # These reuse the per-pin-op fidelity harness in
 # ``_pin_fidelity_common``: a fully pinned plane is driven by one
-# kinematic pin op, the emulated solver writes the per-frame PC2, and
+# kinematic pin op, the solver writes the per-frame PC2, and
 # the host diff compares the pinned-vertex trajectory against
 # ``frontend.FixedScene.time(t)`` -- the source of truth behind
 # ``frontend.preview()``.
@@ -21,9 +21,9 @@
 # on write. The Python ``frontend`` reconstruction is scale-agnostic
 # (it never reads "world-scaling"), so ``fixed.time(t)`` already yields
 # the authored-scale trajectory. Because the solver round-trips back to
-# authored scale too, the emulated PC2 must match ``fixed.time(t)``
-# directly with NO rescaling of either side -- to within the float
-# scale/unscale round-off. That equality, holding for world_scaling
+# authored scale too, the PC2 must match ``fixed.time(t)``
+# directly with NO rescaling of either side, to within the round-off of
+# the solver's own scale/unscale pair. That equality, holding for world_scaling
 # both above (10) and below (0.1) 1.0, is exactly what these rigs lock
 # in across the pin-op matrix (static, move_by, spin, scale).
 #
@@ -66,5 +66,5 @@ def build_driver(case: dict, ctx: r.ScenarioContext) -> str:
 def run(ctx: r.ScenarioContext, case: dict) -> dict:
     # The host diff is identical to the fidelity path: it reconstructs the
     # expected trajectory from the (scale-agnostic) frontend and compares
-    # it to the emulated PC2. No world_scaling handling is needed here.
+    # it to the PC2. No world_scaling handling is needed here.
     return _common.run(ctx, case)

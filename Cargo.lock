@@ -1001,6 +1001,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppf-cts-compute"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "rayon",
+]
+
+[[package]]
 name = "ppf-cts-core"
 version = "0.1.0"
 dependencies = [
@@ -1081,6 +1089,7 @@ dependencies = [
  "more-asserts",
  "nalgebra",
  "num_cpus",
+ "ppf-cts-compute",
  "ppf-cts-core",
  "ppf-cts-formats",
  "rayon",

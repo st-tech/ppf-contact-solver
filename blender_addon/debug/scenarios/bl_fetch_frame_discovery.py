@@ -28,9 +28,9 @@
 # ``force_frame_query`` until ``state.frame`` matches the run, so the
 # ``frame_count`` already handed in is correct and the override changes
 # nothing. Replacing the body with ``return 0`` therefore leaves the full-fetch
-# scenarios green (measured on ``bl_bend_anisotropy_uv``,
-# ``bl_fetch_failed_watchdog`` and ``bl_world_scaling_shell_drape``). This
-# scenario removes what masks it: it hands ``_do_fetch_frames`` a
+# scenarios green (measured on ``bl_fetch_failed_watchdog`` and
+# ``bl_world_scaling_shell_drape``, each of which builds, runs, fetches and
+# drains). This scenario removes what masks it: it hands ``_do_fetch_frames`` a
 # ``frame_count`` of 0, which leaves the discovery as the only thing that can
 # size the fetch.
 #
@@ -89,13 +89,17 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Both tiers. The discovery reads a directory the solver filled and nothing it
-# touches is backend-specific, so it holds over the emulated stub and over a
-# real CUDA solve, and both GPU legs run it. ``dh.connect`` picks LOCAL off
-# Windows and WIN_NATIVE on it; both take the same filesystem branch.
-BACKENDS = ("emulated", "real")
+# RUNS ON THE REAL BACKEND. The discovery reads a directory the solver filled
+# and nothing it touches is backend-specific, so it holds for any backend that
+# writes those frames. ``dh.connect`` picks LOCAL off Windows and WIN_NATIVE on
+# it; both take the same filesystem branch.
+BACKENDS = ("real",)
 
-KNOBS = {"PPF_EMULATED_STEP_MS": "0"}
+# NO KNOBS, and no pacing is wanted. This scenario does not observe a run in
+# progress: the eight frames a solve of this sheet takes arrive well inside the
+# waits below, and the discovery under test reads a directory listing. A
+# `PPF_STEP_DELAY_MS` here would buy nothing and slow the sweep.
+KNOBS = {}
 
 _FRAME_COUNT = 8
 

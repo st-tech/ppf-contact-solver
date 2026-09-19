@@ -186,14 +186,10 @@ try:
     result["data_size"] = len(data_bytes)
     result["param_size"] = len(param_bytes)
 
-    root.ssh_state.server_type = "LOCAL"
-    root.ssh_state.local_path = LOCAL_PATH
-    root.ssh_state.docker_port = SERVER_PORT
     com.set_project_name(CASE["name"])
-    log("before_connect_local")
-    com.connect_local(root.ssh_state.local_path,
-                      server_port=root.ssh_state.docker_port)
-    log("after_connect_local")
+    log("before_connect_native")
+    connect_platform_native(com, pkg, root.ssh_state, LOCAL_PATH, SERVER_PORT)
+    log("after_connect_native")
 
     deadline = time.time() + 30.0
     while time.time() < deadline:
@@ -428,9 +424,9 @@ try:
                     except ValueError:
                         continue
 
-    # Pull in the same emulator patches the build worker uses
+    # Pull in the same solver patches the build worker uses
     # (skip GPU check, redirect BlenderApp's data root to the
-    # PPF_CTS_DATA_ROOT shadow). ``blender_addon.debug.emulator``
+    # PPF_CTS_DATA_ROOT shadow). ``blender_addon.debug.solver``
     # would also work but importing under that path triggers
     # ``blender_addon/__init__.py`` which calls ``import bpy`` and
     # we're outside Blender here.

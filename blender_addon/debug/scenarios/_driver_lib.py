@@ -14,7 +14,7 @@
 # that every driver template prepends with
 # ``str.replace("<<DRIVER_LIB>>", DRIVER_LIB)``. The fragment
 # defines a ``DriverHelpers`` class; scenarios instantiate it and
-# call ``dh.connect_local(...)`` etc.
+# call ``dh.connect(...)`` etc.
 #
 # :data:`BUILD_FAILURE_LIB` is the leading slice of that fragment and
 # is also prependable on its own. It defines ``build_failure_message``
@@ -261,6 +261,54 @@ def build_failure_message(facade, com, *, prefix="build failed",
                    + f"\n<message capped, "
                      f"{len(message) - max_message_chars} chars elided>")
     return message
+
+
+# THE NATIVE CONNECTION FOR THIS MACHINE, for a driver that has no
+# DriverHelpers instance. `DriverHelpers.connect_native` is the same three
+# answers with the wait loop around them; a handful of scenarios drive the
+# pipeline directly and need only this part.
+PLATFORM_NATIVES = {
+    "win32": ("WIN_NATIVE", "win_native_path", "win_native"),
+    "darwin": ("MAC_NATIVE", "mac_native_path", "mac_native"),
+}
+PLATFORM_NATIVE_DEFAULT = ("LINUX_NATIVE", "linux_native_path", "linux_native")
+
+
+def platform_native():
+    # (server_type, path property, backend type) for the machine this runs on.
+    import sys as _sys
+    return PLATFORM_NATIVES.get(_sys.platform, PLATFORM_NATIVE_DEFAULT)
+
+
+def select_platform_native(pkg, ssh_state, path, port, device=None):
+    # Point ssh_state at this platform's native connection and return
+    # (backend type, device). The device is asked of the tree rather than
+    # assumed: a native connect refuses a root holding only the other device's
+    # build, by name, and which one a rig leg built varies (the macOS job
+    # builds the Rust CPU backend, the CUDA legs build a GPU one).
+    server_type, path_field, backend_type = platform_native()
+    ssh_state.server_type = server_type
+    setattr(ssh_state, path_field, path)
+    ssh_state.docker_port = port
+    if device is None:
+        conn = __import__(pkg + ".core.connection",
+                          fromlist=["native_resolvers"])
+        resolver = conn.native_resolvers(backend_type)[0]
+        device = "GPU" if resolver(path, "GPU") is not None else "CPU"
+    ssh_state.native_device = device
+    return backend_type, device
+
+
+def connect_platform_native(com, pkg, ssh_state, path, port, device=None):
+    # Ask the communicator for this platform's native connection.
+    backend_type, device = select_platform_native(pkg, ssh_state, path, port, device)
+    if backend_type == "win_native":
+        com.connect_win_native(path, port, device)
+    elif backend_type == "mac_native":
+        com.connect_mac_native(path, port, device)
+    else:
+        com.connect_linux_native(path, port, device)
+    return backend_type, device
 """
 
 
@@ -336,7 +384,7 @@ class DriverHelpers:
 
     def configure_state(self, *, project_name, frame_count, frame_rate=100,
                         step_size=0.01, gravity=(0.0, 0.0, 0.0)):
-        # Apply the standard test-rig state defaults so emulated runs
+        # Apply the standard test-rig state defaults so runs
         # are short, deterministic, and free of contact / wind / gravity
         # side effects unless the caller asks for them.
         root = self.groups.get_addon_data(bpy.context.scene)
@@ -353,14 +401,71 @@ class DriverHelpers:
 
     # -- connection / pipeline --
 
-    def connect_local(self, *, local_path, server_port, project_name,
-                      timeout=30.0):
+    # THE NATIVE CONNECTION FOR EACH PLATFORM, and the property names it uses.
+    # The rig connects the way an artist does, which after the Local connection
+    # was retired means the native type for the machine the rig is running on.
+    NATIVE_BY_PLATFORM = {
+        "win32": ("WIN_NATIVE", "win_native_path", "win_native"),
+        "darwin": ("MAC_NATIVE", "mac_native_path", "mac_native"),
+    }
+    NATIVE_DEFAULT = ("LINUX_NATIVE", "linux_native_path", "linux_native")
+
+    def platform_native(self):
+        # (server_type, path property, backend type) for this machine.
+        import sys as _sys
+        return self.NATIVE_BY_PLATFORM.get(_sys.platform, self.NATIVE_DEFAULT)
+
+    def resolve_native_device(self, backend_type, root):
+        # WHICH DEVICE THIS TREE ACTUALLY HOLDS A BUILD FOR, asked of the tree.
+        #
+        # The property defaults to GPU, and a native connect REFUSES a root
+        # that holds only the other device's build, by name. That is right for
+        # an artist and wrong to hard-code in a rig that runs on every leg:
+        # the macOS job builds the Rust CPU backend, so a rig pinned to GPU
+        # would refuse every connection on it, and a rig pinned to CPU would
+        # refuse every connection on the CUDA legs. Asking the resolver is the
+        # same question the panel's own device row asks, so the rig also
+        # exercises it rather than working around it.
+        conn = __import__(self.pkg + ".core.connection",
+                          fromlist=["native_resolvers"])
+        resolver = conn.native_resolvers(backend_type)[0]
+        return "GPU" if resolver(root, "GPU") is not None else "CPU"
+
+    def connect_native(self, *, local_path, server_port, project_name,
+                       timeout=30.0, device=None, server_type=None):
+        # Connect through this platform's native backend, attaching to the
+        # server the rig orchestrator already started on server_port.
+        #
+        # THE RIG OWNS THE SERVER, which is what PPF_<PLATFORM>_NATIVE_NO_SPAWN
+        # says in the worker environment (`debug/blender_harness.py`), so the
+        # add-on attaches to the port instead of spawning a second one against
+        # a port the first still holds.
+        #
+        # *server_type* overrides the platform's own, for the scenarios that
+        # exist to exercise ONE platform's native connection wherever they run.
+        selected, path_field, backend_type = self.platform_native()
+        if server_type is not None:
+            selected = server_type
+            path_field, backend_type = {
+                "WIN_NATIVE": ("win_native_path", "win_native"),
+                "MAC_NATIVE": ("mac_native_path", "mac_native"),
+                "LINUX_NATIVE": ("linux_native_path", "linux_native"),
+            }[server_type]
+        if device is None:
+            device = self.resolve_native_device(backend_type, local_path)
+
         root = self.groups.get_addon_data(bpy.context.scene)
-        root.ssh_state.server_type = "LOCAL"
-        root.ssh_state.local_path = local_path
+        root.ssh_state.server_type = selected
+        setattr(root.ssh_state, path_field, local_path)
         root.ssh_state.docker_port = server_port
+        root.ssh_state.native_device = device
         self.com.set_project_name(project_name)
-        self.com.connect_local(local_path, server_port=server_port)
+        if backend_type == "win_native":
+            self.com.connect_win_native(local_path, server_port, device)
+        elif backend_type == "mac_native":
+            self.com.connect_mac_native(local_path, server_port, device)
+        else:
+            self.com.connect_linux_native(local_path, server_port, device)
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -371,59 +476,52 @@ class DriverHelpers:
                 return
             time.sleep(0.2)
         raise RuntimeError(
-            f"server never reached RUNNING within {timeout}s "
+            f"{backend_type} server never reached RUNNING within {timeout}s "
             f"(phase={self.facade.engine.state.phase.name}, "
             f"server={self.facade.engine.state.server.name})"
         )
 
     def connect_win_native(self, *, local_path, server_port, project_name,
-                           timeout=30.0):
-        # Windows-native counterpart to connect_local. The rig owns the
-        # ppf-cts-server (PPF_WIN_NATIVE_NO_SPAWN=1 in the worker env), so
-        # the addon attaches to the server already listening on
-        # server_port instead of spawning its own. win_native_path points
-        # at the repo root; resolve_win_native_root walks up to it if a
-        # subdirectory is given.
-        root = self.groups.get_addon_data(bpy.context.scene)
-        root.ssh_state.server_type = "WIN_NATIVE"
-        root.ssh_state.win_native_path = local_path
-        root.ssh_state.docker_port = server_port
-        self.com.set_project_name(project_name)
-        self.com.connect_win_native(local_path, server_port)
+                           timeout=30.0, device=None):
+        # The Windows native connection, named for the scenarios that exercise
+        # it specifically. win_native_path points at the repo root;
+        # resolve_win_native_root walks up to it if a subdirectory is given.
+        return self.connect_native(
+            local_path=local_path, server_port=server_port,
+            project_name=project_name, timeout=timeout, device=device,
+            server_type="WIN_NATIVE")
 
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            self.facade.engine.dispatch(self.events.PollTick())
-            self.facade.tick()
-            s = self.facade.engine.state
-            if s.phase.name == "ONLINE" and s.server.name == "RUNNING":
-                return
-            time.sleep(0.2)
-        raise RuntimeError(
-            f"win_native server never reached RUNNING within {timeout}s "
-            f"(phase={self.facade.engine.state.phase.name}, "
-            f"server={self.facade.engine.state.server.name})"
-        )
+    def connect_mac_native(self, *, local_path, server_port, project_name,
+                           timeout=30.0, device=None):
+        # The macOS native connection, named for the scenarios that exercise it
+        # specifically.
+        return self.connect_native(
+            local_path=local_path, server_port=server_port,
+            project_name=project_name, timeout=timeout, device=device,
+            server_type="MAC_NATIVE")
+
+    def connect_linux_native(self, *, local_path, server_port, project_name,
+                             timeout=30.0, device=None):
+        # The Linux native connection, named for the scenarios that exercise it
+        # specifically.
+        return self.connect_native(
+            local_path=local_path, server_port=server_port,
+            project_name=project_name, timeout=timeout, device=device,
+            server_type="LINUX_NATIVE")
 
     def connect(self, *, local_path, server_port, project_name, timeout=30.0):
-        # Platform-appropriate connect: WIN_NATIVE on Windows, LOCAL
-        # elsewhere. Both attach to the rig-owned server on server_port,
-        # so a single cross-platform scenario runs on the emulated
-        # macOS/Linux jobs (LOCAL) and the real-GPU Windows job
-        # (WIN_NATIVE) without branching in the scenario body.
-        import sys as _sys
-        if _sys.platform.startswith("win"):
-            return self.connect_win_native(
-                local_path=local_path, server_port=server_port,
-                project_name=project_name, timeout=timeout)
-        return self.connect_local(
+        # Platform-appropriate connect: the native type for the machine this is
+        # running on. Every leg attaches to the rig-owned server on
+        # server_port, so one cross-platform scenario runs on all of them
+        # without branching in the scenario body.
+        return self.connect_native(
             local_path=local_path, server_port=server_port,
             project_name=project_name, timeout=timeout)
 
     def connect_ssh(self, *, host, port, username, key_path, remote_path,
                     server_port, project_name, timeout=60.0):
         # Connect to a REMOTE ppf-cts-server over SSH (server_type
-        # CUSTOM). Unlike LOCAL/WIN_NATIVE this does not attach to the
+        # CUSTOM). Unlike the natives this does not attach to the
         # rig-owned local server; it drives the addon's paramiko backend
         # to a server on another machine (a GPU box). The remote server
         # is expected to be already listening on server_port at the
@@ -504,6 +602,29 @@ class DriverHelpers:
         s = self.facade.engine.state
         if s.solver.name == "FAILED":
             raise RuntimeError(build_failure_message(self.facade, self.com))
+        if not (s.activity.name == "IDLE"
+                and s.solver.name in ("READY", "RESUMABLE")):
+            # THE BUILD NEVER REACHED A TERMINAL STATE INSIDE THE BUDGET, AND
+            # THAT IS REPORTED HERE, NOT LEFT FOR THE SCENARIO TO FIND. A
+            # silent return at this point costs the scenario its whole run
+            # and fetch budget too (measured on the Windows leg of run
+            # 35159051178: 19 scenarios at 92 to 393 s each, about 95 of the
+            # rig's 100 minutes) and records no cause, so two CI runs ended
+            # with "no PC2 produced" and nothing to act on. What the evidence
+            # showed there was the server landing the upload and never
+            # receiving a build request, with the client idle on
+            # solver=NO_BUILD; only the client's own state, error and event
+            # trail can say why, and they are all here.
+            events = self.facade.engine.recent_events[-30:]
+            trail = "\n".join(f"  {t:.3f} {name} {rep}" for t, name, rep in events)
+            raise RuntimeError(
+                f"build gate: the build did not complete within {timeout}s: "
+                f"solver={s.solver.name} activity={s.activity.name} "
+                f"pending_build={getattr(s, 'pending_build', '?')} "
+                f"server={s.server.name} error={s.error!r}\n"
+                + build_failure_message(self.facade, self.com,
+                                        prefix="build did not complete")
+                + f"\nrecent events:\n{trail}")
 
     def run_and_wait(self, *, timeout=90.0):
         self.com.run()
@@ -514,9 +635,9 @@ class DriverHelpers:
         return self._await_running_then_ready(timeout=timeout)
 
     def _await_running_then_ready(self, *, timeout):
-        # 0.05s poll cadence: with PPF_EMULATED_STEP_MS=100 a single
-        # solver step's RUNNING phase can be ~150 ms wall-clock, which
-        # the previous 0.3s sleep often missed entirely. We treat
+        # 0.05s poll cadence, because a single solver step's RUNNING phase
+        # can be shorter than a coarse poll interval and be missed
+        # entirely. We treat
         # ``frame growth since entry`` as conclusive evidence the solver
         # did transition through RUNNING, even if the poll cadence
         # skipped the phase label. ``> start_frame`` (not ``> 0``) so

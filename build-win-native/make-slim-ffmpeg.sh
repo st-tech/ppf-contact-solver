@@ -9,9 +9,39 @@
 # Get script directory BEFORE sourcing profile (which changes cwd)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Ensure we're in MinGW64 environment
-export MSYSTEM=MINGW64
+# The MSYS2 environment that targets this host, chosen by make-slim-ffmpeg.bat:
+# MINGW64 on x64 and CLANGARM64 on ARM64. Run directly, it is MINGW64.
+export MSYSTEM="${PPF_MSYSTEM:-MINGW64}"
 source /etc/profile || true
+
+# CLANGARM64 carries clang and the LLVM binutils under their own names and no
+# gcc, which is the compiler ffmpeg's configure looks for by default, so the
+# compiler and strip are named for it.
+case "$MSYSTEM" in
+    CLANGARM64)
+        export CC=clang CXX=clang++
+        # THE ARCHITECTURE AND OS ARE NAMED, NOT DETECTED. MSYS2 itself is an x64
+        # program, run emulated on ARM64 Windows, so `uname -m` answers x86_64,
+        # and ffmpeg's configure takes its arch default from that: on the
+        # windows-11-arm runner (Build Windows 34991554786) configure stopped on
+        # "nasm/yasm not found or too old", demanding the x86 assembler, after
+        # x264 had built its aarch64 assembly with this same clang. `uname -s`
+        # here names the CLANGARM64 environment, which configure's mingw32* and
+        # mingw64* patterns do not match, so the OS is named too. With no
+        # --cross-prefix this is not a cross compile to configure, and it takes
+        # the host compiler from --cc.
+        FFMPEG_CC_FLAGS=(--cc=clang --cxx=clang++ --arch=aarch64 --target-os=mingw32)
+        STRIP=llvm-strip
+        ;;
+    MINGW64)
+        FFMPEG_CC_FLAGS=()
+        STRIP=strip
+        ;;
+    *)
+        echo "ERROR: make-slim-ffmpeg.sh builds in MINGW64 or CLANGARM64, and MSYSTEM is $MSYSTEM" >&2
+        exit 1
+        ;;
+esac
 
 set -e
 FFMPEG_DIR="$SCRIPT_DIR/ffmpeg"
@@ -74,6 +104,7 @@ cd "ffmpeg-${FFMPEG_VERSION}"
 # Configure with minimal options for PNG to MP4
 echo "Configuring ffmpeg with minimal options..."
 PKG_CONFIG_PATH="$WORK_DIR/deps/lib/pkgconfig:$PKG_CONFIG_PATH" ./configure \
+    ${FFMPEG_CC_FLAGS[@]+"${FFMPEG_CC_FLAGS[@]}"} \
     --prefix="$WORK_DIR/output" \
     --enable-gpl \
     --enable-libx264 \
@@ -124,7 +155,7 @@ make -j$(nproc)
 # Copy and strip the binary
 echo "Installing ffmpeg to $FFMPEG_DIR..."
 cp ffmpeg.exe "$FFMPEG_DIR/ffmpeg.exe"
-strip "$FFMPEG_DIR/ffmpeg.exe"
+"$STRIP" "$FFMPEG_DIR/ffmpeg.exe"
 
 # Clean up
 echo "Cleaning up..."

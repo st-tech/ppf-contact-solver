@@ -9,8 +9,15 @@
 # (`Utils.in_jupyter_notebook`) or shell out to `nvidia-smi` via
 # subprocess (`Utils.get_gpu_count`, `Utils.get_driver_version`).
 
+import http.client
 import os
+import random
+import socket
+import ssl
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
 from typing import Optional
 
@@ -31,14 +38,98 @@ def _as_c(arr, dtype):
     return None if arr is None else np.ascontiguousarray(arr, dtype=dtype)
 
 
+def _tree_root() -> str:
+    """The root of the tree this frontend was imported from.
+
+    Resolved the same way ``App.get_data_dirpath`` resolves it, from this
+    package's own file, because that is the only thing that reliably names the
+    tree: the working directory is wherever the user happened to start, and a
+    packaged tree keeps its cache and its data inside ITSELF, so handing the
+    wrong root would put a distribution's state in the home directory it was
+    packaged to stay out of.
+    """
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def get_cache_dir() -> str:
     """Get the ppf-cts cache directory."""
-    return _rust.get_cache_dir()
+    return _rust.get_cache_dir(_tree_root())
+
+
+def fetch_asset(
+    url: str,
+    dest_path: str,
+    attempts: int = 4,
+    base_delay: float = 2.0,
+    timeout: float = 10,
+    ssl_context: Optional[ssl.SSLContext] = None,
+) -> None:
+    """Download ``url`` to ``dest_path``, retrying transient failures.
+
+    A hosted asset (a GitHub release, for instance) sits behind a gateway
+    that occasionally answers a request with a 502, 503 or 504 under load,
+    and a dropped connection or a timeout is just as transient, so both
+    are worth a bounded number of retries with backoff. An HTTP 4xx
+    response, most commonly a 404, means the asset genuinely is not at
+    this URL, so it is raised immediately instead of retried: retrying it
+    would only delay a correct failure by the whole backoff budget. The
+    file is written to a temporary path next to ``dest_path`` and moved
+    into place only once the download completes, so an interrupted
+    attempt can never leave a truncated file where a later run would
+    treat it as a cached asset.
+
+    Raises:
+        RuntimeError: every attempt failed. The message names the URL,
+            the attempt count, and the last error.
+    """
+    tmp_path = dest_path + ".part"
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with (
+                urllib.request.urlopen(
+                    url, timeout=timeout, context=ssl_context
+                ) as response,
+                open(tmp_path, "wb") as out_file,
+            ):
+                out_file.write(response.read())
+            os.replace(tmp_path, dest_path)
+            return
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                raise
+            last_error = e
+        except (
+            urllib.error.URLError,
+            # A CONNECTION DROPPED MID-BODY DOES NOT ARRIVE AS A URLError.
+            # `urlopen` has already returned by then, so the failure surfaces
+            # from `response.read()` as an http.client exception
+            # (IncompleteRead, RemoteDisconnected) or an ssl.SSLError. Those are
+            # the shape a flaky CDN actually produces, so leaving them out made
+            # this retry cover the case that fails least often.
+            http.client.HTTPException,
+            ssl.SSLError,
+            socket.timeout,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as e:
+            last_error = e
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        if attempt < attempts - 1:
+            delay = base_delay * (2**attempt) + random.uniform(0, 0.5)
+            print(
+                f"fetch of {url} failed ({last_error}), "
+                f"retrying in {delay:.1f}s [attempt {attempt + 2}/{attempts}]"
+            )
+            time.sleep(delay)
+    raise RuntimeError(f"failed to fetch {url} after {attempts} attempts: {last_error}")
 
 
 def get_export_base_path() -> str:
     """Resolve the export base path, honoring fast-check mode."""
-    return _rust.get_export_base_path()
+    return _rust.get_export_base_path(_tree_root())
 
 
 def dict_to_html_table(data: dict, classes: str = "table") -> str:
@@ -101,14 +192,14 @@ class Utils:
     @staticmethod
     def get_ci_root() -> str:
         """Get the path to the CI directory."""
-        return _rust.get_ci_root()
+        return _rust.get_ci_root(_tree_root())
 
     @staticmethod
     def get_ci_dir() -> str:
         """Get the path to the CI local directory."""
         ci_name = Utils.ci_name()
         assert ci_name is not None
-        return _rust.get_ci_dir(ci_name)
+        return _rust.get_ci_dir(_tree_root(), ci_name)
 
     @staticmethod
     def get_gpu_count() -> int:
@@ -153,8 +244,14 @@ class Utils:
 
     @staticmethod
     def check_gpu():
-        """Check that an NVIDIA GPU with sufficient compute capability is present."""
-        _rust.check_gpu()
+        """Check that the backend a run uses can run on this machine.
+
+        Asks that backend's own solver (``ppf-contact-solver --probe``), whose
+        answer carries the backend's precise refusal, and raises with it.
+        """
+        from . import _require_usable_backend
+
+        _require_usable_backend()
 
     terminate = staticmethod(_rust.terminate_solver)
     busy = staticmethod(_rust.solver_busy)

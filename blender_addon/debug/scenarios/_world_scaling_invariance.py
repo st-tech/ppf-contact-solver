@@ -7,7 +7,7 @@
 # scenarios (Design 2).
 #
 # Free-vertex deformation (drape, solid, rod, sand) and contact
-# (colliders) have no closed-form reference -- the emulated solver is
+# (colliders) have no closed-form reference -- the solver is
 # the only oracle. So instead of diffing against ``frontend``, these
 # rigs run the SAME authored scene at two physical sizes and assert the
 # outputs differ by exactly that size ratio:
@@ -21,7 +21,7 @@
 # In sim space both collapse to the identical scene: cycle B's geometry
 # (ratio x bigger) is divided by ratio on ingest, landing exactly on
 # cycle A's geometry, and gravity (absolute, NOT scaled) is the same in
-# both. A deterministic emulator therefore runs the identical sim, and
+# both. A deterministic solver therefore runs the identical sim, and
 # because the per-frame output is divided back by world_scaling, cycle
 # B's written positions are exactly ``ratio`` x cycle A's. We assert
 #
@@ -90,7 +90,7 @@ def ws_run_cycle(dh, tracked_name, *, project_name, frame_count, gravity,
     param_bytes = dh.encoder_param.encode_param(bpy.context)
 
     if first:
-        dh.connect_local(local_path=local_path, server_port=server_port,
+        dh.connect(local_path=local_path, server_port=server_port,
                          project_name=project_name)
         dh.log("connected")
 

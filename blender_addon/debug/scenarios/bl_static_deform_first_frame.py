@@ -44,7 +44,7 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 _FRAME_COUNT = 10
 # The collider travels far enough per frame that projecting frame 1 with the
@@ -153,7 +153,7 @@ try:
     dh.log(f"captured {captured.shape}")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes,

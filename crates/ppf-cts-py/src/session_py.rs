@@ -499,12 +499,13 @@ fn parse_platform(which: &str) -> PyResult<core::Platform> {
 /// `SessionExport.shell_command` minus the `param.export(...)` call
 /// (which the caller still drives via `param_export_to_disk`).
 #[pyfunction]
-#[pyo3(signature = (session_path, output_path, proj_root, which))]
+#[pyo3(signature = (session_path, output_path, proj_root, which, solver_dir))]
 pub fn write_shell_command_script(
     session_path: &str,
     output_path: &str,
     proj_root: &str,
     which: &str,
+    solver_dir: &str,
 ) -> PyResult<String> {
     let plat = parse_platform(which)?;
     core::write_shell_command_script(
@@ -512,9 +513,26 @@ pub fn write_shell_command_script(
         std::path::Path::new(output_path),
         std::path::Path::new(proj_root),
         plat,
+        std::path::Path::new(solver_dir),
     )
     .map(|p| p.to_string_lossy().into_owned())
     .map_err(|e| PyValueError::new_err(format!("write shell command: {e}")))
+}
+
+/// The directories a Windows solver's backend DLL can sit in under
+/// `proj_root`, in the order a caller puts them on PATH.
+///
+/// THE SAME LIST THE LAUNCHER SCRIPT AND THE SERVER USE, published here so the
+/// frontend's `--probe` exec has it too: the solver IMPORTS its backend DLL, so
+/// it does not start at all unless one of these is on PATH, and a list spelled
+/// again in Python would be a second place to update when the directory moves.
+#[pyfunction]
+#[pyo3(signature = (proj_root))]
+pub fn windows_library_dirs(proj_root: &str) -> Vec<String> {
+    core::scripts::windows_library_dirs(std::path::Path::new(proj_root))
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Build the `subprocess.Popen` command body for a given launcher and
@@ -683,6 +701,7 @@ pub fn solver_failed_to_start_message(rc: Option<i32>) -> String {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_logging_docstrings, m)?)?;
+    m.add_function(wrap_pyfunction!(windows_library_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(read_log_tail, m)?)?;
     m.add_function(wrap_pyfunction!(latest_vertex_frame, m)?)?;
     m.add_function(wrap_pyfunction!(list_saved_states, m)?)?;

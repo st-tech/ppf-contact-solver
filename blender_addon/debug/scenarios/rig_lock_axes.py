@@ -29,11 +29,11 @@
 # must still be REFUSED, including the two ways to spell a record
 # non-canonically.
 #
-# `rig_emulated_lock_axes` covers the same modes at the other gate, the
+# `rig_lock_axes_projector` covers the same modes at the other gate, the
 # solver's own live projector.
 #
 # The probe runs in a SUBPROCESS. It imports `frontend`, which loads the
-# per-tree cdylib and installs the emulator's debug patches, and the
+# per-tree cdylib and installs the solver's debug patches, and the
 # orchestrator imports every scenario into one long-lived process that must
 # not inherit either.
 
@@ -50,7 +50,7 @@ from . import _runner as r
 
 # No Blender and no solver process: this is the host-side authoring and build
 # check, so it holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _PROBE = r'''

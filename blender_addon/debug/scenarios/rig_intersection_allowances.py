@@ -19,13 +19,13 @@
 # collapses the three rules into one, or that lets either flag stand in for
 # the other, fails on the controls and not on the allowances.
 #
-# `rig_emulated_intersection` covers the same rules at the other gate, the
+# The solver's own live scan covers the same rules at the other gate, the
 # solver's own live scan. Both gates have to grant the same set: a scene that
 # builds here and aborts there is a broken feature, and the reverse is a
 # silent tolerance.
 #
 # The probe runs in a SUBPROCESS. It imports `frontend`, which loads the
-# per-tree cdylib and installs the emulator's debug patches, and the
+# per-tree cdylib and installs the solver's debug patches, and the
 # orchestrator imports every scenario into one long-lived process that must
 # not inherit either.
 
@@ -42,7 +42,7 @@ from . import _runner as r
 
 # No Blender and no solver process: this is the host-side build check, so it
 # holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _PROBE = r'''

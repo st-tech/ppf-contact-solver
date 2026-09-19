@@ -20,7 +20,7 @@
 # vertices sag. That is genuine physics, so this is real-only.
 #
 # SSH connection parameters come from the environment (injected by the
-# job via `runtests --knob PPF_SSH_*=...`), NOT from string substitution,
+# job via `runtests --knob SSH_*=...`), NOT from string substitution,
 # because the host / key path / remote path are runtime values:
 #   PPF_SSH_HOST, PPF_SSH_PORT, PPF_SSH_USER, PPF_SSH_KEY,
 #   PPF_SSH_REMOTE_PATH, PPF_SSH_SERVER_PORT
@@ -31,6 +31,12 @@
 #      samples came back over the tunnel.
 #   B. cloth_draped: the pinned edge held and the free vertices moved
 #      down (-z), i.e. the remote real solver actually simulated.
+#   C. remote_build_listing_matches_the_running_server: the build listing
+#      taken from the REAL remote host parses, the Compute Device resolves
+#      against it to a server on that host, and the directory that server
+#      reports its runs use is the one the selection names. This is the only
+#      place in CI where the remote listing comes off a machine that is not
+#      the one running Blender.
 
 from __future__ import annotations
 
@@ -166,6 +172,57 @@ try:
         {
             "max_pinned_disp": round(pin_disp, 5),
             "mean_free_dz": round(mean_drop, 5),
+        },
+    )
+
+    # ----- C: the Compute Device resolved against the REAL remote host -
+    #
+    # The one place in CI where the remote build listing is taken from a
+    # machine that is not this one. Every other check of it drives a
+    # stand-in, so this is what says the command reaches a real host, its
+    # output parses, and what it resolves to is the directory the server
+    # over there says its runs use.
+    #
+    # THE SERVER HERE WAS PRE-STARTED BY THE JOB, so this compares the
+    # selection against a server the add-on attached to rather than one it
+    # launched. That is the comparison `check_running_server` makes for a
+    # native connection, which the remote path has no equivalent of, so a
+    # disagreement is exactly the silent substitution worth catching.
+    remote_builds = __import__(pkg + ".core.remote_builds",
+                               fromlist=["cached_builds"])
+    conn_mod = __import__(pkg + ".core.connection",
+                          fromlist=["remote_server_binary"])
+    listing = dict(remote_builds.cached_builds())
+    probe_error = remote_builds.probe_error()
+    # THE PROBED root, not the data root. `normalized_remote_root()` answers
+    # `<share>/ppf-cts/git-<branch>/<project>`, which the listing's keys are
+    # never under, so resolving against it misses every time and reads as a
+    # host with no build.
+    root = remote_builds.probed_root()
+    resolved = conn_mod.remote_server_binary(root, listing, "GPU")
+    expected_dir = conn_mod.remote_target_dir(resolved) if resolved else ""
+    reported_dir = str((dh.com.response or {}).get("solver_target_dir") or "")
+    reported_backend = str((dh.com.response or {}).get("solver_backend") or "")
+    # AN EMPTY REPORT IS A FAILURE TO MEASURE, NOT A MISMATCH. The server
+    # leaves both fields empty when it could not ask its own solver, and
+    # reading that as a disagreement would fail a leg over a question that
+    # was never answered.
+    agrees = (
+        not reported_dir
+        or not expected_dir
+        or os.path.normpath(reported_dir) == os.path.normpath(expected_dir)
+    )
+    dh.record(
+        "C_remote_build_listing_matches_the_running_server",
+        bool(listing) and not probe_error and resolved is not None and agrees,
+        {
+            "root": root,
+            "listing": listing,
+            "probe_error": probe_error,
+            "resolved_server": resolved,
+            "expected_target_dir": expected_dir,
+            "server_reports_target_dir": reported_dir,
+            "server_reports_backend": reported_backend,
         },
     )
 

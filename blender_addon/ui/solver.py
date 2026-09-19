@@ -818,27 +818,6 @@ class SOLVER_OT_Run(AsyncOperator):
         )
         return base
 
-    def invoke(self, context, event):
-        # Guard against running on an emulated (CPU stub, no CUDA) server:
-        # that build is for the test rig and produces no real physics.
-        # The flag is mirrored from the server's ``hardware.emulated`` onto
-        # AppState on every status poll. Only the interactive button path
-        # reaches invoke(); MCP / headless callers go straight to execute()
-        # (EXEC context), so the rig is never blocked by a dialog.
-        from ..core.facade import engine
-        if engine.state.emulated:
-            return context.window_manager.invoke_props_dialog(
-                self, width=420, title="Emulation Mode", confirm_text="Run Anyway",
-            )
-        return self.execute(context)
-
-    def draw(self, context):
-        layout = self.layout
-        col = layout.column(align=True)
-        col.label(text="The server is running in EMULATION mode.", icon="ERROR")
-        col.label(text="The CPU stub backend (test rig only) produces")
-        col.label(text="no real physics. Are you sure you want to run?")
-
     def execute(self, context):
         error = _check_project_name_sync(context)
         if error:

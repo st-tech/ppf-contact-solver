@@ -5,13 +5,12 @@
 #
 # world_scaling SCALE-INVARIANCE for the SAND granular type. A closed
 # mesh is seeded with grains, assigned to a SAND group, and the cloud
-# falls under gravity (the emulator auto-drifts a faceless point cloud).
+# falls under gravity (the solver auto-drifts a faceless point cloud).
 # We run the same grain cloud at base size (world_scaling=1) and at 10x
 # size (world_scaling=0.1) and assert the 10x run reproduces 10x the
 # base run's per-frame grain positions. This covers the grain seed
-# position round-trip (the grain radius / contact skin scaling lives in
-# the encoder and is checked separately; the emulator has no contact
-# pipeline so radius does not affect the drift output here).
+# position round-trip; the grain radius and contact skin scaling live in
+# the encoder and are checked separately.
 #
 # Grains are ALWAYS seeded from the same base geometry with a fixed RNG
 # seed, then their coordinates are scaled by the cycle's factor, so both
@@ -26,7 +25,16 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND. It was refused by name at `initialize()` for
+# carrying SAND grains in a scene that also sets `disable-contact`, whose
+# accumulators this driver kept on the contact layer. `SolverState` owns the
+# six per-vertex grain arrays now, where the reference has always had them,
+# so that combination runs and the refusal is gone.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""

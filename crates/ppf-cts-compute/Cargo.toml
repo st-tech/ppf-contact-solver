@@ -1,0 +1,83 @@
+# File: crates/ppf-cts-compute/Cargo.toml
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# The compute crate. Every backend-specific thing in this workspace lives here,
+# and every backend is a TARGET INSIDE it: there is no ppf-cts-cuda, no
+# ppf-cts-metal and no ppf-cts-cpu, and none may be created.
+#
+# It contains NO SIMULATION, and that is CHECKED rather than remembered:
+# `.github/workflows/scripts/check-compute-neutral.py` is a ratchet over every
+# tracked file here, and its ceilings are at zero, so the table it keeps is a
+# wall rather than a countdown. No simulation sits in either target: the
+# physics is the neutral `*.kernel.cpp` bodies in `ppf-cts-solver`, rendered per
+# target by the transcompiler, so neither recipe here compiles physics from
+# anywhere. The test this crate is held to is
+# one sentence: could this
+# crate be published on its own and used by a program that is not a physics
+# solver? Allocation, transfer, launch and the platform machinery those need
+# answer yes. A kernel table, an argument record and a convergence test answer
+# no, and all three stay in `ppf-cts-solver`, which is why the dependency edge
+# points one way and a dispatch here carries a kernel identifier, an extent and
+# an opaque blob rather than anything this crate can read.
+
+[package]
+name = "ppf-cts-compute"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# The manifest channel a dependent build script reads as DEP_PPFCTSCOMPUTE_<KEY>.
+#
+# It exists because of a cargo rule that decides the whole build split, and
+# getting it wrong gives a green build and a binary that cannot load:
+# `cargo:rustc-link-arg` emitted by a DEPENDENCY never reaches the dependent
+# binary's link, while `rustc-link-lib` and `rustc-link-search` do. The two
+# flags this runtime needs on a C++ backend (`-Wl,-rpath,<libdir>` and, on
+# macOS, `-Wl,-exported_symbol,_print_rust`) are exactly the kind that does not
+# propagate, so this crate publishes its library directory here and the solver's
+# build script reads it back and emits those two itself.
+links = "ppfctscompute"
+
+[dependencies]
+# The host target's range cut. It is the only dependency this crate has, and it
+# is a thread pool rather than anything that knows what is being computed.
+rayon.workspace = true
+# Used only by the `build` module, which a build script takes and a binary does
+# not. See the feature below.
+cc = { version = "1", optional = true }
+
+[features]
+default = []
+# The build-script API (`ppf_cts_compute::build`). A dependent enables it on its
+# [build-dependencies] copy of this crate only.
+build = ["dep:cc"]
+# Whether `src/abi.rs` compiles its `extern "C"` block for the `be_*`
+# symbols. A dependent turns this on when its own build links a library that
+# exports them; nothing here can know, because a library's presence is decided
+# by the dependent's toolchain and a dependency's build script runs first.
+#
+# THE GATE EXISTS BECAUSE A DECLARATION IS NOT FREE. Compiling the block
+# unconditionally and letting the linker drop the unreferenced calls was
+# measured to work on this host and was still refused: whether an unreferenced
+# call to an undefined symbol survives into the link is a property of the linker
+# and of how codegen units happened to fall, so it would hold here and could
+# fail on a platform this change cannot be built on.
+#
+# Enabling it WITHOUT such a library on the link line is a loud failure, which
+# is the right direction: undefined references to `be_open` and its
+# siblings, naming the symbols that are missing.
+backend-abi = []
+# The dependent's statement that its build links NO `be_*` library, which turns
+# the CUDA probe above OFF. The CPU backend sets it: it links no backend library
+# at all, so compiling the ABI block would leave undefined references in a
+# binary that has nothing to resolve them. It is a positive feature rather than a
+# negated one because cargo features are additive and only ever accumulate.
+host-only = []
+# A ROCm build links a be_* library, so the ABI extern block is compiled.
+rocm = []
+
+[build-dependencies]
+
+[lints]
+workspace = true

@@ -385,8 +385,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -460,7 +460,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -512,9 +512,26 @@ jobs:
 
 """
 
-        # Generate a separate step for each example
+        # Generate a separate step for each example. THE OIDC CREDENTIAL LASTS
+        # ONE HOUR AND EVERY EXAMPLE OPENS A TUNNEL OF ITS OWN, SO EACH ONE
+        # REFRESHES FIRST. `aws ec2-instance-connect open-tunnel` authenticates
+        # when it opens, runs in the BACKGROUND, and its exit status is never
+        # checked, so an expired credential does not report itself as one: the
+        # tunnel never binds port 2222 and the ssh that follows reports
+        # `connect to host localhost port 2222: Connection refused`, which reads
+        # as the instance being down. Measured on run 35069498252
+        # (RequestExpired at 60m17s) against run 35056934927 (passed at 59m32s).
+        # The instance wait, warmup and the CUDA build put the first example
+        # well into the hour, and a batch of examples runs for hours more.
         for example in chunk:
-            workflow += f"""      - name: Run {example}
+            workflow += f"""      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
+
+      - name: Run {example}
         run: |
           echo "Running {example}..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
@@ -554,6 +571,14 @@ jobs:
 """
 
         workflow += f"""
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -591,6 +616,14 @@ jobs:
           name: ci-batch-{idx}
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()

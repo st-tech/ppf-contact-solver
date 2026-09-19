@@ -11,9 +11,10 @@
 # + `docker run --gpus all` over an EC2 Instance Connect SSH tunnel, then always
 # terminates the instance. A GPU is required because the image ships one native
 # SASS cubin per architecture listed in
-# crates/ppf-cts-solver/src/cpp/cuda_arch.txt and no JIT-able PTX at all; the
+# crates/ppf-cts-compute/cuda/cuda_arch.txt and no JIT-able PTX at all; the
 # default g6/g6e (L4/L40S, sm_89) run it, and so would a T4 (sm_75) now that
 # the manifest reaches down to Turing; a card below the lowest cubin cannot. The
+
 # docker build itself is a CUDA cross-compile and needs no GPU, but is run on the
 # same instance to keep the build context and the smoke-tested image co-located.
 
@@ -351,10 +352,19 @@ jobs:
             -o ServerAliveInterval=60 \
             -o ServerAliveCountMax=10 \
             ubuntu@localhost \
-            "sudo -n docker run --rm --gpus all ${IMAGE} /bin/sh -c 'cd /root/ppf-contact-solver && PYTHONPATH=/root/ppf-contact-solver /root/.local/share/ppf-cts/venv/bin/python examples/headless.py'"
+            "sudo -n docker run --rm --gpus all -e PPF_DIAG_SELFTEST=1 ${IMAGE} /bin/sh -c 'cd /root/ppf-contact-solver && PYTHONPATH=/root/ppf-contact-solver /root/.local/share/ppf-cts/venv/bin/python examples/headless.py'"
 
           kill $TUNNEL_PID 2>/dev/null || true
 
+      # PPF_DIAG_SELFTEST makes every backend open prove, on this GPU, that a
+      # failed device check reaches the host: the backend fires one
+      # deliberately failing check from a real kernel and refuses to open
+      # unless the record comes back. It is off by default because a run should
+      # not pay a kernel launch for the proof, and on here because this is the
+      # pass that asks whether the image reports what it is supposed to report.
+      # A silent reporting channel is worse than a loud one that is wrong, and
+      # a channel that is unattached or private is exactly that: every gate
+      # stays green while the non-penetration checks report nothing.
       - name: Run fast_check on built image
         run: |
           echo "Running warmup.py fast_check in the built image (GPU)..."
@@ -372,7 +382,28 @@ jobs:
             -o ServerAliveInterval=60 \
             -o ServerAliveCountMax=10 \
             ubuntu@localhost \
-            "sudo -n docker run --rm --gpus all ${IMAGE} /bin/sh -c 'cd /root/ppf-contact-solver && /root/.local/share/ppf-cts/venv/bin/python warmup.py fast_check && /root/.local/share/ppf-cts/venv/bin/python warmup.py clear_all'"
+            "sudo -n docker run --rm --gpus all -e PPF_DIAG_SELFTEST=1 ${IMAGE} /bin/sh -c 'cd /root/ppf-contact-solver && /root/.local/share/ppf-cts/venv/bin/python warmup.py fast_check && /root/.local/share/ppf-cts/venv/bin/python warmup.py clear_all'"
+
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Verify the image carries both backends
+        run: |
+          echo "Verifying the image ships the CUDA and CPU builds (no --gpus)..."
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+
+          aws ec2-instance-connect open-tunnel \
+            --instance-id "$INSTANCE_ID" \
+            --local-port 2222 &
+          TUNNEL_PID=$!
+          sleep 5
+
+          ssh -i /tmp/ec2key -p 2222 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 \
+            -o ServerAliveCountMax=10 \
+            ubuntu@localhost \
+            "cd ${REMOTE_SRC} && bash .github/workflows/scripts/verify-image-backends.sh ${IMAGE} 'sudo -n docker'"
 
           kill $TUNNEL_PID 2>/dev/null || true
 

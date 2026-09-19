@@ -48,7 +48,7 @@
 #   J. keys_survive_coexisting_action: when the object already owns an action,
 #         Blender 5.x puts the visibility keys in its own slot (not the first
 #         channelbag), so sync/needs/remove must walk every slot. A real GPU
-#         run surfaced this; it is pinned here so the emulated suite guards it.
+#         run surfaced this; it is pinned here so the suite guards it.
 #
 # Pure Blender scenario: no server, no solver, no transfer. The PC2 is written
 # directly so the assertions are about playback placement, not about physics.
@@ -60,6 +60,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 # Distinct, and distinct from 1, so an off-by-one or a stray hardcoded origin
 # is unmistakable.
@@ -318,7 +323,7 @@ try:
     # channelbag. Reading through the first-channelbag helper then misses the
     # keys and reports them absent, which drove the heal pass to rewrite them
     # every tick and left them BEZIER. sync/needs/remove must walk every slot.
-    # This is the case the emulated suite could not see until a real run
+    # This is the case the suite could not see until a real run
     # surfaced it, so it is pinned here.
     bpy.ops.mesh.primitive_grid_add(x_subdivisions=2, y_subdivisions=2, size=1.0)
     coexist = bpy.context.object

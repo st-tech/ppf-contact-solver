@@ -22,20 +22,6 @@ This file condenses `docs/blender_addon/troubleshooting.md` into a self-containe
 - Why: `pip` subprocess returned non-zero (network error, no compiler for a C extension, write-denied target), or it exceeded the 120 s internal timeout.
 - Fix: check Blender system console for full `pip` stderr. Verify the install target is writable; the target is Blender's user `scripts/addons/modules/` dir (macOS: `~/Library/Application Support/Blender/<ver>/scripts/addons/modules/`, Linux: `~/.config/blender/<ver>/scripts/addons/modules/`, Windows: `%APPDATA%\Blender Foundation\Blender\<ver>\scripts\addons\modules\`). As a last resort run `python -m pip install --target <that path> paramiko docker`.
 
-## Connection: Local
-
-### "Remote path not found (.../ppf-cts-server)"
-
-- You see: this in the status line after **Connect**.
-- Why: the path does not contain the built `ppf-cts-server` binary.
-- Fix: point **Local Path** at the checkout root that has `target/release/ppf-cts-server`, not a `src/` subdirectory.
-
-### Port already in use
-
-- You see: **Start Server** fails, log shows the port is taken.
-- Why: a stale `ppf-cts-server` process from an earlier session, or another solver, is still bound.
-- Fix: click **Stop Server** first, or change **Server Port**. On the host, `ss -tlnp | grep <port>` names the process.
-
 ## Connection: SSH / SSH Command
 
 ### SSH authentication failed
@@ -90,7 +76,7 @@ Note: the add-on accepts unknown host keys silently (paramiko `AutoAddPolicy`). 
 
 - You see: this error at connect time on the Windows Native backend.
 - Why: the path field is blank.
-- Fix: set **Win Native Path** to the solver root (the directory that contains the `ppf-cts-server.exe` binary, either at the root for bundle layouts or under `target\release\` for dev builds).
+- Fix: set **Solver Path** to the solver root (the directory that contains the `ppf-cts-server.exe` binary, either at the root for bundle layouts or under `target\release\` for dev builds).
 
 ### ppf-cts-server.exe not found under the solver root
 
@@ -110,6 +96,71 @@ Note: the add-on accepts unknown host keys silently (paramiko `AutoAddPolicy`). 
 - Why: on the bundle layout the solver expects CUDA on the system `PATH`; only the dev layout ships its own CUDA.
 - Fix: install a matching CUDA runtime, or switch to the developer build.
 
+## Connection: macOS Native
+
+### "Solver path is not set"
+
+- You see: this error at connect time on the macOS Native backend.
+- Why: the path field is blank.
+- Fix: set **Solver Path** to the solver root, the directory holding `target/release/ppf-cts-server`. Both layouts keep it there: a repo checkout you built, and the extracted bundle.
+
+### ppf-cts-server not found under the solver root
+
+- You see: connect fails immediately with this path in the message.
+- Why: the root points somewhere that holds no solver. Picking a subdirectory is fine, the resolver walks up to the real root, but picking an unrelated folder is not.
+- Fix: verify the directory contains `target/release/ppf-cts-server`. There is no `bin/` fallback for the server on macOS; `bin/` holds the Metal backend dylib and its shader libraries.
+
+### "This bundle ships no Python"
+
+- You see: `start.sh` refuses before launching JupyterLab.
+- Why: unlike the Windows bundle, the macOS bundle carries no interpreter, so it needs one on the machine.
+- Fix: point `PPF_CTS_VENV` at an environment with the frontend dependencies and Python 3.10 or newer, either by editing `config.sh` beside the script or by exporting it. macOS ships 3.9, which the frontend does not parse.
+
+### The app is blocked on first launch
+
+- You see: macOS refuses to open the binaries after you downloaded the bundle in a browser.
+- Why: the download attached `com.apple.quarantine`, and the bundle is signed but not notarized.
+- Fix: nothing, normally. The bundle's launcher clears that mark on its own folder the first time you run it and prints one line saying so, and connecting the add-on to a downloaded bundle clears it the same way before the server is spawned. Fetching with `curl`, `scp` or `git` sets no mark and prints nothing.
+- When it is not automatic: a bundle owned by another user, or on a read-only volume, cannot be cleared. The launcher says so and the add-on leaves the spawn to fail with its own message. Move the folder somewhere you own, or clear it by hand with `xattr -s -d -r com.apple.quarantine <extracted bundle>`. Use `-s`: without it `xattr` follows symbolic links, which leaves their own marks in place and exits non-zero on any link pointing nowhere.
+
+### "does not support the Metal GPU family this solver build requires"
+
+- You see: this at `Run`, naming the GPU.
+- Why: the solver requires the Apple7 family (M1 / A14 or newer). An Intel Mac, or a virtualized Mac whose GPU appears as `Apple Paravirtual device`, does not report it.
+- Fix: run on Apple Silicon hardware. There is no fallback and no override, because a device that cannot support the family cannot be trusted to compute the right answer.
+
+## Connection: Linux Native
+
+### "Solver path is not set"
+
+- You see: this error at connect time on the Linux Native backend.
+- Why: the path field is blank.
+- Fix: set **Solver Path** to the solver root. A repo checkout you built holds the server at `target/release/ppf-cts-server`; an unpacked Linux distribution holds one directory per backend it ships, `target/cuda/release`, `target/rocm/release` and `target/cpu/release`, each beside a `.ppf-backend` marker naming the backend it carries.
+
+### "ppf-cts-server not found under ..."
+
+- You see: connect fails immediately, and the message names the directory it examined and the layouts it accepts.
+- Why: the folder holds no server in any accepted layout. The usual cause is picking the folder the distribution was extracted into rather than the distribution root: the resolver walks up from a subdirectory to a root, never down into one.
+- Fix: point **Solver Path** at the folder that has `target/release`, `target/cuda/release`, `target/rocm/release` or `target/cpu/release` under it. Building from source, run `cargo build --release -p ppf-cts-server` first. The distribution's `bin/` holds the backend library and ffmpeg and never a server, so it is not a root.
+
+### "... holds the CPU build of the solver and no GPU build"
+
+- You see: connect refuses with this, naming the directory, instead of the not-found message. The two device names swap when the folder holds only the GPU build and **Compute Device** says CPU.
+- Why: the folder is right and **Compute Device** is not. Every backend links the same executable name, so the `.ppf-backend` marker in each build directory is what says which device a directory answers to.
+- Fix: set **Compute Device** to the device the message names, or point **Solver Path** at a folder that has the build you want. The add-on refuses rather than running the other build: a CPU run is substantially slower than a GPU one, and nothing later in the run would report the substitution.
+
+### "... holds these GPU builds: cuda, and no rocm build"
+
+- You see: connect refuses with this after naming an accelerator in **GPU Backend**.
+- Why: **Compute Device** is GPU and **GPU Backend** names a backend this root does not hold. A named choice resolves to that build or to nothing; it never falls through to another accelerator.
+- Fix: set **GPU Backend** to one the message lists or to Automatic, or point **Solver Path** at a folder that has the backend you asked for.
+
+### "No GPU build in this folder has a usable device"
+
+- You see: this at **Start Server on Remote**, listing what each GPU build reported.
+- Why: the root holds one or more GPU builds, and none of their solvers found a device it can run on. Each is asked with `ppf-contact-solver --probe` when the server is spawned, which is why connect succeeded and the launch is what refused.
+- Fix: install or repair the driver or runtime the reasons name, or set **Compute Device** to CPU to run without a GPU. An explicit GPU choice never falls back on its own.
+
 ## Connection Profiles
 
 ### Profile dropdown is empty after Open
@@ -121,8 +172,9 @@ Note: the add-on accepts unknown host keys silently (paramiko `AutoAddPolicy`). 
 ### Profile loads but fields are blank
 
 - You see: after picking a profile, connection fields do not populate.
-- Why: the `type` value does not match one of `Local`, `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`, so the loader rejects the entry.
+- Why: the `type` value does not match one of `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`, `macOS Native`, `Linux Native`, so the loader rejects the entry.
 - Fix: fix the `type` value; the set is exact and case-sensitive.
+- Exception: a profile written with the retired `Local` type still loads. It is applied as this platform's native type (`Linux Native`, `macOS Native` or `Windows Native`), and its `local_path` key lands on that type's path field. A profile carrying both `local_path` and the current key keeps the current one.
 
 Note: **Save** overwrites the currently selected entry and rewrites the whole file. Comments and original formatting are lost on round-trip; keep a backup if comments matter.
 
@@ -150,7 +202,7 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 
 - You see: launch never reaches the wait phase.
 - Why: the generated shell script did not start (permission denied, read-only working directory, missing or unbuilt `ppf-cts-server` binary).
-- Fix: check the remote path is writable (the script writes `server.log` and a PID file there) and confirm `target/release/ppf-cts-server` exists and is executable on the remote.
+- Fix: check the remote path is writable (the script writes `server.log` and a PID file there) and confirm the solver the selected **Compute Device** resolves to (`target/release/ppf-cts-server`, or that backend's own `target/<backend>/release/ppf-cts-server`) exists and is executable on the remote.
 
 ### Status: "Protocol version mismatch"
 
@@ -158,11 +210,45 @@ Note: **Save** overwrites the currently selected entry and rewrites the whole fi
 - Why: the server reports a wire version other than the one the add-on carries (`blender_addon/protocol_version.toml`, the single source both halves read).
 - Fix: rebuild the solver from a revision that matches the add-on, or update the add-on.
 
-### "Remote path not found (.../ppf-cts-server)."
+### "ppf-cts-server not found under ... on the solver host, in any layout"
 
-- You see: this message the instant **Connect** returns.
-- Why: post-connect path check found no `ppf-cts-server` binary at the configured directory.
-- Fix: fix **Remote Path** / **Local Path** / **Docker Path** / **Win Native Path** to point at the directory that actually contains the built `ppf-cts-server` binary (typically the checkout root with `target/release/ppf-cts-server`).
+- You see: this message the instant **Connect** returns on an SSH or Docker connection. A Transfer started in the same breath as the connection is canceled by it, which leaves the solver at `NO_BUILD` with no build pending.
+- Why: the post-connect check asks the solver host which directories under the configured root hold a server (`target/release` and the per-backend `target/<backend>/release` directories) and it reported none. It asks only whether the root holds a server at all, never whether it holds the build **Compute Device** names, so a device that host cannot serve is refused later, at Start Server, where it can still be changed.
+- Fix: fix **Remote Path** or **Docker Path** to point at a directory on that host which holds a built solver, and build one there with `cargo build --release -p ppf-cts-server` if there is none. On the three native connection types the same check runs against this machine and the message names **Solver Path** instead.
+
+### Port already in use
+
+- You see: **Start Server on Remote** fails, and the log shows the port is taken.
+- Why: a stale `ppf-cts-server` process from an earlier session, or another solver, is still bound to it.
+- Fix: click **Stop Server** first, or end the process holding the port (`ss -tlnp | grep <port>` names it on Linux). On a Docker connection the **Docker Port** field selects another port; the MCP connection tools take the port as an argument.
+
+## Compute Device and GPU Backend
+
+**Compute Device** (GPU / CPU) and **GPU Backend** (Automatic / CUDA / ROCm) choose which build of the solver the next **Start Server on Remote** launches, and they apply to every connection type. On the three native types the add-on reads the build directories off this machine while you set the path; on SSH and Docker it asks the solver host once per connection for that listing, which is why those two rows are drawn only after **Connect**. The launch exports `CARGO_TARGET_DIR` for the build it resolved, so the build worker loads the matching cdylib out of the same directory.
+
+### "The solver host holds the CPU build of the solver under ... and no GPU build"
+
+- You see: this at **Start Server on Remote** on an SSH or Docker connection. The two device names swap when the host holds only the GPU build and **Compute Device** says CPU.
+- Why: the listing that host returned holds no build for the selected device under **Remote Path** / **Docker Path**. The panel draws the same finding above the button, as "The solver host has no GPU build here; it has CPU".
+- Fix: set **Compute Device** to the device the message names, or point the path at a directory on that host which holds the build you want. The `.ppf-backend` marker in a build directory, not the directory's name, is what says which backend it holds.
+
+### "The solver host holds these GPU builds under ...: cuda, and no rocm build"
+
+- You see: this at **Start Server on Remote** after naming an accelerator in **GPU Backend**.
+- Why: **Compute Device** is GPU and **GPU Backend** names a backend that host does not have under this root. A named choice resolves to that build or to nothing, never to another accelerator.
+- Fix: set **GPU Backend** to one the message lists, or to Automatic, which takes the first GPU build present in CUDA, ROCm order. On a remote connection Automatic does not probe the builds, since probing means running a solver on the far machine, so name the backend where that host holds two GPU builds and you want the second.
+
+### "Could not list the solver builds on the solver host: ..."
+
+- You see: this line with an error icon under the **Compute Device** row, and the same text as a connection error, which cancels a Transfer started in the same breath as the connection.
+- Why: the listing command the add-on runs once at connect time failed, timed out (it is bounded at 10 seconds), or the connection names no directory on the host. The device rows stay drawn, because which builds that host holds is unknown rather than known to be none.
+- Fix: read the reason in the line, which is the backend's own error, then fix the path or the host and press the refresh button beside the GPU dropdown. That one button re-asks for both the GPU list and the build listing. **Start Server on Remote** refuses with this same reason until the listing succeeds.
+
+### Notebook prints "No usable GPU was found on this machine ..., so the CPU backend is selected"
+
+- You see: one line in a notebook or JupyterLab session on the solver host, naming what each GPU backend reported, followed by a run that is substantially slower than expected.
+- Why: no backend was named, so the frontend asked every GPU build present through its own `ppf-contact-solver --probe`, none reported a usable device, and a CPU build was there to answer with. This is the automatic rule's only fallback, and it prints the line so the substitution is never silent. The line is printed once per process.
+- Fix: nothing, when the CPU backend is what you want. Otherwise repair the driver or runtime the reasons name, or pin the backend with `frontend.set_backend("cuda")` (also `"rocm"`, `"metal"`, `"cpu"`). An explicit choice never falls back: it runs that backend or raises, on a machine with a GPU and on one without.
 
 ## Scene Setup: Object Groups
 

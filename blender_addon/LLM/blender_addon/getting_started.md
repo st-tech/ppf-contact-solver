@@ -2,11 +2,11 @@
 
 This file condenses `docs/blender_addon/getting_started/index.md`, `install.md`, `tour.md`, and `first_simulation.md` into one self-contained onboarding reference covering prerequisites, installation, UI layout, and a complete first simulation walkthrough.
 
-ZOZO's Contact Solver (https://github.com/st-tech/ppf-contact-solver) is a GPU-accelerated contact simulation engine; the Blender 5.0+ add-on is one front-end that ships with it, turning Blender into an interactive editor for the solver. You model in Blender, assign material groups, pins, and colliders, and the add-on streams geometry and parameters to the solver backend (local, SSH, Docker, or Windows native), runs the simulation, and pulls the animation back as a **Mesh Cache** modifier you can scrub on the timeline. By the end of this chapter you will have the add-on installed, a connection open, a single cloth sheet cached, and a simulated animation playing in the viewport.
+ZOZO's Contact Solver (https://github.com/st-tech/ppf-contact-solver) is a GPU-accelerated contact simulation engine; the Blender 5.0+ add-on is one front-end that ships with it, turning Blender into an interactive editor for the solver. You model in Blender, assign material groups, pins, and colliders, and the add-on streams geometry and parameters to the solver backend (a native connection on the machine Blender runs on, SSH, or Docker), runs the simulation, and pulls the animation back as a **Mesh Cache** modifier you can scrub on the timeline. By the end of this chapter you will have the add-on installed, a connection open, a single cloth sheet cached, and a simulated animation playing in the viewport.
 
 ## Where to go next
 
-- **Connections**: set up the backend that matches your environment (local, SSH, Docker, Windows native), and learn how connection profiles let you switch between them in one click.
+- **Connections**: set up the backend that matches your environment (Linux Native, macOS Native, Windows Native, SSH, Docker), and learn how connection profiles let you switch between them in one click.
 - **Workflow**: material parameters, pin operations, keyframed scene parameters, invisible colliders, snap-and-merge, and the full lifecycle from **Transfer** through **Fetch**.
 - **Blender Python API**: drive every operator on this page from a script or a Jupyter notebook instead of the sidebar.
 
@@ -15,7 +15,7 @@ ZOZO's Contact Solver (https://github.com/st-tech/ppf-contact-solver) is a GPU-a
 ### Prerequisites
 
 - **Blender 5.0 or newer.** The extension manifest pins `blender_version_min = "5.0.0"`; older builds will refuse to enable it.
-- **A solver backend.** Any one of: a solver checkout on the same machine (simplest), an SSH-reachable Linux host, a Docker container, or a Windows workstation. The solver itself requires an NVIDIA GPU with CUDA 12.x. See Connections for the full matrix and GPU requirements. The add-on is just a client and runs fine on any machine Blender runs on (including macOS).
+- **A solver backend.** Any one of: a solver build on the machine Blender runs on (simplest, and reached by that platform's native connection type: **Linux Native**, **macOS Native**, or **Windows Native**), an SSH-reachable host, or a Docker container. A build is either a repo checkout you compiled or an unpacked distribution. The solver runs on an NVIDIA GPU through CUDA or an AMD GPU through ROCm on Windows and Linux, on Metal on Apple Silicon, or on the portable CPU backend, which needs no GPU and is substantially slower. See Connections for the full matrix and GPU requirements. The add-on is just a client and runs fine on any machine Blender runs on.
 - **(Optional) paramiko / docker-py.** Needed only for SSH and Docker connections. You do not need to install them yourself. When you pick an SSH or Docker server type without the module present, the main panel surfaces an **Install Paramiko** / **Install Docker-Py** button that pip-installs them (via `--target`) into Blender's user `scripts/addons/modules` directory.
 - **cbor2** (bundled wheel, required to encode the scene before upload) is installed with the extension. If it is missing, the main panel surfaces an **Install cbor2** button that reinstalls it into Blender's user `scripts/addons/modules` directory.
 
@@ -38,7 +38,7 @@ All panels live in **View3D → Sidebar (`N`) → ZOZO's Contact Solver**.
 
 ### Backend Communicator
 
-The main panel. Profile row (Open / Clear / Reload / Save), server-type selector, Project Name, **Connect** / **Disconnect**, **Start Server on Remote** / **Stop**, live status line, remote hardware readout, and realtime statistics. Enable **Debug Options** at the bottom to unlock shell, data-transfer, and reload-server tools.
+The main panel. Profile row (Open / Clear / Reload / Save), server-type selector, the path or host fields that type needs, **Compute Device** (GPU / CPU) and, where the solver root holds more than one GPU build, **GPU Backend** (Automatic / CUDA / ROCm), Project Name, **Connect** / **Disconnect**, **Start Server on Remote** / **Stop**, live status line, remote hardware readout, and realtime statistics. Enable **Debug Options** at the bottom to unlock shell, data-transfer, and reload-server tools.
 
 Figure: the Backend Communicator panel with **Connect** (the button that opens the transport to the solver) highlighted.
 
@@ -108,11 +108,18 @@ Before touching the add-on, lay out the two objects the sim needs: a **subdivide
 
 ### Register the objects with the add-on
 
-1. **Pick a connection type.** In the **Backend Communicator** panel, choose `Local` if the solver lives on this machine. It has the fewest moving parts. Fill **Local Path** with the solver checkout (the folder containing the built `ppf-cts-server` binary, typically under `target/release/`) and set **Project Name** to something short. For other backends see Connections and the per-backend pages (local, ssh, docker, windows).
+1. **Pick a connection type.** In the **Backend Communicator** panel, choose the native type for the machine Blender is running on if the solver lives there: **Linux Native**, **macOS Native**, or **Windows Native**. A native connection has the fewest moving parts: no SSH and no Docker, and the add-on starts the server itself. Set **Solver Path** to the solver root, the folder that holds the build:
 
-   Figure: step 1, pick **Local** from the **Type** dropdown, fill the **Path** and **Project Name** fields, then click the highlighted **Connect** button.
+   - A repo checkout you built keeps the server at `target/release/ppf-cts-server` (`target\release\ppf-cts-server.exe` on Windows).
+   - An unpacked distribution keeps one directory per backend it ships. On Linux those are `target/cuda/release`, `target/rocm/release`, and `target/cpu/release`, each carrying a `.ppf-backend` marker that names the backend it holds. The Windows bundle keeps its server at `bin\ppf-cts-server.exe`, and the macOS bundle keeps its Metal build at `target/release`.
 
-2. **Connect, then start the server.** Click **Connect**. The status line flips to *Connected* when the handshake completes. Click **Start Server on Remote**. The add-on launches `ppf-cts-server` on the remote in the background and waits up to 16 seconds for it to come up. Status advances to *Waiting for data* once the server answers.
+   Picking a subdirectory of the root is fine; the add-on walks up to the root and labels which one it resolved. Set **Project Name** to something short. Below the path, leave **Compute Device** on GPU and **GPU Backend** on Automatic for a first run: Automatic takes the one GPU build present, or where a root holds several, the first whose solver reports a usable device. For other backends see Connections and its per-backend pages.
+
+   Figure: step 1, pick your platform's native type from the **Type** dropdown, fill the **Solver Path** and **Project Name** fields, then click the highlighted **Connect** button.
+
+2. **Connect, then start the server.** Click **Connect**. The status line flips to *Connected* when the handshake completes. Click **Start Server on Remote**. On a native connection the add-on spawns `ppf-cts-server` on this machine out of the build directory **Compute Device** and **GPU Backend** name; on SSH and Docker it launches the server on the solver host. Either way it waits up to 16 seconds for the server to come up, and the status advances to *Waiting for data* once the server answers.
+
+   NOTE: On SSH and Docker connections the **Compute Device** and **GPU Backend** rows are drawn after **Connect**, not before it. The add-on asks the solver host once, over the connection, which build directories it holds, and before connecting there is nothing to ask. The refresh button beside the GPU dropdown re-asks for both the GPU list and that build listing.
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups** panel, click **Create Group**, set **Object Type** to **Shell**, and rename it *Cloth*. Select the plane in the 3D viewport, then click **Add Selected Objects** in the group. The add-on tints the plane green (the Shell overlay color) as confirmation.
 

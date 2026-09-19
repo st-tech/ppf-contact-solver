@@ -23,6 +23,12 @@ echo Releasing file locks under %BUILD_WIN%...
 powershell -NoProfile -Command "$base='%BUILD_WIN%'; Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath -like ($base + '\*') } | ForEach-Object { Write-Host ('  Killing PID ' + $_.ProcessId + ' (' + $_.Name + '): ' + $_.ExecutablePath); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 
 call :remove "embedded Python"        "%BUILD_WIN%\python"
+call :remove "Python temp"            "%BUILD_WIN%\python_temp"
+call :remove "full Python"            "%BUILD_WIN%\python_full"
+call :remove "source-built wheels"    "%BUILD_WIN%\wheels"
+call :remove "wheel build scratch"    "%BUILD_WIN%\.wheel-build"
+call :remove "portable ROCm SDK"      "%BUILD_WIN%\rocm"
+call :remove "portable ROCm SDK temp" "%BUILD_WIN%\rocm_temp"
 call :remove "local Rust installation" "%BUILD_WIN%\rust"
 call :remove "portable MSVC"          "%BUILD_WIN%\msvc"
 call :remove "portable CUDA"          "%BUILD_WIN%\cuda"

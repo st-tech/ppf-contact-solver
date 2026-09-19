@@ -1,0 +1,92 @@
+# File: build-mac-native/scripts/downloads.txt
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# Single source of truth for every external download build-mac-native/
+# performs. Format is plain KEY=VALUE, read by scripts/load-downloads.sh and
+# probed by scripts/check-downloads.sh, which warmup.sh runs BEFORE it fetches
+# anything. No URL belongs in any other file under build-mac-native/.
+#
+# A fetched file pairs URL_* with FILE_*. An entry may also carry SHA256_*,
+# the expected hash of the fetched file: check-downloads.sh ignores that key
+# because it probes only URL_*, and warmup.sh verifies it against the file
+# before it uses it. To bump a tool, edit that entry's lines together, then
+# run scripts/check-downloads.sh to confirm the new pointer is reachable
+# before the next warmup.
+#
+# The list is short because macOS supplies most of what the Windows manifest
+# has to fetch. The Xcode command line tools carry clang, make, git and curl,
+# and they carry the macOS SDK whose Metal.framework is the only thing the
+# Metal backend links against. Nothing here provisions a Metal shader
+# compiler: the backend compiles its shader at run time through
+# newLibraryWithSource, so `xcrun metal` and the downloadable Metal Toolchain
+# component are not part of a macOS build (README.md, "The Metal toolchain").
+#
+# ffmpeg AND x264 ARE DELIBERATELY ABSENT.
+#
+# They live in build-win-native/scripts/downloads.txt (URL_FFMPEG_GIT,
+# FFMPEG_TAG, FFMPEG_VERSION, URL_X264_GIT) and are already read by two
+# platforms from there: build-win-native/make-slim-ffmpeg.sh under MSYS2, and
+# .github/workflows/scripts/make-slim-ffmpeg.sh in the Linux container. A copy
+# here is exactly how two platforms come to pin different ffmpeg revisions,
+# which that manifest's header forbids. warmup.sh builds no ffmpeg; the
+# frontend falls back to `shutil.which("ffmpeg")` and skips video export when
+# it finds none (frontend/_session_inspect_.py). If a macOS ffmpeg build is
+# ever added here, it reads the Windows manifest the way the container script
+# does.
+
+# rustup's installer for Unix hosts, the counterpart of the Windows
+# manifest's https://win.rustup.rs/x86_64. warmup.sh fetches it only when the
+# host has no cargo; it installs into build-mac-native/rust with CARGO_HOME
+# and RUSTUP_HOME pointed there, so it touches nothing outside this directory.
+#
+# This entry carries no SHA256_ on purpose, and the interpreter below carries
+# one. The difference is what the URL names: sh.rustup.rs serves whatever
+# rustup released most recently, so a pinned hash would go stale at rustup's
+# next release and stop every provision that has no cached copy, while the
+# interpreter URL names one immutable release asset. What stands in for a hash
+# here is warmup.sh deleting a failed transfer rather than leaving it in
+# downloads/, because that file is handed to sh and a truncated shell script
+# runs the part that arrived instead of failing to parse.
+URL_RUSTUP=https://sh.rustup.rs
+FILE_RUSTUP=rustup-init.sh
+
+# The interpreter bundle.sh ships INSIDE the distribution, so a user who downloads a
+# release needs no Python of their own. warmup.sh extracts it to
+# build-mac-native/python and installs the frontend packages into that tree.
+# It is not the environment a developer builds with: warmup.sh still creates
+# that one separately, from a Python the host already has, and this manifest
+# pins no interpreter for it.
+#
+# This is a python-build-standalone install_only build, which is relocatable
+# by construction, so the tree keeps working from wherever it is copied to.
+# That is what lets bundle.sh place it inside a distribution the user may keep
+# anywhere. The 3.12 series is the one .github/workflows/both-backends.yml
+# and unit-tests.yml already pin for their own frontend dependencies, so the
+# series this ships is exercised elsewhere in the repository. Each of those
+# workflows installs a subset of its own rather than warmup.py's whole list,
+# so what they establish is the series and not the package set. The archive
+# extracts to a single top-level directory named python.
+#
+# The URL spells the version separator %2B and the filename spells it as the
+# literal + the extracted file carries. That is not an inconsistency to
+# harmonize: load-downloads.sh does no decoding, and check-downloads.sh hands
+# the URL to curl verbatim, so each spelling is the one its own consumer
+# needs.
+#
+# SHA256_PYTHON is the only checksum in this manifest, and the reason for it
+# is the fleet rather than the file. The Macs this bundle is built on have no
+# outbound network, so this tarball is relayed into build-mac-native/downloads
+# by hand; a truncated relay yields a tree that extracts and mostly works, and
+# this hash is what turns that into a loud failure instead. warmup.sh checks
+# it on every run that provisions from the archive, whether that run
+# downloaded the file or found a relayed copy already in downloads/, so the
+# relayed copy is covered rather than trusted. A later run finds the
+# provisioned tree and verifies that instead, and reads the archive not at
+# all, so the file may be deleted once the tree exists. The macOS spelling of
+# the tool is `shasum -a 256`; there is no sha256sum on macOS. The value is
+# what this release publishes for this file in its own SHA256SUMS asset.
+URL_PYTHON=https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.12.14%2B20260901-aarch64-apple-darwin-install_only.tar.gz
+FILE_PYTHON=cpython-3.12.14+20260901-aarch64-apple-darwin-install_only.tar.gz
+SHA256_PYTHON=3ee3ee547cedfeb7c2b16b2b7156039f7b470bb8f857e226fd3d2eb11db83c76

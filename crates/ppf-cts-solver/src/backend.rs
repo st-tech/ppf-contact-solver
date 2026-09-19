@@ -22,10 +22,10 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
-// The C++ side picks the implementation: libsimbackend_cuda for the
-// CUDA path, libsimbackend_cpu (the emulator) when --features emulated
-// flips the link in build.rs. Both libraries expose the identical
-// extern "C" surface, so this declaration is unconditional.
+// The C++ side picks the implementation, and build.rs flips the link:
+// libsimbackend_cuda for the CUDA path, libsimbackend_metal for Metal.
+// Every library exposes the identical extern "C" surface, so this
+// declaration is unconditional.
 extern "C" {
     fn advance(result: *mut StepResult);
     fn fetch();
@@ -562,9 +562,11 @@ impl Backend {
             match pin_at_frame.get(&(v as u32)) {
                 Some((at_f, at_p, at_c)) => {
                     for k in 0..3 {
-                        // Interpolate only the residual: the solver readback's
-                        // offset from the exact pinned path, added back onto the
-                        // pin's exact pose for t_frame.
+                        // INTERPOLATE THE RESIDUAL, not the absolute position:
+                        // the exact scripted pose is added back at the end, so
+                        // the interpolation runs on a small offset rather than
+                        // on two large nearby coordinates whose difference
+                        // would lose its leading digits.
                         let rp = f32::from(p[k] - at_p[k]);
                         let rc = f32::from(c[k] - at_c[k]);
                         let exact = f32::from(at_f[k]);
@@ -653,7 +655,7 @@ impl Backend {
             bytes.extend(active.iter().map(|&a| u8::from(a)));
             for p in positions.iter() {
                 for k in 0..3 {
-                    bytes.extend_from_slice(&(p[k] * inv_world).to_le_bytes());
+                    bytes.extend_from_slice(&(f32::from(p[k]) * inv_world).to_le_bytes());
                 }
             }
             let final_path = format!(
@@ -773,11 +775,12 @@ impl Backend {
         if !kinds.any() {
             return;
         }
-        // Refresh the host arrays from the device right before serializing.
-        // The top-of-loop save_and_quit and finished sites run with no advance
-        // since the last fetch_state, so the device rest shape already matches
-        // the host buffers; the auto-save site does one extra identical copy
-        // after fetch_state, which is harmless.
+        // Refresh the host arrays from the device right before serializing: the
+        // refresh is a real DOWNLOAD, not a copy out of a host-side mirror. The
+        // plastic commit is a kernel, so the device holds the crept rest shape
+        // and the host copy is stale from that dispatch until this runs. This
+        // is the checkpoint path alone, which is where the shape has to reach
+        // the host anyway.
         unsafe {
             if kinds.needs_inv_rest() {
                 fetch_inv_rest();
@@ -873,20 +876,20 @@ impl Backend {
         }
         let mut last_time = Instant::now();
         let mut constraint;
-        // Frame 0 is the rest pose at sim time 0. We write it once
+        // Frame 0 is the rest pose at sim time 0. It is written once
         // before the loop so the loop body has a single concern: each
         // iteration prepares the *target* pin positions for the next
         // advance, runs the step, and writes vert_n.bin only after the
-        // step completes — meaning pinned and free vertices in the
-        // same file always reflect the same sim time.
+        // step completes, so the pinned and the free vertices in one
+        // file always reflect the same sim time.
         //
-        // The previous flow set the pin constraint to pin_at(state.time)
-        // (start of step) and then wrote vert_n.bin BEFORE the next
-        // advance. Step n's pinned positions therefore came from
-        // make_constraint at the previous iteration's start time, while
-        // the free vertices in the same file had been integrated to
-        // state.time. The two halves of the file disagreed by one step,
-        // surfacing as the bl_pin_* fidelity divergence.
+        // THE ORDER IS WHAT MAKES THAT TRUE, and it is easy to lose.
+        // Setting the pin constraint from `pin_at(state.time)`, the START
+        // of the step, and writing vert_n.bin BEFORE the next advance puts
+        // step n's pinned positions at the previous iteration's start time
+        // while the free vertices in the same file have been integrated to
+        // `state.time`. The two halves of one file then disagree by one
+        // step, which is what the `bl_pin_*` fidelity scenarios detect.
         if self.state.curr_frame < 0 && self.state.time == 0.0 {
             self.write_frame_outputs(
                 program_args,
@@ -946,11 +949,12 @@ impl Backend {
             None => Vec::new(),
         };
         loop {
-            // GPU clock sampling is only meaningful on the CUDA build. The
-            // emulated/CPU backend has no device, so gating this out avoids a
-            // per-step nvidia-smi subprocess spawn (or failed spawn) on that
-            // path. The CUDA build's logging is unchanged.
-            #[cfg(not(feature = "emulated"))]
+            // GPU clock sampling is meaningful only against a CUDA device, so
+            // it is gated on the backend build.rs actually chose, never on a
+            // feature flag standing in for one. A Metal or CPU build enables no
+            // feature here either, so any weaker condition would spawn
+            // nvidia-smi once per simulation step on a machine that has none.
+            #[cfg(cuda_backend)]
             if let Ok(output) = std::process::Command::new("nvidia-smi")
                 .arg("--query-gpu=clocks.current.sm")
                 .arg("--format=csv,noheader,nounits")
@@ -1178,7 +1182,9 @@ impl Backend {
             }
             unsafe { refresh_collision_active(self.state.time as f32) };
             let mut result = StepResult::default();
+            let _phase = crate::driver::phase::start("solver.advance");
             unsafe { advance(&mut result) };
+            drop(_phase);
             if !result.success() {
                 // Derive the crash sub-kind from the StepResult booleans the
                 // backend already returns (no log parsing).
@@ -1207,12 +1213,17 @@ impl Backend {
                 // durable (tmp + fsync + rename) and first-writer-wins, so once
                 // it lands the panic hook sees a terminal outcome present and
                 // skips its Crashed{Panic}: a later failure while writing the
-                // intersection records can no longer downgrade a precise
-                // sub-kind to a generic panic.
-                crate::status_writer::terminal_crash(kind, detail);
+                // diagnostics can no longer downgrade a precise sub-kind to a
+                // generic panic.
+                crate::status_writer::terminal_crash(kind, detail.clone());
 
+                // The diagnostics are written after the terminal record, so a
+                // failure while writing them cannot cost the crash report
+                // itself.
+                let records = fetch_records();
                 write_intersection_records(
                     &program_args.output,
+                    &records,
                     if sim_args.world_scaling > 0.0 {
                         1.0 / sim_args.world_scaling
                     } else {
@@ -1244,6 +1255,7 @@ impl Backend {
                 // exact frame time t_frame = f / fps within [t_prev, t_curr].
                 for f in self.state.curr_frame + 1..=new_frame {
                     let t_frame = f as f64 / sim_args.fps;
+let _wphase = crate::driver::phase::start("solver.write_frame");
                     self.write_frame_outputs(
                         program_args,
                         sim_args,
@@ -1257,6 +1269,7 @@ impl Backend {
                         t_curr,
                         &mut timeline_statistics,
                     );
+drop(_wphase);
                 }
                 self.state.curr_frame = new_frame;
                 crate::status_writer::progress(Phase::Running, new_frame, self.state.time);
@@ -1387,19 +1400,32 @@ fn write_current_time_to_file(file_path: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn write_intersection_records(output_dir: &str, inv_world: f32) {
-    // The buffer length and the max_count we hand across the FFI both use the
-    // Rust mirror of the capacity, which must equal the canonical
-    // cpp/data.hpp MAX_INTERSECTION_RECORDS macro that bounds the C++-side
-    // writes; if they diverge the C++ getter clamps to its own macro and
-    // silently under-reports here.
+/// Pull the intersection records the backend latched during the failed step.
+///
+/// Fetched once here and handed on, rather than fetched again inside each
+/// writer: two independent fetches could report different record sets, and a
+/// reader comparing the resulting artifacts would have no way to tell which was
+/// which.
+///
+/// The buffer length and the max_count handed across the FFI both use the Rust
+/// mirror of the capacity, which must equal the canonical
+/// MAX_INTERSECTION_RECORDS macro in `src/kernels/data_records.hpp` that bounds
+/// the C++-side writes; if they diverge the C++ getter clamps to its own macro
+/// and silently under-reports.
+fn fetch_records() -> Vec<IntersectionRecord> {
     let mut records = vec![IntersectionRecord::default(); MAX_INTERSECTION_RECORDS];
-    let count =
-        unsafe { fetch_intersection_records(records.as_mut_ptr(), MAX_INTERSECTION_RECORDS as u32) };
-    if count == 0 {
+    let count = unsafe {
+        fetch_intersection_records(records.as_mut_ptr(), MAX_INTERSECTION_RECORDS as u32)
+    };
+    records.truncate(count as usize);
+    records
+}
+
+fn write_intersection_records(output_dir: &str, records: &[IntersectionRecord], inv_world: f32) {
+    if records.is_empty() {
         return;
     }
-    records.truncate(count as usize);
+    let count = records.len();
     let type_name = |t: u32| match t {
         0 => "face_edge",
         1 => "edge_edge",

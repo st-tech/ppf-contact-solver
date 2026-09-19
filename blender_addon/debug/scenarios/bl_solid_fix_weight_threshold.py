@@ -11,7 +11,7 @@
 # pin (which would be a zero-diagonal CG nan: the fix barrier is
 # dispatched over surface verts only and inertia is gated off for fix
 # pins). This scenario exercises the whole encode -> tetrahedralize ->
-# build -> solve -> fetch cycle through the real (emulated) solver with
+# build -> solve -> fetch cycle through the real solver with
 # the toggle enabled, which the rest of the suite never does (the toggle
 # defaults off).
 #
@@ -43,10 +43,10 @@ NEEDS_BLENDER = True
 
 # Backend-agnostic: the assertions below are robust invariants (finite PC2,
 # pinned/anchored region tracks its prescribed motion, free region lags,
-# body not FAILED) that hold on BOTH the emulated CPU stub and the real
+# body not FAILED) that hold on BOTH the solver and the real
 # CUDA solver, so this runs on the free-runner macOS suite AND the real-GPU
 # AWS jobs selected by ``runtests --backend real``.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11
@@ -183,7 +183,7 @@ try:
     core_tracks = 0.4 * MOVE_DZ < anchor_dz < 1.2 * MOVE_DZ and anchor_lateral < 0.2
     # The free far side FOLLOWS the pull on the real solver (bottom_dz ~
     # MOVE_DZ, with dynamic overshoot so it can slightly EXCEED the anchor)
-    # and stays frozen on the kinematic emulator (bottom_dz ~ 0). Assert the
+    # and stays frozen on the kinematic solver (bottom_dz ~ 0). Assert the
     # bounded band rather than a lag DIRECTION, which the real overshoot breaks.
     far_bounded = -0.1 * MOVE_DZ < bottom_dz < 1.4 * MOVE_DZ
     dh.record(

@@ -300,13 +300,29 @@ fn assert_lock_modes_match_axes(
 // Apply per-vertex instancing displacement in place: each column of `base`
 // gains `displacement[dmap[i]]`. Shared by the dynamic and static vertex
 // paths so they cannot drift in their displacement indexing.
+// The sum is checked because a mesh and a placement that each represent fine on
+// their own can still add to something that is not finite, which would otherwise
+// travel into the solve and surface much later as a NaN. This is the one place
+// both vertex paths combine the two, so the check belongs here rather than at the
+// callers.
 fn apply_displacement(
     base: &mut Matrix3xX<f32>,
     displacement: &Matrix3xX<f32>,
     dmap: &[u32],
 ) {
     for (i, mut x) in base.column_iter_mut().enumerate() {
-        x += displacement.column(dmap[i] as usize);
+        let offset = displacement.column(dmap[i] as usize);
+        for (row, value) in x.iter_mut().enumerate() {
+            let sum = *value + offset[row];
+            assert!(
+                sum.is_finite(),
+                "vertex {i}, component {row} lands at {sum} once its object \
+                 placement is applied, which is not a representable position. \
+                 The mesh and the placement each represent fine on their own; \
+                 their sum does not. Move or rescale the geometry."
+            );
+            *value = sum;
+        }
     }
 }
 
@@ -465,6 +481,48 @@ impl DynParamValue {
 }
 
 type DynParamTable = Vec<(String, Vec<(f64, DynParamValue)>)>;
+
+/// Reject a world-space coordinate that cannot be represented as a position.
+///
+/// Every externally supplied position reaches the solver through `scale_mat` or
+/// `scale_vec` below, so the rule is stated once, here, instead of at each
+/// ingest site. Without it a non-finite or overflowing input travels into the
+/// solve and surfaces much later as a NaN in a residual, naming neither the
+/// input it came from nor the limit it broke.
+///
+/// `what` identifies the source (an asset array, a pin path, a collider), and
+/// `at` locates the value within it.
+fn check_position_domain(scaled: f64, what: &str, at: &str) -> f64 {
+    assert!(
+        scaled.is_finite() && scaled.abs() <= f64::from(f32::MAX),
+        "{what} {at} is at {scaled}, which is not a representable position. \
+         Every absolute position has to be finite and within the float range, \
+         including one an animation produces: move or rescale the geometry, or \
+         re-author the motion that leaves it. Note that with world-scaling in \
+         effect the bound applies after scaling."
+    );
+    scaled
+}
+
+/// Scale a matrix of world-space positions into solver coordinates.
+fn scale_mat<const C: usize>(
+    m: Matrix<f64, Const<C>, na::Dyn, VecStorage<f64, Const<C>, na::Dyn>>,
+    ws: f64,
+    what: &str,
+) -> Matrix<f32, Const<C>, na::Dyn, VecStorage<f32, Const<C>, na::Dyn>> {
+    m.map_with_location(|row, col, x| {
+        let at = format!("entry {col}, component {row}");
+        check_position_domain(x * ws, what, &at) as f32
+    })
+}
+
+/// Scale a single world-space position into solver coordinates.
+fn scale_vec(v: Vector3<f64>, ws: f64, what: &str) -> Vector3<f32> {
+    v.map_with_location(|row, _, x| {
+        let at = format!("component {row}");
+        check_position_domain(x * ws, what, &at) as f32
+    })
+}
 
 fn read_mat_from_file<T, const C: usize>(path: &str) -> MatReadResult<T, C>
 where
@@ -858,12 +916,13 @@ impl Scene {
 
         // Uniform world scaling: every input geometric position/length is scaled
         // by `ws` on ingest (and the per-frame output is divided back by it in
-        // backend.rs). Applied to the f64 value before the f32 cast so no
-        // precision is lost. `ws == 1.0` (the default) is a no-op. All the
-        // `.map(|x| (x as f64 * ws) as f32)` reads below are world-space positions,
-        // centers, or deltas; the velocity, keyframe translations, rest offset, and
-        // sphere radius are scaled explicitly. Directions, rotations, indices,
-        // weights, UVs, and physical params (gravity, absolute gaps) are NOT scaled.
+        // backend.rs). It is applied to the f64 value read from the file, before
+        // the narrowing to the simulation's scalar type, so no precision is
+        // lost. `ws == 1.0` (the default) is a no-op. Every world-space
+        // position, center, or delta read below is scaled at its read site; the
+        // velocity, keyframe translations, rest offset, and sphere radius are
+        // scaled explicitly. Directions, rotations, indices, weights,
+        // UVs, and physical params (gravity, absolute gaps) are NOT scaled.
         // `args` is ProgramArgs (no sim params), so read world_scaling from
         // param.toml now (the full Config loads again at its original site below;
         // param.toml is tiny, so the extra parse is negligible).
@@ -881,9 +940,11 @@ impl Scene {
             "world-scaling must be > 0 (got {ws}); 1.0 disables scaling"
         );
 
-        let displacement_mat = read_mat_from_file::<f64, 3>(&displacement_path)
-            .expect("Failed to read displacement")
-            .map(|x| (x as f64 * ws) as f32);
+        let displacement_mat = scale_mat(
+            read_mat_from_file::<f64, 3>(&displacement_path).expect("Failed to read displacement"),
+            ws,
+            "the object placement (displacement.bin)",
+        );
         let vert_dmap_mat = read_vec::<u32>(&vert_dmap_path).expect("Failed to read vert_dmap");
         assert_eq!(vert_dmap_mat.len(), n_vert, "vert_dmap size mismatch");
         for (vertex, &group) in vert_dmap_mat.iter().enumerate() {
@@ -973,9 +1034,11 @@ impl Scene {
             "rotation_lock.bin",
             "rotation_lock_mode.bin",
         );
-        let vert_mat = read_mat_from_file::<f64, 3>(&vert_path)
-            .expect("Failed to read vert")
-            .map(|x| (x as f64 * ws) as f32);
+        let vert_mat = scale_mat(
+            read_mat_from_file::<f64, 3>(&vert_path).expect("Failed to read vert"),
+            ws,
+            "a vertex position (vert.bin)",
+        );
         // Velocity has units length/time; scale it with the geometry so seeded
         // motion stays consistent after the output is divided back by `ws`.
         let vel_mat = read_mat_from_file::<f32, 3>(&vel_path)
@@ -1006,9 +1069,11 @@ impl Scene {
         };
         let rest_vert_mat = if has_rest_vert {
             let rest_vert_path = format!("{}/bin/rest_vert.bin", args.path);
-            let mat = read_mat_from_file::<f64, 3>(&rest_vert_path)
-                .expect("Failed to read rest_vert")
-                .map(|x| (x as f64 * ws) as f32);
+            let mat = scale_mat(
+                read_mat_from_file::<f64, 3>(&rest_vert_path).expect("Failed to read rest_vert"),
+                ws,
+                "a rest-shape vertex (rest_vert.bin)",
+            );
             assert_eq!(mat.ncols(), n_vert, "rest_vert size mismatch");
             Some(mat)
         } else {
@@ -1020,9 +1085,11 @@ impl Scene {
             let n_frames = read_usize(count, "rest_vert_anim_frames");
             let anim_path = format!("{}/bin/rest_vert_anim.bin", args.path);
             let times_path = format!("{}/bin/rest_vert_times.bin", args.path);
-            let flat = read_mat_from_file::<f64, 3>(&anim_path)
-                .expect("Failed to read rest_vert_anim")
-                .map(|x| (x as f64 * ws) as f32);
+            let flat = scale_mat(
+                read_mat_from_file::<f64, 3>(&anim_path).expect("Failed to read rest_vert_anim"),
+                ws,
+                "an animated rest-shape vertex (rest_vert_anim.bin)",
+            );
             assert_eq!(
                 flat.ncols(),
                 n_frames * n_vert,
@@ -1044,9 +1111,11 @@ impl Scene {
             .unwrap_or(false);
         let (bend_rest_vert, bend_rest_vert_mask) = if has_bend_rest_vert {
             let vert_path = format!("{}/bin/bend_rest_vert.bin", args.path);
-            let mat = read_mat_from_file::<f64, 3>(&vert_path)
-                .expect("Failed to read bend_rest_vert")
-                .map(|x| (x as f64 * ws) as f32);
+            let mat = scale_mat(
+                read_mat_from_file::<f64, 3>(&vert_path).expect("Failed to read bend_rest_vert"),
+                ws,
+                "a vertex position (vert.bin)",
+            );
             assert_eq!(mat.ncols(), n_vert, "bend_rest_vert size mismatch");
             let mask_path = format!("{}/bin/bend_rest_vert_mask.bin", args.path);
             let mask_bytes =
@@ -1127,9 +1196,12 @@ impl Scene {
         let (static_vert_dmap_mat, static_vert_mat) = if n_static_vert > 0 {
             (
                 read_vec::<u32>(&static_vert_dmap_path).expect("Failed to read static_vert_dmap"),
-                read_mat_from_file::<f64, 3>(&static_vert_path)
-                    .expect("Failed to read static_vert")
-                    .map(|x| (x as f64 * ws) as f32),
+                scale_mat(
+                    read_mat_from_file::<f64, 3>(&static_vert_path)
+                        .expect("Failed to read static_vert"),
+                    ws,
+                    "a collision-mesh vertex (static_vert.bin)",
+                ),
             )
         } else {
             (Vec::new(), Matrix3xX::<f32>::zeros(0))
@@ -1217,9 +1289,12 @@ impl Scene {
                         let transition = read_string(op_entry, "transition");
                         let bezier_handles = read_bezier_handles(op_entry);
                         let delta_path = format!("{}/bin/{section}-{i}-op-{j}.bin", args.path);
-                        let delta = read_mat_from_file::<f64, 3>(&delta_path)
-                            .expect("Failed to read move_by delta")
-                            .map(|x| (x as f64 * ws) as f32);
+                        let delta = scale_mat(
+                            read_mat_from_file::<f64, 3>(&delta_path)
+                                .expect("Failed to read move_by delta"),
+                            ws,
+                            "move_by delta",
+                        );
                         operations.push(PinOperation::MoveBy {
                             delta,
                             t_start,
@@ -1234,9 +1309,12 @@ impl Scene {
                         let transition = read_string(op_entry, "transition");
                         let bezier_handles = read_bezier_handles(op_entry);
                         let target_path = format!("{}/bin/{section}-{i}-op-{j}.bin", args.path);
-                        let target = read_mat_from_file::<f64, 3>(&target_path)
-                            .expect("Failed to read move_to target")
-                            .map(|x| (x as f64 * ws) as f32);
+                        let target = scale_mat(
+                            read_mat_from_file::<f64, 3>(&target_path)
+                                .expect("Failed to read move_to target"),
+                            ws,
+                            "move_to target",
+                        );
                         operations.push(PinOperation::MoveTo {
                             target,
                             t_start,
@@ -1249,8 +1327,11 @@ impl Scene {
                         let center_x = read_f32(op_entry, "center_x");
                         let center_y = read_f32(op_entry, "center_y");
                         let center_z = read_f32(op_entry, "center_z");
-                        let center = Vector3::new(center_x, center_y, center_z)
-                            .map(|x| (x as f64 * ws) as f32);
+                        let center = scale_vec(
+                            Vector3::new(center_x as f64, center_y as f64, center_z as f64),
+                            ws,
+                            "a spin center",
+                        );
                         let axis_x = read_f32(op_entry, "axis_x");
                         let axis_y = read_f32(op_entry, "axis_y");
                         let axis_z = read_f32(op_entry, "axis_z");
@@ -1270,8 +1351,11 @@ impl Scene {
                         let center_x = read_f32(op_entry, "center_x");
                         let center_y = read_f32(op_entry, "center_y");
                         let center_z = read_f32(op_entry, "center_z");
-                        let center = Vector3::new(center_x, center_y, center_z)
-                            .map(|x| (x as f64 * ws) as f32);
+                        let center = scale_vec(
+                            Vector3::new(center_x as f64, center_y as f64, center_z as f64),
+                            ws,
+                            "a spin center",
+                        );
                         let factor = read_f32(op_entry, "factor");
                         let t_start = read_f64(op_entry, "t_start");
                         let t_end = read_f64(op_entry, "t_end");
@@ -1310,9 +1394,12 @@ impl Scene {
                             read_f64(op_entry, "rest_tz") * ws,
                         ];
                         let base = format!("{}/bin/{section}-{i}-op-{j}", args.path);
-                        let local = read_mat_from_file::<f64, 3>(&format!("{base}.bin"))
-                            .expect("Failed to read transform_keyframes local verts")
-                            .map(|x| (x as f64 * ws) as f32);
+                        let local = scale_mat(
+                            read_mat_from_file::<f64, 3>(&format!("{base}.bin"))
+                                .expect("Failed to read transform_keyframes local verts"),
+                            ws,
+                            "transform_keyframes local verts",
+                        );
                         let times = read_vec::<f64>(&format!("{base}-time.bin"))
                             .expect("Failed to read keyframe times");
                         assert_eq!(times.len(), keyframe_count);
@@ -1398,12 +1485,15 @@ impl Scene {
                     "display-pin-{i} must be an exact pin (pull = 0)"
                 );
                 let n = block.index.len();
-                let rest = read_mat_from_file::<f64, 3>(&format!(
-                    "{}/bin/display-pin-rest-{i}.bin",
-                    args.path
-                ))
-                .expect("Failed to read display pin rest positions")
-                .map(|x| (x as f64 * ws) as f32);
+                let rest = scale_mat(
+                    read_mat_from_file::<f64, 3>(&format!(
+                        "{}/bin/display-pin-rest-{i}.bin",
+                        args.path
+                    ))
+                    .expect("Failed to read display pin rest positions"),
+                    ws,
+                    "display pin rest positions",
+                );
                 assert_eq!(
                     rest.ncols(),
                     n,
@@ -1448,10 +1538,12 @@ impl Scene {
                 let transition = read_string(count, "transition");
                 let mut normal = Vector3::new(nx, ny, nz);
                 normal.normalize_mut();
-                let position =
+                let position = scale_mat(
                     read_mat_from_file::<f64, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
-                        .expect("Failed to read pos_path")
-                        .map(|x| (x as f64 * ws) as f32);
+                        .expect("Failed to read pos_path"),
+                    ws,
+                    "pos_path",
+                );
                 let wall_timing =
                     read_vec::<f64>(&format!("{}/bin/wall-timing-{}.bin", args.path, i))
                         .expect("Failed to read wall timing");
@@ -1491,12 +1583,15 @@ impl Scene {
             let transition = read_string(count, "transition");
             let n_keyframe = read_usize(count, "keyframe");
             if n_keyframe > 0 {
-                let center = read_mat_from_file::<f64, 3>(&format!(
-                    "{}/bin/sphere-pos-{}.bin",
-                    args.path, i
-                ))
-                .expect("Failed to read sphere pos_path")
-                .map(|x| (x as f64 * ws) as f32);
+                let center = scale_mat(
+                    read_mat_from_file::<f64, 3>(&format!(
+                        "{}/bin/sphere-pos-{}.bin",
+                        args.path, i
+                    ))
+                    .expect("Failed to read sphere pos_path"),
+                    ws,
+                    "sphere pos_path",
+                );
                 // Sphere collider radius is a world-space length: scale it so the
                 // collider keeps its size relative to the scaled mesh.
                 let radius: Vec<f32> =
@@ -2387,8 +2482,8 @@ impl Scene {
                 assert_ge!(strainlimit, 0.0, "Strain limit must be non-negative");
                 let (mu, lambda) = if model == Model::Pdrd {
                     // PDRD faces contribute no elastic energy; the
-                    // existing dispatch in energy.cu trips on
-                    // `mu > 0.0f` so zero here is the natural
+                    // face elastic body (`energy/face_force.kernel.cpp`)
+                    // gates on `mu > 0.0f`, so zero here is the natural
                     // skip-everything path.
                     (0.0f32, 0.0f32)
                 } else {
@@ -2709,13 +2804,18 @@ impl Scene {
                 // the step, so a driven collider advances in lockstep with the
                 // clock instead of jumping to the full step's pose and snapping
                 // back on the next step.
+                //
+                // What leaves here is the DIFFERENCE of the two posed positions,
+                // never either position itself: two nearby coordinates far from
+                // the origin cancel their leading digits, so a delta recovered
+                // downstream from an absolute pose would keep only round-off.
                 let step_delta = if kinematic {
                     let mut start: Vector3<f32> = self.vert.column(ind).into();
                     for op in pin.operations.iter() {
                         let (new_pos, _) = apply_pin_op(op, start, i, prev_time);
                         start = new_pos;
                     }
-                    position - start
+                    (position - start).map(f32::from)
                 } else {
                     // A static pin holds still, so it has nowhere to be walked
                     // back to.
@@ -2844,8 +2944,8 @@ impl Scene {
             }
             let normal = wall.normal;
             let (j, k, w, kinematic) = blend_coeff(&wall.timing, &wall.transition);
-            let position = wall.position.column(j) * (1.0 - w)
-                + wall.position.column(k) * w;
+            let position = wall.position.column(j) * f32::from(1.0 - w)
+                + wall.position.column(k) * f32::from(w);
             floor.push(Floor {
                 ground: position,
                 ghat: wall.contact_gap,
@@ -2862,8 +2962,8 @@ impl Scene {
             let reverse = s.inverted;
             let bowl = s.hemisphere;
             let (j, k, w, kinematic) = blend_coeff(&s.timing, &s.transition);
-            let center = s.center.column(j) * (1.0 - w)
-                + s.center.column(k) * w;
+            let center = s.center.column(j) * f32::from(1.0 - w)
+                + s.center.column(k) * f32::from(w);
             let radius = s.radius[j] * (1.0 - w) + s.radius[k] * w;
             sphere.push(Sphere {
                 center,
@@ -3137,8 +3237,9 @@ impl Scene {
     }
 
     pub fn build_collision_window_table(&self) -> CollisionWindowTable {
-        // Single source of truth for the cap (also enforced GPU-side via
-        // the `MAX_COLLISION_WINDOWS` #define in cpp/main/main.cu).
+        // Single source of truth for the cap: the device side reads the
+        // flat window table with the same stride, which
+        // `utility/collision_window.kernel.cpp` documents.
         const MAX_WINDOWS: usize = ppf_cts_core::datamodel::object::MAX_COLLISION_WINDOWS;
 
         // Find all collision_window entries
@@ -3445,16 +3546,29 @@ impl Scene {
 
 // Bridge into the centralized primitive-typed helpers in
 // `ppf_cts_core::datamodel::pin_apply`. Both this solver crate and the
-// migration's frontend preview kernels call into the same module so preview
-// and simulation produce identical positions for the same input.
+// frontend's preview kernels call into the same module so preview and
+// simulation produce identical positions for the same input.
 use ppf_cts_core::datamodel::pin_apply;
 
 fn to_arr(v: Vector3<f32>) -> [f64; 3] {
     [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])]
 }
 
+/// Convert a driven pin position, checking it is representable.
+///
+/// This is the runtime counterpart to the ingest guards: every pin operation
+/// (move, spin, scale, keyframed transform) returns its result through here,
+/// once per driven vertex per Newton step. The ingest check cannot cover these,
+/// because what leaves the domain is not an input but an ACCUMULATED value: a
+/// move that keeps travelling, a spin whose reach is |center| + radius, or a
+/// scale that multiplies an offset position outward. All of those can start
+/// from representable inputs and walk out mid-run.
 fn from_arr(a: [f64; 3]) -> Vector3<f32> {
-    Vector3::new(a[0] as f32, a[1] as f32, a[2] as f32)
+    Vector3::new(
+        check_position_domain(a[0], "a driven pin position", "component 0") as f32,
+        check_position_domain(a[1], "a driven pin position", "component 1") as f32,
+        check_position_domain(a[2], "a driven pin position", "component 2") as f32,
+    )
 }
 
 /// Advance `position` through one pin operation as of `time`. Returns the new

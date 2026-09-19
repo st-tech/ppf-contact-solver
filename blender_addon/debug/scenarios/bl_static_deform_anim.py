@@ -10,7 +10,7 @@
 #       -> core.pc2.write_static_deform_pc2  (cache file)
 #       -> encoder/mesh.py STATIC branch     (info["static_deform_animation"])
 #       -> frontend _populate_static Case-3  (per-vertex pin shell)
-#       -> Rust solver (--features emulated)
+#       -> solver binary
 #       -> output vert_*.bin
 #
 # This scenario builds an icosphere parented to a 2-bone armature,
@@ -51,6 +51,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11
@@ -322,7 +327,7 @@ try:
 
     # ----- D: full transfer/build/run round-trip ------------------
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(
+    dh.connect(
         local_path=LOCAL_PATH,
         server_port=SERVER_PORT,
         project_name=root.state.project_name,

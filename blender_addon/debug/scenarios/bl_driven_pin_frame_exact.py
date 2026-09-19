@@ -32,10 +32,12 @@
 #
 # The diff is the shared fidelity comparison: PC2 output per frame vs
 # `frontend.FixedScene.time(t)` at the exact frame time Rust recorded in
-# frame_to_time.out, which is the analytic prescribed pose. Emulated advance
-# is a no-op, so this isolates the frame writer; the substep-rewind half of
-# the same fix (kinematic pins walked back on a TOI-truncated step) needs a
-# real CCD line search and is covered by the GPU driven-collider run.
+# frame_to_time.out, which is the analytic prescribed pose. A fix pin is an
+# exact Dirichlet condition, so that pose is what the solver owes to
+# round-off whatever else the step does, which is what isolates the frame
+# writer here. The substep-rewind half of the same fix (kinematic pins walked
+# back on a TOI-truncated step) needs the CCD line search and is covered by
+# the GPU driven-collider run.
 
 from __future__ import annotations
 
@@ -43,11 +45,34 @@ from . import _pin_fidelity_common as _common
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
+# NOT ON WINDOWS, WHICH RUNS THE RIG HEADLESS AND SO HAS NO MODAL LOOP.
+#
+# This scenario needs a Blender that owns a window: the PC2 it asserts on is
+# written by `PPF_OT_FramePump.modal` AFTER the driver's exec returns, and a
+# modal operator needs an event loop to run in. Measured on the Windows leg of
+# Blender CI: the driver reached `fetched queued=9 total=9`, the probe recorded
+# `modal_seen: []`, and the scenario finished with ZERO checks and no error,
+# because nothing it asserts on had been written yet. The drawing scenarios in
+# the same set fail one step earlier and say so outright, with "GPU functions
+# for drawing requires the gpu module to be initialized".
+#
+# Two requirements collide here: a full build/run/fetch scenario must NOT be
+# run with `--background`, because the modal operator above needs an event
+# loop, and the Windows leg of CI has no window server, so it runs headless.
+# There is no configuration in which both hold, so this declares where it can
+# run rather than failing there every time. Linux gives the rig its own Xvfb
+# and macOS has a real window server.
+PLATFORMS = ("linux", "darwin")
+
 # Extremely tight: the fixed output equals the analytic pose to within the
 # fp32 output cast and the solver->Blender axis remap. Measured residual is
-# ~6e-8 (the fp32 floor);
-# this bound sits just above it. A regression (chord interpolation) misses
-# by ~1e-3, three orders of magnitude above this bound.
+# ~6e-8 (the fp32 floor); this bound sits just above it. A regression (chord
+# interpolation) misses by ~1e-3, three orders of magnitude above this bound.
 _TOLERANCE = 1e-6
 
 CASE = {

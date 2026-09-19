@@ -24,7 +24,7 @@
 #
 # Encoding-only: no build / run / fetch (mirrors bl_velocity_keyframes).
 # The hinge dynamics themselves are exercised on a real CUDA host by
-# examples/pdrd_hinge.py and examples/pdrd_gear.py; the emulated backend
+# examples/pdrd_hinge.py and examples/pdrd_gear.py; the solver
 # has no physics, so this rig validates the Blender->encoder plumbing.
 
 from __future__ import annotations
@@ -34,6 +34,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

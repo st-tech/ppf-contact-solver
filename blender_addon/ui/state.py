@@ -238,26 +238,59 @@ class SSHState(PropertyGroup):
             "default. Not a path on the machine Blender runs on"
         ),
     )  # pyright: ignore
-    local_path: StringProperty(
-        name="Path",
-        subtype="DIR_PATH",
-        default="",
-        description="Local directory of the ppf-contact-solver repo (the server runs from here)",
-    )  # pyright: ignore
+    # WHERE THE SOLVER RUNS. Three of these reach a server on THIS machine and
+    # start it themselves, one per platform; the rest reach one somewhere else.
+    #
+    # EXPLICIT NUMERIC IDs, as every saved enum in this file must have. Blender
+    # stores the NUMBER in the `.blend`, so 3-tuples auto-numbered by list order
+    # mean deleting or reordering an item silently repoints every saved file.
+    # The numbers here are the ones the 3-tuple list had, so every `.blend`
+    # written before they were spelled out keeps the connection it was saved
+    # with.
+    #
+    # SLOT 0 IS RETIRED AND STAYS RETIRED. It was `LOCAL`, a connection to a
+    # server the artist had started by hand on this machine, and the three
+    # native types replaced it: they reach the same server and also know how to
+    # start it, which build directory it came out of, and which device it runs
+    # on. Nothing may take the number back, because a `.blend` saved with Local
+    # still carries it; `core.migrate_renames.migrate_retired_connection`
+    # moves such a file onto this platform's native type and carries its path
+    # across, which is why no item is offered for it here.
     server_type: EnumProperty(  # pyright: ignore
         name="Type",
         items=[
-            ("LOCAL", "Local", "Use local directory"),
-            ("CUSTOM", "SSH", "Use a custom ssh config"),
-            ("COMMAND", "SSH Command", "Use ssh command"),
-            ("DOCKER", "Docker", "Use docker"),
-            ("DOCKER_SSH", "Docker over SSH", "Use docker over ssh"),
+            ("CUSTOM", "SSH", "Use a custom ssh config", "NONE", 1),
+            ("COMMAND", "SSH Command", "Use ssh command", "NONE", 2),
+            ("DOCKER", "Docker", "Use docker", "NONE", 3),
+            ("DOCKER_SSH", "Docker over SSH", "Use docker over ssh", "NONE", 4),
             (
                 "DOCKER_SSH_COMMAND",
                 "Docker over SSH Command",
                 "Use docker over ssh command",
+                "NONE",
+                5,
             ),
-            ("WIN_NATIVE", "Windows Native", "Use local Windows native build with CUDA"),
+            (
+                "WIN_NATIVE",
+                "Windows Native",
+                "Use a Windows build on this machine, and start its server",
+                "NONE",
+                6,
+            ),
+            (
+                "MAC_NATIVE",
+                "macOS Native",
+                "Use a macOS build on this machine, and start its server",
+                "NONE",
+                7,
+            ),
+            (
+                "LINUX_NATIVE",
+                "Linux Native",
+                "Use a Linux build on this machine, and start its server",
+                "NONE",
+                8,
+            ),
         ],
         default="CUSTOM",
     )
@@ -285,6 +318,119 @@ class SSHState(PropertyGroup):
         subtype="DIR_PATH",
         default="",
         description="Root directory where ppf-cts-server.exe is located",
+    )  # pyright: ignore
+    mac_native_path: StringProperty(
+        name="Solver Path",
+        subtype="DIR_PATH",
+        default="",
+        description="Root directory where ppf-cts-server is located",
+    )  # pyright: ignore
+    linux_native_path: StringProperty(
+        name="Solver Path",
+        subtype="DIR_PATH",
+        default="",
+        description="Root directory where ppf-cts-server is located",
+    )  # pyright: ignore
+    # WHICH COMPUTE DEVICE THE SERVER RUNS ON.
+    #
+    # ONE PROPERTY FOR EVERY CONNECTION, not one each. The three natives differ
+    # in which accelerator the host has, CUDA or ROCm against Metal, and the
+    # remote connections differ in which machine is asked; none of them differs
+    # in the QUESTION, so a second property would be two names for one choice
+    # and would let a `.blend` carry answers that disagree.
+    #
+    # EXPLICIT NUMERIC IDs, as every saved enum in this file must have. Blender
+    # stores the NUMBER in the `.blend`, so 3-tuples auto-numbered by list order
+    # mean deleting or reordering an item silently repoints every saved file.
+    # Retire a value by keeping its slot, never by removing it.
+    #
+    # GPU IS SLOT 0 AND THE DEFAULT, so every `.blend` saved before this
+    # property existed reads as GPU, which is what those files were built
+    # against.
+    native_device: EnumProperty(
+        name="Compute Device",
+        description=(
+            "Which build of the solver to run. GPU uses the solver host's "
+            "accelerator (CUDA or ROCm on Windows and Linux, Metal on macOS); "
+            "CPU runs the portable backend, which needs no GPU and is "
+            "substantially slower"
+        ),
+        items=[
+            (
+                "GPU",
+                "GPU",
+                "Run the accelerated build (CUDA or ROCm on Windows and Linux, "
+                "Metal on macOS)",
+                "NONE",
+                0,
+            ),
+            (
+                "CPU",
+                "CPU",
+                "Run the portable CPU build. No GPU required, and "
+                "substantially slower than the accelerated one",
+                "NONE",
+                1,
+            ),
+        ],
+        default="GPU",
+        # READ ONCE, WHEN THE SERVER IS SPAWNED. Blender makes every property
+        # keyframable unless told otherwise, and `options` REPLACES that default
+        # rather than adding to it, so leaving this off would put a working
+        # keyframe button next to a value nothing samples per frame.
+        options=set(),
+    )  # pyright: ignore
+    # WHICH ACCELERATOR, once Compute Device says GPU and the solver host holds
+    # more than one GPU build. A Windows x64 distribution carries CUDA and ROCm
+    # together, a Linux x86_64 one carries both as well, and a machine can have
+    # an NVIDIA and an AMD card at once, so the artist needs a way to say which
+    # one runs; a notebook says the same thing with ``frontend.set_backend``
+    # (``frontend/_backends_.py``).
+    #
+    # AUTOMATIC IS SLOT 0 AND THE DEFAULT, so a `.blend` saved before this
+    # property existed, and every artist who does not care, gets the rule rather
+    # than a name: the one GPU build present, or where several are, the first
+    # whose solver reports a usable device, CUDA before ROCm.
+    #
+    # EXPLICIT NUMERIC IDs, as every saved enum in this file must have, and a
+    # retired value keeps its slot.
+    native_gpu_backend: EnumProperty(
+        name="GPU Backend",
+        description=(
+            "Which accelerator to run on when Compute Device is GPU and the "
+            "solver host holds more than one GPU build"
+        ),
+        items=[
+            (
+                "AUTO",
+                "Automatic",
+                "Use the only GPU build present, or where there are several, "
+                "the first whose solver reports a usable device (CUDA, then "
+                "ROCm)",
+                "NONE",
+                0,
+            ),
+            (
+                "CUDA",
+                "CUDA",
+                "Run the CUDA build, on an NVIDIA GPU. Refused by name when "
+                "this folder has no CUDA build",
+                "NONE",
+                1,
+            ),
+            (
+                "ROCM",
+                "ROCm",
+                "Run the ROCm build, on an AMD GPU. Refused by name when this "
+                "folder has no ROCm build",
+                "NONE",
+                2,
+            ),
+        ],
+        default="AUTO",
+        # Read when the server is spawned, like Compute Device above, so it
+        # carries no keyframe button.
+        options=set(),
     )  # pyright: ignore
     # The index is retained for display and backward compatibility. UUID is
     # the stable saved identity used for launch; ``solver_gpu`` is only the

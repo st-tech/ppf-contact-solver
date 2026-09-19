@@ -1,0 +1,30 @@
+#!/bin/bash
+# Pre-commit hook: clear output cells from staged Jupyter notebooks under
+# examples/ before they land. Backed by tools/clear_notebook_outputs.py
+# (no jupyter / nbconvert dependency).
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$REPO_ROOT/tools/clear_notebook_outputs.py"
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "pre-commit: missing $SCRIPT, skipping notebook scrub." >&2
+    exit 0
+fi
+
+NOTEBOOKS="$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '^examples/.*\.ipynb$' || true)"
+
+if [ -z "$NOTEBOOKS" ]; then
+    exit 0
+fi
+
+COUNT="$(printf '%s\n' "$NOTEBOOKS" | wc -l | tr -d ' ')"
+echo "pre-commit: clearing outputs in $COUNT staged notebook(s)..."
+
+cd "$REPO_ROOT"
+
+# Pass paths via xargs so any quoting weirdness is contained, and re-stage.
+printf '%s\n' "$NOTEBOOKS" | xargs python3 "$SCRIPT"
+printf '%s\n' "$NOTEBOOKS" | xargs git add --

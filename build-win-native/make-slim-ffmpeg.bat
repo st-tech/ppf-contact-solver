@@ -32,6 +32,22 @@ if errorlevel 1 (
     echo ERROR: Failed to load download manifest
     exit /b 1
 )
+call "%BUILD_WIN%\scripts\platform.bat"
+if errorlevel 1 exit /b 1
+
+REM THE MSYS2 ENVIRONMENT IS THE ONE THAT TARGETS THIS HOST. MSYS2 publishes one
+REM x86_64 base installer and runs it under emulation on Windows on ARM, where its
+REM CLANGARM64 environment is the toolchain that emits native ARM64 code; MINGW64
+REM there would build an x64 ffmpeg.exe that runs only under emulation. nasm
+REM assembles x86 code only, so ARM64 has no use for it: the aarch64 assembly in
+REM x264 and ffmpeg is compiled by clang.
+if "!PPF_WIN_ARCH!"=="arm64" (
+    set "PPF_MSYSTEM=CLANGARM64"
+    set "MSYS2_PACKAGES=mingw-w64-clang-aarch64-clang mingw-w64-clang-aarch64-pkgconf make git diffutils"
+) else (
+    set "PPF_MSYSTEM=MINGW64"
+    set "MSYS2_PACKAGES=mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-pkg-config make nasm git diffutils"
+)
 
 REM Download and install MSYS2 if not present
 if not exist "%MSYS2_DIR%\usr\bin\bash.exe" (
@@ -65,7 +81,7 @@ if not exist "%MSYS2_DIR%\usr\bin\bash.exe" (
 
     echo Installing required packages...
     "%MSYS2_DIR%\usr\bin\bash.exe" --login -c "pacman -Syu --noconfirm"
-    "%MSYS2_DIR%\usr\bin\bash.exe" --login -c "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-pkg-config make nasm git diffutils"
+    "%MSYS2_DIR%\usr\bin\bash.exe" --login -c "pacman -S --noconfirm --needed !MSYS2_PACKAGES!"
 
     echo MSYS2 setup complete!
 )
@@ -75,8 +91,9 @@ echo   Building Slim FFmpeg for Windows
 echo ============================================================
 echo.
 
-REM Run the build script in MSYS2 MinGW64 environment
-echo Running build in MSYS2 MinGW64 environment...
+REM Run the build script in this host's MSYS2 environment, which
+REM make-slim-ffmpeg.sh reads from the PPF_MSYSTEM it inherits.
+echo Running build in the MSYS2 !PPF_MSYSTEM! environment...
 REM Convert Windows path to MSYS2 path (C:\foo\bar -> /c/foo/bar)
 REM Extract drive letter and convert to lowercase
 set DRIVE_LETTER=%BUILD_WIN:~0,1%

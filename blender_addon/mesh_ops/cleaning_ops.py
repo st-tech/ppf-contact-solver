@@ -353,7 +353,7 @@ def is_particle_mesh(obj) -> bool:
     return bool(
         obj.type == "MESH"
         and obj.data is not None
-        and obj.get("ppf_particle_mesh")
+        and obj.get("particle_mesh")
         and len(obj.data.polygons) == 0
         and len(obj.data.edges) == 0
     )
@@ -868,7 +868,7 @@ class MESH_OT_PPFScanMeshes(Operator):
     chokes on, and report what was found. Reads the meshes only, nothing is
     modified. Adjust the thresholds with Adjust Last Operation (F9)"""
 
-    bl_idname = "object.ppf_scan_mesh_defects"
+    bl_idname = "object.scan_mesh_defects"
     bl_label = "Scan Selected Meshes"
     bl_options = {"REGISTER"}
 
@@ -948,7 +948,7 @@ class MESH_OT_PPFMergeByDistance(_CountChangingRepair):
     mass/gap^2 stiffness destroy the conditioning of the solver's fp32 Newton
     matrix. Changes the vertex count"""
 
-    bl_idname = "object.ppf_merge_by_distance"
+    bl_idname = "object.merge_by_distance"
     bl_label = "Merge by Distance"
     report_verb = "Merged"
 
@@ -981,7 +981,7 @@ class MESH_OT_PPFRemoveLooseVertices(_CountChangingRepair):
     incident faces and aborts when a vertex has none. Pinned vertices are
     kept, since a pin holds them regardless. Changes the vertex count"""
 
-    bl_idname = "object.ppf_remove_loose_vertices"
+    bl_idname = "object.remove_loose_vertices"
     bl_label = "Remove Loose Vertices"
     report_verb = "Removed"
 
@@ -1018,7 +1018,7 @@ class MESH_OT_PPFDissolveDegenerate(_CountChangingRepair):
     has no defined normal, so the contact normal and the bending hinge built
     on it are both undefined. Changes the vertex count"""
 
-    bl_idname = "object.ppf_dissolve_degenerate"
+    bl_idname = "object.dissolve_degenerate"
     bl_label = "Dissolve Degenerate"
     report_verb = "Dissolved"
 
@@ -1057,7 +1057,7 @@ class MESH_OT_PPFDeleteDuplicateFaces(_RepairBase):
     aborts, and the encoder already refuses to transfer them. Leaves the
     vertex count unchanged, so pins and caches survive"""
 
-    bl_idname = "object.ppf_delete_duplicate_faces"
+    bl_idname = "object.delete_duplicate_faces"
     bl_label = "Delete Duplicate Faces"
     report_verb = "Deleted"
 
@@ -1082,7 +1082,7 @@ class MESH_OT_PPFTriangulate(_RepairBase):
     between the displayed surface and the simulated one. Leaves the vertex
     count unchanged, so pins and caches survive"""
 
-    bl_idname = "object.ppf_triangulate_for_solver"
+    bl_idname = "object.triangulate_for_solver"
     bl_label = "Triangulate"
     report_verb = "Triangulated"
 
@@ -1099,7 +1099,7 @@ class MESH_OT_PPFRecalcNormals(_RepairBase):
     consistently wound surface to tell inside from outside. Leaves the vertex
     count unchanged, so pins and caches survive"""
 
-    bl_idname = "object.ppf_recalc_normals_outside"
+    bl_idname = "object.recalc_normals_outside"
     bl_label = "Recalculate Outside"
     report_verb = "Rewound"
 
@@ -1170,7 +1170,7 @@ def _draw_near_duplicates(box, defect, report):
     )
     _fix_button(
         box,
-        "object.ppf_merge_by_distance",
+        "object.merge_by_distance",
         "Merge by Distance",
         "AUTOMERGE_ON",
         report,
@@ -1188,7 +1188,7 @@ def _draw_surface(box, defect, report):
             icon="ERROR",
         )
         box.operator(
-            "object.ppf_recalc_normals_outside",
+            "object.recalc_normals_outside",
             text="Recalculate Outside",
             icon="NORMALS_FACE",
         )
@@ -1228,7 +1228,7 @@ def _draw_resplittable(box, defect, report):
     )
     sub.label(text="Blender may split these differently than the simulation.")
     box.operator(
-        "object.ppf_triangulate_for_solver",
+        "object.triangulate_for_solver",
         text="Triangulate",
         icon="MOD_TRIANGULATE",
     )
@@ -1273,7 +1273,7 @@ _DEFECT_ROWS = (
         _simple_row(
             "{count} isolated vertex(es), in no face",
             "ERROR",
-            "object.ppf_remove_loose_vertices",
+            "object.remove_loose_vertices",
             "Remove Loose Vertices",
             "X",
         ),
@@ -1284,7 +1284,7 @@ _DEFECT_ROWS = (
         _simple_row(
             "{count} hanging seam vertex(es)",
             "ERROR",
-            "object.ppf_remove_loose_vertices",
+            "object.remove_loose_vertices",
             "Remove Loose Vertices",
             "X",
         ),
@@ -1295,7 +1295,7 @@ _DEFECT_ROWS = (
         _simple_row(
             "{count} duplicate face(s)",
             "ERROR",
-            "object.ppf_delete_duplicate_faces",
+            "object.delete_duplicate_faces",
             "Delete Duplicate Faces",
             "X",
         ),
@@ -1306,7 +1306,7 @@ _DEFECT_ROWS = (
         _simple_row(
             "{count} degenerate (zero-area) face(s)",
             "ERROR",
-            "object.ppf_dissolve_degenerate",
+            "object.dissolve_degenerate",
             "Dissolve Degenerate",
             "X",
             pass_threshold=True,
@@ -1371,7 +1371,7 @@ def draw_mesh_cleaning(layout, context):
     col = box.column()
     col.enabled = can_clean(context)
     col.operator(
-        "object.ppf_scan_mesh_defects",
+        "object.scan_mesh_defects",
         text="Scan Selected Meshes",
         icon="VIEWZOOM",
     )

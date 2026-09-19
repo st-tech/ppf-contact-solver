@@ -11,8 +11,8 @@ requirements.txt
 .clang-format
 *.lock
 !Cargo.lock
-# Ignore a local CARGO_HOME / stray .cargo state, but keep the committed
-# workspace cargo config (defines the `build-emul` alias).
+# Ignore a local CARGO_HOME / stray .cargo state, while keeping any
+# committed workspace cargo config tracked.
 .cargo*
 !.cargo/
 .cargo/*
@@ -42,6 +42,7 @@ examples/asset
 examples/data
 examples/**/.*
 examples/export
+/export/
 examples/_*
 # `frontend.extra.sparse_clone` populates this with shallow clones of
 # external repos (Codim-IPC, etc.) on first run of the fitting/drape
@@ -62,20 +63,51 @@ docs/logs.rst
 blender_addon/lib
 *.log
 report.json
-src/cpp/build
-# CUDA build artifacts under any crate. The legacy `src/cpp/build`
+src/kernels/build
+# CUDA build artifacts under any crate. The legacy `src/kernels/build`
 # pattern above stays for older checkouts that still carry it; this
-# glob matches the `crates/<name>/src/cpp/build/` location used now.
-**/src/cpp/build
+# glob matches the `crates/<name>/src/kernels/build/` location used now.
+**/src/kernels/build
+# Metal backend build artifacts, same shape as the CUDA line above. The
+# individual object and library patterns already cover the files; this keeps
+# the directory itself out too. The recipe lives beside the CUDA one in
+# `crates/ppf-cts-compute/metal`, so the glob names that directory rather than
+# a path under a crate's `src/`.
+**/ppf-cts-compute/metal/build
+# The CUDA recipe's own default OUT_DIR, for a hand-run `make` in that
+# directory. A cargo build passes OUT_DIR and writes nothing here, but
+# regenerating a rendering or the kernel table by hand is a documented step and
+# it lands in `build/` beside the recipe.
+**/ppf-cts-compute/cuda/build
 # The C++/CUDA regression binaries and their objects. The test Makefiles write
 # them one level above the crate's src/, because two build scripts watch
 # `crates/ppf-cts-solver/src` recursively and anything landing inside it
 # invalidates both. This entry does NOT accomplish that: cargo's mtime walk
 # does not consult .gitignore, so the directory has to sit outside the watch on
-# its own merits and this line only keeps the results untracked. The two
-# root-anchored per-binary entries that used to sit above matched nothing once
-# the solver moved under crates/, which is how a 1.2 MB ELF came to be tracked.
+# its own merits and this line only keeps the results untracked. A root-anchored
+# per-binary entry matches nothing here, because the solver sits under crates/,
+# so one left in place lets a 1.2 MB ELF be tracked.
 **/build-tests/
+
+# The same defect one level down: a test Makefile invoked without its OUT
+# override builds its binary in place, beside the source, which lands inside the
+# watched tree AND is untracked by nothing. These are the names those Makefiles
+# produce. Path-relative rather than root-anchored, for the reason above.
+**/tests/test_pdrd_polar
+**/tests/test_bend_aniso
+**/tests/test_reduce
+**/tests/test_exclusive_scan
+**/tests/test_radix_sort
+**/tests/test_pierce_underflow
+**/tests/test_normalize_underflow
+**/tests/test_cuda_arena
+**/tests/test_cuda_diagnostics
+**/tests/test_row_dedupe
+**/tests/test_row_pattern
+**/tests/test_accd_degenerate
+**/tests/test_distance_coeff
+**/tests/test_friction
+**/tests/test_translation_lock
 build-win-native/python
 build-win-native/deps
 build-win-native/.*
@@ -92,11 +124,12 @@ build-win-native/ci
 build-win-native/temp_ffmpeg
 build-win-native/ffmpeg
 build-win-native/msys64
-# Embedded toolchain dirs that warmup.bat builds on Windows hosts.
-# They are large local-only build artifacts, never committed. Listed
-# here so `rsync --filter=':- .gitignore' --delete` preserves them; a
-# missing entry here = `--delete` wipes them and recovery requires
-# re-running warmup.bat (20-30 min, ~10GB of downloads).
+# Embedded toolchain dirs warmup.bat builds on Windows hosts. They
+# only exist in a checkout that has run warmup.bat, never in a fresh
+# clone. Listed here so `rsync --filter=':- .gitignore' --delete`
+# preserves them; a missing entry here means `--delete` wipes them and
+# recovery requires re-running warmup.bat (20-30 min, ~10GB of
+# downloads).
 build-win-native/cuda
 build-win-native/dist
 build-win-native/mingit
@@ -105,6 +138,48 @@ build-win-native/msvc
 build-win-native/jupyter
 build-win-native/fast_check
 build-win-native/python_full
+# build-mac-native/, the same split as the Windows block above: the scripts,
+# scripts/downloads.txt and README.md are tracked, and everything warmup.sh
+# provisions or build.sh and bundle.sh generate is not. Once warmup.sh has
+# run this directory holds a toolchain that only exists on the macOS host,
+# so these entries are also what keeps `rsync --filter=':- .gitignore'
+# --delete` from wiping it.
+build-mac-native/.*
+build-mac-native/downloads
+build-mac-native/rust
+build-mac-native/deps
+build-mac-native/python
+build-mac-native/dist
+build-mac-native/jupyter
+build-mac-native/ffmpeg
+build-mac-native/temp_ffmpeg
+build-mac-native/start.sh
+build-mac-native/*.log
+build-mac-native/*.pem
+build-mac-native/*.zip
+build-mac-native/*.tar.gz
+build-mac-native/*.dmg
+build-mac-native/*.pkg
+# build-linux-native/, the same split as the macOS block above: the scripts,
+# scripts/downloads.txt and README.md are tracked, and everything warmup.sh
+# provisions or build.sh and bundle.sh generate is not. Once warmup.sh has run
+# this directory holds a CUDA toolkit, an interpreter and a Rust toolchain, so
+# these entries are also what keeps `rsync --filter=':- .gitignore' --delete`
+# from wiping them.
+build-linux-native/.*
+build-linux-native/downloads
+build-linux-native/rust
+build-linux-native/cuda
+build-linux-native/rocm
+build-linux-native/python
+build-linux-native/patchelf
+build-linux-native/nasm
+build-linux-native/ffmpeg
+build-linux-native/dist
+build-linux-native/jupyter
+build-linux-native/start.sh
+build-linux-native/*.log
+build-linux-native/*.tar.gz
 .claude/
 .venv/
 
@@ -114,3 +189,7 @@ calibration/report_data/
 # fTetWild writes this into its working directory. The tet script removes
 # it after a run, so one that survives is from a run that ended early.
 __tracked_surface.stl
+
+# Suite output written by examples/run_suite.py when --out is not given.
+suite_results.json
+crates/ppf-cts-compute/rocm/build/

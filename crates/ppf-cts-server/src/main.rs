@@ -116,10 +116,10 @@ async fn main() -> anyhow::Result<()> {
     // logging; the merged map is keyed by channel name and later
     // entries with the same key overwrite earlier ones (channel names
     // do not collide across files in practice). Probed roots, in order:
-    //   1. `<root>/crates/ppf-cts-solver/src/`        (CUDA solver,
-    //                                                  owns most
-    //                                                  channels)
-    //   2. `<root>/crates/ppf-cts-core/src/`          (Rust kernels)
+    //   1. `<root>/crates/ppf-cts-solver/src/`        (the neutral solver)
+    //   2. `<root>/crates/ppf-cts-compute/`          (every backend; none
+    //                                                  declares a channel today)
+    //   3. `<root>/crates/ppf-cts-core/src/`          (Rust kernels)
     // `<root>` is resolved as: `PPF_CTS_LOG_SRC_DIR` env var first
     // (colon-separated absolute paths used directly), then cwd, then a
     // `target/release/` walk-up from the binary's own location. The
@@ -129,28 +129,41 @@ async fn main() -> anyhow::Result<()> {
     // `<repo_root>/target/release/ppf-cts-server`, so its parent chain
     // points at the right tree.
     let mut config = EngineConfig::default();
-    // Populate `hardware` with a real probe. Without this, every
-    // field stays "Unknown" and the addon's "Remote Hardware" panel
-    // shows nothing useful.
+    // Populate `hardware` with a real probe. Without this, only the backend is
+    // known and the addon's "Remote Hardware" panel has nothing to show.
     config.hardware = ppf_cts_server::hardware::probe();
+    // ONE ENTRY PER FIELD THAT IS PRESENT, matching what the panel draws. A
+    // fixed format string would have to print something for a field this
+    // backend does not have, which is the thing the panel stopped doing.
+    let hw = &config.hardware;
+    let mut fields = vec![format!("Backend={}", hw.backend)];
+    for (label, value) in [
+        ("GPU", hw.gpu.clone()),
+        ("GPU Family", hw.gpu_family.clone()),
+        ("GPU Index", hw.gpu_index.map(|index| index.to_string())),
+        ("VRAM", hw.vram.clone()),
+        ("CUDA", hw.cuda.clone()),
+        ("SM", hw.sm.clone()),
+    ] {
+        if let Some(value) = value {
+            fields.push(format!("{label}={value}"));
+        }
+    }
+    fields.push(format!("CPU={}", hw.cpu));
+    fields.push(format!("RAM={}", hw.ram));
+    log::info!(target: "ppf::serve", "hardware: {}", fields.join(" "));
+    // Which build this server's runs will use, reported on every response so
+    // an add-on attaching to this server can refuse it when it is not the
+    // build the add-on's device selection names.
+    let solver = ppf_cts_server::executor::solver_build();
     log::info!(
         target: "ppf::serve",
-        "hardware: GPU={} VRAM={} CUDA={} SM={} CPU={} RAM={}",
-        config.hardware.gpu,
-        config.hardware.vram,
-        config.hardware.cuda,
-        config.hardware.sm,
-        config.hardware.cpu,
-        config.hardware.ram,
+        "solver build: target_dir={} backend={}",
+        if solver.target_dir.is_empty() { "<unknown>" } else { &solver.target_dir },
+        if solver.backend.is_empty() { "<unknown>" } else { &solver.backend },
     );
-    if config.hardware.emulated {
-        log::warn!(
-            target: "ppf::serve",
-            "MODE: EMULATED build (CPU stub backend, no CUDA). Simulations \
-             will NOT produce real physics; this binary is for the test \
-             rig only. Rebuild without `--features emulated` for real runs."
-        );
-    }
+    config.solver_target_dir = solver.target_dir;
+    config.solver_backend = solver.backend;
     let src_roots: Vec<std::path::PathBuf> = if let Ok(override_paths) =
         std::env::var("PPF_CTS_LOG_SRC_DIR")
     {
@@ -177,6 +190,19 @@ async fn main() -> anyhow::Result<()> {
         let mut roots: Vec<std::path::PathBuf> = Vec::new();
         for base in probe_bases {
             roots.push(base.join("crates").join("ppf-cts-solver").join("src"));
+            // THE COMPUTE CRATE, WHOLE, RATHER THAN ONE BACKEND BY NAME. The
+            // walk recurses, so this one root covers cuda/, rocm/ and metal/
+            // at once and needs no edit when a backend is added. Measured: NO
+            // backend directory declares a channel today, `SimpleLog logging(`
+            // appearing only in ppf-cts-core/src and ppf-cts-solver/src/driver,
+            // so this root contributes nothing and is kept for the backend that
+            // declares one next. It used to name `cuda` and say nearly every
+            // channel was declared there, which was true of the CUDA
+            // orchestrator that used to live in that tree and has since been
+            // deleted; the stale comment cost a reader a wrong conclusion about
+            // what a distribution must ship. A missing root is skipped in
+            // silence below.
+            roots.push(base.join("crates").join("ppf-cts-compute"));
             roots.push(base.join("crates").join("ppf-cts-core").join("src"));
         }
         roots

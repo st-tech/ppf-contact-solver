@@ -6,12 +6,11 @@
 #
 # Cusick drape-test harness for the bundled fabric presets.
 #
-# This is the Tier-2 validation step (see this directory's README.md):
-# it reproduces the standard
-# Cusick fabric-drape experiment (Cusick 1965/1968; BS 5058 / ISO 9073-9) in
-# the solver and measures the Drape Coefficient (DC) of each SHELL preset, so
-# the shipped fabric `bend` / `young-mod` numbers are tied to published textile
-# data rather than chosen by eye.
+# This is the Tier-2 validation step for the bundled fabric presets: it
+# reproduces the standard Cusick fabric-drape experiment (Cusick 1965/1968;
+# BS 5058 / ISO 9073-9) in the solver and measures the Drape Coefficient (DC)
+# of each SHELL preset, so the shipped fabric `bend` / `young-mod` numbers are
+# tied to published textile data rather than chosen by eye.
 #
 # Method
 # ------
@@ -43,10 +42,10 @@
 # projection onto XZ (the Y coordinate is dropped). This matches every cloth
 # example in examples/ (e.g. bench_drape.py: sheets in XZ, sphere below in -Y).
 #
-# IMPORTANT: the emulated (macOS) backend has NO real physics, so the DC it
-# reports is meaningless; it is useful only as a plumbing smoke test. Run this
-# on a real CUDA host (see calibration/cusick_drape/README.md) for the numbers
-# that calibrate the presets.
+# IMPORTANT: take the numbers that calibrate the presets from a real CUDA host
+# (see calibration/cusick_drape/README.md). Every backend computes the same
+# physics, but the Rust CPU backend runs at about 30x the wall clock, which is a
+# plumbing smoke test rather than a sweep.
 #
 # Usage (from the worktree root, with the project venv):
 #     PYTHONPATH=. python calibration/cusick_drape/cusick_drape.py --all

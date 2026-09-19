@@ -62,6 +62,7 @@ from .events import (
     FetchFailed,
     FetchMapComplete,
     FetchRequested,
+    KillServerRequested,
     PollTick,
     ProgressUpdated,
     QueryRequested,
@@ -199,13 +200,19 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             )
 
         # ── Server lifecycle ───────────────────────────────
-        case StartServerRequested(cuda_device=device, cuda_device_uuid=device_uuid) \
-                if state.phase == Phase.ONLINE and not state.busy:
+        case StartServerRequested(
+            cuda_device=device,
+            cuda_device_uuid=device_uuid,
+            device=compute_device,
+            gpu_backend=gpu_backend,
+        ) if state.phase == Phase.ONLINE and not state.busy:
             return (
                 replace(state, server=Server.LAUNCHING),
                 [DoLaunchServer(
                     cuda_device=device,
                     cuda_device_uuid=device_uuid,
+                    device=compute_device,
+                    gpu_backend=gpu_backend,
                 )],
             )
 
@@ -218,6 +225,19 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         case StopServerRequested() if state.server in (Server.RUNNING, Server.LAUNCHING):
             return (
                 replace(state, server=Server.STOPPING),
+                [DoStopServer()],
+            )
+
+        case KillServerRequested() if (
+            state.phase == Phase.ONLINE
+            and not state.busy
+            and state.server != Server.STOPPING
+        ):
+            # The refusal the button answers ("port already in use", "a
+            # server is already running") is in ``error``; acting on it
+            # clears it, as a new Connect would.
+            return (
+                replace(state, server=Server.STOPPING, error=""),
                 [DoStopServer()],
             )
 
@@ -742,21 +762,22 @@ def _interpret_response(
         # why the bump did nothing. Stopping the server forces a clean
         # restart against the on-disk binary, which is the version the
         # user actually intended to run. DoStopServer routes through the
-        # current backend (local/win_native: subprocess.terminate;
+        # current backend (local/win_native/mac_native: subprocess.terminate;
         # ssh/docker: pkill -f ppf-cts-server on the remote).
         # The two version numbers are the whole diagnosis, so they go on the
         # panel as well as into the Console. A restart is the fix only when
         # the on-disk binary is already the matching one; a solver that came
-        # as a Docker image or a Windows bundle carries its version with it,
-        # and for those the only fix is to update whichever side is behind,
-        # so the message has to name that rather than just say restart.
+        # as a Docker image, a Windows bundle or a macOS bundle carries its
+        # version with it, and for those the only fix is to update whichever
+        # side is behind, so the message has to name that rather than just
+        # say restart.
         mismatch = (
             f"Protocol version mismatch: server reports {version}, add-on "
-            f"expects {PROTOCOL_VERSION}. The server is being stopped so a "
-            f"restart picks up the on-disk binary. If it reports the same "
-            f"version again, the two halves are different releases: update "
-            f"the add-on, or pull the solver image or Windows bundle that "
-            f"matches it."
+            f"expects {PROTOCOL_VERSION}. The server is being stopped; press "
+            f"Start Server so the restart picks up the on-disk binary. If it "
+            f"reports the same version again, the two halves are different "
+            f"releases: update the add-on, or pull the solver image, Windows "
+            f"bundle or macOS bundle that matches it."
         )
         return (
             replace(state, version_ok=False, error=mismatch),
@@ -777,14 +798,6 @@ def _interpret_response(
     # treats every client edit as divergent, which is the safe default.
     server_data_hash = str(r.get("data_hash", "") or "")
     server_param_hash = str(r.get("param_hash", "") or "")
-    # Emulated-build flag rides on ``hardware.emulated`` in normal
-    # responses. The minimal error-only reply omits the hardware block,
-    # so fall back to the last-known value rather than resetting it.
-    _hw = r.get("hardware")
-    server_emulated = (
-        bool(_hw.get("emulated", False)) if isinstance(_hw, dict) else state.emulated
-    )
-
     status_str = r.get("status", "")
     error_msg = r.get("error", "")
     # Stable snake_case name of the crash cause, empty when the error is
@@ -830,7 +843,6 @@ def _interpret_response(
                 server_upload_id=server_upload_id,
                 server_data_hash=server_data_hash,
                 server_param_hash=server_param_hash,
-                emulated=server_emulated,
             ),
             log_effects,
         )
@@ -1039,7 +1051,6 @@ def _interpret_response(
             frame=frame,
             version_ok=True,
             starting_poll_guard=starting_poll_guard_after,
-            emulated=server_emulated,
         )
         return new_state, effects
 
@@ -1066,7 +1077,6 @@ def _interpret_response(
         server_param_hash=server_param_hash,
         active_upload_id=new_active_upload_id,
         starting_poll_guard=starting_poll_guard_after,
-        emulated=server_emulated,
     )
 
     return new_state, effects
@@ -1090,6 +1100,18 @@ def _server_gone(state: AppState) -> AppState:
     (ServerLost, ServerStopped, empty-response). Do NOT route through
     _reset_state(): that returns a fresh AppState and would drop the
     fields needed for reconnection.
+
+    ``version_ok`` IS SCRUBBED, because it describes the server that was
+    answering and there is no longer one. Leaving it false outlived the
+    server it accused: a protocol mismatch stops that server (see the
+    ServerPolled branch), every later poll then took the empty-response path
+    through here, and ``to_remote_status`` reads ``not version_ok`` ahead of
+    the server states, so the panel went on reporting Protocol Version
+    Mismatch about a process that was already gone, with ``can_operate``
+    false behind it. Only Disconnect cleared it, which is why reconnecting
+    appeared to be the fix. ``error`` is deliberately left alone: the
+    diagnosis and the two version numbers stay on the panel, now beside a
+    status that says the server is not running.
     """
     return replace(
         state,
@@ -1100,4 +1122,5 @@ def _server_gone(state: AppState) -> AppState:
         traffic="",
         message="",
         active_upload_id="",
+        version_ok=True,
     )

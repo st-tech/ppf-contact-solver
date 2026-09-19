@@ -85,7 +85,7 @@ fn fixed_session_param_snapshot_is_independent() {
 fn unix_script_has_shebang_and_path_args() {
     let s = Session::new("app", "demo", "/tmp/app", "/tmp/proj", "/tmp/data");
     let fs = FixedSession::from_session(&s);
-    let script = shell_command_script(&s, &fs, Platform::Unix);
+    let script = shell_command_script(&s, &fs, Platform::Unix, Path::new("/tmp/proj/target/release"));
     assert!(script.starts_with("#!/bin/bash"));
     assert!(script.contains("/tmp/proj/target/release/ppf-contact-solver"));
     // Path values are double-quoted so spaces in project root don't
@@ -101,10 +101,45 @@ fn unix_script_has_shebang_and_path_args() {
 fn unix_script_quotes_paths_with_spaces() {
     let s = Session::new("My App", "demo", "/tmp/has space", "/tmp/has space/proj", "/tmp/has space/data");
     let fs = FixedSession::from_session(&s);
-    let script = shell_command_script(&s, &fs, Platform::Unix);
+    let script = shell_command_script(&s, &fs, Platform::Unix, Path::new("/tmp/proj/target/release"));
     // Both path args must reach the solver as a single argv entry.
     assert!(script.contains(r#"--path "/tmp/has space/demo""#));
     assert!(script.contains(r#"--output "/tmp/has space/demo/output""#));
+}
+
+// A distribution writes nothing under the user's home. The Metal pipeline
+// archive and the NVIDIA driver's compute cache are the caches the solver
+// process writes itself, and this script is the only thing that configures that
+// process on every entry point, so a tree carrying the self-contained marker
+// must hand it the tree's own cache directory, and a developer checkout must
+// keep the defaults.
+#[cfg(unix)]
+#[test]
+fn unix_script_keeps_the_gpu_caches_inside_a_selfcontained_tree() {
+    let tree = tempfile::tempdir().unwrap();
+    let proj = tree.path().to_path_buf();
+    let s = Session::new("app", "demo", "/tmp/app", proj.clone(), "/tmp/data");
+    let fs = FixedSession::from_session(&s);
+
+    let checkout = shell_command_script(&s, &fs, Platform::Unix, &proj.join("target/release"));
+    assert!(!checkout.contains("PPF_METAL_ARCHIVE_DIR"), "{checkout}");
+    assert!(!checkout.contains("CUDA_CACHE_PATH"), "{checkout}");
+
+    std::fs::write(proj.join(crate::datamodel::app::SELFCONTAINED_MARKER), "").unwrap();
+    let packaged = shell_command_script(&s, &fs, Platform::Unix, &proj.join("target/release"));
+    let cache = proj.join("cache").join("ppf-cts");
+    let solver = packaged.find("\"$SOLVER_PATH\" --path").expect("the solver exec line");
+    for (name, dir) in [
+        ("PPF_METAL_ARCHIVE_DIR", "metal-pipeline-archive"),
+        ("CUDA_CACHE_PATH", "nv-compute-cache"),
+    ] {
+        let line = format!("export {name}=\"${{{name}:-{}}}\"", cache.join(dir).display());
+        let at = packaged
+            .find(&line)
+            .unwrap_or_else(|| panic!("no {name} export in:\n{packaged}"));
+        // The export precedes the solver's exec, so the process inherits it.
+        assert!(at < solver, "{name} is exported after the solver starts:\n{packaged}");
+    }
 }
 
 #[cfg(windows)]
@@ -117,7 +152,7 @@ fn windows_script_quotes_paths_with_spaces() {
         "C:\\New Folder\\data",
     );
     let fs = FixedSession::from_session(&s);
-    let script = shell_command_script(&s, &fs, Platform::Windows);
+    let script = shell_command_script(&s, &fs, Platform::Windows, Path::new("/tmp/proj/target/release"));
     // Path values are wrapped in double quotes so cmd doesn't split
     // "C:\New Folder\app\demo" on the embedded space.
     assert!(script.contains(r#"--path "C:\New Folder\app\demo""#));
@@ -134,13 +169,42 @@ fn windows_script_has_batch_header_and_dll_path() {
         "C:\\data",
     );
     let fs = FixedSession::from_session(&s);
-    let script = shell_command_script(&s, &fs, Platform::Windows);
+    let script = shell_command_script(&s, &fs, Platform::Windows, Path::new("/tmp/proj/target/release"));
     assert!(script.starts_with("@echo off"));
     assert!(script.contains("ppf-contact-solver.exe"));
     assert!(script.contains("LIB_PATH"));
     assert!(script.contains("CUDA_PATH"));
     // Variadic forwarding for batch.
     assert!(script.contains("%*"));
+}
+
+#[test]
+fn windows_script_takes_its_library_dirs_from_the_shared_list() {
+    // The launcher and ppf-cts-server's `--backend` query have to search the
+    // same directories for the backend DLL, the solver not starting without
+    // it, so both read `windows_library_dirs`. A script spelling its own
+    // pair would drift from the server's the next time the library moves,
+    // which is how five copies came to name a directory that no longer
+    // existed while nothing failed.
+    let s = Session::new("app", "demo", "C:\\app", "C:\\proj", "C:\\data");
+    let fs = FixedSession::from_session(&s);
+    let script = shell_command_script(&s, &fs, Platform::Windows, Path::new("/tmp/proj/target/release"));
+    let [dev, bundle] = scripts::windows_library_dirs(&s.proj_root);
+    assert!(
+        script.contains(&format!("set LIB_PATH_DEV={}", dev.display())),
+        "{script}"
+    );
+    assert!(
+        script.contains(&format!("set LIB_PATH_BUNDLE={}", bundle.display())),
+        "{script}"
+    );
+    // The checkout's directory is the compute crate's build output, which is
+    // build-win-native/build.bat's LIB_DIR.
+    assert!(
+        dev.ends_with("crates/ppf-cts-compute/cuda/build/lib"),
+        "{}",
+        dev.display()
+    );
 }
 
 #[test]
@@ -774,6 +838,7 @@ fn write_shell_command_script_produces_persisted_file() {
         &output_path,
         &proj_root,
         Platform::Unix,
+        &proj_root.join("target/release"),
     )
     .unwrap();
     assert!(p.ends_with("command.sh"));

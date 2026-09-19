@@ -28,6 +28,22 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# AN OBSERVATION WINDOW, ASKED FOR RATHER THAN INHERITED. This scenario
+# samples a solve while it is running, and a real solve on a scene this
+# size finishes faster than the addon polls, so a correct run would be
+# unobservable and the assertions could not tell "the state never
+# appeared" from "the state was never sampled". It used to get its window
+# from the deleted stub, whose advance slept 1000 ms BY DEFAULT; nothing
+# here ever requested that. `PPF_STEP_DELAY_MS` is the replacement and
+# defaults to zero, so the window is now a declared property of this
+# scenario. 300 rather than 1000 because a real step already does work.
+KNOBS = {"PPF_STEP_DELAY_MS": "300"}
+
+# RUNS ON THE REAL BACKEND. What it needs is an observation window wide
+# enough to sample a running solve, which `PPF_STEP_DELAY_MS` above
+# supplies explicitly.
+BACKENDS = ("real",)
+
 # Live-fetch race: the modal can't drain the apply queue mid-driver
 # under host load, so a trailing frame is dropped at parallel >= 2.
 # The orchestrator's serial postlude runs this scenario after the
@@ -68,7 +84,7 @@ try:
                 transition="LINEAR")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
         data=data_bytes, param=param_bytes,
@@ -118,7 +134,7 @@ try:
             # Settle: drain any final fetches before sampling.
             # Timeout sized for slow CI runners; the local rig finishes
             # this drain in 1-2 seconds, but a free GitHub Linux runner
-            # can lag behind the emulated solver's wall-clock pace and
+            # can lag behind the solver's wall-clock pace and
             # need much more headroom.
             dh.force_frame_query(expected_frames=FRAME_COUNT - 1, timeout=60.0)
             # Inner drain has to be long enough for every queued frame

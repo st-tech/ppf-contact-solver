@@ -71,6 +71,12 @@ from . import _mcp_lib as ml
 from . import _runner as r
 from . import REPO_ROOT_POSIX
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. It drives the addon's in-process MCP server and never asks the solver to
+# step, so nothing in it is backend-specific. A rig run against a CPU build
+# passed it, and that run is the evidence this line rests on.
+BACKENDS = ("real",)
+
 NEEDS_BLENDER = True
 
 # macOS runners block loopback HTTP to Blender's in-process MCP server, so the
@@ -274,32 +280,47 @@ try:
                 return status
             time.sleep(0.1)
 
-    # connect_local carries no port of its own: it reads the panel's shared
-    # port field, which is where the worker's solver server has to be named
-    # for the LOCAL connect to reach it.
+    # The native connect reads the panel's shared port field, which is where
+    # the worker's solver server has to be named for it to reach it. The rig
+    # worker sets PPF_LINUX_NATIVE_NO_SPAWN, so the add-on attaches to that
+    # server rather than starting one of its own.
     ssh_state = groups_mod.get_addon_data(bpy.context.scene).ssh_state
     ssh_state.docker_port = RIG_SERVER_PORT
 
+    # THE NATIVE TOOL FOR THIS PLATFORM, because the rig's solver root holds
+    # this platform's server and each native resolver looks for its own
+    # executable name. The scenario runs on Linux and Windows, so the tool it
+    # names has to follow.
+    import sys as _sys
+    native_tool = ("connect_win_native" if _sys.platform.startswith("win")
+                   else "connect_linux_native")
+    native_type = ("win_native" if _sys.platform.startswith("win")
+                   else "linux_native")
+
+    # LABELED RATHER THAN KEYED BY TOOL NAME, because on Windows the
+    # platform's native tool IS connect_win_native and the two entries would
+    # collide, leaving one report standing in for both.
     entry_points = (
-        ("connect_local", {"path": RIG_SOLVER_PATH}),
-        ("connect_ssh", {"host": "rig.invalid", "username": "nobody",
-                         "key_path": "/nonexistent/key", "remote_path": "/tmp"}),
-        ("connect_win_native", {"path": "/tmp", "port": 9091}),
-        ("connect", None),
+        ("native", native_tool, {"path": RIG_SOLVER_PATH}),
+        ("ssh", "connect_ssh", {"host": "rig.invalid", "username": "nobody",
+                                "key_path": "/nonexistent/key",
+                                "remote_path": "/tmp"}),
+        ("win", "connect_win_native", {"path": "/tmp", "port": 9091}),
+        ("generic", "connect", None),
     )
     started_from = {}
     reports = {}
-    for name, args in entry_points:
-        started_from[name] = settle_offline()
-        reports[name] = call(name, args)
-    local_conn = reports["connect_local"]
-    ssh_conn = reports["connect_ssh"]
-    win_conn = reports["connect_win_native"]
-    generic = reports["connect"]
+    for label, name, args in entry_points:
+        started_from[label] = settle_offline()
+        reports[label] = call(name, args)
+    local_conn = reports["native"]
+    ssh_conn = reports["ssh"]
+    win_conn = reports["win"]
+    generic = reports["generic"]
     mcp_check(result, "J_connect_family_initiates_from_offline",
               all(is_offline(v) for v in started_from.values())
               and local_conn.get("status") == "success"
-              and local_conn.get("connection_type") == "local"
+              and local_conn.get("connection_type") == native_type
               and local_conn.get("path") == RIG_SOLVER_PATH
               and ssh_conn.get("status") == "success"
               and ssh_conn.get("connection_type") == "ssh"
@@ -323,9 +344,9 @@ try:
     # stays online for the whole check.
     settle_offline()
     ssh_state.docker_port = RIG_SERVER_PORT
-    held = call("connect_local", {"path": RIG_SOLVER_PATH})
+    held = call(native_tool, {"path": RIG_SOLVER_PATH})
     online = wait_connected()
-    second = call("connect_local", {"path": RIG_SOLVER_PATH})
+    second = call(native_tool, {"path": RIG_SOLVER_PATH})
     second_generic = call("connect")
     released = call("disconnect")
     after = settle_offline()

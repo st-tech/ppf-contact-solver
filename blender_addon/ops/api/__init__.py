@@ -1,4 +1,4 @@
-"""Object-oriented API for the ZOZO Contact Solver.
+"""Object-oriented API for ZOZO's Contact Solver.
 
 Usage in Blender scripts::
 
@@ -33,7 +33,10 @@ Usage in Blender scripts::
     rod.add(obj.name)
     rod.create_pin(obj.name, "left", indices=left_indices)
 
-    # Connection (falls through to bpy.ops)
+    # Connection settings, the compute device among them, are scene
+    # parameters; connect() falls through to bpy.ops and starts the
+    # connection with the values they hold.
+    solver.param.native_device = "CPU"
     solver.connect()
 """
 

@@ -56,7 +56,7 @@
 #     arrives with nothing behind it.
 #
 # NO BLENDER AND NO GPU. The gate is host-side Rust in the solver driver, shared
-# by both backends, so this runs anywhere the emulated server runs and holds on
+# by both backends, so this runs anywhere the server runs and holds on
 # the real-GPU jobs unchanged. The addon-side gate that refuses the same
 # geometry one step earlier, where the object still has a name, is
 # `bl_degenerate_tessellation_rejection`. Both gates have to grant the same set.
@@ -101,7 +101,7 @@ from . import _runner as r
 
 # No Blender and no GPU: this is the host-side build check in the solver
 # driver, so it holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _PROBE = r'''
@@ -241,9 +241,6 @@ print("PPFRESULT" + json.dumps(cases))
 def run(ctx: r.ScenarioContext) -> dict:
     env = dict(os.environ)
     env["PPF_CTS_DATA_ROOT"] = ctx.workspace
-    # The emulator's default step is 1000 ms; only one case here runs frames
-    # and none of them measures time, so the sleep is pure sweep cost.
-    env["PPF_EMULATED_STEP_MS"] = "0"
     env["PYTHONPATH"] = REPO_ROOT_POSIX
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE, REPO_ROOT_POSIX],

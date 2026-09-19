@@ -50,6 +50,12 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it. The sweep that had
+# failed it loaded a DIFFERENT tree's addon through the shared extension
+# symlink, so that verdict was about other code; against this tree it
+# passes unchanged.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import traceback
@@ -176,13 +182,13 @@ try:
 
     # ----- C: SAND particle mesh is exempt -----------------------------
     grains = new_mesh("Grains", [(i * 0.5, 0, 0) for i in range(40)], [])
-    grains["ppf_particle_mesh"] = 1
+    grains["particle_mesh"] = 1
     rep_grains = clean.scan_object(grains, merge_threshold=TH, area_eps=0.0)
     g_iso = rep_grains["defects"]["isolated_verts"]["count"]
     g_surf = rep_grains["defects"]["surface"]["count"]
     only_select(grains)
     grains_before = len(grains.data.vertices)
-    rm_res = bpy.ops.object.ppf_remove_loose_vertices(acknowledge=True)
+    rm_res = bpy.ops.object.remove_loose_vertices(acknowledge=True)
     dh.record(
         "C_particle_mesh_is_exempt",
         clean.is_particle_mesh(grains)
@@ -195,10 +201,10 @@ try:
 
     # ----- D: merge repairs, and the cached report is dropped ----------
     only_select(dup)
-    bpy.ops.object.ppf_scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
+    bpy.ops.object.scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
     cached_before = clean.get_scan_report(dup.name) is not None
     verts_before = len(dup.data.vertices)
-    merge_res = bpy.ops.object.ppf_merge_by_distance(
+    merge_res = bpy.ops.object.merge_by_distance(
         merge_threshold=TH, acknowledge=True
     )
     verts_after = len(dup.data.vertices)
@@ -232,7 +238,7 @@ try:
     guard_res = "raised"
     guard_msg = ""
     try:
-        guard_res = str(bpy.ops.object.ppf_merge_by_distance(
+        guard_res = str(bpy.ops.object.merge_by_distance(
             merge_threshold=TH, acknowledge=False
         ))
     except RuntimeError as e:
@@ -254,7 +260,7 @@ try:
     resp = clean.find_resplittable_faces(quad.data)
     only_select(quad)
     q_verts_before = len(quad.data.vertices)
-    tri_res = bpy.ops.object.ppf_triangulate_for_solver()
+    tri_res = bpy.ops.object.triangulate_for_solver()
     resp_after = clean.find_resplittable_faces(quad.data)
     dh.record(
         "F_resplittable_faces_and_triangulate",
@@ -282,7 +288,7 @@ try:
                        [(0, 1, 2), (1, 2, 3)])
     surf_flip_before = clean.find_surface_defects(flipped.data)
     only_select(flipped)
-    recalc_res = bpy.ops.object.ppf_recalc_normals_outside()
+    recalc_res = bpy.ops.object.recalc_normals_outside()
     surf_flip_after = clean.find_surface_defects(flipped.data)
     dh.record(
         "G_surface_and_winding",
@@ -304,7 +310,7 @@ try:
     co_before = [tuple(v.co) for v in probe.data.vertices]
     np_before = (len(probe.data.vertices), len(probe.data.polygons))
     only_select(probe)
-    bpy.ops.object.ppf_scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
+    bpy.ops.object.scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
     co_after = [tuple(v.co) for v in probe.data.vertices]
     np_after = (len(probe.data.vertices), len(probe.data.polygons))
     dh.record(
@@ -383,7 +389,7 @@ try:
             [(0, 1, 2, 3), (4, 6, 7, 5), (0, 1, 2, 3), (9, 10, 11)],
         )
         only_select(allbad)
-        bpy.ops.object.ppf_scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
+        bpy.ops.object.scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
         rep_all = clean.get_scan_report(allbad.name)
         clean.draw_mesh_cleaning(StubLayout(draw_sink), bpy.context)
         # And the genuinely-clean branch: a closed, triangulated,
@@ -392,7 +398,7 @@ try:
                        [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)],
                        [(0, 2, 1), (0, 1, 3), (1, 2, 3), (0, 3, 2)])
         only_select(tet)
-        bpy.ops.object.ppf_scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
+        bpy.ops.object.scan_mesh_defects(merge_threshold=TH, area_eps=0.0)
         rep_tet = clean.get_scan_report(tet.name)
         clean.draw_mesh_cleaning(StubLayout(draw_sink), bpy.context)
     except Exception as e:
@@ -403,12 +409,12 @@ try:
     dh.record(
         "J_panel_draw_renders_every_row",
         draw_err == ""
-        and "object.ppf_scan_mesh_defects" in drawn_ops
-        and "object.ppf_merge_by_distance" in drawn_ops
-        and "object.ppf_delete_duplicate_faces" in drawn_ops
-        and "object.ppf_remove_loose_vertices" in drawn_ops
-        and "object.ppf_dissolve_degenerate" in drawn_ops
-        and "object.ppf_triangulate_for_solver" in drawn_ops
+        and "object.scan_mesh_defects" in drawn_ops
+        and "object.merge_by_distance" in drawn_ops
+        and "object.delete_duplicate_faces" in drawn_ops
+        and "object.remove_loose_vertices" in drawn_ops
+        and "object.dissolve_degenerate" in drawn_ops
+        and "object.triangulate_for_solver" in drawn_ops
         and any("No defects found" in t for t in labels)
         and (rep_tet or {}).get("n_errors") == 0
         and (rep_tet or {}).get("n_notes") == 0,
@@ -561,7 +567,7 @@ try:
         had_mod = any(m.type == "MESH_CACHE" for m in victim.modifiers)
         only_select(victim)
         v_before = len(victim.data.vertices)
-        res_clear = bpy.ops.object.ppf_merge_by_distance(
+        res_clear = bpy.ops.object.merge_by_distance(
             merge_threshold=TH, acknowledge=True, clear_stale_caches=True)
         mod_after = any(m.type == "MESH_CACHE" for m in victim.modifiers)
         merged_ok = len(victim.data.vertices) == v_before - 2
@@ -575,7 +581,7 @@ try:
         )
         keeper.modifiers.new(name="ContactSolverCache", type="MESH_CACHE")
         only_select(keeper)
-        bpy.ops.object.ppf_merge_by_distance(
+        bpy.ops.object.merge_by_distance(
             merge_threshold=TH, acknowledge=True, clear_stale_caches=False)
         keeper_mod = any(m.type == "MESH_CACHE" for m in keeper.modifiers)
     except Exception as e:
@@ -689,7 +695,7 @@ try:
         hash_before = p_item.vg_hash
 
         only_select(stamped)
-        bpy.ops.object.ppf_merge_by_distance(
+        bpy.ops.object.merge_by_distance(
             merge_threshold=TH, acknowledge=True, clear_stale_caches=True)
 
         hash_after = p_item.vg_hash

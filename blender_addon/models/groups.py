@@ -218,7 +218,7 @@ def get_object_type(object_type):
 
 
 def sand_radius_source_object(group):
-    """First included SAND object carrying a stamped ``ppf_grain_radius``.
+    """First included SAND object carrying a stamped ``grain_radius``.
 
     The Convert op stamps the user-chosen radius on each object it converts;
     that stamped value is the locked source of truth for both the rendered
@@ -232,7 +232,7 @@ def sand_radius_source_object(group):
         if not obj_ref.included or not obj_ref.uuid:
             continue
         obj = get_object_by_uuid(obj_ref.uuid)
-        if obj is not None and obj.get("ppf_grain_radius"):
+        if obj is not None and obj.get("grain_radius"):
             return obj
     return None
 
@@ -263,7 +263,7 @@ def sand_seeded_radius(group):
     """Locked grain radius for a SAND group.
 
     The Convert op stamps the user-chosen radius on the object as
-    ``ppf_grain_radius`` and derives the non-overlapping seeding spacing from
+    ``grain_radius`` and derives the non-overlapping seeding spacing from
     it, so that value is the single source of truth for both the rendered
     sphere and the contact skin. Returns the first included converted object's
     stamped radius, falling back to the group's ``sand_grain_radius`` for an
@@ -271,7 +271,7 @@ def sand_seeded_radius(group):
     """
     obj = sand_radius_source_object(group)
     if obj is not None:
-        return float(obj["ppf_grain_radius"])
+        return float(obj["grain_radius"])
     return float(group.sand_grain_radius)
 
 

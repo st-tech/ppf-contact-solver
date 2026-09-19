@@ -8,7 +8,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 [![All Examples (Windows Native)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once-win.yml)
 [![Python API Docs](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/make-docs.yml)
 [![Docker Build](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/build-docker.yml)
-[![Build Windows](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml)
+[![Build Release](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release.yml)
 [![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
 ![solver_logo](./asset/image/teaser-image.jpg)
 
@@ -16,11 +16,11 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 👀 Quick Look
 
-🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally if you have a modern NVIDIA GPU on Windows or Linux)
+🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally on a modern NVIDIA GPU on Windows or Linux, or on an Apple silicon Mac)
 
 <https://github.com/user-attachments/assets/f266111e-7380-428b-8a3c-25eac4f039e5>
 
-🚀 Or double click `start.bat` (Windows) or run a Docker command (Linux/Windows) to get it running
+🚀 Or run it locally: `./ppf-contact-solver` (macOS/Linux), double click `start.bat` (Windows), or a Docker command (Linux/Windows)
 
 ![glance-terminal](./asset/image/glance-terminal.webp)
 
@@ -40,6 +40,9 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
 - **🐛 Community Tested**: Users report bugs and we fix them [(Issues)](https://github.com/st-tech/ppf-contact-solver/issues).
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
+- **🖥️ Cross Platform**: Both the add-on and the solver engine run natively on macOS, Windows, and Linux.
+- **🎛️ Cross Architecture**: We natively support Apple silicon (Metal), NVIDIA (CUDA), and AMD (ROCm) GPUs.
+- **🧮 SIMD-Optimized CPU Backend**: Our CPU code runs natively on both x86_64 and ARM64.
 - **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 - **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8).
@@ -52,7 +55,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 > <a name="note-penetration-free"></a>[1] **What the guarantee means:**
 >
-> Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found in extreme cases, for example:
+> We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found in extreme cases, for example:
 >
 > - The target contact thickness is atom-level thin.
 > - An object collides at the speed of light.
@@ -67,7 +70,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
 - **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
 - **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
-- **🔒 Tightly bound to CUDA:** The solver backend runs on NVIDIA GPUs only; CPU, AMD, and Apple Metal are not supported.
+- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
 - **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
 - **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
 
@@ -77,7 +80,9 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
 - [💨 Getting Started](#-getting-started)
+  - [🍎 macOS Native](#-macos-native)
   - [🪟 Windows Native Executable](#-windows-native-executable)
+  - [🐧 Linux Native](#-linux-native)
   - [🐳 Docker (Linux and Windows)](#-docker-linux-and-windows)
 - [🐍 How To Use](#-how-to-use)
   - [🎨 Blender Add-on](#-blender-add-on)
@@ -117,6 +122,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📝 Change History
 
+- (2026.09.19) Added support for Apple (Metal) and AMD (ROCm) GPUs, and CPU support for x86_64 and aarch64 with SIMD optimization (AVX2 and NEON).
 - (2026.07.09) Added a [performance article](./articles/performance.md) benchmarking the speedup across all examples.
 - (2026.06.30) Added rigidbody support based on [Painless Differentiable Rotation Dynamics](https://dl.acm.org/doi/10.1145/3730944).
 - (2026.06.30) Added sand support.
@@ -153,9 +159,18 @@ To retain consistency with the paper, we have created a new branch ```sigasia-20
 
 ## ⚡️ Requirements
 
-- 🔥 An NVIDIA GPU with CUDA 12.8 or newer support. The RTX 4090 or 5090 is ideal for large-scale simulations, while the RTX 3090, 4070, or 5070 remains suitable for small to medium-scale workloads.
-- 💻 x86 architecture (arm64 is not supported)
-- 🐳 A Docker environment (see [below](#-docker-linux-and-windows)) or 🪟 Windows 10/11 for native executable (see [below](#-windows-native-executable))
+A GPU is recommended, but not required. The right backend is picked for you when a run starts.
+
+| Hardware | Backend | Runs on | Good to know |
+| --- | --- | --- | --- |
+| 🟩 NVIDIA GPU | CUDA 12.8+ | Linux (x86_64, arm64), Windows (x86_64) | RTX 4090 / 5090 for large scenes; 3090 / 4070 / 5070 for small to medium ones |
+| 🟥 AMD GPU | ROCm | Linux (x86_64), Windows (x86_64) | gfx9 through gfx12 |
+| 🍎 Apple silicon | Metal | macOS | M1 / A14 generation or newer |
+| 💻 Any CPU | CPU (x86_64, arm64) | macOS, Windows, Linux | SIMD-optimized using AVX2 and NEON instructions |
+
+You will also need:
+
+- 🐳 A Docker environment (see [below](#-docker-linux-and-windows)), supported only on x86_64 with an NVIDIA GPU (CUDA)
 - 🎨 Blender 5+ (only if you intend to use the Blender add-on)
 
 ## 💨 Getting Started
@@ -164,20 +179,46 @@ Whether you plan to use the Blender add-on or the JupyterLab interface, the solv
 
 > ⚠️ Do not run `warmup.py` locally. If you do, you are very likely to hit failures and find it difficult to cleanup.
 
-#### 🪟 Windows Native Executable
-
-For Windows 10/11 users, a self-contained executable (~320MB) is available.
-No Python, Docker, or CUDA Toolkit installation is needed.
-All should simply work out of the box [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
-
-> 🤔 If you are cautious, you can review the [build workflow](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release-win.yml) to verify safety yourself.
+> 🤔 If you are cautious, you can review the [build workflow](https://github.com/st-tech/ppf-contact-solver/actions/workflows/release.yml) to verify safety yourself.
 We try to maximize transparency; **we never build locally and upload.**
 
-1. Install the latest NVIDIA driver [(Link)](https://www.nvidia.com/en-us/drivers/)
+#### 🍎 macOS Native
+
+For Apple silicon Macs, a self-contained folder carrying the Metal and CPU backends.
+No Python, Homebrew, or Xcode installation is needed, and nothing is installed outside the folder.
+
+1. Download the latest release from [GitHub Releases](https://github.com/st-tech/ppf-contact-solver/releases) and unzip
+2. Open Terminal and change into the unzipped folder
+3. Run `./ppf-contact-solver`
+
+JupyterLab frontend will auto-start. You should be able to access it at <http://localhost:8080>.
+Keep the terminal window open; `Ctrl+C` shuts it down.
+
+#### 🪟 Windows Native Executable
+
+For Windows 10/11 users, a self-contained executable (several hundred MB) is available.
+No Python, Docker, or CUDA Toolkit installation is needed.
+All should simply work out of the box [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
+The x86_64 archive carries the CUDA, ROCm, and CPU backends, so one download serves an NVIDIA machine and an AMD one, while a Windows on ARM machine runs the CPU backend.
+
+1. Install the latest driver for your GPU: NVIDIA [(Link)](https://www.nvidia.com/en-us/drivers/) or AMD [(Link)](https://www.amd.com/en/support), skipped for a CPU-only run
 2. Download the latest release from [GitHub Releases](https://github.com/st-tech/ppf-contact-solver/releases) and unzip
 3. Double click `start.bat`
 
 JupyterLab frontend will auto-start. You should be able to access it at <http://localhost:8080>.
+
+#### 🐧 Linux Native
+
+A self-contained directory for x86_64 and aarch64 machines running glibc 2.28 or newer.
+The x86_64 archive carries the CUDA, ROCm, and CPU backends, and the aarch64 one carries CUDA and the CPU backend.
+No Python, CUDA Toolkit, or ROCm installation is needed.
+
+1. Install the latest driver for your GPU: NVIDIA [(Link)](https://www.nvidia.com/en-us/drivers/) or AMD [(Link)](https://www.amd.com/en/support), skipped for a CPU-only run
+2. Download the latest release from [GitHub Releases](https://github.com/st-tech/ppf-contact-solver/releases) and unzip
+3. Run `./ppf-contact-solver`
+
+JupyterLab frontend will auto-start. You should be able to access it at <http://localhost:8080>.
+Keep the terminal window open; `Ctrl+C` shuts it down.
 
 #### 🐳 Docker (Linux and Windows)
 
@@ -252,7 +293,7 @@ We provide two frontends: a Blender add-on and a JupyterLab interface. The Blend
 
 In both cases, you can interact with the simulator on your laptop while the actual simulation runs on a remote headless server over the internet.
 This means that **you don't have to own NVIDIA hardware**, but can rent it at [vast.ai](https://vast.ai) for less than $0.5 per hour.
-That said, if you do have a modern NVIDIA GPU on a local Windows or Linux machine, you can also run the solver directly on it.
+That said, if you do have a modern NVIDIA GPU on a local Windows or Linux machine, or an Apple silicon Mac, you can also run the solver directly on it.
 Actually, this [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8) was recorded on a [vast.ai](https://vast.ai) instance.
 The experience is good! 👍
 
@@ -572,7 +613,7 @@ All the log files are updated in real-time and can be fetched right after the si
 
 ### 🎨 Blender Add-on Examples
 
-These scenes are all built with our [add-on](#-blender-add-on). The simulation itself runs on a remote solver, or directly on your local machine if you have a modern NVIDIA GPU on Windows or Linux.
+These scenes are all built with our [add-on](#-blender-add-on). The simulation itself runs on a remote solver, or directly on your local machine if you have a modern NVIDIA GPU on Windows or Linux, or an Apple silicon Mac.
 
 You set the geometry, constraints, and parameters from Blender's UI, and the saved `.blend` carries everything the add-on needs.
 
@@ -700,7 +741,7 @@ Each example runs in parallel on its own instance, which reduces the total actio
 
 ### [![Blender CI](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml/badge.svg)](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml)
 
-This action exercises our [Blender add-on](#-blender-add-on) on free GitHub-hosted Linux and macOS runners in parallel. Blender 5.1.1 is installed from the official Blender Foundation mirror, the Rust solver is built in CPU-emulated mode (no CUDA required), and the add-on is installed as a Blender 5 extension. A headless test rig then runs the full scenario registry covering add-on UI flows.
+This action exercises our [Blender add-on](#-blender-add-on) on Linux, Windows, and macOS in parallel. The Linux and Windows jobs run against the real CUDA solver on freshly launched `g6e.2xlarge` AWS instances, and the macOS job runs on a free GitHub-hosted runner that drives another such instance over the add-on's SSH connection. Blender 5.2.0 is installed from the official Blender Foundation mirror, and the add-on is installed as a Blender 5 extension. A headless test rig then runs the scenario registry covering add-on UI flows, sharded across the instances.
 
 ### 📦 Action Artifacts
 

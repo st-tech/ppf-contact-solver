@@ -13,8 +13,8 @@
 #
 # One rule covers every backend: the devices offered are those of the machine
 # that will run the server, enumerated by running nvidia-smi THROUGH the
-# connection to it. That machine is the local one for Local and Windows Native,
-# another host for SSH, and a container for Docker, and none of those
+# connection to it. That machine is the local one for Local and for the native
+# backends, another host for SSH, and a container for Docker, and none of those
 # distinctions reach this module: they are all just "the solver host", reached
 # the same way. nvidia-smi is the same tool the server and check_gpu already
 # use, so a device listed here is one the solver can be pointed at.

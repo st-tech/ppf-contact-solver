@@ -49,7 +49,8 @@ The repo contains:
     directly by `frontend` (no maturin, no wheel).
   - `ppf-cts-server`: standalone Rust binary (`ppf-cts-server`) that
     embeds the in-process Python `frontend` package and exposes the
-    TCP / CBOR protocol the add-on talks to over SSH / Docker / Windows-native transports.
+    TCP / CBOR protocol the add-on talks to over SSH, Docker, and the
+    three native transports.
 - `frontend/`: Python asset / scripting layer that imports
   `_ppf_cts_py` directly for in-process use (notebooks, tests, and
   inside `ppf-cts-server`). The Blender add-on does not import it; the
@@ -103,14 +104,19 @@ Install, UI tour, and the first end-to-end simulation. Load when:
 
 ### `LLM/blender_addon/connections.md` (~585 lines)
 
-How to wire Blender to a solver backend. Four backends, plus connection
-profiles. Load when:
+How to wire Blender to a solver backend. Eight connection types, plus
+connection profiles. Load when:
 
 - User's connection isn't working, and `troubleshooting.md` didn't
   resolve it.
-- User asks about a specific backend: Local (solver on same Mac/Linux
-  host), SSH (remote Linux), Docker (local or over SSH), Windows
-  Native (Windows solver + Windows Blender).
+- User asks about a specific connection type: Windows Native, macOS
+  Native or Linux Native (solver on the machine Blender runs on, which
+  the add-on starts itself), SSH or SSH Command (remote Linux), Docker
+  (on this machine or over SSH). A .blend or profile saved with the
+  retired Local type is migrated onto this platform's native type.
+- User asks which build runs: Compute Device (GPU / CPU) and GPU
+  Backend (Automatic / CUDA / ROCm) apply to every connection type,
+  and name the build directory the server is started from.
 - Questions about ports: 9090 server, 9633 MCP, paramiko keepalive
   (30 s), modal timeouts (60 s / 16 s / 45 s / 70 s).
 - Questions about `~/.ssh/config` support (only the six keywords
@@ -401,7 +407,7 @@ Fast lookup for common question shapes.
 | --------------------------------------------------------------- | -------------------------- |
 | "What does this error mean?"                                    | troubleshooting.md         |
 | "How do I connect to [backend]?"                                | connections.md             |
-| "Does my SSH / Docker / Windows setup work?"                    | connections.md + troubleshooting.md |
+| "Does my SSH / Docker / native setup work?"                     | connections.md + troubleshooting.md |
 | "What units are [parameter] in? What's its default?"            | parameters.md              |
 | "Why is my cloth not behaving right?"                           | parameters.md (material), then simulation.md (Update Params vs Transfer) |
 | "How do I pin vertices and move them?"                          | constraints.md             |

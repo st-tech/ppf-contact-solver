@@ -139,6 +139,9 @@ One-line definitions for the terms that appear across the rest of the documentat
 **Communicator**
 : The add-on's single connection manager. It owns all remote operations from a background thread so the UI never blocks on the network.
 
+**Compute Device**
+: Connection-panel selector for which build of the solver a started server runs: **GPU** (CUDA or ROCm on Windows and Linux, Metal on macOS) or **CPU** (the portable backend, which needs no GPU and is substantially slower). Applies to every connection type, and is read when the server is spawned, so changing it takes effect at the next **Start Server**.
+
 **Connection profile**
 : A saved TOML entry capturing every field of the Connections panel for one host, used to switch between hosts and share presets across a team.
 
@@ -151,8 +154,11 @@ One-line definitions for the terms that appear across the rest of the documentat
 **`execute_shell_command`**
 : MCP tool that runs arbitrary shell commands on the Blender host. Paired with `run_python_script` as an escape hatch for provisioning and maintenance tasks not yet covered by dedicated tools.
 
-**Local connection**
-: A connection type where the solver runs on the same Linux host as Blender, reached over a loopback socket.
+**GPU Backend**
+: Connection-panel selector for which accelerator runs when **Compute Device** is GPU and the solver root holds more than one GPU build: **Automatic**, **CUDA**, or **ROCm**. Drawn only where there is a choice to make. Automatic takes the one GPU build present, or where a root holds several, CUDA before ROCm; on a native connection it asks each build's own solver whether its device is usable and takes the first that answers yes. A named choice that the root cannot serve is refused by name rather than run as the other backend.
+
+**Linux Native connection**
+: A connection type where the solver runs directly as a Linux subprocess started by the add-on, with no SSH or Docker. **Solver Path** accepts a repo checkout you built (`target/release`) and an unpacked Linux distribution, whose CUDA, ROCm and CPU builds each sit in their own `target/<backend>/release` directory beside a `.ppf-backend` marker.
 
 **MCP resource**
 : A read-only asset exposed by the MCP server via `resources/read`, covering live scene snapshots (`blender://scene/current`) and the bundled `llm://<topic>` markdown docs.
@@ -173,7 +179,7 @@ One-line definitions for the terms that appear across the rest of the documentat
 : MCP tool that evaluates arbitrary Python inside Blender. Exists for operations the add-on does not yet expose as first-class tools.
 
 **`ppf-cts-server`**
-: The Rust solver binary launched on the remote side (or as a local subprocess for Windows Native) that listens for work over TCP on the configured port (default 9090).
+: The Rust solver binary launched on the remote side (or as a subprocess on the machine Blender runs on for the three native connection types, Windows Native, macOS Native and Linux Native) that listens for work over TCP on the configured port (default 9090).
 
 **Session ID**
 : Per-connection identifier the server assigns at start. Persisted with the `.blend` on save so a reopened file can detect whether the remote has been reset since the file was saved.
@@ -189,3 +195,6 @@ One-line definitions for the terms that appear across the rest of the documentat
 
 **Windows Native connection**
 : A connection type where the solver runs directly as a Windows subprocess, using a bundled Python interpreter and no SSH or Docker.
+
+**macOS Native connection**
+: A connection type where the solver runs directly as a macOS subprocess against the local Metal build, with no SSH or Docker. Unlike the Windows bundle it ships no interpreter, so it uses a Python environment already on the machine.

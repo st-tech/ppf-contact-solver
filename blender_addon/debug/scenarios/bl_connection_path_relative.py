@@ -20,14 +20,15 @@
 #
 #   * core.utils.resolve_local_path expands the ``//`` form, passes an absolute
 #     path through unchanged, and leaves a blank path blank.
-#   * ui.main_panel._draw_win_native_status draws CHECKMARK for a bundle named
-#     in the ``//`` form (a fake layout records the label() calls, since a real
+#   * ui.main_panel._draw_native_status draws CHECKMARK for a bundle named in
+#     the ``//`` form (a fake layout records the label() calls, since a real
 #     UILayout cannot be built outside draw).
 #   * ui.main_panel._draw_long_path_warning measures the resolved path, not the
 #     short ``//`` spelling that would hide an over-long root.
-#   * REMOTE_OT_Connect.get_remote_path returns an absolute directory for LOCAL
-#     and returns the SSH / Docker paths verbatim, since those name a directory
-#     on the solver host where the client's .blend location means nothing.
+#   * REMOTE_OT_Connect.get_remote_path returns the SSH / Docker paths verbatim,
+#     since those name a directory on the solver host where the client's .blend
+#     location means nothing, while a native path is resolved to an absolute
+#     directory at its own call site.
 #   * the not-found message names the directory examined and tells a user with
 #     no toolchain what to do, rather than only prescribing a cargo build.
 #
@@ -42,7 +43,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Pure path-resolution logic; nothing here reaches a solver.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''
@@ -82,7 +83,7 @@ try:
     conn = __import__(pkg + ".core.connection",
                       fromlist=["win_native_not_found_message"])
     main_panel = __import__(pkg + ".ui.main_panel",
-                            fromlist=["_draw_win_native_status"])
+                            fromlist=["_draw_native_status"])
     conn_ops = __import__(pkg + ".ui.connection_ops",
                           fromlist=["REMOTE_OT_Connect"])
     groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
@@ -123,7 +124,7 @@ try:
 
     # ---- the panel validates the folder the user picked ----
     fl_rel = _FakeLayout()
-    main_panel._draw_win_native_status(fl_rel, rel_bundle)
+    main_panel._draw_native_status(fl_rel, "WIN_NATIVE", rel_bundle)
     record(
         "panel_relative_path_validates",
         any(ic == "CHECKMARK" for _, ic in fl_rel.labels)
@@ -132,7 +133,7 @@ try:
     )
 
     fl_abs = _FakeLayout()
-    main_panel._draw_win_native_status(fl_abs, bundle)
+    main_panel._draw_native_status(fl_abs, "WIN_NATIVE", bundle)
     record(
         "panel_absolute_path_still_validates",
         any(ic == "CHECKMARK" for _, ic in fl_abs.labels),
@@ -145,7 +146,7 @@ try:
     os.makedirs(empty, exist_ok=True)
     rel_empty = bpy.path.relpath(empty, start=project)
     fl_empty = _FakeLayout()
-    main_panel._draw_win_native_status(fl_empty, rel_empty)
+    main_panel._draw_native_status(fl_empty, "WIN_NATIVE", rel_empty)
     record(
         "panel_relative_path_without_solver_still_errors",
         any(ic == "ERROR" for _, ic in fl_empty.labels),
@@ -188,11 +189,14 @@ try:
     props = root.ssh_state
     op = conn_ops.REMOTE_OT_Connect
 
-    props.server_type = "LOCAL"
-    props.local_path = rel_bundle
-    got_local = op.get_remote_path(op, props)
-    record("local_path_reaches_backend_absolute", _same(got_local, bundle),
-           {"got": got_local, "want": bundle})
+    # A NATIVE path is resolved where it is used, not by get_remote_path: the
+    # picker writes it in the ``//`` form, and the connect arm expands it with
+    # resolve_local_path before handing it to the facade.
+    props.server_type = "LINUX_NATIVE"
+    props.linux_native_path = rel_bundle
+    got_native = utils.resolve_local_path(props.linux_native_path)
+    record("native_path_reaches_backend_absolute", _same(got_native, bundle),
+           {"got": got_native, "want": bundle})
 
     # A REMOTE path names a directory on the solver host, so it is passed
     # through untouched: expanding it against the client's .blend would point

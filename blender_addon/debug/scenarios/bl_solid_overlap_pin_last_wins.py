@@ -32,7 +32,7 @@
 #         structure: two pin blocks, one PULL holder (pull > 0) carrying
 #         the captured move ops, and one bottom FixPair (pull == 0).
 #
-# Why B checks the built scene rather than runtime motion: the emulated
+# Why B checks the built scene rather than runtime motion: the solver
 # (CPU) solver the rig runs does not execute the soft-pull *follow* (a
 # move_by on a PULL holder produces no displacement; a fully-pinned SOLID
 # then stays bit-for-bit at rest). The runtime follow is exercised on the
@@ -48,6 +48,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 10
@@ -221,7 +226,7 @@ try:
     dh.log(f"pins captured: body swings ~{cap_disp:.2f}")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes,
@@ -261,7 +266,7 @@ try:
          "pull_holders": pull_holders, "fix_holders": fix_holders,
          "pull_holder_carries_captured_move": pull_carries_move,
          "info_toml_found": bool(info_path),
-         "note": "pull holder (captured move) + bottom FixPair; emulated "
+         "note": "pull holder (captured move) + bottom FixPair; "
                  "solver does not run soft-pull follow, so the decoded "
                  "structure is verified instead of runtime motion"},
     )

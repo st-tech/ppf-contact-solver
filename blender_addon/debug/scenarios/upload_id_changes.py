@@ -16,7 +16,7 @@ from . import _runner as r
 
 # Server-only plumbing (no Blender, no physics); backend-agnostic upload
 # contract, runs on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 def run(ctx: r.ScenarioContext) -> dict:

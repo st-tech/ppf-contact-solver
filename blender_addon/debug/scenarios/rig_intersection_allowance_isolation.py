@@ -8,7 +8,7 @@
 #
 # The other gates on the feature all ask whether the rule is right for one
 # pair at a time: `rig_intersection_allowances` walks it at the scene-build
-# gate, and `rig_emulated_intersection` walks it at the solver's live scan. None of them
+# gate. None of them
 # can see a defect in how the flags are DISTRIBUTED over a scene, which is
 # what this scenario measures. A policy byte written to the wrong slice of the
 # vertex buffer, two objects handed the same object id, and a pin bit reaching
@@ -74,11 +74,11 @@
 # BOTH BACKENDS. The counting cases are the host-side scene-build check and
 # the wiring cases read exported files, so both run identically on either. The
 # run case is the one that differs and it is a real gate on each: on the
-# emulator it exercises the live edge-triangle scan, and on CUDA it exercises
+# solver it exercises the live edge-triangle scan, and on CUDA it exercises
 # `check_intersection` at `initialize` and after every step.
 #
 # The probe runs in a SUBPROCESS. It imports `frontend`, which loads the
-# per-tree cdylib and installs the emulator's debug patches, and the
+# per-tree cdylib and installs the solver's debug patches, and the
 # orchestrator imports every scenario into one long-lived process that must
 # not inherit either.
 
@@ -95,7 +95,7 @@ from . import _runner as r
 
 # See the header: the build-gate and wiring halves are backend-agnostic, and
 # the run case asserts something true of both solvers.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 # Drives a solver run, so it should not share a worker with another one.
 NOT_PARALLELIZABLE = True
 
@@ -487,11 +487,9 @@ def run(ctx: r.ScenarioContext) -> dict:
     env = dict(os.environ)
     env["PPF_CTS_DATA_ROOT"] = ctx.workspace
     env["PYTHONPATH"] = REPO_ROOT_POSIX
-    # The emulator's per-step sleep exists so other scenarios can observe
-    # BUSY/RUNNING transitions. Nothing here reads a transition, and at the
-    # default 1000 ms the single run would spend its whole time asleep. The
-    # real solver does not read the variable.
-    env["PPF_EMULATED_STEP_MS"] = "0"
+    # No `PPF_STEP_DELAY_MS`. Nothing here watches a run in progress: each
+    # case is judged by what its completed run reported, so a per-step delay
+    # would only slow the sweep.
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE, REPO_ROOT_POSIX],
         capture_output=True,

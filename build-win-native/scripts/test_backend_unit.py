@@ -1,38 +1,34 @@
 """Unit test for the Windows-native backend (no Blender required).
 
 Exercises ``blender_addon/core/backends.py:WinNativeBackend`` end-to-end
-against a freshly built solver. Verifies the four Windows-specific
-behaviors of WinNativeBackend:
+against a freshly built solver. Verifies four things:
 
-  1. ``create_backend("win_native", …)`` launches ``server.py`` as a
-     subprocess and the server binds the requested port.
+  1. ``create_backend("win_native", …)`` launches ``ppf-cts-server.exe``
+     as a subprocess and the server binds the requested port.
   2. A socket query round-trips (``backend.query``).
-  3. The ``glob``-based frame-file counter (which replaces the Unix
-     ``ls -1 vert_*.bin`` shell-out in ``_count_remote_frames``)
-     matches the max index correctly.
-  4. ``backend.stop_server()`` terminates the subprocess cleanly
-     (replaces the ``pkill -f server.py`` path).
+  3. The ``glob``-based frame-file counter in ``_count_remote_frames``,
+     the branch the SSH backends take by shelling out to
+     ``ls -1 vert_*.bin``, matches the max index correctly.
+  4. ``backend.stop_server()`` terminates the subprocess cleanly.
 
 Designed to work under either project layout:
 
-  - **Source-tree layout** (``C:\\ppf-contact-solver``): has
-    ``build-win-native\\python\\…``.
+  - **Dev layout**  (``C:\\ppf-contact-solver``): has ``build-win-native\\python\\…``.
   - **Bundle layout** (``<dist>``): has ``python\\…`` directly at the root.
 
-Run over SSH against the Windows box, writing ``<root>`` for the checkout
-(``C:\\ppf-contact-solver`` below):
+Run over SSH against the Windows box:
 
-    # Source-tree layout, embedded Python
-    <root>\\build-win-native\\python\\python.exe \\
-        <root>\\build-win-native\\scripts\\test_backend_unit.py <root> 9091
+    # Dev layout, embedded Python
+    C:\\ppf-contact-solver\\build-win-native\\python\\python.exe \\
+        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_unit.py  C:\\ppf-contact-solver  9091
 
     # Bundle layout, bundled Python
-    <root>\\build-win-native\\dist\\python\\python.exe \\
-        <root>\\build-win-native\\scripts\\test_backend_unit.py \\
-        <root>\\build-win-native\\dist  9092
+    C:\\ppf-contact-solver\\build-win-native\\dist\\python\\python.exe \\
+        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_unit.py \\
+        C:\\ppf-contact-solver\\build-win-native\\dist  9092
 
 Argv: ``<root>  [port]`` — ``root`` must contain ``blender_addon/`` and
-``server.py``. Both layouts satisfy that.
+the built solver tree. Both layouts satisfy that.
 
 On success every step prints an ``OK`` line and the script exits 0.
 On failure the offending step prints a ``FAIL:`` message to stderr
@@ -127,9 +123,9 @@ def _import_backends() -> types.ModuleType:
 def _dump_subprocess(backend) -> None:
     """Surface the subprocess's own stderr when the port never bound.
 
-    Without this, a server.py import error (seen IRL when the bundle was
-    missing the ``server/`` package) looks like a generic "didn't bind"
-    timeout and you're stuck guessing.
+    Without this, a server that exits during startup, as one does when
+    the bundle is missing a file it needs, looks like a generic "didn't
+    bind" timeout and you're stuck guessing.
     """
     proc = getattr(backend, "_process", None)
     code = proc.poll() if proc is not None else "no process"
@@ -172,7 +168,7 @@ def main() -> None:
             _die(f"query alive=False, resp={resp!r}")
         print(f"OK [query]: keys={sorted(resp.keys())}")
 
-        # Step 3 — glob-based frame counting (replaces `ls -1` shell-out)
+        # Step 3 — glob-based frame counting (the win_native branch)
         fake_out = os.path.join(ROOT, "session", "output_backend_unit_fake")
         os.makedirs(fake_out, exist_ok=True)
         try:

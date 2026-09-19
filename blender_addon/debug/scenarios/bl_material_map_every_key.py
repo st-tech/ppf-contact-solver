@@ -32,7 +32,7 @@
 #   G: no tet- file exists for any SHELL-only key.
 #   H: a SHELL-only key on a SOLID group is refused at encode, by name.
 #
-# The emulated backend runs the full scene BUILD, so every one of these files is
+# The solver runs the full scene BUILD, so every one of these files is
 # written for real. What it cannot show is the physics, which needs a real GPU
 # run to measure.
 
@@ -44,6 +44,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

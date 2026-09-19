@@ -45,6 +45,12 @@ from .connection_ops import (
     REMOTE_OT_RefreshGpuDevices,
     REMOTE_OT_StartServer,
     REMOTE_OT_StopServer,
+    SOLVER_OT_ForceTerminatePort,
+    is_local_server_type,
+    force_terminate_status,
+    NATIVE_PATH_FIELDS,
+    REMOTE_SERVER_TYPES,
+    SERVER_TYPE_BACKENDS,
     classes as connection_classes,
 )
 from .install_ops import (
@@ -75,7 +81,6 @@ from .debug_ops import (
 from .addon_ops import classes as addon_classes
 from .jupyter_ops import classes as jupyter_classes
 from .solver_control_ops import (
-    SOLVER_OT_ForceTerminatePort,
     SOLVER_OT_OpenSessionFolder,
     SOLVER_OT_SaveAndQuit,
     SOLVER_OT_ShowConsole,
@@ -140,7 +145,7 @@ def remote_frame_to_blender(value, *, grouped=False) -> str:
 def _our_server_responding_in_error(error_msg: str) -> bool:
     """True when the panel's port-in-use error names a port that now
     answers a ppf-cts-server TCMD ping. Used to suppress the stale
-    error + Force Terminate button after the spawn path's attach branch
+    error + Force Terminate Process button after the spawn path's attach branch
     takes over.
     """
     import re
@@ -206,9 +211,9 @@ def _draw_path_warning(layout, path, *, shell_bound: bool = True) -> bool:
 
     ``shell_bound`` is what the path's backend does with it. A REMOTE path is
     interpolated into a shell command on the solver host, so it refuses
-    whitespace as well as metacharacters. The Windows Native root is only
-    ever an ``os.path.join`` base and a ``subprocess.Popen`` ``cwd``, so it
-    refuses metacharacters alone; each caller passes what is true of its own
+    whitespace as well as metacharacters. A native solver root, Windows or
+    macOS, is only ever an ``os.path.join`` base and a ``subprocess.Popen``
+    ``cwd``, so it refuses metacharacters alone; each caller passes what is true of its own
     backend, and the Connect gate reads the matching predicate.
     """
     bad = (find_invalid_path_char(path) if shell_bound
@@ -223,27 +228,252 @@ def _draw_path_warning(layout, path, *, shell_bound: bool = True) -> bool:
     return True
 
 
-def _draw_win_native_status(layout, win_path) -> None:
-    """Draw the Windows Native solver-path validity line(s) for *win_path*.
+def _draw_native_gpu_backend(layout, props, root, builds) -> None:
+    """Draw the GPU Backend selector where the root offers a choice of one.
 
-    Resolves *win_path* to the real solver root (walking up from a selected
-    subdirectory such as ``target/release``, ``bin``, or the embedded
-    ``python`` folder), then draws a CHECKMARK when a root is found, adding a
-    second line naming the resolved root when it differs from what the user
-    selected, or an ERROR when no ancestor holds ``ppf-cts-server.exe``.
-    No-op for a blank path.
+    DRAWN ONLY WHERE THERE IS SOMETHING TO SAY, unlike the Compute Device row
+    above it: a Windows x64 distribution carries CUDA and ROCm together and the
+    artist picks between them, while a macOS root has one accelerator and a
+    CUDA-or-ROCm row there would be a control that can never mean anything. It
+    is also drawn when the saved choice names a backend this root does not
+    hold, so a `.blend` carrying that choice can be corrected rather than
+    silently ignored.
+
+    WHICH BACKENDS ARE OFFERED IS A FACT ABOUT THE DISK, as with the device
+    row. Whether one has a usable GPU is a question for the solver, asked when
+    the server is spawned; asking it here would run a solver on every redraw.
     """
-    win_path = resolve_local_path(win_path or "").rstrip("/\\")
-    if not win_path:
+    from ..core.connection import GPU_BACKEND_AUTO, native_gpu_backend_choice_open
+
+    found = builds(root)
+    named = [name for name in found if name]
+    selected = props.native_gpu_backend
+    missing = selected != GPU_BACKEND_AUTO and selected.lower() not in named
+    if len(named) < 2 and not missing:
         return
-    from ..core.connection import resolve_win_native_root
-    resolved = resolve_win_native_root(win_path)
+    row = layout.row(align=True)
+    row.enabled = native_gpu_backend_choice_open(found, selected)
+    row.prop(props, "native_gpu_backend", text=iface_("GPU Backend"))
+    if missing:
+        layout.label(
+            text=iface_("This folder has no {} build").format(selected),
+            icon="ERROR",
+        )
+
+
+def _draw_native_device(layout, props, root, resolver, builds=None) -> None:
+    """Draw the GPU/CPU selector for a local native backend, ALWAYS.
+
+    DRAWN EVEN WHEN ONLY ONE DEVICE IS BUILT, disabled with a line saying why,
+    rather than hidden. A control that disappears when its precondition is
+    unmet costs the artist the discoverability of the feature: they cannot tell
+    "this build has no CPU solver" from "this add-on cannot do that".
+
+    WHICH DEVICES ARE OFFERED IS A FACT ABOUT THE DISK. The backend is chosen
+    when the solver is BUILT, so a device is available exactly when a server
+    binary for it exists under the selected root. A machine with a GPU whose
+    tree has only ever built the CPU backend can honestly offer only CPU, and
+    the reverse is the common case: an ordinary GPU checkout has no CPU build
+    until someone asks for one.
+    """
+    from ..core.connection import DEVICE_CPU, DEVICE_GPU, native_device_choice_open
+
+    root = resolve_local_path(root or "").rstrip("/\\")
+    have = {device: bool(resolver(root, device)) for device in (DEVICE_GPU, DEVICE_CPU)}
+    row = layout.row(align=True)
+    # Only a root that holds BOTH gives the artist a choice to make; with one,
+    # the property cannot be moved onto something that is not there. It stays
+    # open while the selection names the ABSENT build, because the property
+    # defaults to GPU and a folder holding only the CPU build would otherwise
+    # lock it on a device Connect can only refuse.
+    row.enabled = native_device_choice_open(have, props.native_device)
+    row.prop(props, "native_device", expand=True)
+    if builds is not None and props.native_device == DEVICE_GPU:
+        _draw_native_gpu_backend(layout, props, root, builds)
+    if not any(have.values()):
+        # The path warning above already said the root is wrong; adding a
+        # second complaint here would be noise.
+        return
+    if not have[DEVICE_CPU]:
+        # THE COMMAND IS SPELLED WITH ITS TARGET DIRECTORY, because a bare
+        # `--features cpu` does not produce a build this panel can offer
+        # ALONGSIDE the GPU one, and reaching this branch means a GPU build is
+        # here (a root holding neither returned above). Every backend links the
+        # same executable name, so `build.rs` refuses to put the CPU build into
+        # a `target/release` that already holds the GPU one and names this
+        # variable in its own refusal. Naming only the feature flag sent the
+        # artist to a command that either stops at that refusal or, on a
+        # cleaned tree, replaces the GPU build they still want.
+        layout.label(text=iface_("CPU build not found. To add one:"), icon="INFO")
+        layout.label(
+            text="CARGO_TARGET_DIR=target/cpu cargo build --release --features cpu"
+        )
+    elif not have[DEVICE_GPU]:
+        if props.native_device == DEVICE_GPU:
+            # The selection names the absent build, which is where a CPU-only
+            # folder starts; the selector above is open for exactly this, so
+            # the line says what to pick.
+            layout.label(
+                text=iface_("GPU build not found under this root. Choose CPU to run the CPU build."),
+                icon="ERROR",
+            )
+        else:
+            layout.label(text=iface_("GPU build not found under this root"), icon="INFO")
+    # NO LINE FOR A CPU SELECTION THAT IS SIMPLY WORKING. The two branches
+    # above report a build that is ABSENT, which the artist has to act on; a
+    # note that the backend they deliberately picked is the slower one reports
+    # nothing they did not just decide, and it sat under the selector on every
+    # redraw for the whole session.
+
+
+def _draw_native_status(layout, server_type, path) -> None:
+    """Draw the native solver-path validity line(s) for *path*.
+
+    Resolves *path* to the real solver root (walking up from a selected
+    subdirectory such as ``target/release``, ``target/cuda/release``, ``bin``,
+    or an embedded ``python`` folder), then draws a CHECKMARK when a root is
+    found, adding a second line naming the resolved root when it differs from
+    what the user selected, or an ERROR when no ancestor holds a server.
+    No-op for a blank path.
+
+    ONE DRAWER FOR THE THREE NATIVES. What differs between them is the resolver
+    and the executable's name, and both come from the backend's own entry in
+    `core.connection`, so neither is spelled here.
+    """
+    from ..core.connection import native_resolvers
+
+    backend_type = SERVER_TYPE_BACKENDS[server_type]
+    path = resolve_local_path(path or "").rstrip("/\\")
+    if not path:
+        return
+    resolve_root = native_resolvers(backend_type)[3]
+    resolved = resolve_root(path)
     if resolved is None:
-        layout.label(text="ppf-cts-server.exe not found", icon="ERROR")
+        exe = "ppf-cts-server.exe" if backend_type == "win_native" else "ppf-cts-server"
+        layout.label(text=f"{exe} not found", icon="ERROR")
         return
     layout.label(text="Solver path valid", icon="CHECKMARK")
-    if os.path.normpath(resolved) != os.path.normpath(win_path):
+    if os.path.normpath(resolved) != os.path.normpath(path):
         layout.label(text=iface_("Using solver root: {path}").format(path=resolved))
+
+
+def _draw_remote_device(layout, props) -> None:
+    """Draw the Compute Device and GPU Backend rows for a REMOTE connection.
+
+    WHY THIS IS NOT `_draw_native_device`. That one answers from the local
+    filesystem on every redraw, which it can afford because the builds are on
+    this machine. Here they are on the solver host, so the answer comes from
+    the listing `core.remote_builds` took once over the connection, and the
+    rows exist only while there is a connection to have taken it.
+
+    DRAWN AFTER CONNECT, NOT BEFORE, which is the opposite of the native rows
+    and follows from the same fact. Before connecting there is nothing to ask,
+    so a row here would offer a choice against no information; the GPU picker
+    directly below has always worked this way for the same reason. The choice
+    reaches the server at Start Server, so the rows are disabled once one is
+    running: Stop Server, pick, Start Server is how a running solver is moved,
+    exactly as it is for the GPU.
+
+    THE SELECTION IS READ AT START SERVER, not held from connect, which is what
+    makes these rows mean anything: they are drawn only once a connection is up,
+    so a value captured at connect would leave a control the artist can move and
+    that changes no run. `REMOTE_OT_StartServer` passes what they hold, exactly
+    as it passes the GPU index.
+    """
+    from ..core import remote_builds
+    from ..core.connection import (
+        DEVICE_CPU,
+        DEVICE_GPU,
+        native_device_choice_open,
+        remote_server_binary,
+    )
+
+    if props.server_type not in REMOTE_SERVER_TYPES:
+        return
+    if not com.is_connected():
+        return
+
+    col = layout.column()
+    col.enabled = not com.is_server_running() and not com.is_server_launching()
+
+    error = remote_builds.probe_error()
+    if error:
+        # THE FAILED PROBE GETS A LINE, and the rows still get drawn. Which
+        # builds the host has is unknown, not known to be none, and hiding the
+        # rows would say the second. The launch refuses by name if the choice
+        # cannot be served, and the reason here is what the artist acts on.
+        col.prop(props, "native_device", expand=True)
+        col.label(text=error, icon="ERROR")
+        return
+    if not remote_builds.has_probed():
+        return
+
+    # THE ROOT THE PROBE RECORDED, never one derived here. The listing's keys
+    # are absolute directories under the root the probe was pointed at, which is
+    # the backend's `current_directory`, the SOLVER root. Deriving one here from
+    # `normalized_remote_root()` gets the DATA root
+    # (`<share>/ppf-cts/git-<branch>/<project>`) instead, and every lookup then
+    # misses, which is indistinguishable from a host holding no build: the rows
+    # go dead and the panel says "No solver build found under ..." while the
+    # listing in `remote_builds` holds both. That shipped, on every remote
+    # transport at once, because this is the only place the two spellings could
+    # differ and nothing compared them.
+    root = remote_builds.probed_root()
+    listing = remote_builds.cached_builds()
+    have = {
+        device: bool(remote_server_binary(root, listing, device))
+        for device in (DEVICE_GPU, DEVICE_CPU)
+    }
+    row = col.row(align=True)
+    row.enabled = native_device_choice_open(have, props.native_device)
+    row.prop(props, "native_device", expand=True)
+
+    if props.native_device == DEVICE_GPU:
+        _draw_remote_gpu_backend(col, props, root, listing)
+
+    if not any(have.values()):
+        col.label(
+            text=iface_("No solver build found under {path}").format(path=root),
+            icon="ERROR",
+        )
+        return
+    if not have[props.native_device]:
+        other = DEVICE_CPU if props.native_device == DEVICE_GPU else DEVICE_GPU
+        col.label(
+            text=iface_("The solver host has no {device} build here; it has {other}").format(
+                device=props.native_device, other=other
+            ),
+            icon="ERROR",
+        )
+
+
+def _draw_remote_gpu_backend(layout, props, root, listing) -> None:
+    """Draw the GPU Backend row where a remote root offers a choice of one.
+
+    The same rule the native row follows: drawn only where there is something
+    to say, which is a host holding more than one GPU build, or a saved choice
+    that host does not have.
+    """
+    from ..core.connection import (
+        GPU_BACKEND_AUTO,
+        native_gpu_backend_choice_open,
+        remote_gpu_builds,
+    )
+
+    found = remote_gpu_builds(root, listing)
+    named = [name for name in found if name]
+    selected = props.native_gpu_backend
+    missing = selected != GPU_BACKEND_AUTO and selected.lower() not in named
+    if len(named) < 2 and not missing:
+        return
+    row = layout.row(align=True)
+    row.enabled = native_gpu_backend_choice_open(found, selected)
+    row.prop(props, "native_gpu_backend", text=iface_("GPU Backend"))
+    if missing:
+        layout.label(
+            text=iface_("The solver host has no {} build").format(selected),
+            icon="ERROR",
+        )
 
 
 def _draw_gpu_section(layout, props) -> None:
@@ -258,6 +488,22 @@ def _draw_gpu_section(layout, props) -> None:
     Disabled while the server is up, because the choice is applied at Start
     Server: Stop Server, pick, Start Server is how a running solver is moved.
     """
+    from ..core.connection import DEVICE_CPU
+
+    # The macOS native solver runs on the system default Metal device, so there
+    # is nothing to pick and the dropdown has nothing to offer. The confirmation
+    # line below gates itself on the backend the SERVER reports, which is the
+    # answer that also holds for a Metal or CPU server reached some other way;
+    # this return is about the PICKER.
+    if props.server_type == "MAC_NATIVE":
+        return
+    # A CPU RUN HAS NO GPU TO PICK. The dropdown would offer the solver host's
+    # cards for a server that opens none of them, and the launch would write a
+    # CUDA_VISIBLE_DEVICES in front of a binary with no CUDA in it. The
+    # confirmation line below says nothing for a non-CUDA server already, so
+    # what is left without this is a control that means nothing.
+    if props.native_device == DEVICE_CPU:
+        return
     if not com.is_connected():
         return
     col = layout.column()
@@ -301,6 +547,16 @@ def _draw_gpu_confirmation(layout, props) -> None:
     hardware = com.response.get("hardware") or {}
     if not hardware:
         return
+    # EVERY LINE BELOW IS A CUDA QUESTION, so a server that is not on CUDA is
+    # not asked it. Metal opens the system default device and offers no way to
+    # name another, and a CPU build has no device at all, so neither reports a
+    # GPU index and neither has anything for this to confirm. Read from the
+    # server's own "Backend" rather than from the add-on's connection type:
+    # the two agree only for a server this add-on launched itself, and an SSH
+    # connection to a Mac is exactly where they do not.
+    backend = str(hardware.get("Backend", "cuda"))
+    if backend != "cuda":
+        return
     reported = hardware.get("GPU Index")
     if reported is None:
         layout.label(text="Server does not report which GPU it is on", icon="QUESTION")
@@ -335,6 +591,86 @@ def _draw_gpu_confirmation(layout, props) -> None:
         icon="ERROR",
     )
     alert.label(text="Press Stop Server, then Start Server, to move it")
+
+
+def _draw_force_terminate(layout, props, context) -> None:
+    """Draw the Force Terminate Process button and its status line.
+
+    Drawn only in the states ``_force_terminate_offered`` names, where a
+    server process has to be ended and Stop Server cannot reach it. It is
+    enabled when no job is running, and carries a three-branch line under
+    it: a server of ours is listening on the port, nothing is, or the port
+    is held by another program. That line is what tells the artist whether
+    the kill has anything to act on before they press it.
+
+    FOR A REMOTE TYPE (SSH, Docker, Docker over SSH) THE ROW IS DRAWN ONLY
+    WHILE CONNECTED. This is a deliberate departure from drawing every
+    conditional button disabled with a status line: that rule is for a
+    feature awaiting a precondition the artist can meet, and a disconnected
+    remote kill has NO transport to act through, so a disabled button there
+    would offer an action that cannot exist in that state. Connected, the
+    kill runs through the live backend and leaves the server stopped, so
+    Start Server is the next step.
+    """
+    if not is_local_server_type(props.server_type) and not com.is_connected():
+        return
+    row = layout.row()
+    row.enabled = SOLVER_OT_ForceTerminatePort.poll(context)
+    row.operator(SOLVER_OT_ForceTerminatePort.bl_idname, icon="X")
+    text, icon = force_terminate_status(props)
+    layout.label(text=text, icon=icon)
+
+
+def _names_port_in_use(err_lower: str) -> bool:
+    """True when a lowercased error says a port is taken.
+
+    Covers ``PortInUseByForeignProcess``'s ``"Port N is in use"`` and the
+    remote launch's ``"Server port N is already in use on the remote host"``.
+    The ``"already running on port N"`` refusal is deliberately NOT one of
+    them, because it is the one that must not be probed for staleness: there
+    our own server answering IS the report.
+    """
+    return "in use" in err_lower and "port" in err_lower
+
+
+def _force_terminate_offered(error: str, *, stale_port_error: bool) -> bool:
+    """True when the panel is reporting a failure whose way out is Force
+    Terminate Process, which is the only time its row is drawn.
+
+    THREE STATES, AND THEY ARE THE WHOLE LIST:
+
+    - A PROTOCOL VERSION MISMATCH, read off ``RemoteStatus`` rather than off
+      the message because two of the malformed-response paths set the state
+      with no error text at all. A server orphaned from an earlier binary
+      keeps serving its old ``PROTOCOL_VERSION`` across the update the artist
+      just made, so the restart has to end the process, not the image.
+    - ANY ERROR WHILE NOT CONNECTED, which is what a refused or lost
+      connection leaves behind. Stop Server is reachable only through a
+      connection, so there the button is the only way to end a server
+      process, whatever the refusal says.
+    - AN ERROR NAMING A HELD PORT, connected or not: ``"Port N is in use"``,
+      ``"A solver server is already running on port N"``
+      (``NativeServerMismatch``), and the remote launch's ``"Server port N is
+      already in use on the remote host"``, which a CONNECTED Start Server
+      raises and the connected kill clears through the live backend.
+
+    Being disconnected is what separates the second from the errors that are
+    not connection failures: a build or transfer refusal (stray isolated
+    vertices, no usable rest shape) can only be raised while ONLINE, and
+    there the server answers Start Server and Stop Server. A standing kill
+    button outside these states is an invitation to end a healthy server.
+
+    A stale port error is not offered either: ``_our_server_responding_in_error``
+    has just found our own server answering on the port the message names.
+    """
+    if com.info.status == RemoteStatus.PROTOCOL_VERSION_MISMATCH:
+        return True
+    if stale_port_error or not error:
+        return False
+    if not com.is_connected():
+        return True
+    err_lower = error.lower()
+    return _names_port_in_use(err_lower) or "already running on port" in err_lower
 
 
 def _draw_long_path_warning(layout, path, project_name) -> bool:
@@ -514,17 +850,27 @@ class MAIN_PT_RemotePanel(Panel):
             elif props.server_type == "DOCKER_SSH_COMMAND":
                 col.prop(props, "command")
                 col.prop(props, "container")
-            if props.server_type == "WIN_NATIVE":
-                col.prop(props, "win_native_path")
+            if props.server_type in NATIVE_PATH_FIELDS:
+                field = NATIVE_PATH_FIELDS[props.server_type]
+                path = getattr(props, field)
+                col.prop(props, field)
                 # Held to the same rule the Connect gate uses for this
                 # backend, so the warning and the button never disagree.
-                if not _draw_path_warning(col, props.win_native_path,
-                                          shell_bound=False):
-                    _draw_win_native_status(col, props.win_native_path)
-                    _draw_long_path_warning(col, props.win_native_path, state.project_name)
-            elif props.server_type == "LOCAL":
-                col.prop(props, "local_path")
-                _draw_path_warning(col, props.local_path)
+                if not _draw_path_warning(col, path, shell_bound=False):
+                    _draw_native_status(col, props.server_type, path)
+                    from ..core.connection import native_resolvers
+                    resolver, _, builds, resolve_root = native_resolvers(
+                        SERVER_TYPE_BACKENDS[props.server_type]
+                    )
+                    _draw_native_device(
+                        col,
+                        props,
+                        resolve_root(resolve_local_path(path or "")) or path,
+                        resolver,
+                        builds,
+                    )
+                    if props.server_type == "WIN_NATIVE":
+                        _draw_long_path_warning(col, path, state.project_name)
             elif props.server_type in ["CUSTOM", "COMMAND"]:
                 col.prop(props, "ssh_remote_path")
                 _draw_path_warning(col, props.ssh_remote_path)
@@ -533,9 +879,10 @@ class MAIN_PT_RemotePanel(Panel):
                 _draw_path_warning(col, props.docker_path)
 
             # Drawn on the box rather than inside col, which is disabled while
-            # connected: the picker is reachable exactly then, since the GPU is
-            # applied at Start Server, and the confirmation line reports the
-            # running server.
+            # connected: these are reachable exactly then, since both the
+            # build and the GPU are applied at Start Server, and the
+            # confirmation lines report the running server.
+            _draw_remote_device(box, props)
             _draw_gpu_section(box, props)
 
             row = box.row(align=True)
@@ -606,48 +953,50 @@ class MAIN_PT_RemotePanel(Panel):
         else:
             layout.label(text=message, icon=com.info.status.icon)
         error = com.error
-        if error:
-            # Recovery hatch for "Port N is in use" — surfaces only when
-            # the error wording matches PortInUseByForeignProcess so the
-            # button isn't a foot-gun that's always visible. Clicking it
-            # walks the process tree and force-kills the squatter.
-            #
-            # Defense in depth: when the message implicates a port, probe
-            # it live before showing. If our own ppf-cts-server is now
-            # responding there (e.g. the user clicked Connect a second
-            # time and the spawn path's attach branch took over), the
-            # error is stale — suppress the label AND the button so we
-            # don't tempt the user into killing our own running server.
-            err_lower = error.lower()
-            is_port_error = "in use" in err_lower and "port" in err_lower
-            stale_port_error = is_port_error and _our_server_responding_in_error(error)
-            if not stale_port_error:
-                _draw_error_lines(layout, error)
-                if is_port_error:
+        err_lower = error.lower()
+        # Defense in depth for the port refusal: when the message says the
+        # port is in use, probe it live before showing. If our own
+        # ppf-cts-server is now responding there (e.g. the user clicked
+        # Connect a second time and the spawn path's attach branch took
+        # over), the error is stale, so suppress the label AND the button and
+        # do not tempt the user into killing our own running server. The
+        # "already running" refusal is different: there our server IS
+        # answering, and that is the problem being reported.
+        is_port_error = bool(error) and _names_port_in_use(err_lower)
+        stale_port_error = is_port_error and _our_server_responding_in_error(error)
+        if error and not stale_port_error:
+            _draw_error_lines(layout, error)
+            # A repair the artist can press sits next to the refusal that asks
+            # for it. These two are BUILD refusals, which can only be raised
+            # while connected; a CONNECTION failure takes the Force Terminate
+            # Process row below instead.
+            if "isolated vert" in err_lower:
+                # Stray faceless vertices on a STATIC collider abort the
+                # build; offer a one-click cleanup (see the encoder's
+                # detect_isolated_vertices check / geometry_cleanup_ops).
+                layout.operator(
+                    MESH_OT_RemoveIsolatedVertices.bl_idname, icon="TRASH",
+                )
+            elif "no usable rest shape" in err_lower:
+                # The failing Transfer already opened a dialog carrying
+                # this button, but a dismissed dialog must not take the
+                # repair with it, so the panel keeps offering it for as
+                # long as the error stands. Only when triangulating is the
+                # right repair, which the message says: a face that is
+                # already a triangle has no other split, and one that is
+                # degenerate itself has no sound split at all. Splitting
+                # either would change the mesh without fixing it.
+                if "triangulate faces" in err_lower:
                     layout.operator(
-                        SOLVER_OT_ForceTerminatePort.bl_idname, icon="X",
+                        MESH_OT_TriangulateDegenerateFaces.bl_idname,
+                        icon="MOD_TRIANGULATE",
                     )
-                elif "isolated vert" in err_lower:
-                    # Stray faceless vertices on a STATIC collider abort the
-                    # build; offer a one-click cleanup (see the encoder's
-                    # detect_isolated_vertices check / geometry_cleanup_ops).
-                    layout.operator(
-                        MESH_OT_RemoveIsolatedVertices.bl_idname, icon="TRASH",
-                    )
-                elif "no usable rest shape" in err_lower:
-                    # The failing Transfer already opened a dialog carrying
-                    # this button, but a dismissed dialog must not take the
-                    # repair with it, so the panel keeps offering it for as
-                    # long as the error stands. Only when triangulating is the
-                    # right repair, which the message says: a face that is
-                    # already a triangle has no other split, and one that is
-                    # degenerate itself has no sound split at all. Splitting
-                    # either would change the mesh without fixing it.
-                    if "triangulate faces" in err_lower:
-                        layout.operator(
-                            MESH_OT_TriangulateDegenerateFaces.bl_idname,
-                            icon="MOD_TRIANGULATE",
-                        )
+        # The way out sits next to the refusal that names it, and the
+        # Connection box is collapsible, so the row goes here rather than
+        # beside Stop Server: a refused Connect must never leave the artist
+        # with a server process and nothing to end it with.
+        if _force_terminate_offered(error, stale_port_error=stale_port_error):
+            _draw_force_terminate(layout, props, context)
 
         server_error = com.server_error
         crash_kind = com.crash_kind
@@ -694,15 +1043,6 @@ class MAIN_PT_RemotePanel(Panel):
         # Remote Hardware info (shown when connected)
         hardware = com.response.get("hardware", {})
         if hardware and com.is_connected():
-            # Prominent, always-visible banner when the connected server
-            # is an emulated (CPU stub, no CUDA) build: it produces no
-            # real physics. `alert` renders the box in the theme's red.
-            if hardware.get("emulated"):
-                warn = layout.box()
-                warn.alert = True
-                wcol = warn.column(align=True)
-                wcol.label(text="SERVER IN EMULATION MODE (no CUDA)", icon="ERROR")
-                wcol.label(text="Solver produces no real physics (test-rig build).")
             hw_box = layout.box()
             row = hw_box.row()
             row.prop(

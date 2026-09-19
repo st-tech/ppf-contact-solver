@@ -37,6 +37,11 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import time
@@ -68,7 +73,7 @@ try:
     Transfer = solver_mod.SOLVER_OT_Transfer
     com = dh.com
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     # Pump a few ticks so the first ServerPolled response lands and
     # populates ``com.info.response['data'] == 'NO_DATA'`` plus

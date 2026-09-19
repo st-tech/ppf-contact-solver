@@ -371,7 +371,7 @@ class _Probe:
         self.cfg = dict(_DEFAULTS)
         # Env knobs override defaults.
         for k in self.cfg:
-            envname = f"PPF_PROBE_{k.upper()}"
+            envname = f"PROBE_{k.upper()}"
             v = os.environ.get(envname)
             if v is not None:
                 try:

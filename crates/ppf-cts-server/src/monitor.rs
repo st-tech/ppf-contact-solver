@@ -39,12 +39,11 @@ use ppf_cts_formats::files::{
 };
 use ppf_cts_formats::status::{self, lock, signal_name, signal_sidecar, CrashKind, Outcome, Phase};
 use ppf_cts_formats::FormatError;
-// Test rig spawns peer workers as sibling processes; the
-// emulated-feature build narrows the busy check to descendants only
-// so a foreign worker's solver doesn't trip our liveness watchdog.
-#[cfg(feature = "emulated")]
-use ppf_cts_core::utils::solver_busy_descendants_only as solver_busy;
-#[cfg(not(feature = "emulated"))]
+// Solver scan, host-global by default and narrowed to this process's own
+// descendants when `PPF_SOLVER_SCAN_DESCENDANTS` is set. The scoping is a
+// RUNTIME signal rather than a build feature, because a real backend has no
+// flag standing in for "under a parallel runner"; `ppf_cts_core::utils`
+// carries the selector and both scopings agree on a single-worker host.
 use ppf_cts_core::utils::solver_busy;
 use serde::Deserialize;
 
@@ -578,9 +577,7 @@ fn seal_abrupt_crash(
 ///
 /// Every field except the outcome states what the torn record established:
 /// the frame, pid and launch id are unknown, so they are written as the zero
-/// that means unknown, which is exactly what the detail already says. The
-/// emulated flag is this build's own, and it is the only field that is not a
-/// property of the dead run.
+/// that means unknown, which is exactly what the detail already says.
 fn seal_torn_record_crash(out_dir: &Path, kind: CrashKind, detail: &str) {
     let sealed = status::RunStatus {
         phase: Phase::Ended,
@@ -594,7 +591,6 @@ fn seal_torn_record_crash(out_dir: &Path, kind: CrashKind, detail: &str) {
         seq: 0,
         pid: 0,
         launch_id: String::new(),
-        emulated: cfg!(feature = "emulated"),
     };
     if let Err(e) = status::write_terminal(out_dir, &sealed) {
         log::warn!(
@@ -1520,7 +1516,6 @@ mod tests {
             seq: 3,
             pid,
             launch_id: "testlaunch00".into(),
-            emulated: true,
         }
     }
 

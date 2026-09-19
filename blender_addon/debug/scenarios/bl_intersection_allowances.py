@@ -7,7 +7,7 @@
 # per-group checkboxes ("Allow Self-Intersections", "Allow Inter-Object
 # Intersections") and a per-pin one ("Allow Intersections Here").
 #
-# `rig_intersection_allowances` and `rig_emulated_intersection` cover what the
+# `rig_intersection_allowances` covers what the
 # allowances MEAN, at the scene-build gate and at the solver's own scan. Both
 # drive the frontend API directly and never load Blender, so neither can see
 # whether a checkbox is wired to anything. A property that is declared, drawn
@@ -109,6 +109,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -302,7 +307,7 @@ try:
                  "a full restart"},
     )
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

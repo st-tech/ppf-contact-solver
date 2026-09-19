@@ -48,6 +48,13 @@ Darwin)
   BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender
   ;;
 Linux)
+  # The official Linux release is linux-x64 only. On any other machine it would
+  # download a Blender that cannot run there, so the refusal names the machine.
+  if [ "$(uname -m)" != "x86_64" ]; then
+    echo "Blender publishes no official Linux build for $(uname -m); this script installs only linux-x64." >&2
+    echo "Use a Blender built for $(uname -m) (a distribution package or your own build) instead." >&2
+    exit 1
+  fi
   PLATFORM=linux
   BLENDER_OPT="$HOME/.local/opt/blender-${BLENDER_VERSION}-linux-x64"
   BLENDER_BIN="$BLENDER_OPT/blender"

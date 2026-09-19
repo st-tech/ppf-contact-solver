@@ -38,3 +38,14 @@ pub use statistics::{
     StatisticsManifest, StatisticsObject, StatisticsValidationError, STATISTICS_VERSION,
 };
 pub use status::{RunStatus, STATUS_VERSION};
+
+/// A digest of the sources this crate's formats and the parameter registry are
+/// built from, computed by `build.rs`.
+///
+/// Two binaries reporting the same stamp were built from the same
+/// `ppf-cts-formats` and `ppf-cts-core` sources, so the session one writes is
+/// the session the other reads. The frontend compares the loaded Python
+/// extension's stamp with a solver's `--probe` answer before a run takes its
+/// solver from another backend's directory. `build.rs` says what is digested
+/// and why a version number cannot stand in for it.
+pub const SOURCE_STAMP: &str = env!("PPF_SOURCE_STAMP");

@@ -16,7 +16,7 @@
 #   * core.connection.resolve_win_native_root returns a valid root unchanged,
 #     ascends from any subdirectory (including the binary file itself) to its
 #     parent root, and returns None for an unrelated / blank path.
-#   * ui.main_panel._draw_win_native_status draws a CHECKMARK "Solver path
+#   * ui.main_panel._draw_native_status draws a CHECKMARK "Solver path
 #     valid" line for a subdir selection plus a second line naming the resolved
 #     root, a CHECKMARK with no extra line for an exact root, and an ERROR line
 #     for a directory with no solver under it (a fake layout records the
@@ -36,7 +36,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Pure path-resolution logic (resolve_win_native_root); backend-agnostic.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''
@@ -54,7 +54,7 @@ def record(name, ok, details=None):
 
 
 class _FakeLayout:
-    """Records label() calls so _draw_win_native_status can be exercised
+    """Records label() calls so _draw_native_status can be exercised
     without a real Blender UILayout (which can't be built outside draw)."""
 
     def __init__(self):
@@ -73,12 +73,12 @@ def _touch(path):
 tmp = None
 try:
     conn = __import__(pkg + ".core.connection", fromlist=["resolve_win_native_root"])
-    main_panel = __import__(pkg + ".ui.main_panel", fromlist=["_draw_win_native_status"])
+    main_panel = __import__(pkg + ".ui.main_panel", fromlist=["_draw_native_status"])
     groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
     resolve = conn.resolve_win_native_root
 
     # ---- fake solver trees: a distributable bundle and a repo checkout ----
-    tmp = tempfile.mkdtemp(prefix="ppf_win_native_")
+    tmp = tempfile.mkdtemp(prefix="win_native_")
     bundle = os.path.join(tmp, "bundle")
     _touch(os.path.join(bundle, "bin", "ppf-cts-server.exe"))
     _touch(os.path.join(bundle, "python", "python.exe"))
@@ -119,7 +119,7 @@ try:
 
     # ---- panel status line: subdir validates and names the resolved root ----
     fl_sub = _FakeLayout()
-    main_panel._draw_win_native_status(fl_sub, os.path.join(bundle, "bin"))
+    main_panel._draw_native_status(fl_sub, "WIN_NATIVE", os.path.join(bundle, "bin"))
     icons_sub = [ic for _, ic in fl_sub.labels]
     texts_sub = [tx for tx, _ in fl_sub.labels]
     record(
@@ -132,7 +132,7 @@ try:
     )
 
     fl_root = _FakeLayout()
-    main_panel._draw_win_native_status(fl_root, bundle)
+    main_panel._draw_native_status(fl_root, "WIN_NATIVE", bundle)
     record(
         "panel_exact_root_valid_no_extra_line",
         [ic for _, ic in fl_root.labels] == ["CHECKMARK"]
@@ -142,7 +142,7 @@ try:
     )
 
     fl_bad = _FakeLayout()
-    main_panel._draw_win_native_status(fl_bad, empty)
+    main_panel._draw_native_status(fl_bad, "WIN_NATIVE", empty)
     record(
         "panel_invalid_shows_error",
         [ic for _, ic in fl_bad.labels] == ["ERROR"]
@@ -151,7 +151,7 @@ try:
     )
 
     fl_blank = _FakeLayout()
-    main_panel._draw_win_native_status(fl_blank, "")
+    main_panel._draw_native_status(fl_blank, "WIN_NATIVE", "")
     record("panel_blank_silent", fl_blank.labels == [], {"labels": fl_blank.labels})
 
     # ---- select Windows Native with a subdir: Connect stays reachable ----

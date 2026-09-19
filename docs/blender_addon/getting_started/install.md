@@ -7,15 +7,17 @@
 - **A solver backend.** Build or deploy the engine from
   [st-tech/ppf-contact-solver](https://github.com/st-tech/ppf-contact-solver)
   on any one of: the same machine (simplest), an SSH-reachable Linux host, a
-  Docker container, or a Windows workstation. On Linux and Windows the
-  solver requires an NVIDIA GPU and the CUDA 12.8 toolkit (on Linux the
-  build checks `nvcc --version` and refuses any other release); on Apple
-  Silicon it is the Metal build that runs (see
-  [Local](../connections/local.md)). See
-  [Connections](../connections/index.md) for
-  the full matrix and GPU requirements. The add-on is just a client and runs
-  fine anywhere Blender runs on one of the platforms its manifest declares:
-  Apple-silicon macOS, x86-64 Linux, and x86-64 Windows.
+  Docker container, a Windows workstation, or an Apple-silicon Mac. Which
+  build runs there depends on the hardware: CUDA on an NVIDIA GPU (the
+  project builds against CUDA 12.8), ROCm on an AMD GPU (x86-64 Linux and
+  x64 Windows), Metal on Apple silicon, and a CPU build that needs no GPU at
+  all and is substantially slower than any of them. A solver binary reports
+  which one it is: `ppf-contact-solver --backend` prints `cuda`, `rocm`,
+  `metal`, or `cpu`. See [Connections](../connections/index.md) for the
+  transport that matches where the solver runs. The add-on is just a client
+  and runs fine anywhere Blender runs on one of the platforms its manifest
+  declares: Apple-silicon macOS, x86-64 and arm64 Linux, and x64 and arm64
+  Windows.
 - **(Optional) paramiko / docker-py.** Needed only for SSH and Docker
   connections. You do not need to install them yourself. When you pick an SSH
   or Docker server type without the module present, the main panel surfaces an

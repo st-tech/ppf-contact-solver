@@ -12,19 +12,20 @@
 //! rest bend angles. Plasticity adds no field. It CREEPS those four in place
 //! on the device, so what would otherwise be a build-time constant becomes the
 //! one thing in a `DataSet` whose value depends on how far the run has got.
-//! One kernel per array, in `cpp/plasticity/plasticity.cu`:
+//! One creep pass per array, named by its [`PlasticKinds`] field and driven by
+//! `driver::plasticity` over the bodies in
+//! `src/kernels/plasticity/plasticity.kernel.cpp`:
 //!
-//! | kernel | runs when | creeps |
-//! | ------ | --------- | ------ |
-//! | `update_face_plasticity` | `shell_face_count > 0`, `FaceParam::plasticity` | `inv_rest2x2` |
-//! | `update_tet_plasticity` | any tet, `TetParam::plasticity` | `inv_rest3x3` |
-//! | `update_hinge_plasticity` | any hinge, `HingeParam::plasticity` | `HingeProp::rest_angle` |
-//! | `update_rod_bend_plasticity` | `rod_count > 0`, `EdgeParam::plasticity` | `VertexProp::rest_bend_angle` |
+//! | pass | runs when | creeps |
+//! | ---- | --------- | ------ |
+//! | `face` | `shell_face_count > 0`, `FaceParam::plasticity` | `inv_rest2x2` |
+//! | `tet` | any tet, `TetParam::plasticity` | `inv_rest3x3` |
+//! | `hinge` | any hinge, `HingeParam::plasticity` | `HingeProp::rest_angle` |
+//! | `rod_bend` | `rod_count > 0`, `EdgeParam::plasticity` | `VertexProp::rest_bend_angle` |
 //!
-//! Both halves of each condition matter, and mirror `main.cu`'s dispatch: a
-//! tet asset gives its surface faces the object's `plasticity` parameter, so
-//! the parameter test alone reports face plasticity on a scene that has no
-//! shell face for the kernel to run over.
+//! Both halves of each condition matter: a tet asset gives its surface faces
+//! the object's `plasticity` parameter, so the parameter test alone reports
+//! face plasticity on a scene that has no shell face for the pass to run over.
 //!
 //! Those four live inside `DataSet`, so keeping them current at every
 //! checkpoint by re-serializing the dataset would carry the whole struct along
@@ -79,7 +80,7 @@ use super::data::{
 use serde::{Deserialize, Serialize};
 
 /// Which of the four plasticity kernels this scene actually runs: the element
-/// count `main.cu` dispatches on, and the same `plasticity > 0` test the
+/// count the pass dispatches over, and the same `plasticity > 0` test the
 /// kernel itself applies to its per-element parameter. The parameter arrays
 /// are deduplicated per unique material (`builder::dedup_param`), so this scan
 /// is over a handful of entries, not per element.
@@ -97,7 +98,7 @@ pub struct PlasticKinds {
     pub rod_bend: bool,
 }
 
-/// How many elements each kernel dispatches over, in `main.cu`'s terms.
+/// How many elements each creep pass dispatches over.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ElementCounts {
     pub shell_face: u32,

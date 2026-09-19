@@ -18,9 +18,9 @@
 #   B) the release frame encodes as unpin_time = pin_duration / fps,
 #   C) a held anchor carries no motion operations.
 #
-# Encoding-only: the emulated backend has no rigid physics, so this rig
-# validates the Blender -> encoder plumbing. The drop-after-release dynamics
-# run on a real CUDA host.
+# Encoding-only by design: this rig validates the Blender -> encoder
+# plumbing, and the drop-after-release dynamics are exercised by the PDRD
+# examples rather than here.
 
 from __future__ import annotations
 
@@ -29,6 +29,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

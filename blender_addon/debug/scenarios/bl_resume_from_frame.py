@@ -33,6 +33,32 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# AN OBSERVATION WINDOW, ASKED FOR RATHER THAN INHERITED. This scenario
+# samples a solve while it is running, and a real solve on a scene this
+# size finishes faster than the addon polls, so a correct run would be
+# unobservable and the assertions could not tell "the state never
+# appeared" from "the state was never sampled". It used to get its window
+# from the deleted stub, whose advance slept 1000 ms BY DEFAULT; nothing
+# here ever requested that. `PPF_STEP_DELAY_MS` is the replacement and
+# defaults to zero, so the window is now a declared property of this
+# scenario.
+#
+# 1000 ms, and the value is set by the span that must be LONG, not by the
+# 60 s gate. This scenario must catch the solve mid-flight, so the run
+# has to still be going when the poll loop looks; the scene is 20 frames at
+# 2 substeps, so the run lasts 40 delays while frame 1 arrives after 2. At
+# 100 ms that is a 4 s run, and the whole solve reached `finished.txt`
+# before `save_and_quit` was dispatched, which the gate reports as
+# `solver=FAILED` at frame 0 and reads like a stall. At 1000 ms frame 1
+# lands at 2 s, far inside the gate, and the run lasts 40 s, which is the
+# span that actually has to be long.
+KNOBS = {"PPF_STEP_DELAY_MS": "1000"}
+
+# RUNS ON THE REAL BACKEND. What it needs is an observation window wide
+# enough to sample a running solve, which `PPF_STEP_DELAY_MS` above
+# supplies explicitly.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import glob
@@ -64,7 +90,7 @@ try:
                 transition="LINEAR")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                     project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="resume-from-frame:build")

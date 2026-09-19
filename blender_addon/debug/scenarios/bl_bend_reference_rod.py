@@ -5,7 +5,7 @@
 #
 # Exercises the per-object "reference rest angle" feature for mesh-based
 # ROD groups end-to-end through the production pipeline on a no-GPU host
-# (macOS), using the CUDA-free emulated solver.
+# (macOS), using the CPU backend.
 #
 # A rod that opts into a reference rest angle has its interior-vertex
 # rest bend angles computed from a separate reference object (a
@@ -24,7 +24,7 @@
 #   D. encoder_rejects_bad_reference- a deviating reference fails upload.
 #   E. build_succeeds_with_reference- the solver loads the reference
 #                                     buffer and builds without panic.
-#   F. run_completes                - the emulated solver advances every
+#   F. run_completes                - the solver advances every
 #                                     frame with the reference in play.
 
 from __future__ import annotations
@@ -36,7 +36,13 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""
@@ -184,7 +190,7 @@ try:
 
     # --- E/F: end-to-end build + run ---
     data_bytes, param_bytes, _dh2, _ph2 = encoder_pkg.prepare_upload(bpy.context)
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, "bend-ref-rod:build",

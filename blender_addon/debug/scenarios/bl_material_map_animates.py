@@ -10,7 +10,7 @@
 # linear interpolation. Two samples naming one source is therefore a constant
 # hold, which is why no hold flag exists.
 #
-# The chain, on the emulated backend so it runs on any host:
+# The chain, on the solver so it runs on any host:
 #
 #   A. payload_carries_samples: the encoded row carries `times` and
 #      `weight_frames` rather than a single `weights` array, with one weight
@@ -36,6 +36,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 _BASE_BEND = 1.0
 _TARGET_BEND = 4000.0
@@ -183,7 +188,7 @@ try:
          "has_static_weights": "weights" in row},
     )
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.build_and_wait(data_bytes, param_bytes, message="animated map")
     dh.log("built")

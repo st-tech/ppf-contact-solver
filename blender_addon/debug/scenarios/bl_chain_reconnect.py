@@ -8,6 +8,11 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 # Chain scenarios hold the solver/server boundary across multiple
 # cycles; under parallel host load the cumulative timing slack runs
 # out and reconnect races trip. Always run serially after the

@@ -10,7 +10,7 @@
 # Learning GPU EC2 instance, drives it over an EC2 Instance Connect SSH tunnel,
 # and always terminates it. The GPU must be Ampere-or-newer (sm_86+): the CUDA
 # build ships one native SASS cubin per architecture listed in
-# crates/ppf-cts-solver/src/cpp/cuda_arch.txt and no JIT-able PTX at all, so the
+# crates/ppf-cts-compute/cuda/cuda_arch.txt and no JIT-able PTX at all, so the
 # default g6/g6e (L4/L40S, sm_89) instances run it while an older card (e.g.
 # an sm_61 Pascal) has no runnable kernel image. The list reaches down to
 # Turing (sm_75) as of the sm_75 cubin, confirmed on the self-hosted T4.
@@ -347,8 +347,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -418,9 +418,12 @@ jobs:
           # Setup Rust environment (cargo is not on the non-login SSH PATH)
           source "$HOME/.cargo/env"
 
-          # Default features = the REAL CUDA backend. Never pass
-          # --features emulated / --no-default-features here: the emulated
-          # backend has no physics and would overwrite target/release.
+          # Default features = the REAL CUDA backend, which is what this
+          # workflow exists to exercise. Never narrow it here: any other
+          # selection lands at the same target/release/ path, and
+          # --features cpu in particular builds a backend that refuses
+          # every scene at initialize(), so the run would prove nothing
+          # about CUDA.
           echo "Running cargo build --release..."
           cargo build --release
 
@@ -660,7 +663,7 @@ jobs:
         run: |
           set -eu
           SM='${{ steps.gpu.outputs.sm }}'
-          MANIFEST=crates/ppf-cts-solver/src/cpp/cuda_arch.txt
+          MANIFEST=crates/ppf-cts-compute/cuda/cuda_arch.txt
           awk '/^floor|^cubin/{next} {print}' "$MANIFEST" > /tmp/manifest.head
           { cat /tmp/manifest.head; echo "floor $SM"; echo; echo "cubin $SM"; } > "$MANIFEST"
           echo "--- cuda_arch.txt for this job only ---"

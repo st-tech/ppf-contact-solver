@@ -114,12 +114,16 @@ switch to the developer build (which ships its own).
 ### "Remote path not found (.../ppf-cts-server)"
 
 The post-connect check looks for `<path>/target/release/ppf-cts-server`
-and did not find it. Point **Remote Path** / **Path** / **Container
-Path** at the solver root - the directory that has `target/release/`
-under it, for example `/root/ppf-contact-solver` - not at
-`target/release` itself. Windows Native does not raise this message: a
-**Solver Path** with no binary under `target\release\` or `bin\` reports
-"ppf-cts-server.exe not found under ..." instead.
+and did not find it. Point **Remote Path** / **Container Path** at the
+solver root - the directory that has `target/release/` under it, for
+example `/root/ppf-contact-solver` - not at `target/release` itself.
+Only the SSH and Docker types raise this message. The three co-located
+types each name the layouts they accept instead: **Local** reports
+"ppf-cts-server not found under ... in any layout" and lists them,
+**Windows Native** reports "ppf-cts-server.exe not found under ..." for
+a **Solver Path** with no binary under `target\release\` or `bin\`, and
+**macOS Native** reports "ppf-cts-server not found under ..." for one
+with none under `target/release/`.
 
 ## Connection profiles
 
@@ -134,7 +138,7 @@ are unclosed quotes or unescaped backslashes in Windows paths (use
 
 The `type` value does not match one of `Local`, `SSH`, `SSH Command`,
 `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows
-Native`. Case matters.
+Native`, `macOS Native`. Case matters.
 
 :::{note}
 **Save** rewrites the whole TOML; comments and original formatting are
@@ -162,10 +166,11 @@ last 20 lines of `server.log`. Usual causes:
 ### "Port N is in use"
 
 Something is already bound to the port the server was told to use.
-Only Windows Native raises this. There the add-on first probes the
-port: if it answers a ppf-cts-server protocol ping, the add-on attaches
-to that running server instead of erroring out (this is what lets you
-restart Blender without losing the server). If the holder is not a
+The two native types, Windows Native and macOS Native, raise this.
+Each first probes the port: if it answers a ppf-cts-server protocol
+ping, the add-on attaches to that running server instead of erroring
+out (this is what lets you restart Blender without losing the
+server). If the holder is not a
 ppf-cts-server, the panel surfaces the error and shows a **Force
 Terminate Process** button. Clicking it walks the process tree and
 force-kills the listener on that port. If the squatter is not yours,
@@ -483,8 +488,8 @@ tool for the case where the server will not start: list the venv, run
 inside the container, not on the daemon host. **Run as Shell**, on by
 default, is what makes pipes, redirection and `&&` work - it wraps the
 command in `/bin/sh -c` on the SSH and Docker backends and hands it to a
-shell on the Local and Windows Native ones - and there is rarely a
-reason to untick it.
+shell on the three co-located ones (Local, Windows Native, macOS
+Native) - and there is rarely a reason to untick it.
 
 ### Data Transfer Tests
 
@@ -508,9 +513,9 @@ is the number to compare against when a transfer merely feels slow.
 same Blender session: the reference copy it compares against is held in
 memory, so before then there is nothing to check a download against.
 Both need the server running, not just a connection. Two things worth
-knowing before you read the result: on the Local and Windows Native
-backends the payload is written straight to the filesystem instead of
-through the socket (unless `PPF_FORCE_TCP_TRANSFER=1` is set in the
+knowing before you read the result: on the three co-located backends
+(Local, Windows Native, macOS Native) the payload is written straight
+to the filesystem instead of through the socket (unless `PPF_FORCE_TCP_TRANSFER=1` is set in the
 environment), so there the round trip measures a file copy rather than a
 network; and the test file is left behind in the remote root - nothing
 in the add-on deletes it - so clean it up yourself after a large test.

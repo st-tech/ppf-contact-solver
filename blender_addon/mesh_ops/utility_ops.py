@@ -26,7 +26,7 @@ class OBJECT_OT_SymmetricTriangulate(Operator):
     mesh keeps its symmetry under bending in the simulation. Adds one
     vertex per face"""
 
-    bl_idname = "object.ppf_symmetric_triangulate"
+    bl_idname = "object.symmetric_triangulate"
     bl_label = "Symmetric Triangulate"
     bl_options = {"REGISTER", "UNDO"}
 

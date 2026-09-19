@@ -23,7 +23,7 @@
 # solve. Real-only + darwin-only, like bl_ssh_remote_solve.
 #
 # SSH parameters come from the environment (injected by the macos-ssh job
-# via `runtests --knob PPF_SSH_*=...`):
+# via `runtests --knob SSH_*=...`):
 #   PPF_SSH_HOST, PPF_SSH_PORT, PPF_SSH_USER, PPF_SSH_KEY,
 #   PPF_SSH_REMOTE_PATH, PPF_SSH_SERVER_PORT
 #

@@ -7,6 +7,8 @@ For the latest highlights, see the [README](../README.md).
 
 ### 2026
 
+- **(2026.09.18)** Added support for Apple (Metal) and AMD (ROCm) GPUs, and CPU support for x86_64 and aarch64 with SIMD optimization (AVX2 and NEON).
+- **(2026.07.09)** Added a [performance article](./performance.md) benchmarking the speedup across all examples.
 - **(2026.06.30)** Added rigidbody support based on [Painless Differentiable Rotation Dynamics](https://dl.acm.org/doi/10.1145/3730944).
 - **(2026.06.30)** Added sand support.
 - **(2026.06.30)** Achieved 2x performance improvement [with help of feedback from @Hurleyworks](https://github.com/st-tech/ppf-contact-solver/discussions/86).

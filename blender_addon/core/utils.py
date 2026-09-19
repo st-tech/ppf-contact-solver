@@ -73,9 +73,10 @@ def find_invalid_path_char(path: str) -> str | None:
 def resolve_local_path(path: str) -> str:
     """Return *path* as an absolute path on the machine Blender runs on.
 
-    The two connection paths that name a directory on the CLIENT machine
-    (``local_path`` and ``win_native_path``) are ``DIR_PATH`` properties, so
-    Blender's directory picker writes them in whatever form the user's
+    The three connection paths that name a directory on the CLIENT machine
+    (``local_path``, ``win_native_path`` and ``mac_native_path``) are
+    ``DIR_PATH`` properties, so Blender's directory picker writes them in
+    whatever form the user's
     ``Preferences > File Paths > Relative Paths`` setting asks for. That
     setting ships enabled, so once the .blend has been saved the picker
     stores a ``//``-prefixed path relative to the .blend

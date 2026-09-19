@@ -26,6 +26,44 @@ from ..core.utils import (
 )
 from ..models.groups import get_addon_data
 
+# THE CONNECTION TYPES WHOSE SERVER RUNS ON THIS MACHINE, mapped to the property
+# holding the folder it runs from.
+#
+# One per platform, because a solver root is a path on THIS machine and the
+# three platforms spell and pick one differently; the artist sees one "Solver
+# Path" field either way, since only their own platform's type is usable.
+#
+# ONE MAP, SO THE PANEL, THE CONNECT GATE AND THE FORCE-TERMINATE BUTTON CANNOT
+# DISAGREE. A list of native types in each of them is a place a type can be
+# added to two of the three, and that gap is silent: the gate simply returns
+# None, which reads as "cannot connect" with no reason given, and the button
+# simply hides.
+NATIVE_PATH_FIELDS = {
+    "WIN_NATIVE": "win_native_path",
+    "MAC_NATIVE": "mac_native_path",
+    "LINUX_NATIVE": "linux_native_path",
+}
+
+# The backend each native connection type creates. The panel needs the backend's
+# name to reach its resolvers, and the two spellings differ only in case and
+# order, which is exactly the kind of thing that is worth writing down once
+# rather than deriving with `.lower()` at four call sites.
+SERVER_TYPE_BACKENDS = {
+    "WIN_NATIVE": "win_native",
+    "MAC_NATIVE": "mac_native",
+    "LINUX_NATIVE": "linux_native",
+}
+
+# The connection types that reach a server on ANOTHER machine, which is where
+# the solver builds have to be asked for rather than looked at.
+REMOTE_SERVER_TYPES = (
+    "CUSTOM",
+    "COMMAND",
+    "DOCKER",
+    "DOCKER_SSH",
+    "DOCKER_SSH_COMMAND",
+)
+
 
 def _refresh_ssh_panel_bridge():
     """Forward to main_panel.refresh_ssh_panel (the canonical implementation).
@@ -65,16 +103,15 @@ class REMOTE_OT_Connect(Operator):
     def get_remote_path(self, props):
         """Return the solver directory for the selected connection type.
 
-        ``LOCAL`` names a directory on the machine Blender runs on, so it goes
-        through ``resolve_local_path``: the picker stores it in Blender's
-        ``//``-relative notation whenever the .blend is saved and relative
-        paths are enabled, and ``os.path`` cannot read that form. The SSH and
-        Docker paths name a directory on the solver host, where the client's
-        .blend location has no meaning, so they are returned verbatim.
+        The SSH and Docker paths name a directory on the SOLVER HOST, where the
+        client's .blend location has no meaning, so they are returned verbatim.
+        A native path names a directory on the machine Blender runs on and goes
+        through ``resolve_local_path`` at its own call site instead, because the
+        picker stores it in Blender's ``//``-relative notation whenever the
+        .blend is saved and relative paths are enabled, and ``os.path`` cannot
+        read that form.
         """
-        if props.server_type == "LOCAL":
-            return resolve_local_path(props.local_path)
-        elif props.server_type in ["CUSTOM", "COMMAND"]:
+        if props.server_type in ["CUSTOM", "COMMAND"]:
             return props.ssh_remote_path
         else:
             return props.docker_path
@@ -141,23 +178,18 @@ class REMOTE_OT_Connect(Operator):
                 and module_exists(["paramiko"])
                 and project_name_valid
             )
-        elif props.server_type == "WIN_NATIVE":
-            # The Windows Native root never reaches a shell (it is an
-            # os.path.join base, a Popen argv element, and that Popen's cwd),
-            # so it is held to the metacharacter rule only. A space is
-            # ordinary in a Windows path, and this button is the only place
-            # the user could act on a refusal of one, with no field on screen
-            # to change and nothing wrong with what they picked.
+        elif props.server_type in NATIVE_PATH_FIELDS:
+            # A NATIVE ROOT NEVER REACHES A SHELL (it is an os.path.join base, a
+            # Popen argv element, and that Popen's cwd), so it is held to the
+            # metacharacter rule only. A space is ordinary in a path on all
+            # three platforms, and this button is the only place the user could
+            # act on a refusal of one, with no field on screen to change and
+            # nothing wrong with what they picked.
+            path = getattr(props, NATIVE_PATH_FIELDS[props.server_type])
             return (
                 not com.is_connected()
-                and props.win_native_path.strip() != ""
-                and find_shell_unsafe_path_char(props.win_native_path) is None
-                and project_name_valid
-            )
-        elif props.server_type == "LOCAL":
-            return (
-                not com.is_connected()
-                and find_invalid_path_char(props.local_path) is None
+                and path.strip() != ""
+                and find_shell_unsafe_path_char(path) is None
                 and project_name_valid
             )
 
@@ -205,6 +237,8 @@ class REMOTE_OT_Connect(Operator):
                 container=container,
                 server_port=props.docker_port,
                 proxy_jump=parsed.proxy_jump,
+                device=props.native_device,
+                gpu_backend=props.native_gpu_backend,
             ):
                 return {"CANCELLED"}
         elif props.server_type == "CUSTOM" or props.server_type == "DOCKER_SSH":
@@ -218,6 +252,8 @@ class REMOTE_OT_Connect(Operator):
                 container=container,
                 server_port=props.docker_port,
                 proxy_jump=props.proxy_jump.strip(),
+                device=props.native_device,
+                gpu_backend=props.native_gpu_backend,
             ):
                 return {"CANCELLED"}
         elif props.server_type == "DOCKER":
@@ -225,17 +261,38 @@ class REMOTE_OT_Connect(Operator):
                 props.container,
                 self.get_remote_path(props),
                 server_port=props.docker_port,
+                device=props.native_device,
+                gpu_backend=props.native_gpu_backend,
             )
         elif props.server_type == "WIN_NATIVE":
             win_path = resolve_local_path(props.win_native_path)
             if not win_path:
                 self.report({"ERROR"}, iface_("Solver path is not set"))
                 return {"CANCELLED"}
-            com.connect_win_native(win_path, props.docker_port)
-        elif props.server_type == "LOCAL":
-            com.connect_local(
-                self.get_remote_path(props),
-                server_port=props.docker_port,
+            com.connect_win_native(
+                win_path,
+                props.docker_port,
+                props.native_device,
+                props.native_gpu_backend,
+            )
+        elif props.server_type == "MAC_NATIVE":
+            mac_path = resolve_local_path(props.mac_native_path)
+            if not mac_path:
+                self.report({"ERROR"}, iface_("Solver path is not set"))
+                return {"CANCELLED"}
+            com.connect_mac_native(
+                mac_path, props.docker_port, props.native_device
+            )
+        elif props.server_type == "LINUX_NATIVE":
+            linux_path = resolve_local_path(props.linux_native_path)
+            if not linux_path:
+                self.report({"ERROR"}, iface_("Solver path is not set"))
+                return {"CANCELLED"}
+            com.connect_linux_native(
+                linux_path,
+                props.docker_port,
+                props.native_device,
+                props.native_gpu_backend,
             )
 
         self._connection_established = False
@@ -255,7 +312,7 @@ class REMOTE_OT_Connect(Operator):
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         # Check is_connected() before the cancel/timeout branches: a fast connect
-        # (e.g., LOCAL) can reach ONLINE before the first timer tick, which would
+        # (e.g. a native) can reach ONLINE before the first timer tick, which would
         # otherwise be misread as a cancellation since is_connecting() is False.
         if com.is_connected():
             self._connection_established = True
@@ -355,7 +412,12 @@ class REMOTE_OT_StartServer(AsyncOperator):
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        com.start_server(selected, props.solver_gpu_uuid)
+        com.start_server(
+            selected,
+            props.solver_gpu_uuid,
+            props.native_device,
+            props.native_gpu_backend,
+        )
         self.setup_modal(context)
         return {"RUNNING_MODAL"}
 
@@ -412,6 +474,208 @@ class REMOTE_OT_StopServer(AsyncOperator):
 
     def on_complete(self, context):
         redraw_all_areas(context)
+
+
+# Server types whose server runs on THIS machine, on a loopback port. For
+# these the Force Terminate Process button works without a connection: the port is
+# inspectable from here, and a native Connect is refused exactly while a
+# server from an earlier session still holds it.
+LOCAL_SERVER_TYPES = tuple(NATIVE_PATH_FIELDS)
+
+# The panel redraws many times a second, so the loopback probe behind the
+# Force Terminate Process status line is cached for this long. One (port, timestamp,
+# verdict) tuple: only the configured port is ever asked.
+_LISTENER_TTL_S = 1.5
+_listener_cache: tuple[int, float, str] | None = None
+
+# Verdicts of ``local_listener_verdict``.
+LISTENER_OURS = "ours"
+LISTENER_FOREIGN = "foreign"
+LISTENER_FREE = "free"
+
+
+def is_local_server_type(server_type: str) -> bool:
+    return server_type in LOCAL_SERVER_TYPES
+
+
+def local_listener_verdict(port: int) -> str:
+    """Whether a ppf-cts-server, some other program, or nothing listens on
+    loopback *port*, cached for ``_LISTENER_TTL_S``."""
+    import time
+
+    global _listener_cache
+    from ..core.connection import _port_is_in_use, _probe_ppf_cts_server
+
+    now = time.monotonic()
+    if (
+        _listener_cache
+        and _listener_cache[0] == port
+        and now - _listener_cache[1] < _LISTENER_TTL_S
+    ):
+        return _listener_cache[2]
+    if _probe_ppf_cts_server(port, timeout=0.5):
+        verdict = LISTENER_OURS
+    elif _port_is_in_use(port):
+        verdict = LISTENER_FOREIGN
+    else:
+        verdict = LISTENER_FREE
+    _listener_cache = (port, now, verdict)
+    return verdict
+
+
+def force_terminate_status(props) -> tuple[str, str]:
+    """The status line under the Force Terminate Process button, as ``(text, icon)``.
+
+    Three answers: a server of ours is listening on the port, nothing is,
+    or the port cannot be checked from here and why. A local type is asked
+    on the loopback; a remote type is reachable only through the connection,
+    and a panel draw must never issue a backend command, so its answer is
+    read off the engine's own view of the server.
+    """
+    port = props.docker_port
+    if is_local_server_type(props.server_type):
+        verdict = local_listener_verdict(port)
+        if verdict == LISTENER_OURS:
+            return (
+                iface_("A solver server is listening on port {port}").format(port=port),
+                "CHECKMARK",
+            )
+        if verdict == LISTENER_FOREIGN:
+            return (
+                iface_("Port {port} is held by another program").format(port=port),
+                "ERROR",
+            )
+        return (
+            iface_("Nothing is listening on port {port}").format(port=port),
+            "INFO",
+        )
+    if com.is_server_running():
+        return (
+            iface_("A solver server is listening on port {port} of the solver host").format(port=port),
+            "CHECKMARK",
+        )
+    return (
+        iface_("Cannot check port {port} from here: Force Terminate Process ends the ppf-cts-server on that port").format(port=port),
+        "QUESTION",
+    )
+
+
+class SOLVER_OT_ForceTerminatePort(AsyncOperator):
+    """End the ppf-cts-server process, whether or not this add-on started it.
+
+    Two paths, decided by whether the add-on is connected:
+
+    - Not connected, local server type: the loopback port is killed directly
+      (``kill_local_server``), and the connection state is reset the way
+      Disconnect resets it, so the refusal the artist was looking at is gone
+      and a fresh Connect starts clean. This is the state the button exists
+      for: a native Connect refused because a server from an earlier session
+      still holds the port, where Stop Server is unreachable.
+    - Connected, any server type: the kill goes through the live backend on
+      the worker thread (``KillServerRequested``, the same effect Stop Server
+      on Remote runs), and the state is left the way Stop Server leaves it:
+      connected to the host, server stopped, Start Server next.
+
+    A remote type with no connection has no transport to act through, so
+    the poll refuses it and the panel does not draw the button then.
+    """
+
+    bl_idname = "solver.force_terminate_port"
+    bl_label = "Force Terminate Process"
+    bl_description = (
+        "End the solver server process on the configured port, whether or "
+        "not this add-on started it"
+    )
+
+    timeout: float = 60.0
+    auto_redraw: bool = True
+
+    @classmethod
+    def poll(cls, context):
+        props = get_addon_data(context.scene).ssh_state
+        idle = (
+            not com.busy()
+            and not com.is_connecting()
+            and not com.is_server_launching()
+            and not com.is_server_stopping()
+            and not com.info.status.abortable()
+        )
+        if com.is_connected():
+            return idle
+        return idle and is_local_server_type(props.server_type)
+
+    def execute(self, context):
+        from ..core.server_kill import kill_local_server
+
+        props = get_addon_data(context.scene).ssh_state
+        if com.is_connected():
+            com.kill_server()
+            if not com.is_server_stopping():
+                # The transition guard refused it: something started between
+                # the poll and the click.
+                self.report({"WARNING"}, iface_("Force Terminate Process: the connection is busy, try again"))
+                return {"CANCELLED"}
+            self.setup_modal(context)
+            return {"RUNNING_MODAL"}
+        if not is_local_server_type(props.server_type):
+            self.report(
+                {"ERROR"},
+                iface_("Force Terminate Process needs a connection for this server type"),
+            )
+            return {"CANCELLED"}
+        report = kill_local_server(props.docker_port)
+        # The refusal is in the connection error, and a fresh Connect must
+        # start from a clean state: this is what Disconnect does.
+        com.disconnect()
+        self._report(report, next_step=iface_("Press Connect to start a new one."))
+        redraw_all_areas(context)
+        return {"FINISHED"}
+
+    def is_complete(self) -> bool:
+        return not com.is_server_stopping()
+
+    def on_complete(self, context):
+        report = com.last_kill_report
+        if report is None:
+            self.report({"WARNING"}, iface_("Force Terminate Process finished without a report"))
+        else:
+            self._report(
+                report, next_step=iface_("Press Start Server to launch a new one.")
+            )
+        redraw_all_areas(context)
+
+    def _report(self, report, *, next_step: str) -> None:
+        """Say what was killed (pid, port, where) or why nothing was."""
+        pids = ", ".join(str(p) for p in report.killed)
+        if not report.checked:
+            self.report(
+                {"ERROR"},
+                iface_("Could not inspect port {port} ({where}): {error}").format(
+                    port=report.port, where=report.where, error=report.error
+                ),
+            )
+            return
+        if report.nothing_found:
+            self.report(
+                {"WARNING"},
+                iface_("No ppf-cts-server was listening on port {port} ({where}).").format(
+                    port=report.port, where=report.where
+                )
+                + " " + next_step,
+            )
+            return
+        text = iface_("Killed pid {pids} on port {port} ({where}).").format(
+            pids=pids, port=report.port, where=report.where
+        )
+        level = "INFO"
+        if report.survivors:
+            left = ", ".join(str(p) for p in report.survivors)
+            text += " " + iface_("Still running after the kill: pid {pids}.").format(pids=left)
+            level = "WARNING"
+        if report.error:
+            text += " " + report.error
+            level = "WARNING"
+        self.report({level}, text + " " + next_step)
 
 
 class REMOTE_OT_OpenProfile(Operator):
@@ -546,6 +810,7 @@ classes = [
     REMOTE_OT_StartServer,
     REMOTE_OT_CancelStartServer,
     REMOTE_OT_StopServer,
+    SOLVER_OT_ForceTerminatePort,
     REMOTE_OT_OpenProfile,
     REMOTE_OT_ClearProfile,
     REMOTE_OT_ReloadProfile,

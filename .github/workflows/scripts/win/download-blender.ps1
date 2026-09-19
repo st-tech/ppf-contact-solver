@@ -7,22 +7,29 @@
 # debug rig can launch it. Mirrors the "Download Blender" steps in
 # blender.yml (Linux/macOS) for the Windows-native GPU job.
 #
-# Extracts to C:\blender\blender-<ver>-windows-x64\blender.exe and writes
+# Extracts to C:\blender\blender-<ver>-<platform>\blender.exe and writes
 # that path to C:\blender_bin.txt so later steps (install-blender-addon,
 # run-blender-rig) can read it without re-deriving the folder name.
 #
+# -Platform names Blender's own download: windows-x64, the default, or
+# windows-arm64 for a Windows on ARM host. An x64 Blender runs there under
+# emulation and installs the x64 wheels, so it cannot test the arm64 add-on.
+#
 # Usage (over SSH):
 #   powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.2.0
+#   powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version 5.2.0 -Platform windows-arm64
 
 param(
-    [string]$Version = "5.2.0"
+    [string]$Version = "5.2.0",
+    [ValidateSet("windows-x64", "windows-arm64")]
+    [string]$Platform = "windows-x64"
 )
 
 $ErrorActionPreference = "Stop"
 
 # Minor series dir on the mirror, e.g. 5.2.0 -> Blender5.2
 $minor = ($Version -split '\.')[0..1] -join '.'
-$url = "https://download.blender.org/release/Blender$minor/blender-$Version-windows-x64.zip"
+$url = "https://download.blender.org/release/Blender$minor/blender-$Version-$Platform.zip"
 $zip = "C:\blender.zip"
 $dest = "C:\blender"
 

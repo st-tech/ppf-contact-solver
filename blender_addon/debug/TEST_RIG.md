@@ -9,47 +9,54 @@ pipeline:
   ``_ppf_cts_py`` PyO3 module from ``crates/ppf-cts-py``; the addon
   itself does not import it.
 - Real Rust solver binary at ``target/release/ppf-cts-server`` (built
-  from ``crates/ppf-cts-server``), with the workspace ``emulated``
-  feature enabled (``cargo build --release -p ppf-cts-server
-  --features emulated``) so it skips CUDA but still goes through the
-  real scene loader, the real ``Constraint`` build, the real per-frame
-  loop, and writes ``vert_*.bin`` in the real wire format from
-  ``crates/ppf-cts-formats``.
+  from ``crates/ppf-cts-server``), going through the real scene loader,
+  the real ``Constraint`` build, the real per-frame loop, and writing
+  ``vert_*.bin`` in the real wire format from ``crates/ppf-cts-formats``.
 
-The ``--features emulated`` build:
+## EVERY SCENARIO NAMES THE BACKEND IT WAS RUN AGAINST
 
-- Stubs the ``extern "C"`` CUDA kernel calls (``advance``, ``fetch``,
-  ``initialize``, ``update_constraint``, ...) with Rust no-ops.
-- After every ``scene.make_constraint(time)``, applies the kinematic
-  ``FixPair`` positions directly to ``state.curr_vertex``. Pinned
-  vertices land exactly where the addon's encoder said they should at
-  that frame, which is what the production CUDA solver does too for
-  kinematic pins.
-- Sleeps ``PPF_EMULATED_STEP_MS`` milliseconds per solver step
-  (default 1000ms) so the run paces like a real simulation. Set
-  ``PPF_EMULATED_STEP_MS=0`` for unit tests.
+There is no default backend and no scenario inherits one. ``--backend`` is
+REQUIRED, every scenario declares ``BACKENDS = ("real",)``, and a scenario that
+declares nothing is refused rather than defaulted: a default is how a scenario
+acquires a claim its author never made.
+
+``real`` means a backend that computes real physics, which is CUDA on a CUDA
+host, Metal on macOS, or the Rust CPU backend
+(``cargo build --release --features cpu``, about 30x the wall clock). The rig
+drives whichever one the tree was built for.
+
+Two refusals follow from that, both deliberate:
+
+- ``--backend`` is REQUIRED and has no default, because a default would label
+  every invocation that omitted it as having targeted something it did not.
+- Naming an unrunnable scenario on the command line refuses the run.
+  Explicit names bypass the selection filter, so this is the only place
+  that case can be caught.
 
 ## Quick start
 
 ```sh
-# Build the emulated Rust binary (one-time, on any host).
-# On a CUDA host build.rs blocks the stub by default (it would overwrite the
-# real binary); PPF_ALLOW_EMULATED=1 opts in. Harmless on CUDA-less hosts.
-PPF_ALLOW_EMULATED=1 cargo build --release -p ppf-cts-server --features emulated
+# Build the server the rig spawns, plus a solver for it to launch.
+# On a CUDA host, plain `cargo build --release` gives the real backend
+# and is what `--backend real` needs.
+cargo build --release
+cargo build --release -p ppf-cts-server
 
 # Install Blender-side deps (one-time).
 ./install-blender-addon.sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install numpy scipy tqdm psutil tomli ipython pillow pythreejs pytetwild tetgen
 
-# All scenarios.
-python3.12 blender_addon/debug/main.py runtests
+# All scenarios this backend can run (and a named report of those it cannot).
+python3.12 blender_addon/debug/main.py runtests --backend real
 
 # One scenario.
-python3.12 blender_addon/debug/main.py runtests bl_connect_local
+python3.12 blender_addon/debug/main.py runtests bl_connect_linux_native \
+    --backend real
 
 # Stress: 3 repeats of everything at parallel=4.
-python3.12 blender_addon/debug/main.py runtests --parallel 4 --repeat 3 --report run.json
+python3.12 blender_addon/debug/main.py runtests --backend real \
+    --parallel 4 --repeat 3 --report run.json
 ```
 
 The rig is all-green on macOS, Linux, and Windows. Each host runs the
@@ -90,65 +97,100 @@ a laptop and a CI runner.
 
 | Layer                          | What's faked                          | What's real                                  |
 | ------------------------------ | ------------------------------------- | -------------------------------------------- |
-| ``server/emulator.py``         | ``Utils.check_gpu`` (no-op stub)      | All of ``frontend``, all of the addon, all transitions, atomic upload, monitor |
-| ``crates/ppf-cts-solver/src/backend.rs`` (emulated) | CUDA kernels (no-op stubs)            | Scene loading, constraint build, vert_*.bin writer, frame loop |
 | ``blender_addon/debug/probe.py`` | nothing (it's the observer)         | Hooks Blender's real handler tables, samples real ``engine.state`` |
-| ``blender_addon/debug/orchestrator.py`` | nothing (host-side)            | Spawns the real ``ppf-cts-server`` binary (``--features emulated`` build) and real Blender |
+| ``blender_addon/debug/orchestrator.py`` | nothing (host-side)            | Spawns the real ``ppf-cts-server`` binary and real Blender |
 
-Two artifacts cover the GPU absence:
+NOTHING IS FAKED. The server is the real ``ppf-cts-server`` binary and the
+solver it launches is a real one; a GPU-less host is served by building the CPU
+backend, whose ``check_gpu`` answers for itself rather than being patched out
+from Python.
 
-- ``frontend.Utils.check_gpu`` is patched to a no-op (otherwise it
-  raises ``RuntimeError: nvidia-smi not found``).
-- The Rust binary is built with ``--features emulated`` so it never
-  links against ``simbackend_cuda`` and never makes a CUDA call.
+## Backend selection (``--backend``)
 
-## Real vs emulated backend (``--backend``)
+``runtests --backend <name>`` gates the scenario set on a per-scenario
+``BACKENDS`` tag, alongside the ``PLATFORMS`` gate. The flag is required:
+there is no default backend.
 
-The rig grew up against the emulated stub, so most physics scenarios
-assert on emulator-specific behavior (frozen frames via
-``PPF_EMULATED_STEP_MS=0``, the ``PPF_EMULATED_ELASTIC`` ARAP step,
-``PPF_EMULATED_FAIL_AT_FRAME`` fault injection). Those do not reproduce
-on the real CUDA solver.
+- ``BACKENDS`` is unset => REFUSED. Every scenario must name the backend it
+  was RUN against; there is no default to inherit.
+- ``BACKENDS = ("real",)`` => runs against a backend that computes real
+  physics. That is every scenario in the registry.
 
-``runtests --backend {emulated,real}`` (default ``emulated``) gates the
-scenario set on a per-scenario ``BACKENDS`` tag, alongside the existing
-``PLATFORMS`` gate:
+``PPF_EMULATED_*`` knobs are refused. Nothing reads them now, so one left
+in a ``KNOBS`` dict or passed with ``--knob`` would be an inert
+environment variable that reads like working fault injection or working
+frame pacing. The orchestrator fails such a scenario by name rather than
+letting it assert against a premise that has evaporated.
 
-- ``BACKENDS`` is unset (the default) => emulated-only. The scenario
-  runs on the free-runner ``emulated`` suite but is skipped by
-  ``--backend real``.
-- ``BACKENDS = ("emulated", "real")`` => backend-agnostic. The scenario
-  asserts plumbing / structure / connection / rejection / liveness /
-  round-trip / kinematic-frozen invariants that hold on both backends,
-  so it also runs on the real-GPU jobs.
-- ``BACKENDS = ("real",)`` => a real-only smoke.
-
-The AWS GPU jobs in ``.github/workflows/blender.yml`` run
-``runtests --backend real``. The macOS job runs the full emulated suite.
+Every job in ``.github/workflows/blender.yml`` runs
+``runtests --backend real``.
 When you add a real-capable scenario, remember the connection path:
-``dh.connect(...)`` picks WIN_NATIVE on Windows and LOCAL elsewhere, so a
-cross-platform real scenario must use it (not ``dh.connect_local``, which
-only works on Linux/macOS). See ``bl_real_solid_smoke`` for the pattern.
+``dh.connect(...)`` picks the NATIVE connection of the machine it runs on,
+LINUX_NATIVE on Linux, MAC_NATIVE on macOS, WIN_NATIVE on Windows, so a
+cross-platform real scenario uses it and carries no platform branch of its own.
+See ``bl_real_solid_smoke`` for the pattern. A scenario that exists to exercise
+ONE platform's native connection names that one instead
+(``dh.connect_win_native``, ``dh.connect_mac_native``,
+``dh.connect_linux_native``) and gates itself with ``PLATFORMS``;
+``bl_mac_native_real_solve`` is that pattern.
 
-### CI: four jobs, two backends
+### The device is asked of the tree, and the rig owns the server
+
+``dh.connect_native`` resolves the Compute Device from the tree it is pointed
+at rather than assuming one: ``resolve_native_device`` calls the same
+``core.connection.native_resolvers`` entry the panel's own device row calls, so
+a leg that built only the CPU backend connects as CPU and a CUDA leg connects
+as GPU. Do not hard-code a device. ``native_device`` defaults to GPU and a
+native connection REFUSES a root holding only the other device's build, by
+name, so a scenario pinned to GPU is refused on every connection on a CPU-only
+leg, and one pinned to CPU is refused on the CUDA legs. Pass ``device=`` only
+where the refusal itself is what the scenario asserts. A driver that builds no
+``DriverHelpers`` gets the same three answers from ``platform_native()``,
+``select_platform_native()`` and ``connect_platform_native()`` in
+``scenarios/_driver_lib.py``.
+
+**WHERE EACH NATIVE IS ACTUALLY EXERCISED IN CI, which is not one leg per
+platform.** The Linux leg runs the whole set on a disposable AWS GPU instance,
+so LINUX_NATIVE is covered there. The Windows leg does the same for WIN_NATIVE.
+The macOS leg is a GitHub-hosted runner, and that runner is VIRTUALIZED WITH NO
+METAL ACCESS, so it cannot run an accelerated solver of its own at all; no macOS
+instance can be launched on AWS either. That is why the leg runs only
+``bl_ssh_remote_solve`` and ``bl_ssh_remote_solid``, driving a remote Linux GPU
+box over SSH, and why MAC_NATIVE is NOT exercised by CI. It is not an omission
+to be fixed by adding scenarios there: a Metal run has nowhere to happen in CI.
+A change to the macOS native path is verified by running the rig on one of the
+Mac dev boxes by hand, which are reachable from dev-head and from nowhere in
+GitHub Actions.
+
+The server a native connection attaches to belongs to the rig, not to the
+addon. ``blender_harness.py`` sets ``PPF_WIN_NATIVE_NO_SPAWN``,
+``PPF_MAC_NATIVE_NO_SPAWN`` and ``PPF_LINUX_NATIVE_NO_SPAWN`` in every worker's
+Blender environment, so the native backend attaches to the port the
+orchestrator already started a server on. Without them the addon spawns a
+second ``ppf-cts-server`` against the port the rig's own one still holds, and
+the scenario drives whichever of the two wins the race. Scenarios do not opt
+in.
+
+### CI: three jobs, one backend
 
 ``.github/workflows/blender.yml`` runs the rig on:
 
-- **macOS** - free GitHub runner, emulated build, the full suite.
-- **macOS (SSH)** - macOS Blender (emulated build) drives a REAL CUDA
-  solver on a disposable AWS L4 over the addon's paramiko SSH backend
+- **macOS (SSH)** - macOS Blender drives a REAL CUDA
+  solver on a disposable AWS GPU box over the addon's paramiko SSH backend
   (``server_type`` CUSTOM). Runs the real-only ``bl_ssh_remote_solve``
   (SHELL) and ``bl_ssh_remote_solid`` (SOLID) smokes, so both encode
   paths cross the tunnel. This is the only job exercising the SSH
   backend and the "local Blender + remote GPU" workflow.
-- **Linux** - disposable AWS L4 GPU instance, real CUDA build, the
+- **Linux** - disposable AWS GPU instance (an L40S on the default
+  ``g6e.2xlarge``, an L4 on the ``g6`` types), real CUDA build, the
   ``--backend real`` subset. Blender's window runs under Xvfb (software
   GL) while the solver uses the real GPU.
-- **Windows** - disposable AWS L4 GPU instance, real Windows-native
-  build. The rig runs Blender headless (``--background`` via
-  ``PPF_BLENDER_HEADLESS=1``), which needs no OpenGL/desktop, so it runs
-  directly over SSH. The L4 comes up in TCC (compute-only) mode with no
-  WGL/OpenGL, so a GUI launch is avoided entirely. The driver holds the
+- **Windows** - disposable AWS GPU instance of the same types, real
+  Windows-native build. The rig runs Blender headless (``--background``
+  via ``PPF_BLENDER_HEADLESS=1``), which needs no OpenGL/desktop, so it
+  runs directly over SSH whatever driver model the GPU comes up in. An L4
+  comes up in TCC (compute-only) mode with no WGL/OpenGL, which is why a
+  GUI launch is avoided entirely. The driver holds the
   main thread and drains its own PC2 frames, so scenarios complete in a
   single ``--python`` run with no event loop (see
   ``.github/workflows/scripts/win/run-blender-rig.ps1``).
@@ -175,13 +217,32 @@ the wire protocol or the rig's own helpers):
 
 Blender-driven (opt-in, requires Blender; see the per-OS search order
 under "Displays on Linux", or set ``PPF_BLENDER_BIN``): every other
-entry. They cover connect paths
-(``bl_connect_local`` is Linux-only,
-``bl_connect_win_native`` is Windows-only), the pin-fidelity
+entry. They cover connect paths (one scenario per native type:
+``bl_connect_linux_native`` is Linux-only, ``bl_connect_win_native`` is
+Windows-only, ``bl_mac_native_real_solve`` is macOS-only), the build and the
+device a REMOTE launch names (``bl_remote_device_select``), the pin-fidelity
 matrix, UI / state-machine integration, chain lifecycle, copy/paste
 clipboards, fetch/transfer regressions, progress UX, and the
 intersection-feedback round-trip. Use ``main.py runtests --list`` to
 enumerate the full set on the current platform.
+
+``bl_remote_device_select`` is the Compute Device and GPU Backend choices
+reaching a server on ANOTHER machine, over SSH and over Docker, and it runs on
+every CI leg because it needs no second machine, no sshd, no daemon and no GPU.
+A remote backend is reached through exactly one abstraction, ``exec_command``,
+so a stand-in for it records the script ``effect_runner._do_launch_server``
+composes, and the scenario reads the resolved build directory and the exported
+``CARGO_TARGET_DIR`` back out of that script. It asserts the launch the addon
+sends, not the far side's response to it.
+
+``bl_retired_connection_migration`` is what a saved artifact naming the retired
+Local connection opens as, and it has to run inside Blender: an EnumProperty is
+stored as its ITEM NUMBER, so a file holding a retired one reads the field's
+DEFAULT with nothing reported, and only a real PropertyGroup carries the raw
+ID-property the migration reads to see it. It covers the .blend path and the
+profile path together, since a profile is the same question in a file the user
+wrote, and it reads the platform mapping out of the module it checks rather than
+restating it, so it asserts this platform's native connection wherever it runs.
 
 Scenarios that need a *real build + run* (cancel-build, terminate-
 run, save-and-quit-resume, solver-crash, fidelity tests of pin
@@ -195,7 +256,7 @@ Each worker gets its own subdirectory under
 ``$TMPDIR/ppf-debug/<run-id>/worker-NN/``:
 
 - ``server/``  : ``ppf-cts-server`` CWD; ``progress.log``, ``server.log``, ``stdout.log``, ``stderr.log``.
-- ``project/`` : ``PPF_CTS_DATA_ROOT`` shadow (the rust-mode emulator
+- ``project/`` : ``PPF_CTS_DATA_ROOT`` shadow (per-worker isolation
   patches ``frontend.BlenderApp.__init__`` to honor it). Holds
   ``data.pickle``, ``param.pickle``, ``upload_id.txt``, ``app_state.pickle``,
   ``output/vert_*.bin``, ``save_*.bin``, ... Per-project filenames are
@@ -230,19 +291,18 @@ spawned server's environment.
 
 | Env                              | Effect                                       |
 | -------------------------------- | -------------------------------------------- |
-| ``PPF_EMULATED_STEP_MS``         | Wall-clock ms per solver step (default 1000) |
 | ``PPF_CTS_DATA_ROOT``            | Set automatically per worker; do not override |
 
 Probe knobs (Blender-side scenarios only):
 
 | Env                                  | Effect                                       |
 | ------------------------------------ | -------------------------------------------- |
-| ``PPF_PROBE_SAMPLE_HZ``              | State-sample rate (default 10)               |
-| ``PPF_PROBE_BUDGET_CONNECTING_S``    | Stuck-CONNECTING budget in seconds (default 30) |
-| ``PPF_PROBE_BUDGET_LAUNCHING_S``     | Stuck-LAUNCHING budget (default 20)          |
-| ``PPF_PROBE_BUDGET_BUILDING_UNCHANGED_S`` | Build-progress-unchanged budget (default 10) |
-| ``PPF_PROBE_BUDGET_RUNNING_UNCHANGED_S``  | Run-frame-unchanged budget (default 8)    |
-| ``PPF_PROBE_MAX_DEPSGRAPH_PER_S``    | Runaway-depsgraph threshold (default 100)    |
+| ``PROBE_SAMPLE_HZ``              | State-sample rate (default 10)               |
+| ``PROBE_BUDGET_CONNECTING_S``    | Stuck-CONNECTING budget in seconds (default 30) |
+| ``PROBE_BUDGET_LAUNCHING_S``     | Stuck-LAUNCHING budget (default 20)          |
+| ``PROBE_BUDGET_BUILDING_UNCHANGED_S`` | Build-progress-unchanged budget (default 10) |
+| ``PROBE_BUDGET_RUNNING_UNCHANGED_S``  | Run-frame-unchanged budget (default 8)    |
+| ``PROBE_MAX_DEPSGRAPH_PER_S``    | Runaway-depsgraph threshold (default 100)    |
 
 ## Adding a new scenario
 
@@ -279,18 +339,22 @@ by the addon's reload server's ``execute`` command, may never fire.
 The bootstrap pattern packs the entire scenario into the first tick
 and writes its result to disk before quitting.
 
-## Building the emulated Rust binary
-
-The default build links ``simbackend_cuda`` and requires the CUDA
-toolkit. To build a CUDA-free binary for the test rig:
+## Building the Rust binaries the rig needs
 
 ```sh
-# On a host that HAS the CUDA toolkit, build.rs refuses the emulated
-# build by default (the stub would silently overwrite the real CUDA
-# binary at target/release/). Opt in with PPF_ALLOW_EMULATED=1. On a
-# CUDA-less host the variable is unnecessary but harmless.
-PPF_ALLOW_EMULATED=1 cargo build --release -p ppf-cts-server --features emulated
+# The real backend for the host (CUDA where a toolkit is present, Metal
+# on macOS), which is what --backend real requires.
+cargo build --release
+cargo build --release -p ppf-cts-server
 ```
+
+A CUDA-free host runs a scene through this rig by building the CPU backend:
+``cargo build --release --features cpu`` produces a solver that computes real
+physics from the same neutral kernels, at about 30x the wall clock; it is the right thing to build when a server
+binary has to EXIST locally while the solving happens elsewhere
+(``.github/workflows/blender.yml``'s ``macos-ssh`` job does exactly this
+for the local worker slots), and unlike the deleted stub it cannot hand
+back fake kinematics.
 
 The workspace produces two release binaries that matter here:
 ``target/release/ppf-cts-server`` (from ``crates/ppf-cts-server``,
@@ -299,25 +363,23 @@ spawned by the orchestrator) and ``target/release/ppf-contact-solver``
 ``frontend.session.shell_command()`` invokes from inside the
 server). The crate ``ppf-cts-solver`` keeps the historical binary
 name ``ppf-contact-solver`` via its ``[[bin]]`` stanza, so launcher
-scripts that hardcode that filename keep working. Both binaries pick
-up the workspace ``emulated`` feature: CUDA calls are stubbed and
-per-frame kinematics are applied directly to vertex positions in
-``Backend::apply_kinematic_constraint`` (in
-``crates/ppf-cts-solver/src/backend.rs``).
+scripts that hardcode that filename keep working. Both are built from
+the same feature selection, so the server and the per-session solver it
+launches always agree on which backend is in play.
 
 ## Solver math unit tests (host, no CUDA)
 
 Some solver math is pure float code that runs identically on host and
 device, so it can be unit tested with a plain C++ compiler with no nvcc
 (macOS included). These are standalone from the Blender ``runtests``
-rig: the emulated server stubs the CUDA solver with no-ops, so it never
-runs the real solver math and cannot regression-test it.
+rig, which drives the pipeline around the solver rather than the solver
+math itself.
 
 PDRD exact-rigid polar fit (``rigid_polar_quat`` in
-``crates/ppf-cts-solver/src/cpp/energy/model/pdrd_polar.hpp``):
+``crates/ppf-cts-solver/src/kernels/energy/model/pdrd_polar.hpp``):
 
 ```sh
-make -C crates/ppf-cts-solver/src/cpp/energy/model/tests test
+make -C crates/ppf-cts-solver/src/kernels/energy/model/tests test
 ```
 
 This guards the rigid-body collapse where a PDRD body settled exactly

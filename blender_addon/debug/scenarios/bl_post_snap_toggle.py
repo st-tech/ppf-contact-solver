@@ -23,7 +23,7 @@
 # The closure is an addon-side reconstruction applied on top of whatever
 # positions the solver returns (it reads the cross_stitch ind/w the same
 # way for every endpoint type), so it needs no real stitch physics from
-# the emulated solver: the toggle is the only thing that can move A.v0
+# the solver: the toggle is the only thing that can move A.v0
 # onto B.v0. We fetch once with the toggle on, read the PC2 it wrote,
 # then clear + re-fetch with the toggle off and read again.
 #
@@ -46,6 +46,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -158,7 +163,7 @@ try:
 
     # Build + run once; the solver frames are reused by both fetches.
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.build_and_wait(data_bytes, param_bytes, message="post_snap:build",
                       timeout=120.0)

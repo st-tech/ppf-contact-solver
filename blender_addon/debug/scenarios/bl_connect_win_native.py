@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Phase-2: Windows-only counterpart to bl_connect_local. Sets the
+# The Windows-only counterpart to bl_connect_linux_native. Sets the
 # addon's backend to WIN_NATIVE and points it at the worker's debug
 # server. Requires ``PPF_WIN_NATIVE_NO_SPAWN=1`` in the environment so
 # the addon's connect_win_native skips its embedded-Python detection
@@ -17,11 +17,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
-# Backend-agnostic: a connection handshake, no emulated physics. Runs on
+# Backend-agnostic: a connection handshake, no physics. Runs on
 # the real-GPU Windows job (this is THE Windows-native connect path).
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 # WIN_NATIVE backend is the Windows path; on Linux/macOS this connect
-# call has no production analogue. See bl_connect_local for the Linux
+# call has no production analogue. See bl_connect_linux_native for the Linux
 # counterpart.
 PLATFORMS = ("win32",)
 

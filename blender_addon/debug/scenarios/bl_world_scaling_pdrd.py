@@ -12,10 +12,9 @@
 # by the appropriate powers of world_scaling). This rig confirms the
 # combination is now ACCEPTED and round-trips the geometry.
 #
-# The CUDA-free emulator has NO rigid-body physics (PDRD dynamics run on
-# a real CUDA host only), so a PDRD body does not move here and an
-# output scale-invariance / motion test is not possible. What IS
-# observable in emulated mode, and what this rig locks in, is:
+# This rig covers the BUILD and ENCODE half rather than the motion: a
+# scale-invariance test on the output is the PDRD examples' job. What it
+# locks in is:
 #
 #   A. build_succeeds   - a PDRD body with world_scaling=0.1 builds
 #                         WITHOUT the old hard error (the gate is gone).
@@ -28,7 +27,7 @@
 #   D. stable           - all positions finite and bounded.
 #
 # The full PDRD rigid-body inertia / centroid scaling is GPU-only and is
-# verified there; this rig is the emulated-host guard that the gate was
+# verified there; this rig is the host-side guard that the gate was
 # lifted cleanly and the surface geometry survives world_scaling.
 
 from __future__ import annotations
@@ -40,7 +39,35 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_STEP_MS": "0"}
+# AN OBSERVATION WINDOW, because the ADDON loses frames a fast backend emits.
+#
+# This is the only scenario in the world_scaling family that asserts a frame
+# COUNT, and the assertion was written against the solver, whose own
+# comment below says it "can emit a couple of extra settle frames". A real
+# backend is the opposite problem: measured on the CUDA leg of Blender CI, the
+# solver produced ELEVEN per-frame statistics files for `frames = 9` while the
+# PC2 the add-on wrote carried SIX samples. The solve is not short; the capture
+# is. The same scenario passes on the CPU backend, which is slow enough for the
+# frame pump to keep up, and that difference is the whole tell.
+#
+# `PPF_STEP_DELAY_MS` rides the neutral driver in `src/driver/step.rs`, so it
+# paces CUDA, Metal and the CPU backend alike rather than only the leg that
+# failed.
+#
+# 600 ms, and the value was measured rather than picked: the captured sample
+# count rises with it, which is what a pump shortfall looks like and what a
+# genuinely short solve would not do. 6 of 8 with no window on CUDA, 7 of 8 at
+# 200 ms, 8 and a pass at 600. A 9-frame scene at 600 ms is still short enough
+# not to join the long scenarios that `--parallel` kills.
+KNOBS = {"PPF_STEP_DELAY_MS": "600"}
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 WORLD_SCALING = 0.1
 
@@ -80,7 +107,7 @@ try:
     encoder_pkg = __import__(pkg + ".core.encoder", fromlist=["prepare_upload"])
     data_bytes, param_bytes, _d, _p = encoder_pkg.prepare_upload(bpy.context)
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.build_and_wait(data_bytes, param_bytes, "ws-pdrd:build", timeout=180.0)
     solver_name = dh.facade.engine.state.solver.name
@@ -103,7 +130,7 @@ try:
         dh.log(f"pc2 shape={arr.shape}")
 
         # B: the run advanced and produced at least the requested frames
-        # (the emulated PDRD path can emit a couple of extra settle frames;
+        # (the PDRD path can emit a couple of extra settle frames;
         # the exact count is not a world_scaling concern).
         dh.record("B_frames_produced", arr.shape[0] >= FRAME_COUNT,
                   {"samples": int(arr.shape[0]), "expected_min": FRAME_COUNT})

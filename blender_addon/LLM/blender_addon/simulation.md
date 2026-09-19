@@ -238,7 +238,7 @@ TIP: Save the `.blend` after fetching. The add-on migrates temporary cache files
 
 ### Disconnecting while a simulation runs
 
-Once **Run** is pressed on a remote backend (SSH, Docker, or Windows Native), the solver is doing its work on the remote host; Blender is just watching. You do **not** have to keep Blender open for the run to continue:
+Once **Run** is pressed on a backend that owns its own solver process (SSH, Docker, Linux Native, Windows Native, or macOS Native), the solver is doing its work there; Blender is just watching. You do **not** have to keep Blender open for the run to continue:
 
 - Press **Disconnect** on the Backend Communicator to drop the live connection. The remote solver keeps going.
 - You can even quit Blender entirely. The remote process is owned by the solver host, not by the add-on.

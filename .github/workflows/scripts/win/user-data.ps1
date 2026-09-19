@@ -7,6 +7,13 @@
 $ErrorActionPreference = "Continue"
 Start-Transcript -Path "C:\build-setup.log" -Append
 
+# EVERY CI INSTANCE ENDS ITSELF AFTER EIGHT HOURS. The workflow's cleanup
+# runs on success, failure and cancellation, but not if the runner dies;
+# with --instance-initiated-shutdown-behavior terminate on every launch, a
+# scheduled shutdown is a termination. Past every timeout-minutes, with margin.
+Write-Host "Scheduling the eight-hour self-destruct..."
+shutdown /s /t 28800 /c "CI self-destruct: this instance outlived its workflow"
+
 Write-Host "=== Starting SSH Setup ==="
 
 $SSHPort = SSH_PORT_PLACEHOLDER

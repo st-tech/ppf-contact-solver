@@ -5,13 +5,13 @@
 #
 # Real-backend end-to-end check of a LATE start (Starting Frame > 1).
 #
-# Everything else about the Starting Frame feature is covered on the emulated
+# Everything else about the Starting Frame feature is covered on the
 # backend (bl_frame_start, bl_frame_start_leadin): the resolver, the frame-to-
 # time conversion, the playback placement, and the lead-in visibility keying,
-# all against a hand-written PC2. What no emulated test can show is a REAL solve
+# all against a hand-written PC2. What no test can show is a REAL solve
 # consuming the new time-shifted schedules and producing physics, then that
 # real output being placed on a late timeline with the lead-in preserved. The
-# emulated advance() is a no-op, so the free vertices never move; only the CUDA
+# advance() is a no-op, so the free vertices never move; only the CUDA
 # solver drapes them. This scenario is that missing end-to-end link, so it is
 # real-only.
 #
@@ -25,7 +25,7 @@
 #   A. real_solve_runs_and_moves: encode -> build -> solve -> fetch completed
 #      on the real solver, the PC2 is finite with >= frame_count-1 samples, the
 #      pinned edge held to round-off, and the free region traveled DOWNWARD
-#      (genuine dynamics the emulator freezes), all driven through the
+#      (genuine gravity dynamics), all driven through the
 #      frame_start encoder. Direction IS asserted: the encoder captures the
 #      starting-frame deform pose as the solver's initial state, so the solve
 #      begins from the lifted lead-in shape at rest and gravity leaves it
@@ -51,7 +51,7 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Real-only: the drape is genuine gravity dynamics that the kinematic emulator
+# Real-only: the drape is genuine gravity dynamics that the kinematic solver
 # freezes. Selected by the AWS Linux / Windows GPU jobs via
 # ``runtests --backend real``.
 BACKENDS = ("real",)
@@ -68,7 +68,7 @@ _LEADIN_LIFT = 1.5
 # row-0 full-lift pose that a broken (always-on) cache would show.
 _LEADIN_PROBE_FRAME = 3
 # Floor on the free region's DOWNWARD travel across the solve window. Its job is
-# to separate a real solve from the emulated backend's frozen no-op, which leaves
+# to separate a real solve from the solver's frozen no-op, which leaves
 # the free vertices at exactly zero travel; it is NOT a prediction of sag depth.
 # The rig runs at 100 fps (``_driver_lib.configure_state``), so 23 solved frames
 # span 0.23 s and free fall alone caps the mean drop at 0.5*9.8*0.23^2 = 0.259.
@@ -195,7 +195,7 @@ try:
     # genuine dynamics ------------------------------------------------
     # The frame_start encoder emitted a scene the real CUDA solver accepted
     # and simulated: >= frame_count-1 finite frames, the pinned edge held to
-    # round-off, and the free region traveled DOWNWARD (the emulator would
+    # round-off, and the free region traveled DOWNWARD (the solver would
     # freeze it). Direction IS asserted, because the encoder hands the solver
     # the starting-frame deform-evaluated mesh as its initial state
     # (``encoder/mesh.py:_start_frame_eval_local_verts``, which frame_sets to

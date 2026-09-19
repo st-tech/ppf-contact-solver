@@ -20,7 +20,7 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'ap-northeast-1'
+        default: 'us-east-2'
         type: choice
         options:
           - us-east-1
@@ -336,8 +336,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -411,7 +411,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -461,6 +461,13 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             ubuntu@localhost "mkdir -p /tmp/ci"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run belt
         run: |
           echo "Running belt..."
@@ -497,6 +504,13 @@ jobs:
           echo "belt" > frontend/.CI
           python3 /tmp/belt.py 2>&1 | tee /tmp/ci/belt/belt.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run cards
         run: |
@@ -535,6 +549,13 @@ jobs:
           python3 /tmp/cards.py 2>&1 | tee /tmp/ci/cards/cards.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run codim
         run: |
           echo "Running codim..."
@@ -572,6 +593,13 @@ jobs:
           python3 /tmp/codim.py 2>&1 | tee /tmp/ci/codim/codim.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run curtain
         run: |
           echo "Running curtain..."
@@ -608,6 +636,13 @@ jobs:
           echo "curtain" > frontend/.CI
           python3 /tmp/curtain.py 2>&1 | tee /tmp/ci/curtain/curtain.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run domino
         run: |
@@ -647,6 +682,14 @@ jobs:
           ENDSSH
 
 
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -684,6 +727,14 @@ jobs:
           name: ci-batch-1
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()
@@ -1041,8 +1092,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -1116,7 +1167,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -1166,6 +1217,13 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             ubuntu@localhost "mkdir -p /tmp/ci"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run drape
         run: |
           echo "Running drape..."
@@ -1202,6 +1260,13 @@ jobs:
           echo "drape" > frontend/.CI
           python3 /tmp/drape.py 2>&1 | tee /tmp/ci/drape/drape.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run fishingknot
         run: |
@@ -1240,6 +1305,13 @@ jobs:
           python3 /tmp/fishingknot.py 2>&1 | tee /tmp/ci/fishingknot/fishingknot.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run fitting
         run: |
           echo "Running fitting..."
@@ -1276,6 +1348,13 @@ jobs:
           echo "fitting" > frontend/.CI
           python3 /tmp/fitting.py 2>&1 | tee /tmp/ci/fitting/fitting.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run friction
         run: |
@@ -1315,6 +1394,14 @@ jobs:
           ENDSSH
 
 
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -1352,6 +1439,14 @@ jobs:
           name: ci-batch-2
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()
@@ -1709,8 +1804,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -1784,7 +1879,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -1834,6 +1929,13 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             ubuntu@localhost "mkdir -p /tmp/ci"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run hang
         run: |
           echo "Running hang..."
@@ -1870,6 +1972,13 @@ jobs:
           echo "hang" > frontend/.CI
           python3 /tmp/hang.py 2>&1 | tee /tmp/ci/hang/hang.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run needle
         run: |
@@ -1908,6 +2017,13 @@ jobs:
           python3 /tmp/needle.py 2>&1 | tee /tmp/ci/needle/needle.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run noodle
         run: |
           echo "Running noodle..."
@@ -1944,6 +2060,13 @@ jobs:
           echo "noodle" > frontend/.CI
           python3 /tmp/noodle.py 2>&1 | tee /tmp/ci/noodle/noodle.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run ribbon
         run: |
@@ -1983,6 +2106,14 @@ jobs:
           ENDSSH
 
 
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -2020,6 +2151,14 @@ jobs:
           name: ci-batch-3
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()
@@ -2377,8 +2516,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -2452,7 +2591,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -2502,6 +2641,13 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             ubuntu@localhost "mkdir -p /tmp/ci"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run roller
         run: |
           echo "Running roller..."
@@ -2538,6 +2684,13 @@ jobs:
           echo "roller" > frontend/.CI
           python3 /tmp/roller.py 2>&1 | tee /tmp/ci/roller/roller.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run stack
         run: |
@@ -2576,6 +2729,13 @@ jobs:
           python3 /tmp/stack.py 2>&1 | tee /tmp/ci/stack/stack.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run trampoline
         run: |
           echo "Running trampoline..."
@@ -2612,6 +2772,13 @@ jobs:
           echo "trampoline" > frontend/.CI
           python3 /tmp/trampoline.py 2>&1 | tee /tmp/ci/trampoline/trampoline.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run trapped
         run: |
@@ -2651,6 +2818,14 @@ jobs:
           ENDSSH
 
 
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -2688,6 +2863,14 @@ jobs:
           name: ci-batch-4
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()
@@ -3045,8 +3228,8 @@ jobs:
           # ships several toolkits and points /usr/local/cuda at whichever it
           # prefers, which is 13.2 as shipped, and the solver Makefile compiles
           # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-solver/src/cpp/Makefile:6), so setting PATH alone
-          # cannot steer it. main.cu reads
+          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
+          # cannot steer it. The CUDA backend's be_open preflight reads
           # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
           # an unpinned runner fails to compile rather than misbehaving quietly.
           CUDA_DIR=/usr/local/cuda-12.8
@@ -3120,7 +3303,7 @@ jobs:
           # package; ppf-cts-server is a separate workspace member.
           # The Blender addon launcher
           # (blender_addon/core/connection.py) looks for it under
-          # target/release/ when PPF_USE_RUST_SERVER=1 is set, so
+          # target/release/ when USE_RUST_SERVER=1 is set, so
           # build it now and smoke-check --help.
           echo "Running cargo build --release -p ppf-cts-server..."
           cargo build --release -p ppf-cts-server
@@ -3170,6 +3353,13 @@ jobs:
             -o UserKnownHostsFile=/dev/null \
             ubuntu@localhost "mkdir -p /tmp/ci"
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run twist
         run: |
           echo "Running twist..."
@@ -3206,6 +3396,13 @@ jobs:
           echo "twist" > frontend/.CI
           python3 /tmp/twist.py 2>&1 | tee /tmp/ci/twist/twist.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run five-twist
         run: |
@@ -3244,6 +3441,13 @@ jobs:
           python3 /tmp/five-twist.py 2>&1 | tee /tmp/ci/five-twist/five-twist.log
           ENDSSH
 
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Run woven
         run: |
           echo "Running woven..."
@@ -3280,6 +3484,13 @@ jobs:
           echo "woven" > frontend/.CI
           python3 /tmp/woven.py 2>&1 | tee /tmp/ci/woven/woven.log
           ENDSSH
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run yarn
         run: |
@@ -3319,6 +3530,14 @@ jobs:
           ENDSSH
 
 
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -3356,6 +3575,14 @@ jobs:
           name: ci-batch-5
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()

@@ -10,7 +10,7 @@
 # and one-channel CSV export.
 #
 # Contact count is the one channel that separates the two backends, so it is
-# the one the run has to gate on ``ctx.backend``. The emulated stub runs no
+# the one the run has to gate on ``ctx.backend``. The stub runs no
 # contact assembly, so the channel is absent there and is asserted absent
 # rather than approximated; the real solver advertises it and reports a
 # positive count once the sheet lands on the floor.
@@ -23,8 +23,10 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
-BACKENDS = ("emulated", "real")
-KNOBS = {"PPF_EMULATED_ELASTIC": "1", "PPF_EMULATED_STEP_MS": "0"}
+BACKENDS = ("real",)
+# No KNOBS. The solver computes real physics with nothing to switch on, and
+# this scenario reads the statistics a completed run wrote rather than watching
+# one in progress, so it needs no `PPF_STEP_DELAY_MS` either.
 
 
 _DRIVER_BODY = r"""
@@ -108,7 +110,7 @@ try:
     )
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(
+    dh.connect(
         local_path=LOCAL_PATH,
         server_port=SERVER_PORT,
         project_name=root.state.project_name,
@@ -399,7 +401,7 @@ try:
     )
 
     # G: contact count is solver-produced. The real sheet falls onto the
-    # analytic floor and must report positive contacts. The emulator does not
+    # analytic floor and must report positive contacts. The solver does not
     # execute contact assembly and must report the channel unavailable.
     contact_bit = stats_cache.CHANNEL_BY_ID["CONTACT_COUNT"][3]
     contact_rows = list(

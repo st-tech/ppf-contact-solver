@@ -4,11 +4,9 @@
 # License: Apache v2.0
 #
 # Real-backend SHELL gravity drape. A square cloth is pinned along its top
-# edge and released under gravity: on the real solver the free region sags
-# downward while the pinned edge holds. This is genuine elastic dynamics
-# that the emulated CPU stub cannot produce (its advance() is a no-op, so
-# the free vertices would stay frozen), which is exactly why it is
-# real-only: it exercises SHELL bending/gravity on the real CUDA solver.
+# edge and released under gravity: the free region sags downward while the
+# pinned edge holds. This is genuine elastic dynamics, so it exercises SHELL
+# bending and gravity end to end rather than the encoder alone.
 #
 # bl_ssh_remote_solve runs the same drape over the SSH backend from macOS;
 # this one uses the platform-appropriate local connection (dh.connect =>
@@ -30,7 +28,7 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Real-only: the drape is genuine gravity dynamics; the kinematic emulator
+# Real-only: the drape is genuine gravity dynamics; the kinematic solver
 # freezes the free vertices, so this asserts motion only the real solver
 # produces. Selected by the AWS Linux / Windows jobs via
 # ``runtests --backend real``.

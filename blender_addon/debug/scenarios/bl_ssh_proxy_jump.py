@@ -42,6 +42,11 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 _DRIVER_TEMPLATE = r"""
 import inspect, os, shutil, sys, tempfile, time, traceback, types
@@ -99,7 +104,7 @@ Host *
     User fallback-user
 '''
 
-tmpdir = tempfile.mkdtemp(prefix="ppf_proxyjump_")
+tmpdir = tempfile.mkdtemp(prefix="proxyjump_")
 config_path = os.path.join(tmpdir, "config")
 with open(config_path, "w") as f:
     f.write(CONFIG_TEXT)

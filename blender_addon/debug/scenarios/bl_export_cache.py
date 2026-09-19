@@ -10,7 +10,7 @@
 # drive Blender's built-in exporters over the simulated frame range and let
 # them sample the ContactSolverCache MESH_CACHE-deformed mesh at each frame.
 #
-# The rig stands up a real emulated run of a pinned, moving plane (so the mesh
+# The rig stands up a real run of a pinned, moving plane (so the mesh
 # genuinely moves frame to frame), fetches the animation into a local PC2, then
 # exercises the operators through bpy.ops with EXEC_DEFAULT (explicit filepath,
 # so no file browser opens headless).
@@ -54,6 +54,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 _FRAME_COUNT = 6
 
@@ -138,7 +143,7 @@ try:
                 transition="LINEAR")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="export:build")

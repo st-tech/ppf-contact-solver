@@ -20,7 +20,7 @@
 #   * a STATIC cube moving rigidly via object location fcurves
 #   * a STATIC cube driven by a captured (synthesized) deformation cache
 #
-# Gravity is zero and every vertex is prescribed, so the emulated backend's
+# Gravity is zero and every vertex is prescribed, so the solver's
 # kinematic-constraint replay is exact and the invariance is tight.
 #
 # Subtests:
@@ -40,6 +40,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -154,7 +159,7 @@ try:
     objs = [plane, spin_plane, cube_rigid, cube_def]
     dh.save_blend(PROBE_DIR, "time_scale_invariance.blend")
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     animation_mod = __import__(pkg + ".core.animation",
                                fromlist=["clear_animation_data"])

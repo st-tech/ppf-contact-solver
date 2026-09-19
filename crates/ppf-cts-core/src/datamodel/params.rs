@@ -36,8 +36,7 @@ pub enum ObjectKind {
     Pdrd,
     /// Granular / sand body: a faceless cloud of free particles with no
     /// elements and no elastic energy. The solver advances the points
-    /// directly (the emulated backend drifts them under gravity; the real
-    /// granular kernel replaces that). Only `density` and the standard
+    /// directly through the granular kernel. Only `density` and the standard
     /// contact/friction params are meaningful.
     Points,
 }
@@ -393,9 +392,7 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "If non-zero, initialize each hinge or rod-joint rest angle from the initial pose instead of the default (flat for shells, straight for rods). Treated as a boolean flag."));
 
     // Granular (sand) material knobs. Defined only for the faceless particle
-    // kind so the addon's `sand-*` params resolve at decode. The emulated
-    // backend ignores them (it just drifts the cloud); the real granular
-    // kernel consumes them.
+    // kind so the addon's `sand-*` params resolve at decode.
     if matches!(kind, ObjectKind::Points) {
         m.insert("sand-particle-mass".into(), entry(1e-3f64, "Sand Particle Mass",
             "Mass of a single sand particle, in kilograms (the addon authors it in grams and \

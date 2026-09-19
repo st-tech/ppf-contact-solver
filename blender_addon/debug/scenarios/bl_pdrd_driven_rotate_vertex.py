@@ -16,8 +16,8 @@
 # state the panel's Vertex toggle + eyedropper set), encodes, decodes, and
 # asserts the spin round-trips with the picked-vertex center and a unit axis.
 #
-# Encoding-only (the emulated backend has no rigid physics); the spin runs on
-# a real CUDA host.
+# Encoding-only by design; the spin itself is exercised by the PDRD
+# examples.
 
 from __future__ import annotations
 
@@ -26,6 +26,11 @@ from . import _runner as r
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

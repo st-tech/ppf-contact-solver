@@ -1,4 +1,4 @@
-"""``_Solver``: top-level entry point for the ZOZO Contact Solver
+"""``_Solver``: top-level entry point for ZOZO's Contact Solver
 scripting API.
 
 See :mod:`blender_addon.ops.api` for the package overview.
@@ -47,7 +47,7 @@ def _handler_result(handler, **kwargs) -> dict:
 
 @blender_api
 class _Solver:
-    """Top-level entry point for the ZOZO Contact Solver.
+    """Top-level entry point for ZOZO's Contact Solver.
 
     Available as ``solver`` when imported via::
 

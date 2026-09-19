@@ -8,7 +8,7 @@
 # new name on the wire. Note that it does NOT, on its own, retarget
 # the on-disk upload location: ``state.remote_root`` is captured at
 # connect time. The supported "switch projects" flow is rename +
-# disconnect + fresh ``connect_local`` under the new name.
+# disconnect + a fresh native connect under the new name.
 #
 # This scenario covers all three pieces of that contract end-to-end:
 # the first transfer under proj_A, the runner-side rename, and a
@@ -26,7 +26,7 @@
 #      project_name flips to ``"proj_B"``. Outgoing requests now
 #      carry the new name as the server-side ``name`` arg.
 #   C. ``proj_b_reconnect_relocates_upload``: after
-#      ``com.disconnect()`` + ``connect_local(project_name="proj_B")``
+#      ``com.disconnect()`` + a native connect with ``project_name="proj_B"``
 #      + a fresh ``BuildPipelineRequested``, the worker's proj_B
 #      project root carries its own ``data.pickle`` + ``param.pickle``
 #      + a distinct ``upload_id.txt``, while proj_A's tree (data
@@ -42,6 +42,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -62,7 +67,7 @@ def _project_root_for(probe_dir, name):
     # uploads land under ``<shadow>/<project_name>/`` (the Rust
     # ``ppf-cts-server`` joins PPF_CTS_DATA_ROOT with the project
     # name directly; the historical ``git-debug`` segment from the
-    # python emulator is gone).
+    # python solver is gone).
     workspace = os.path.dirname(probe_dir)
     return os.path.join(workspace, "project", name)
 
@@ -124,7 +129,7 @@ try:
     pin.move_by(delta=(0.05, 0.0, 0.0), frame_start=1, frame_end=2,
                 transition="LINEAR")
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected_as_proj_A")
 
@@ -175,7 +180,7 @@ try:
     # ----- C: rename + reconnect retargets the on-disk upload ------
     # Disconnect drops the backend and clears runner._project_name;
     # _reset_state also wipes state.remote_root and state.project_name.
-    # Reconnecting via dh.connect_local re-arms the runner with the new
+    # Reconnecting via dh.connect_native re-arms the runner with the new
     # project_name and re-binds state.remote_root to the server-reported
     # proj_B root on the next poll. A fresh BuildPipelineRequested then
     # writes data.pickle + param.pickle under proj_B's tree without
@@ -189,7 +194,7 @@ try:
     # connect helper itself sets the runner-side project_name through
     # com.set_project_name.
     root.state.project_name = "proj_B"
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name="proj_B")
     dh.log("reconnected_as_proj_B")
 

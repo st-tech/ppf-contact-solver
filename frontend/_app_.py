@@ -81,7 +81,7 @@ class App:
 
         Args:
             name (str): The name of the application.
-            cache_dir (str): The directory used to store cached files. If empty, defaults to ``~/.cache/ppf-cts`` (or a project-relative ``cache/ppf-cts`` on Windows).
+            cache_dir (str): The directory used to store cached files. If empty, defaults to ``<tree root>/cache/ppf-cts`` for a tree that keeps its own state (Windows, and any packaged distribution), and to ``~/.cache/ppf-cts`` for a developer checkout elsewhere.
 
         Returns:
             App: A new instance of the App class.
@@ -117,7 +117,7 @@ class App:
 
         Args:
             name (str): The name of the application.
-            cache_dir (str): The directory used to store cached files. If empty, defaults to ``~/.cache/ppf-cts`` (or a project-relative ``cache/ppf-cts`` on Windows).
+            cache_dir (str): The directory used to store cached files. If empty, defaults to ``<tree root>/cache/ppf-cts`` for a tree that keeps its own state (Windows, and any packaged distribution), and to ``~/.cache/ppf-cts`` for a developer checkout elsewhere.
 
         Returns:
             App: A new instance of the App class.
@@ -293,7 +293,7 @@ class App:
         Args:
             name (str): The name of the application.
             renew (bool): If True, discard any saved state and start fresh. If False, load saved state when available.
-            cache_dir (str): The directory used to store cached files. If empty, defaults to ``~/.cache/ppf-cts`` (or a project-relative ``cache/ppf-cts`` on Windows).
+            cache_dir (str): The directory used to store cached files. If empty, defaults to ``<tree root>/cache/ppf-cts`` for a tree that keeps its own state (Windows, and any packaged distribution), and to ``~/.cache/ppf-cts`` for a developer checkout elsewhere.
         """
         self._extra = Extra()
         self._name = name

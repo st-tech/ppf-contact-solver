@@ -8,7 +8,7 @@
 # A ``ConnectionBackend`` encapsulates everything needed to talk to a remote
 # (or local) solver: opening channels, executing commands, querying the
 # server, and sending/receiving data.  Four concrete implementations cover
-# SSH, Docker, local-subprocess, and Windows-native modes.
+# SSH, Docker, and the three native modes.
 #
 # The old ``connection.type`` string checks scattered across protocol.py,
 # client.py, and connection.py are replaced by polymorphic dispatch on the
@@ -35,7 +35,9 @@ from .protocol import (
     socket_data_receive,
     socket_upload_atomic,
 )
+from .connection import DEVICE_GPU
 from .gpu_devices import AUTOMATIC
+from .server_kill import KillReport, kill_local_server
 from .status import BytesPerSecondCalculator
 from ..models.console import console
 from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVAL
@@ -46,20 +48,48 @@ from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVA
 DATA_PICKLE = "data.pickle"
 PARAM_PICKLE = "param.pickle"
 
-# Status-query channels (LocalBackend / DockerBackend / WinNativeBackend open
-# a raw socket; SSHBackend a paramiko direct-tcpip channel) carry a short
-# request/response round-trip, so they must complete in well under a second on
-# any backend. None of the open_channel implementations set a timeout, so a
-# blocking recv() waits forever if the server accepts the connection but never
-# answers -- e.g. its accept loop is momentarily stalled while the solver
-# finalizes and writes finished.txt. Because the single I/O worker thread runs
-# one operation at a time, one such stuck query wedges the whole worker: the
-# addon stops polling and hangs indefinitely with a stale solver=RUNNING even
-# though the solve already finished (observed intermittently, and made more
-# likely by build-time timing shifts such as a newer scipy). Capping the query
-# channel lets the `_query_via_channel` except -> (alive=False) path fire on a
-# stall so the next background poll retries on a fresh connection, which the
-# now-freed server answers. Both socket and paramiko Channel expose settimeout.
+def command_lines(text: str) -> list[str]:
+    """One command's output as lines, keeping a LEADING TAB on the first one.
+
+    STRIPPED OF LINE ENDINGS ONLY, never of whitespace in general, and this is
+    the one place every backend gets that from.
+
+    The build probe (`core.remote_builds.probe_command`) prints
+    `<marker><TAB><directory>` per build directory, and a directory with no
+    `.ppf-backend` marker prints its separator with nothing before it. That is
+    not a corner case: it is the shape of a downloaded distribution, which the
+    probe's own docstring names as expected. `str.strip()` on the whole output
+    takes the leading TAB off the FIRST line, the line no longer carries the
+    separator, `parse_listing` ignores it, and a host holding exactly one
+    unmarked build is reported as holding none. The panel then draws "No solver
+    build found under ...", which reads as a wrong path.
+
+    `parse_listing` rstrips line endings only, deliberately and with a comment
+    saying why; stripping here defeated that one layer above it. Measured
+    against a container serving an unmarked build: the probe printed
+    `"\t/root/ppf-contact-solver/target/release"` and the add-on cached `{}`.
+
+    `splitlines` needs no trailing strip of its own: it does not invent a final
+    empty line for text that ends in a newline.
+    """
+    return text.strip("\r\n").splitlines()
+
+
+# Status-query channels (DockerBackend and the three native backends open a
+# raw socket; SSHBackend a paramiko direct-tcpip
+# channel) carry a short request/response round-trip, so they must complete in
+# well under a second on any backend. None of the open_channel implementations
+# set a timeout, so a blocking recv() waits forever if the server accepts the
+# connection but never answers -- e.g. its accept loop is momentarily stalled
+# while the solver finalizes and writes finished.txt. Because the single I/O
+# worker thread runs one operation at a time, one such stuck query wedges the
+# whole worker: the addon stops polling and hangs indefinitely with a stale
+# solver=RUNNING even though the solve already finished (observed
+# intermittently, and made more likely by build-time timing shifts such as a
+# newer scipy). Capping the query channel lets the `_query_via_channel` except
+# -> (alive=False) path fire on a stall so the next background poll retries on
+# a fresh connection, which the now-freed server answers. Both socket and
+# paramiko Channel expose settimeout.
 _QUERY_CHANNEL_TIMEOUT_S = 30.0
 
 # The data-transfer and upload-notify channels need the same guard as the query
@@ -77,13 +107,13 @@ _TRANSFER_CHANNEL_TIMEOUT_S = 30.0
 def _force_tcp() -> bool:
     """True when ``PPF_FORCE_TCP_TRANSFER`` is set to a truthy value.
 
-    Co-located backends (``local`` / ``win_native``) default to direct
-    disk I/O: they write/read the project pickles straight to/from the
-    shared filesystem instead of streaming them through the localhost
-    socket. This knob routes them back through the wire handlers so the
-    test rig can keep exercising the streamed path that SSH/Docker rely
-    on in production. SSH/Docker never consult it (they have no disk to
-    share).
+    Co-located backends (``win_native`` / ``mac_native`` / ``linux_native``)
+    default to direct disk I/O: they write/read the project pickles
+    straight to/from the shared filesystem instead of streaming them
+    through the localhost socket. This knob routes them back through
+    the wire handlers so the test rig can keep exercising the streamed
+    path that SSH/Docker rely on in production. SSH/Docker never
+    consult it (they have no disk to share).
     """
     val = os.environ.get("PPF_FORCE_TCP_TRANSFER", "").strip().lower()
     return val not in ("", "0", "false", "no", "off")
@@ -114,7 +144,7 @@ class ConnectionBackend(Protocol):
 
     @property
     def backend_type(self) -> str:
-        """Return the type tag: "ssh", "docker", "local", or "win_native"."""
+        """The type tag: "ssh", "docker", "win_native", "mac_native" or "linux_native"."""
         ...
 
     @property
@@ -439,7 +469,7 @@ def _receive_via_channel(
 
 
 # ---------------------------------------------------------------------------
-# Direct-disk helpers (co-located local / win_native fast path)
+# Direct-disk helpers (the co-located natives' fast path)
 #
 # When the addon and server share a filesystem, the payloads never need
 # to cross the socket: the addon writes/reads them on disk directly.
@@ -606,6 +636,8 @@ class SSHBackend:
         port: int,
         container: str = "",
         jump_clients: list | None = None,
+        device: str = "GPU",
+        gpu_backend: str = "AUTO",
     ) -> None:
         self._instance = instance
         self._directory = directory
@@ -616,6 +648,13 @@ class SSHBackend:
         # the backend owns them for as long as it owns the session and closes
         # them in reverse on disconnect.
         self._jump_clients = list(jump_clients or [])
+        # WHICH BUILD ON THE SOLVER HOST A RUN USES, held here for the same
+        # reason the natives hold it: the launch happens at Start Server rather
+        # than at connect, so a Stop/Start cycle has to make the same two
+        # choices the connection did. Which DIRECTORY each answers to is asked
+        # of the host, once, by `core.remote_builds`.
+        self._device = device
+        self._gpu_backend = gpu_backend
 
     @property
     def backend_type(self) -> str:
@@ -660,14 +699,14 @@ class SSHBackend:
                 timeout=None if timeout is None else timeout + 1.0,
             )
             exit_code = stdout.channel.recv_exit_status()
-            output = stdout.read().decode().strip()
-            error_output = stderr.read().decode().strip()
+            output = stdout.read().decode()
+            error_output = stderr.read().decode()
         except Exception as e:
             return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
         return {
             "exit_code": exit_code,
-            "stdout": output.splitlines(),
-            "stderr": error_output.splitlines(),
+            "stdout": command_lines(output),
+            "stderr": command_lines(error_output),
         }
 
     def query(self, args: dict, project_name: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tuple[dict, bool]:
@@ -718,11 +757,22 @@ class SSHBackend:
 class DockerBackend:
     """Connection via Docker API (local Docker socket)."""
 
-    def __init__(self, instance: Any, directory: str, port: int, container: str = "") -> None:
+    def __init__(
+        self,
+        instance: Any,
+        directory: str,
+        port: int,
+        container: str = "",
+        device: str = "GPU",
+        gpu_backend: str = "AUTO",
+    ) -> None:
         self._instance = instance  # docker container object
         self._directory = directory
         self._port = port
         self._container = container
+        # The same two answers the SSH backend holds, for the same reason.
+        self._device = device
+        self._gpu_backend = gpu_backend
 
     @property
     def backend_type(self) -> str:
@@ -772,8 +822,8 @@ class DockerBackend:
             return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
         return {
             "exit_code": exit_code,
-            "stdout": (raw_out or b"").decode(errors="replace").strip().splitlines(),
-            "stderr": (raw_err or b"").decode(errors="replace").strip().splitlines(),
+            "stdout": command_lines((raw_out or b"").decode(errors="replace")),
+            "stderr": command_lines((raw_err or b"").decode(errors="replace")),
         }
 
     def query(self, args: dict, project_name: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tuple[dict, bool]:
@@ -813,158 +863,31 @@ class DockerBackend:
 
 
 # ---------------------------------------------------------------------------
-# Local backend
-# ---------------------------------------------------------------------------
-
-class LocalBackend:
-    """Connection to a local solver process via localhost socket."""
-
-    def __init__(self, directory: str, port: int) -> None:
-        self._directory = directory
-        self._port = port
-
-    @property
-    def backend_type(self) -> str:
-        return "local"
-
-    @property
-    def current_directory(self) -> str:
-        return self._directory
-
-    @property
-    def server_port(self) -> int:
-        return self._port
-
-    def open_channel(self) -> socket.socket:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(("localhost", self._port))
-        return s
-
-    def exec_command(
-        self, command: str, *, shell: bool = False, cwd: str | None = None,
-        timeout: float | None = None,
-    ) -> dict:
-        cwd = cwd or self._directory
-        try:
-            process = subprocess.Popen(
-                command, shell=shell, cwd=cwd,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = process.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                stdout, stderr = process.communicate()
-                return {
-                    "exit_code": 124,
-                    "stdout": stdout.decode().strip().splitlines(),
-                    "stderr": ["command timed out"],
-                }
-            return {
-                "exit_code": process.returncode,
-                "stdout": stdout.decode().strip().splitlines(),
-                "stderr": stderr.decode().strip().splitlines(),
-            }
-        except Exception as e:
-            return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
-
-    def query(self, args: dict, project_name: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tuple[dict, bool]:
-        return _query_via_channel(self.open_channel, args, project_name, chunk_size)
-
-    def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
-                  progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        # Co-located: write straight to the shared filesystem. Set
-        # PPF_FORCE_TCP_TRANSFER=1 to stream through the socket instead
-        # (keeps the wire handlers under test in the rig).
-        if _force_tcp():
-            _send_via_channel(self.open_channel, remote_path, data, project_name,
-                              chunk_size, progress_cb, interrupt_cb, bps_window)
-        else:
-            _send_via_disk(remote_path, data, project_name, progress_cb, interrupt_cb)
-
-    def upload_atomic(self, project_root, data, param, project_name, *,
-                      data_hash="", param_hash="",
-                      chunk_size=DEFAULT_CHUNK_SIZE,
-                      progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        if _force_tcp():
-            _upload_atomic_via_channel(
-                self.open_channel, project_root, data, param, project_name,
-                chunk_size, progress_cb, interrupt_cb, bps_window,
-                data_hash=data_hash, param_hash=param_hash,
-            )
-        else:
-            _upload_atomic_via_disk(
-                self.open_channel, project_root, data, param, project_name,
-                progress_cb, interrupt_cb, data_hash, param_hash,
-            )
-
-    def receive_data(self, remote_path, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
-                     progress_cb=None, interrupt_cb=None, bps_window=3.0):
-        if _force_tcp():
-            return _receive_via_channel(self.open_channel, remote_path, project_name,
-                                        chunk_size, progress_cb, interrupt_cb, bps_window)
-        return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
-
-    def disconnect(self) -> None:
-        pass
-
-    def stop_server(self) -> None:
-        """Direct-kill the local ``ppf-cts-server`` bound to our port.
-
-        The local server is launched detached (``nohup bash -c "...; \
-        ppf-cts-server --port N" &``) by ``effect_runner``, so there is no
-        Popen handle to terminate, and terminating the ``bash`` wrapper would
-        orphan the server child. Stop therefore finds the process listening on
-        ``self._port`` and kills it (SIGTERM, then SIGKILL), plus any matching
-        wrapper. Best-effort and idempotent: a clean no-op when nothing is
-        listening. ``effect_runner._do_stop_server`` clears the response cache
-        and dispatches ``ServerStopped`` after this returns.
-        """
-        port = self._port
-        # ``lsof -ti tcp:N`` yields the PID(s) bound to the port (the server
-        # binds 127.0.0.1:N). Kill those, then sweep any lingering wrapper by
-        # command match. Both ``lsof`` and ``pkill`` are present on macOS/Linux
-        # where the local backend runs; guards keep it quiet if either is
-        # missing or the port is already free.
-        self.exec_command(
-            f"PIDS=$(lsof -ti tcp:{port} 2>/dev/null); "
-            f'[ -n "$PIDS" ] && kill $PIDS 2>/dev/null; '
-            f"sleep 0.3; "
-            f"PIDS=$(lsof -ti tcp:{port} 2>/dev/null); "
-            f'[ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null; '
-            f"pkill -f 'ppf-cts-server .*--port {port}' 2>/dev/null; true",
-            shell=True,
-        )
-        return
-
-    def start_server(self) -> None:
-        """Symmetric no-op so Stop/Start cycles don't AttributeError.
-
-        ``ServerLaunched`` is dispatched by the caller anyway; the
-        external server (rig orchestrator, dev shell) is responsible
-        for keeping it up.
-        """
-        return
-
-    def is_alive(self) -> bool:
-        # Probe the port: a crashed local server should report dead so
-        # the protocol's is_alive() means actual reachability, matching
-        # the SSH and win_native backends.
-        from .connection import _probe_ppf_cts_server
-        return _probe_ppf_cts_server(self._port)
-
-
-# ---------------------------------------------------------------------------
 # Windows native backend
 # ---------------------------------------------------------------------------
 
 class WinNativeBackend:
     """Connection to a locally-launched Windows native solver."""
 
-    def __init__(self, directory: str, port: int, process: subprocess.Popen) -> None:
+    def __init__(
+        self,
+        directory: str,
+        port: int,
+        process: subprocess.Popen,
+        device: str = "GPU",
+        gpu_backend: str = "AUTO",
+    ) -> None:
         self._directory = directory
         self._port = port
         self._process = process
+        # HELD FOR THE RESTART PATH. `start_server` re-spawns after a
+        # user-issued Stop, and a restart that forgot the choice would come
+        # back on the other build with nothing saying so. The accelerator is
+        # held for the same reason: a root carrying CUDA and ROCm would
+        # otherwise restart on whichever one the rule picks rather than on the
+        # one the artist chose.
+        self._device = device
+        self._gpu_backend = gpu_backend
 
     @property
     def backend_type(self) -> str:
@@ -1000,13 +923,13 @@ class WinNativeBackend:
                 stdout, stderr = process.communicate()
                 return {
                     "exit_code": 124,
-                    "stdout": stdout.decode().strip().splitlines(),
+                    "stdout": command_lines(stdout.decode()),
                     "stderr": ["command timed out"],
                 }
             return {
                 "exit_code": process.returncode,
-                "stdout": stdout.decode().strip().splitlines(),
-                "stderr": stderr.decode().strip().splitlines(),
+                "stdout": command_lines(stdout.decode()),
+                "stderr": command_lines(stderr.decode()),
             }
         except Exception as e:
             return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
@@ -1017,7 +940,7 @@ class WinNativeBackend:
     def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
                   progress_cb=None, interrupt_cb=None, bps_window=3.0):
         # Co-located: write straight to the shared filesystem. See
-        # LocalBackend.send_data for the PPF_FORCE_TCP_TRANSFER override.
+        # SSHBackend.send_data for the PPF_FORCE_TCP_TRANSFER override.
         if _force_tcp():
             _send_via_channel(self.open_channel, remote_path, data, project_name,
                               chunk_size, progress_cb, interrupt_cb, bps_window)
@@ -1047,7 +970,7 @@ class WinNativeBackend:
                                         chunk_size, progress_cb, interrupt_cb, bps_window)
         return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
 
-    def stop_server(self) -> None:
+    def stop_server(self) -> KillReport:
         """Terminate the local server subprocess but keep the backend alive.
 
         Two paths:
@@ -1055,23 +978,28 @@ class WinNativeBackend:
         - **Owned** (we spawned it): terminate the Popen handle.
         - **Attach mode** (``_process is None``): the addon adopted a
           pre-existing ``ppf-cts-server.exe`` (Blender restart, addon
-          reload, etc). Fall back to ``taskkill /F /IM ppf-cts-server.exe``.
-          The binary name is unique to this project, so killing every
-          instance is safe and gives the user a working Stop button
-          regardless of how the server was started.
+          reload, etc). ``kill_local_server`` then ends the listener on
+          ``self._port`` with its process tree, which gives the user a
+          working Stop button regardless of how the server was started.
+
+        THE ATTACH KILL IS SCOPED TO THIS BACKEND'S PORT, as on macOS: the
+        rig runs its Windows workers in parallel, one ``ppf-cts-server.exe``
+        each on its own port, and an image-name kill would end them all.
         """
         if self._process and self._process.poll() is None:
+            pid = self._process.pid
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self._process.kill()
+            report = KillReport("this machine", self._port, killed=(pid,))
         elif self._process is None:
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "ppf-cts-server.exe"],
-                capture_output=True, check=False,
-            )
+            report = kill_local_server(self._port)
+        else:
+            report = KillReport("this machine", self._port)
         self._process = None
+        return report
 
     def start_server(
         self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = ""
@@ -1090,14 +1018,19 @@ class WinNativeBackend:
             return False
         from .connection import spawn_win_native_server
         self._process = spawn_win_native_server(
-            self._directory, self._port, cuda_device, cuda_device_uuid
+            self._directory,
+            self._port,
+            cuda_device,
+            cuda_device_uuid,
+            self._device,
+            self._gpu_backend,
         )
         return self._process is not None
 
     def disconnect(self) -> None:
         """Sever the addon's reference to the server without stopping it.
 
-        Matches ``LocalBackend.disconnect``: the server keeps running so a
+        Matches its sibling natives: the server keeps running so a
         subsequent Connect attaches via the probe path in
         ``spawn_win_native_server`` instead of trying to spawn a new
         ``ppf-cts-server.exe`` and colliding with the still-bound port.
@@ -1127,6 +1060,401 @@ class WinNativeBackend:
         # Attach mode (and test mode): we don't own the process, so
         # poll the port instead. A successful TCMD probe is the
         # liveness signal the rest of the backend cares about.
+        from .connection import _probe_ppf_cts_server
+        return _probe_ppf_cts_server(self._port)
+
+
+# ---------------------------------------------------------------------------
+# macOS native backend
+# ---------------------------------------------------------------------------
+
+class MacNativeBackend:
+    """Connection to a locally-launched macOS native solver."""
+
+    def __init__(
+        self,
+        directory: str,
+        port: int,
+        process: subprocess.Popen,
+        device: str = "GPU",
+    ) -> None:
+        self._directory = directory
+        self._port = port
+        self._process = process
+        # HELD FOR THE RESTART PATH. `start_server` re-spawns after a
+        # user-issued Stop, and a restart that forgot the choice would come
+        # back on the other build with nothing saying so.
+        self._device = device
+
+    @property
+    def backend_type(self) -> str:
+        return "mac_native"
+
+    @property
+    def current_directory(self) -> str:
+        return self._directory
+
+    @property
+    def server_port(self) -> int:
+        return self._port
+
+    def open_channel(self) -> socket.socket:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("localhost", self._port))
+        return s
+
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        cwd = cwd or self._directory
+        try:
+            process = subprocess.Popen(
+                command, shell=shell, cwd=cwd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": 124,
+                    "stdout": command_lines(stdout.decode()),
+                    "stderr": ["command timed out"],
+                }
+            return {
+                "exit_code": process.returncode,
+                "stdout": command_lines(stdout.decode()),
+                "stderr": command_lines(stderr.decode()),
+            }
+        except Exception as e:
+            return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
+
+    def query(self, args: dict, project_name: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tuple[dict, bool]:
+        return _query_via_channel(self.open_channel, args, project_name, chunk_size)
+
+    def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
+                  progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        # Co-located: write straight to the shared filesystem. See
+        # SSHBackend.send_data for the PPF_FORCE_TCP_TRANSFER override.
+        if _force_tcp():
+            _send_via_channel(self.open_channel, remote_path, data, project_name,
+                              chunk_size, progress_cb, interrupt_cb, bps_window)
+        else:
+            _send_via_disk(remote_path, data, project_name, progress_cb, interrupt_cb)
+
+    def upload_atomic(self, project_root, data, param, project_name, *,
+                      data_hash="", param_hash="",
+                      chunk_size=DEFAULT_CHUNK_SIZE,
+                      progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        if _force_tcp():
+            _upload_atomic_via_channel(
+                self.open_channel, project_root, data, param, project_name,
+                chunk_size, progress_cb, interrupt_cb, bps_window,
+                data_hash=data_hash, param_hash=param_hash,
+            )
+        else:
+            _upload_atomic_via_disk(
+                self.open_channel, project_root, data, param, project_name,
+                progress_cb, interrupt_cb, data_hash, param_hash,
+            )
+
+    def receive_data(self, remote_path, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
+                     progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        if _force_tcp():
+            return _receive_via_channel(self.open_channel, remote_path, project_name,
+                                        chunk_size, progress_cb, interrupt_cb, bps_window)
+        return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
+
+    def stop_server(self) -> KillReport:
+        """Terminate the local server subprocess but keep the backend alive.
+
+        Two paths:
+
+        - **Owned** (we spawned it): terminate the Popen handle.
+        - **Attach mode** (``_process is None``): the addon adopted a
+          pre-existing ``ppf-cts-server`` (Blender restart, addon reload,
+          etc). ``kill_local_server`` finds the process listening on
+          ``self._port`` and kills that one. SIGTERM first, because the
+          server passes a cancel to an in-flight build worker on its own
+          shutdown path, then SIGKILL for a survivor.
+
+        THE ATTACH KILL IS SCOPED TO THIS BACKEND'S PORT, and a name match
+        would be wrong here. The binary name is unique to this project but not
+        unique on the host: the rig runs one ``ppf-cts-server`` per worker slot,
+        each on its own port, and every worker sets ``PPF_MAC_NATIVE_NO_SPAWN``,
+        so this branch is the only stop path a mac_native connection takes. A
+        name-wide kill would reach into another worker's run and end its solve
+        mid-flight, which ``bl_server_stop_is_real`` states as the invariant
+        both POSIX kill patterns must carry the port. The Windows twin reads
+        the listener's pid from ``netstat`` and is scoped the same way.
+        """
+        if self._process and self._process.poll() is None:
+            pid = self._process.pid
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+            report = KillReport("this machine", self._port, killed=(pid,))
+        elif self._process is None:
+            report = kill_local_server(self._port)
+        else:
+            report = KillReport("this machine", self._port)
+        self._process = None
+        return report
+
+    def start_server(self) -> bool:
+        """Launch ``ppf-cts-server`` from the solver root.
+
+        Takes no device argument: the Metal backend opens the system default
+        device and offers no way to name another, so there is no selection to
+        deliver.
+
+        No-op if the process is already alive (Start clicked twice) or in test
+        mode where an external orchestrator owns the server.
+        ``spawn_mac_native_server`` also returns None when a ppf-cts-server is
+        already on the port (attach mode), so ``_process`` legitimately stays
+        None there.
+
+        Returns True when a server was actually spawned, so the caller can say
+        whether it started one or attached to one already running.
+        """
+        if self.is_alive():
+            return False
+        from .connection import spawn_mac_native_server
+        self._process = spawn_mac_native_server(
+            self._directory, self._port, self._device
+        )
+        return self._process is not None
+
+    def disconnect(self) -> None:
+        """Sever the addon's reference to the server without stopping it.
+
+        Matches its sibling natives: the server keeps running so a
+        subsequent Connect attaches through the probe path in
+        ``spawn_mac_native_server`` instead of spawning a second
+        ``ppf-cts-server`` against a port the first one still holds.
+
+        Explicit teardown (Stop button) still goes through ``stop_server`` if
+        the user wants the server gone; this only decouples that from the
+        routine disconnect triggered by ``load_pre`` / atexit / the addon's
+        own DisconnectRequested flow.
+        """
+        return
+
+    def is_alive(self) -> bool:
+        # Owned process: cheap poll on the Popen handle.
+        if self._process is not None:
+            return self._process.poll() is None
+        # Attach mode (and test mode): we don't own the process, so poll the
+        # port instead. A successful TCMD probe is the liveness signal the
+        # rest of the backend cares about.
+        from .connection import _probe_ppf_cts_server
+        return _probe_ppf_cts_server(self._port)
+
+
+# ---------------------------------------------------------------------------
+# Linux native backend
+# ---------------------------------------------------------------------------
+
+class LinuxNativeBackend:
+    """Connection to a locally-launched Linux native solver."""
+
+    def __init__(
+        self,
+        directory: str,
+        port: int,
+        process: subprocess.Popen,
+        device: str = "GPU",
+        gpu_backend: str = "AUTO",
+    ) -> None:
+        self._directory = directory
+        self._port = port
+        self._process = process
+        # HELD FOR THE RESTART PATH. `start_server` re-spawns after a
+        # user-issued Stop, and a restart that forgot the choice would come
+        # back on the other build with nothing saying so. The accelerator is
+        # held for the same reason: a root carrying CUDA and ROCm would
+        # otherwise restart on whichever one the rule picks rather than on the
+        # one the artist chose.
+        self._device = device
+        self._gpu_backend = gpu_backend
+
+    @property
+    def backend_type(self) -> str:
+        return "linux_native"
+
+    @property
+    def current_directory(self) -> str:
+        return self._directory
+
+    @property
+    def server_port(self) -> int:
+        return self._port
+
+    def open_channel(self) -> socket.socket:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(("localhost", self._port))
+        return s
+
+    def exec_command(
+        self, command: str, *, shell: bool = False, cwd: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        cwd = cwd or self._directory
+        try:
+            process = subprocess.Popen(
+                command, shell=shell, cwd=cwd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": 124,
+                    "stdout": command_lines(stdout.decode()),
+                    "stderr": ["command timed out"],
+                }
+            return {
+                "exit_code": process.returncode,
+                "stdout": command_lines(stdout.decode()),
+                "stderr": command_lines(stderr.decode()),
+            }
+        except Exception as e:
+            return {"exit_code": 1, "stdout": [], "stderr": [str(e)]}
+
+    def query(self, args: dict, project_name: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tuple[dict, bool]:
+        return _query_via_channel(self.open_channel, args, project_name, chunk_size)
+
+    def send_data(self, remote_path, data, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
+                  progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        # Co-located: write straight to the shared filesystem. See
+        # SSHBackend.send_data for the PPF_FORCE_TCP_TRANSFER override.
+        if _force_tcp():
+            _send_via_channel(self.open_channel, remote_path, data, project_name,
+                              chunk_size, progress_cb, interrupt_cb, bps_window)
+        else:
+            _send_via_disk(remote_path, data, project_name, progress_cb, interrupt_cb)
+
+    def upload_atomic(self, project_root, data, param, project_name, *,
+                      data_hash="", param_hash="",
+                      chunk_size=DEFAULT_CHUNK_SIZE,
+                      progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        if _force_tcp():
+            _upload_atomic_via_channel(
+                self.open_channel, project_root, data, param, project_name,
+                chunk_size, progress_cb, interrupt_cb, bps_window,
+                data_hash=data_hash, param_hash=param_hash,
+            )
+        else:
+            _upload_atomic_via_disk(
+                self.open_channel, project_root, data, param, project_name,
+                progress_cb, interrupt_cb, data_hash, param_hash,
+            )
+
+    def receive_data(self, remote_path, project_name, *, chunk_size=DEFAULT_CHUNK_SIZE,
+                     progress_cb=None, interrupt_cb=None, bps_window=3.0):
+        if _force_tcp():
+            return _receive_via_channel(self.open_channel, remote_path, project_name,
+                                        chunk_size, progress_cb, interrupt_cb, bps_window)
+        return _receive_via_disk(remote_path, progress_cb, interrupt_cb)
+
+    def stop_server(self) -> KillReport:
+        """Terminate the local server subprocess but keep the backend alive.
+
+        Two paths:
+
+        - **Owned** (we spawned it): terminate the Popen handle.
+        - **Attach mode** (``_process is None``): the addon adopted a
+          pre-existing ``ppf-cts-server`` (Blender restart, addon reload,
+          etc). ``kill_local_server`` finds the process listening on
+          ``self._port`` and kills that one. SIGTERM first, because the
+          server passes a cancel to an in-flight build worker on its own
+          shutdown path, then SIGKILL for a survivor.
+
+        THE ATTACH KILL IS SCOPED TO THIS BACKEND'S PORT, and a name match
+        would be wrong here. The binary name is unique to this project but not
+        unique on the host: the rig runs one ``ppf-cts-server`` per worker slot,
+        each on its own port, and every worker sets ``PPF_LINUX_NATIVE_NO_SPAWN``,
+        so this branch is the only stop path a linux_native connection takes. A
+        name-wide kill would reach into another worker's run and end its solve
+        mid-flight, which ``bl_server_stop_is_real`` states as the invariant
+        both POSIX kill patterns must carry the port. The Windows twin reads
+        the listener's pid from ``netstat`` and is scoped the same way.
+        """
+        if self._process and self._process.poll() is None:
+            pid = self._process.pid
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+            report = KillReport("this machine", self._port, killed=(pid,))
+        elif self._process is None:
+            report = kill_local_server(self._port)
+        else:
+            report = KillReport("this machine", self._port)
+        self._process = None
+        return report
+
+    def start_server(
+        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = ""
+    ) -> bool:
+        """Launch ``ppf-cts-server`` from the solver root, on CUDA device *cuda_device*.
+
+        IT TAKES A DEVICE AND THE macOS TWIN DOES NOT. Linux is where the GPU
+        picker has something to say: a CUDA machine numbers its cards, so the
+        panel's choice has to reach the launch. Metal opens the system default
+        device and offers no way to name another.
+
+        No-op if the process is already alive (Start clicked twice) or in test
+        mode where an external orchestrator owns the server.
+        ``spawn_linux_native_server`` also returns None when a ppf-cts-server is
+        already on the port (attach mode), so ``_process`` legitimately stays
+        None there.
+
+        Returns True when a server was actually spawned, so the caller can say
+        whether the device selection reached anything.
+        """
+        if self.is_alive():
+            return False
+        from .connection import spawn_linux_native_server
+        self._process = spawn_linux_native_server(
+            self._directory,
+            self._port,
+            cuda_device,
+            cuda_device_uuid,
+            self._device,
+            self._gpu_backend,
+        )
+        return self._process is not None
+
+    def disconnect(self) -> None:
+        """Sever the addon's reference to the server without stopping it.
+
+        Matches its Windows and macOS twins: the server keeps running so a
+        subsequent Connect attaches through the probe path in
+        ``spawn_linux_native_server`` instead of spawning a second
+        ``ppf-cts-server`` against a port the first one still holds.
+
+        Explicit teardown (Stop button) still goes through ``stop_server`` if
+        the user wants the server gone; this only decouples that from the
+        routine disconnect triggered by ``load_pre`` / atexit / the addon's
+        own DisconnectRequested flow.
+        """
+        return
+
+    def is_alive(self) -> bool:
+        # Owned process: cheap poll on the Popen handle.
+        if self._process is not None:
+            return self._process.poll() is None
+        # Attach mode (and test mode): we don't own the process, so poll the
+        # port instead. A successful TCMD probe is the liveness signal the
+        # rest of the backend cares about.
         from .connection import _probe_ppf_cts_server
         return _probe_ppf_cts_server(self._port)
 
@@ -1237,6 +1565,7 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
     - ``docker``: container, path, server_port
     - ``local``: path, server_port
     - ``win_native``: path, server_port
+    - ``mac_native``: path, server_port
 
     ``jumps`` is the resolved ProxyJump chain: one dict per hop, ordered
     outward from this machine, each holding the same host / port / username /
@@ -1275,6 +1604,8 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
             port=config.get("server_port", DEFAULT_SERVER_PORT),
             container=config.get("container", ""),
             jump_clients=jump_clients,
+            device=config.get("device", DEVICE_GPU),
+            gpu_backend=config.get("gpu_backend", "AUTO"),
         )
 
         # If there's a Docker container over SSH, verify it's running
@@ -1363,24 +1694,71 @@ def create_backend(backend_type: str, config: dict) -> ConnectionBackend:
             directory=config["path"],
             port=config.get("server_port", DEFAULT_SERVER_PORT),
             container=config["container"],
-        )
-
-    elif backend_type == "local":
-        return LocalBackend(
-            directory=config["path"],
-            port=config.get("server_port", DEFAULT_SERVER_PORT),
+            device=config.get("device", DEVICE_GPU),
+            gpu_backend=config.get("gpu_backend", "AUTO"),
         )
 
     elif backend_type == "win_native":
         from .connection import connect_win_native
+        # THE DEVICE IS REMEMBERED ON THE BACKEND, not only used once here.
+        # `start_server` re-spawns after a user-issued Stop, and a restart that
+        # forgot the choice would silently come back on the other build.
+        device = config.get("device", DEVICE_GPU)
+        # The accelerator rides beside the device for the same reason: both are
+        # answers about WHICH BUILD to run, and a restart has to make the same
+        # two choices the connection did.
+        gpu_backend = config.get("gpu_backend", "AUTO")
         info, process = connect_win_native(
             config["path"],
             config.get("server_port", DEFAULT_SERVER_PORT),
+            device,
+            config.get("project_name", ""),
+            gpu_backend,
         )
         return WinNativeBackend(
             directory=info.current_directory,
             port=info.server_port,
             process=process,
+            device=device,
+            gpu_backend=gpu_backend,
+        )
+
+    elif backend_type == "mac_native":
+        from .connection import connect_mac_native
+        # Same contract as win_native above.
+        device = config.get("device", DEVICE_GPU)
+        info, process = connect_mac_native(
+            config["path"],
+            config.get("server_port", DEFAULT_SERVER_PORT),
+            device,
+            config.get("project_name", ""),
+        )
+        return MacNativeBackend(
+            directory=info.current_directory,
+            port=info.server_port,
+            process=process,
+            device=device,
+        )
+
+    elif backend_type == "linux_native":
+        from .connection import connect_linux_native
+        # Same contract as win_native above, and Linux carries both halves of
+        # it: a distribution here ships CUDA and ROCm side by side.
+        device = config.get("device", DEVICE_GPU)
+        gpu_backend = config.get("gpu_backend", "AUTO")
+        info, process = connect_linux_native(
+            config["path"],
+            config.get("server_port", DEFAULT_SERVER_PORT),
+            device,
+            config.get("project_name", ""),
+            gpu_backend,
+        )
+        return LinuxNativeBackend(
+            directory=info.current_directory,
+            port=info.server_port,
+            process=process,
+            device=device,
+            gpu_backend=gpu_backend,
         )
 
     else:

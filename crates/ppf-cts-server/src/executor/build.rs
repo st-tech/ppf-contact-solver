@@ -211,10 +211,6 @@ pub(super) enum BuildOutcome {
     /// The pipeline already dispatched a terminal event (e.g.
     /// `GpuCheckFailed`) and the caller must NOT dispatch another
     /// `BuildCompleted` / `BuildCancelledEvent` / `BuildFailed`.
-    /// Only constructed in non-emulated builds (the GPU-check path),
-    /// but the test harness in `executor/mod.rs::other_disc` matches
-    /// every variant so the enum needs to keep it under `emulated`.
-    #[cfg_attr(feature = "emulated", allow(dead_code))]
     AlreadyDispatched,
 }
 
@@ -242,11 +238,10 @@ async fn run_build_pipeline(
     // so we just call into utils::check_gpu directly. A future
     // phase can introduce a OnceCell if the cost ever shows up.
     //
-    // The emulated build skips the check entirely (mirrors
-    // server/emulator.py's `Utils.check_gpu = no-op` patch); the
-    // emulated solver doesn't touch CUDA so nvidia-smi being absent
-    // is irrelevant.
-    #[cfg(not(feature = "emulated"))]
+    // Whether this build needs a GPU at all is `check_gpu`'s own question,
+    // answered per backend in `ppf-cts-core::utils`, so the check runs
+    // unconditionally here and the backend that cannot use a GPU says so
+    // there rather than being skipped by a feature flag at the call site.
     if let Err(e) = ppf_cts_core::utils::check_gpu() {
         // GPU check failure is its own event in transitions.
         dispatch_re_entrant(
@@ -795,10 +790,51 @@ fn failure_identity(headline: &str) -> &str {
     }
 }
 
+/// The package name out of `No module named 'x.y'`, or `None`.
+///
+/// The remedy below has to name something installable, and the import
+/// name is what the worker reports. They coincide for every dependency
+/// this project installs (`warmup.py`'s list is `pytetwild`, `tetgen`,
+/// `scipy`, `psutil`, ... each spelled the same on PyPI), which is why
+/// the remedy also names `warmup.py` itself: that list is authoritative
+/// where a mechanically derived name is only a good guess.
+///
+/// A SUBMODULE YIELDS ITS TOP-LEVEL PACKAGE. `No module named
+/// 'scipy.sparse'` is raised by an installed-but-partial scipy as well
+/// as by an absent one, and `pip install scipy.sparse` is not a command;
+/// the distribution is what a reader can act on either way.
+fn missing_module_name(headline: &str) -> Option<String> {
+    let rest = headline.split_once("No module named ")?.1;
+    let mut chars = rest.chars();
+    let quote = chars.next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let name: String = chars.take_while(|c| *c != quote).collect();
+    let root = name.split('.').next().unwrap_or_default();
+    if root.is_empty() {
+        None
+    } else {
+        Some(root.to_string())
+    }
+}
+
 /// Turn a cryptic `ModuleNotFoundError: No module named 'pythreejs'`
 /// into an actionable message that names the interpreter, how it was
-/// chosen, and how to point the build at the project venv. Non-import
-/// failures pass through unchanged.
+/// chosen, and what to do about it. Non-import failures pass through
+/// unchanged.
+///
+/// THE REMEDY DEPENDS ON WHETHER THE INTERPRETER WAS CHOSEN OR FALLEN
+/// BACK TO, and getting that wrong costs the reader the whole message.
+/// `PathFallback` means no venv was in play, so the fix is to put the
+/// build on the project venv and the message says how. `Explicit` and
+/// `Venv` mean the build is ALREADY running the interpreter it was
+/// pointed at, and telling that reader to point `PPF_CTS_BUILD_PYTHON`
+/// at the venv is telling them to do what they have done: the message
+/// then describes their situation correctly and prescribes a no-op,
+/// which reads as the diagnosis being wrong about everything else too.
+/// What is actually wrong there is the ENVIRONMENT, not the selection,
+/// so the remedy installs the missing package into that interpreter.
 ///
 /// Classification reads the first line's identity segment only
 /// (`failure_identity`), which is the exception the worker raised.
@@ -818,12 +854,40 @@ fn enrich_build_failure(reason: String, python: &Path, source: PythonSource) -> 
     if !is_missing_dependency_error(failure_identity(headline)) {
         return reason;
     }
+    let module = missing_module_name(headline);
+    let remedy = match source {
+        // Nothing selected this interpreter; it is whatever PATH had.
+        // The project deps live in the venv, so the fix is to get the
+        // build onto it.
+        PythonSource::PathFallback => "The frontend deps (numpy, scipy, pytetwild, ...) live \
+             in the ppf-cts venv, and this interpreter is not it: it came off PATH because \
+             nothing named one. Point PPF_CTS_BUILD_PYTHON at that venv's interpreter (e.g. \
+             <data-root>/venv/bin/python) or launch the server with the venv activated so \
+             VIRTUAL_ENV is set, then rebuild."
+            .to_string(),
+        // The build is already on the interpreter it was pointed at.
+        // Repointing it is a no-op; that interpreter is short a package.
+        PythonSource::Explicit | PythonSource::Venv => {
+            let install = match &module {
+                Some(name) => format!(
+                    "Install it there with `{} -m pip install {name}`. ",
+                    python.display()
+                ),
+                None => String::new(),
+            };
+            format!(
+                "That is the interpreter this build was pointed at, so repointing it is not the \
+                 fix: the environment itself is short a package. {install}Or re-provision the \
+                 whole dependency set, which is what warmup.py lists and installs \
+                 (macOS: build-mac-native/warmup.sh, otherwise python3 warmup.py). If this is \
+                 the WRONG environment rather than an incomplete one, point \
+                 PPF_CTS_BUILD_PYTHON at the ppf-cts venv's interpreter instead."
+            )
+        }
+    };
     let mut enriched = format!(
         "build worker's Python ({}, resolved from {}) is missing a required frontend \
-         dependency: {headline}. The frontend deps (numpy, scipy, pythreejs, ...) live in the \
-         ppf-cts venv. Point PPF_CTS_BUILD_PYTHON at that venv's interpreter (e.g. \
-         <data-root>/venv/bin/python) or launch the server with the venv activated so \
-         VIRTUAL_ENV is set, then rebuild.",
+         dependency: {headline}. {remedy}",
         python.display(),
         source.describe(),
     );
@@ -870,6 +934,164 @@ fn locate_build_worker() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Which build this server's runs use: the cargo target directory the build
+/// worker takes the solver from, and what that solver says it is.
+///
+/// THE SOLVER A RUN EXECUTES IS DECIDED BY THIS PROCESS'S ENVIRONMENT, NOT BY
+/// WHERE THIS BINARY SITS. The build worker's `frontend` loads its cdylib out
+/// of `CARGO_TARGET_DIR` when that is set and out of its own tree's `target`
+/// otherwise, and `frontend.artifact_dir` names the solver beside that cdylib
+/// in the session launcher. So an add-on that attaches to a server it did not
+/// start has no way to learn which solver its runs will get unless the server
+/// says, and it refuses one that is not the build its device selection names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SolverBuild {
+    /// Absolute target directory, or empty when the build worker cannot be
+    /// located, in which case no run on this server can build at all.
+    pub target_dir: String,
+    /// What the solver in that directory printed for `--backend`, or empty
+    /// when there is none or it could not be asked.
+    ///
+    /// ASKED OF THE BINARY, NOT READ OFF THE `.ppf-backend` MARKER. A bundler
+    /// writes the marker, so it states what the bundler believed it copied;
+    /// the binary states what it is.
+    pub backend: String,
+}
+
+/// Resolve [`SolverBuild`] for this process, once, at startup.
+pub fn solver_build() -> SolverBuild {
+    let Some(worker) = locate_build_worker() else {
+        return SolverBuild::default();
+    };
+    // `<tree>/frontend/build_worker.py`: the worker puts `<tree>` on the
+    // interpreter's path, so that tree's `frontend` is the one that decides.
+    let Some(tree) = worker.parent().and_then(Path::parent) else {
+        return SolverBuild::default();
+    };
+    let tree = if tree.is_absolute() {
+        tree.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(tree),
+            Err(_) => return SolverBuild::default(),
+        }
+    };
+    let target = target_dir_for(&tree, std::env::var_os("CARGO_TARGET_DIR").as_deref());
+    let backend = ask_solver_backend(&target, &tree).unwrap_or_else(|reason| {
+        log::warn!(
+            target: "ppf::serve",
+            "could not ask the solver under {} which backend it is: {reason}",
+            target.display()
+        );
+        String::new()
+    });
+    SolverBuild {
+        target_dir: target.to_string_lossy().into_owned(),
+        backend,
+    }
+}
+
+/// The rule `frontend._target_dirs` applies, restated for the one caller that
+/// cannot import it: `CARGO_TARGET_DIR` when it is set, relative to the tree
+/// root when relative (as Cargo reads it), and the tree's own `target`
+/// otherwise. The frontend searches ONLY that directory, so there is no
+/// fallback here to mirror.
+fn target_dir_for(tree: &Path, cargo_target_dir: Option<&std::ffi::OsStr>) -> PathBuf {
+    match cargo_target_dir {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                tree.join(path)
+            }
+        }
+        _ => tree.join("target"),
+    }
+}
+
+const SOLVER_EXE: &str = if cfg!(windows) {
+    "ppf-contact-solver.exe"
+} else {
+    "ppf-contact-solver"
+};
+
+/// Ask the solver under *target_dir* which backend it links.
+///
+/// The profile order is `frontend._find_cdylib`'s, release before debug.
+/// BOUNDED, because this runs before the server accepts a connection, and a
+/// binary that does not exit would hold startup with it.
+///
+/// A FAILURE HERE IS NOT EVIDENCE ABOUT THE BUILD, only that the question
+/// could not be asked, which is why the caller reports it as an empty answer
+/// with a logged reason and the add-on never compares it: the attach check
+/// compares target directories.
+fn ask_solver_backend(target_dir: &Path, tree: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let Some(solver) = ["release", "debug"]
+        .iter()
+        .map(|profile| target_dir.join(profile).join(SOLVER_EXE))
+        .find(|path| path.is_file())
+    else {
+        return Err(format!("no {SOLVER_EXE} in its release or debug directory"));
+    };
+    let mut command = std::process::Command::new(&solver);
+    command
+        .arg("--backend")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // THIS IS THE ONE PLACE THE SERVER RUNS THE SOLVER ITSELF; every solve
+    // goes through the session launcher. On Windows the solver imports its
+    // backend DLL and does not start without that DLL's directory on PATH,
+    // which the launcher sets and a server's own PATH need not carry. So the
+    // child gets the launcher's search order, `%LIB_PATH_DEV%;
+    // %LIB_PATH_BUNDLE%;%CUDA_PATH%\bin;%PATH%`, from the same list.
+    if cfg!(windows) {
+        let mut search: Vec<PathBuf> =
+            ppf_cts_core::datamodel::session::scripts::windows_library_dirs(tree).into();
+        if let Some(cuda) = std::env::var_os("CUDA_PATH") {
+            search.push(PathBuf::from(cuda).join("bin"));
+        }
+        if let Some(existing) = std::env::var_os("PATH") {
+            search.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(search) {
+            command.env("PATH", joined);
+        }
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("{} did not start: {e}", solver.display()))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{} did not answer within 10 s", solver.display()));
+            }
+            Err(e) => return Err(format!("waiting on {} failed: {e}", solver.display())),
+        }
+    };
+    let mut answer = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut answer);
+    }
+    if !status.success() {
+        return Err(format!("{} exited with {status}", solver.display()));
+    }
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err(format!("{} printed nothing", solver.display()));
+    }
+    Ok(answer.to_string())
 }
 
 /// Deliver a cancel signal to the build worker.
@@ -930,6 +1152,99 @@ mod tests {
         assert!(msg.contains("PPF_CTS_BUILD_PYTHON"));
         assert!(msg.contains("pythreejs"));
         assert!(msg.contains("venv"));
+    }
+
+    #[test]
+    fn enrich_build_failure_does_not_prescribe_a_no_op_to_a_venv_build() {
+        // THE FAILURE THIS PINS. A build already running the ppf-cts venv's
+        // interpreter was told to "Point PPF_CTS_BUILD_PYTHON at that venv's
+        // interpreter", which is what it was doing. The reader is left with a
+        // message that names their setup exactly and asks for it again, and
+        // the real fault (that venv is short a package) goes unstated.
+        for source in [PythonSource::Venv, PythonSource::Explicit] {
+            let msg = enrich_build_failure(
+                "ModuleNotFoundError: No module named 'pytetwild'".to_string(),
+                Path::new("/Users/x/.local/share/ppf-cts/venv/bin/python"),
+                source,
+            );
+            assert!(
+                msg.contains("pip install pytetwild"),
+                "no installable remedy: {msg:?}"
+            );
+            // The remedy must name the interpreter that is actually short the
+            // package, so a reader with several venvs installs into the right
+            // one.
+            assert!(
+                msg.contains("/Users/x/.local/share/ppf-cts/venv/bin/python -m pip install"),
+                "the install names the wrong interpreter: {msg:?}"
+            );
+            assert!(msg.contains("warmup.py"), "no re-provision route: {msg:?}");
+            assert!(
+                !msg.contains("Point PPF_CTS_BUILD_PYTHON at that venv's interpreter"),
+                "still prescribes the no-op: {msg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn enrich_build_failure_keeps_the_repoint_remedy_for_a_path_fallback() {
+        // The mirror case, and the one where repointing IS the fix: nothing
+        // named an interpreter, so the build is on whatever PATH had.
+        let msg = enrich_build_failure(
+            "ModuleNotFoundError: No module named 'pytetwild'".to_string(),
+            Path::new("/usr/bin/python3"),
+            PythonSource::PathFallback,
+        );
+        assert!(msg.contains("PPF_CTS_BUILD_PYTHON"), "{msg:?}");
+        assert!(msg.contains("VIRTUAL_ENV"), "{msg:?}");
+    }
+
+    #[test]
+    fn enrich_build_failure_stays_on_one_line_above_the_traceback() {
+        // The traceback is attached after a newline and readers split on it:
+        // `_crash_detail_line` in the panel draws the first line only. A
+        // remedy carrying its own newline would be cut off mid-sentence.
+        let msg = enrich_build_failure(
+            "ModuleNotFoundError: No module named 'pytetwild'".to_string(),
+            Path::new("/x/venv/bin/python"),
+            PythonSource::Venv,
+        );
+        assert!(!msg.contains('\n'), "remedy broke onto a second line: {msg:?}");
+    }
+
+    #[test]
+    fn missing_module_name_reads_the_package_a_reader_can_install() {
+        assert_eq!(
+            missing_module_name("ModuleNotFoundError: No module named 'pytetwild'").as_deref(),
+            Some("pytetwild")
+        );
+        // A submodule yields its distribution, because that is what pip takes.
+        assert_eq!(
+            missing_module_name("No module named 'scipy.sparse'").as_deref(),
+            Some("scipy")
+        );
+        assert_eq!(
+            missing_module_name("No module named \"tetgen\"").as_deref(),
+            Some("tetgen")
+        );
+        // Nothing to name: the remedy drops the install line rather than
+        // printing a command with an empty argument.
+        assert!(missing_module_name("ImportError: cannot import name 'x'").is_none());
+        assert!(missing_module_name("No module named ").is_none());
+        assert!(missing_module_name("No module named ''").is_none());
+    }
+
+    #[test]
+    fn enrich_build_failure_without_a_module_name_still_carries_a_remedy() {
+        // A bare ImportError has no module to install, and the message must
+        // still say what to do rather than trailing off.
+        let msg = enrich_build_failure(
+            "ImportError: cannot import name 'tetrahedralize' from 'pytetwild'".to_string(),
+            Path::new("/x/venv/bin/python"),
+            PythonSource::Venv,
+        );
+        assert!(!msg.contains("pip install ."), "empty package name: {msg:?}");
+        assert!(msg.contains("warmup.py"), "{msg:?}");
     }
 
     #[test]
@@ -1159,6 +1474,56 @@ mod tests {
     }
 
     #[test]
+    fn the_target_dir_is_the_trees_own_when_nothing_names_another() {
+        let tree = Path::new("/srv/tree");
+        assert_eq!(target_dir_for(tree, None), tree.join("target"));
+        // An empty value names nothing, which is how `frontend` reads it too.
+        assert_eq!(
+            target_dir_for(tree, Some(std::ffi::OsStr::new(""))),
+            tree.join("target")
+        );
+    }
+
+    #[test]
+    fn a_named_target_dir_is_the_only_answer() {
+        let tree = Path::new("/srv/tree");
+        // Relative to the tree root, as Cargo and `frontend` both read it.
+        assert_eq!(
+            target_dir_for(tree, Some(std::ffi::OsStr::new("target/cpu"))),
+            tree.join("target").join("cpu")
+        );
+        let elsewhere = std::env::temp_dir().join("elsewhere");
+        assert_eq!(
+            target_dir_for(tree, Some(elsewhere.as_os_str())),
+            elsewhere
+        );
+    }
+
+    #[test]
+    fn a_target_dir_with_no_solver_cannot_say_its_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = ask_solver_backend(dir.path(), dir.path()).unwrap_err();
+        assert!(err.contains(SOLVER_EXE), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_backend_is_what_the_solver_answers() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // A release build beside a debug one: release is asked, as
+        // `frontend._find_cdylib` prefers it.
+        for (profile, word) in [("release", "cpu"), ("debug", "cuda")] {
+            let profile_dir = dir.path().join(profile);
+            std::fs::create_dir_all(&profile_dir).unwrap();
+            let solver = profile_dir.join(SOLVER_EXE);
+            std::fs::write(&solver, format!("#!/bin/sh\necho {word}\n")).unwrap();
+            std::fs::set_permissions(&solver, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(ask_solver_backend(dir.path(), dir.path()).unwrap(), "cpu");
+    }
+
+    #[test]
     fn locate_build_worker_honors_env_override() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("custom_worker.py");
@@ -1261,3 +1626,4 @@ mod tests {
         assert!(!status.success(), "TerminateProcess'd child reported success");
     }
 }
+

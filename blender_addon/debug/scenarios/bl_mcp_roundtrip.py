@@ -56,6 +56,11 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 # macOS GitHub-hosted runners block loopback HTTP from urllib to Blender's
 # in-process MCP server, so the rig does not select this scenario there.
 # Declaring it here rather than returning a pass from run() keeps a

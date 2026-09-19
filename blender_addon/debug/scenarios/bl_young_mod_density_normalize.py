@@ -15,8 +15,8 @@
 #      ``encode_param`` produces (what the solver receives over the wire)
 #      and assert the "young-mod" value is unchanged with the toggle ON and
 #      divided by density with it OFF, while "density" is always unchanged.
-#   2. Emulated-solver witness: a successful ``build_and_wait`` for each
-#      case. The emulated Rust binary builds the FixedScene from the sent
+#   2. Solver-side witness: a successful ``build_and_wait`` for each
+#      case. The solver binary builds the FixedScene from the sent
 #      payload, and ``scene.rs`` asserts ``young_mod > 0`` per element while
 #      doing so, so a broken conversion (zero/negative) would fail the build.
 
@@ -28,6 +28,12 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it. The sweep that had
+# failed it loaded a DIFFERENT tree's addon through the shared extension
+# symlink, so that verdict was about other code; against this tree it
+# passes unchanged.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -69,11 +75,11 @@ def run_pass(dh, group, normalized, label):
          "density": DENSITY, "sent_young_mod": ym, "sent_density": dens,
          "expected_young_mod": expected},
     )
-    # A successful build witnesses that the emulated solver deserialized and
+    # A successful build witnesses that the solver deserialized and
     # accepted the (possibly converted) young-mod that was sent.
     dh.build_and_wait(data_bytes, param_bytes,
                       message="young-mod-%s" % label)
-    dh.record("%s_emulated_build_ok" % label, True,
+    dh.record("%s_build_ok" % label, True,
               {"sent_young_mod": ym})
     return ym
 
@@ -94,7 +100,7 @@ try:
     group.shell_density = DENSITY
     dh.log("configured young_mod=%g density=%g" % (FIELD_YM, DENSITY))
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

@@ -191,11 +191,59 @@ impl ParseState {
             return;
         }
 
+        // THE NEUTRAL DRIVER'S SPELLING OF THE SAME THING. `SimpleLog`'s
+        // constructor opens a scope and its destructor records how long the
+        // scope took, under the scope's own name; `log::Section::new("advance")`
+        // is that, and without this branch neither `advance` nor `initialize`
+        // registers. The cost of the omission is not cosmetic: `advance` is the
+        // channel the addon pins as `time-per-step`, so the panel found the file
+        // only because the channel is hand-listed, and `names()` did not carry
+        // it at all.
+        if line.contains("log::Section::new(") {
+            self.parent_name.clear();
+            let name = extract_name(line);
+            self.register(name.clone(), out);
+            self.parent_name = name;
+            return;
+        }
+
+        // THE NEUTRAL DRIVER'S OWN SPELLING, which carries the parent and the
+        // channel in ONE call: `log::mark("advance", "SL_toi", value)`, where
+        // C++ sets the parent once with `SimpleLog logging("advance")` and then
+        // names the channel alone. Taking the first quoted string here would
+        // key every one of the driver's channels as `advance`, and reading a
+        // marked value back would find nothing under its own name.
+        if line.contains("log::mark(") {
+            if let Some((parent, name)) = extract_pair(line) {
+                let saved = std::mem::replace(&mut self.parent_name, parent);
+                self.register(name, out);
+                self.parent_name = saved;
+            }
+            return;
+        }
+
         if line.starts_with("/*== push") || line.contains("logging.push(") || line.contains("logging.mark(") {
             let name = extract_name(line);
             self.register(name, out);
         }
     }
+}
+
+/// Extract the FIRST TWO quoted strings from a line, as the neutral driver's
+/// `log::mark("<parent>", "<channel>", value)` carries them.
+///
+/// Returns `None` when the line holds fewer than two, which is what a partial
+/// or wrapped call looks like: registering the parent as a channel would be
+/// worse than registering nothing, because the entry would then claim a name
+/// no file is ever written under.
+fn extract_pair(line: &str) -> Option<(String, String)> {
+    let mut parts = line.split('"').skip(1).step_by(2);
+    let parent = parts.next()?.replace(' ', "_");
+    let name = parts.next()?.replace(' ', "_");
+    if parent.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some((parent, name))
 }
 
 /// Extract the first quoted string from a line and replace internal
@@ -454,4 +502,25 @@ logging.push("deep");
         let out = get_logging_docstrings(dir.path());
         assert!(out.contains_key("deep"));
     }
+
+    // THE NEUTRAL DRIVER'S FORM, which carries the parent and the channel in
+    // one call. Keying on the first quoted string would file every one of its
+    // channels under `advance`, and a caller asking for the marked value by
+    // its own name would find nothing.
+    #[test]
+    fn a_rust_mark_keys_on_the_second_string() {
+        let src = r#"
+// Name: SL-toi
+// Format: list[(time, ratio)]
+// Description:
+// The fraction the strain limiter allowed.
+log::mark("advance", "SL_toi", shell_toi as f64);
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "step.rs", src);
+        let out = get_logging_docstrings(dir.path());
+        assert!(out.contains_key("SL-toi"), "keys: {:?}", out.keys());
+        assert_eq!(out["SL-toi"].filename, "advance.SL_toi.out");
+    }
+
 }

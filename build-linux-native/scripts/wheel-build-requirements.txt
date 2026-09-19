@@ -1,0 +1,22 @@
+# File: build-linux-native/scripts/wheel-build-requirements.txt
+# Code: Claude Code
+# Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+# License: Apache v2.0
+#
+# The build tools scripts/source-wheel.sh builds a wheel with, installed with
+# --require-hashes into a throwaway environment and used with
+# --no-build-isolation, so a build requirement cannot float to whatever the
+# index serves that day. The versions satisfy the build-system requirements of
+# every package scripts/platform.sh names. Each hash is the sha256 PyPI publishes
+# for that file: Cython's two cp312 manylinux wheels and its pure-Python wheel,
+# which pip takes for an interpreter neither platform wheel matches.
+#
+# To move a pin, take the version and every file hash from
+# https://pypi.org/pypi/<name>/<version>/json together, and rebuild a wheel with
+# scripts/source-wheel.sh before committing.
+cython==3.3.0 \
+    --hash=sha256:7e321ae700995a16dc3055ada06ffb8d61e1a7434e5d0e811547a45ac1015ebd \
+    --hash=sha256:428fafed98ea26927000a287b4dfc9ef07339f56656a5329a34eaa593f79a4f8 \
+    --hash=sha256:9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670

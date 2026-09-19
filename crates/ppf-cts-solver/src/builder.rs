@@ -56,7 +56,7 @@ pub struct SandParams {
 /// `HingeProp::uv_edge_sin2` for a hinge with no usable UV direction, either
 /// because the mesh carries no UV at all or because both incident faces have a
 /// degenerate UV edge. Negative so it cannot collide with a real `sin^2`, which
-/// lies in `[0, 1]`; the kernel and the emulator both read it as "isotropic".
+/// lies in `[0, 1]`; the kernel reads it as "isotropic".
 /// The build refuses a scene that pairs it with non-unit bending ratios, so it
 /// never silently discards an anisotropy the user asked for.
 pub(crate) const NO_UV_EDGE_DIRECTION: f32 = -1.0;
@@ -104,8 +104,8 @@ fn signed_dihedral_angle(
 /// condition ~20). Instead, when an element crosses this ratio it is dropped
 /// from the elastic/strain energy entirely (the caller flags it in the
 /// returned `exclude_face`/`exclude_tet` mask, which `update_rest_shape`
-/// writes into the dedicated per-element `rest_excluded` flag that
-/// `energy.cu` and `strainlimiting.cu` gate on, independently of and never
+/// writes into the dedicated per-element `rest_excluded` flag that the elastic
+/// and strain-limiting kernels gate on, independently of and never
 /// aliasing the kinematic `fixed` flag) and a benign
 /// identity `inv_rest` is stored. Its vertices are still governed by inertia,
 /// the pull constraint, and their other (non-singular) elements, so every
@@ -378,59 +378,54 @@ pub(crate) fn compute_inv_rest(
     exclude_singular: bool,
 ) -> (Vec<Matrix2<f32>>, Vec<Matrix3<f32>>, Vec<u8>, Vec<u8>) {
     let uv = &mesh.uv;
-    let (inv_rest2x2, exclude_face): (Vec<Matrix2<f32>>, Vec<u8>) = (0
-        ..mesh.mesh.mesh.shell_face_count)
-        .into_par_iter()
-        .map(|i| {
-            let f = mesh.mesh.mesh.face.column(i);
-            // Compute rest-pose from 3D geometry projected into tangent plane
-            let (x0, x1, x2) = (
-                rest_v.column(f[0]),
-                rest_v.column(f[1]),
-                rest_v.column(f[2]),
-            );
-            let dx = Matrix3x2::<f32>::from_columns(&[
-                (x1 - x0),
-                (x2 - x0),
-            ]);
-            let d_mat = shell_rest_tangent_matrix(&dx);
-            // When UV data exists, rotate d_mat to align with the UV first-edge
-            // direction and apply shrink. This preserves UV orientation for
-            // Baraff-Witkin anisotropy while keeping F ≈ I at rest.
-            let d_mat = if let Some(uv) = uv.as_ref() {
-                let uv_e0 = uv[i].column(1) - uv[i].column(0);
-                let lu0 = uv_e0.norm();
-                if lu0 > 0.0 {
-                    let uv_dir = uv_e0 / lu0;
-                    // Rotation from (1,0) to uv_dir
-                    let rot = Matrix2::<f32>::new(
-                        uv_dir[0], -uv_dir[1],
-                        uv_dir[1],  uv_dir[0],
-                    );
-                    let face_param = &face_params[face_props[i].param_index as usize];
-                    debug_assert!(
-                        face_param.shrink_x > 0.0 && face_param.shrink_y > 0.0,
-                        "FaceParam::shrink_x/shrink_y uninitialized"
-                    );
-                    let shrink = Matrix2::<f32>::new(
-                        face_param.shrink_x, 0.0,
-                        0.0, face_param.shrink_y,
-                    );
-                    shrink * rot * d_mat
+    let (inv_rest2x2, exclude_face): (Vec<Matrix2<f32>>, Vec<u8>) =
+        (0..mesh.mesh.mesh.shell_face_count)
+            .into_par_iter()
+            .map(|i| {
+                let f = mesh.mesh.mesh.face.column(i);
+                // Compute rest-pose from 3D geometry projected into tangent plane
+                let (x0, x1, x2) = (
+                    rest_v.column(f[0]),
+                    rest_v.column(f[1]),
+                    rest_v.column(f[2]),
+                );
+                let dx = Matrix3x2::<f32>::from_columns(&[
+                    (x1 - x0).map(f32::from),
+                    (x2 - x0).map(f32::from),
+                ]);
+                let d_mat = shell_rest_tangent_matrix(&dx);
+                // When UV data exists, rotate d_mat to align with the UV first-edge
+                // direction and apply shrink. This preserves UV orientation for
+                // Baraff-Witkin anisotropy while keeping F ≈ I at rest.
+                let d_mat = if let Some(uv) = uv.as_ref() {
+                    let uv_e0 = (uv[i].column(1) - uv[i].column(0)).map(f32::from);
+                    let lu0 = uv_e0.norm();
+                    if lu0 > 0.0 {
+                        let uv_dir = uv_e0 / lu0;
+                        // Rotation from (1,0) to uv_dir
+                        let rot = Matrix2::<f32>::new(uv_dir[0], -uv_dir[1], uv_dir[1], uv_dir[0]);
+                        let face_param = &face_params[face_props[i].param_index as usize];
+                        debug_assert!(
+                            face_param.shrink_x > 0.0 && face_param.shrink_y > 0.0,
+                            "FaceParam::shrink_x/shrink_y uninitialized"
+                        );
+                        let shrink =
+                            Matrix2::<f32>::new(face_param.shrink_x, 0.0, 0.0, face_param.shrink_y);
+                        shrink * rot * d_mat
+                    } else {
+                        d_mat
+                    }
                 } else {
                     d_mat
+                };
+                if exclude_singular {
+                    let (inv, ex) = invert_or_exclude2(&d_mat);
+                    (inv, ex as u8)
+                } else {
+                    (invert_rest_or_panic2(&d_mat, i, [f[0], f[1], f[2]]), 0u8)
                 }
-            } else {
-                d_mat
-            };
-            if exclude_singular {
-                let (inv, ex) = invert_or_exclude2(&d_mat);
-                (inv, ex as u8)
-            } else {
-                (invert_rest_or_panic2(&d_mat, i, [f[0], f[1], f[2]]), 0u8)
-            }
-        })
-        .unzip();
+            })
+            .unzip();
 
     let tet_columns: Vec<_> = mesh.mesh.mesh.tet.column_iter().collect();
     let (inv_rest3x3, exclude_tet): (Vec<Matrix3<f32>>, Vec<u8>) = tet_columns
@@ -447,9 +442,9 @@ pub(crate) fn compute_inv_rest(
             let s = tet_param.shrink;
             debug_assert!(s > 0.0, "TetParam::shrink uninitialized");
             let mat = s * Matrix3::<f32>::from_columns(&[
-                (x1 - x0),
-                (x2 - x0),
-                (x3 - x0),
+                (x1 - x0).map(f32::from),
+                (x2 - x0).map(f32::from),
+                (x3 - x0).map(f32::from),
             ]);
             if exclude_singular {
                 // A streamed rest frame can fold a tet through a near-singular
@@ -876,9 +871,9 @@ pub fn build(
     }
 
     // Populate rod-bend rest angle for interior rod vertices whose adjacent
-    // rod-edges request rest-from-geometry. Matches the device-side gate at
-    // src/cpp/energy/energy.cu:333: vertex has exactly 2 rod edges and 0
-    // faces.
+    // rod-edges request rest-from-geometry. Matches the device-side gate the
+    // rod-bend site is dispatched under: a vertex with exactly 2 rod edges and
+    // 0 faces.
     for j in 0..n_vert {
         let adj_edges: Vec<usize> = mesh.mesh.neighbor.vertex.edge[j]
             .iter()
@@ -907,15 +902,20 @@ pub fn build(
         let edge_1 = mesh.mesh.mesh.edge.column(adj_edges[1]);
         let other_0 = if edge_0[0] == j { edge_0[1] } else { edge_0[0] };
         let other_1 = if edge_1[0] == j { edge_1[1] } else { edge_1[0] };
-        // Subtract in f32 directly: vertex columns are f32, matching the
-        // runtime bend energy in energy.cu which operates on f32 vertex
-        // positions. `bend_rest_v` is the reference rest shape for a
-        // reference rod (and the initial vert everywhere else).
+        // Subtract the stored vertex columns directly, which is the order the
+        // runtime rod bend energy uses: `rod_bend_angle` in
+        // `kernels/energy/model/rod_bend.kernel.cpp` forms both edge vectors as
+        // differences of the positions it was handed. Reproducing that order
+        // here is what makes the stored rest angle match the runtime theta, so
+        // `theta - rest_angle` is zero at frame 0 and the rod does not twitch
+        // with `bend_rest_from_geometry` on. `bend_rest_v` is the reference
+        // rest shape for a reference rod (and the initial vert everywhere
+        // else).
         let v_other_0 = bend_rest_v.column(other_0);
         let v_j = bend_rest_v.column(j);
         let v_other_1 = bend_rest_v.column(other_1);
-        let e0 = v_other_0 - v_j;
-        let e1 = v_other_1 - v_j;
+        let e0 = (v_other_0 - v_j).map(f32::from);
+        let e1 = (v_other_1 - v_j).map(f32::from);
         let n0 = e0.norm();
         let n1 = e1.norm();
         if n0 <= 0.0 || n1 <= 0.0 {
@@ -1029,8 +1029,9 @@ pub fn build(
     // A grain is a loose vertex with no incident element (no face, no
     // rod-edge, no tet); the face/rod/tet/PDRD mass aggregation above
     // contributes nothing to it, so without this pass its mass stays 0.
-    // A zero-mass vertex has zero inertia force/Hessian (energy.cu:246-247),
-    // so gravity is inert and the diagonal block is singular. The same
+    // A zero-mass vertex has zero inertia force/Hessian, since
+    // `kernels/energy/vertex_force.kernel.cpp` scales both by `mass`, so
+    // gravity is inert and the diagonal block is singular. The same
     // predicate gates the per-grain VertexParam below. Matches the device
     // gate for an isolated vertex: no faces and no rod edges (the rod-bend
     // path also checks tet-free). `neighbor.vertex.edge` ranges over the
@@ -1064,7 +1065,8 @@ pub fn build(
     // to ~0 (a silent Zeno hang). Give each massless stitch vertex the mass of
     // the element it is sewn to (the largest mass in its seam) - the build-time
     // analog of the contact barrier's static-side max-mass substitution
-    // (barrier.cu::compute_stiffness).
+    // (`kernels/barrier/contact_stiffness.kernel.cpp`, which substitutes the
+    // pair's largest mass for a zero one).
     for seam in constraint.stitch.iter() {
         let seam_mass = seam
             .index
@@ -1165,8 +1167,9 @@ pub fn build(
                 // assigns it a valid param_index (without this it stays 0,
                 // an out-of-bounds read of vertex_params[0] in a pure cloud
                 // where temp_vertex_params is otherwise empty), and feeds
-                // offset = grain radius to the point-point barrier
-                // (contact.cu:277). Friction is the inter-grain coefficient.
+                // offset = grain radius to the point-point barrier, which
+                // reads it as `VertexParam::offset`. Friction is the
+                // inter-grain coefficient.
                 Some(VertexParam {
                     ghat: sand.contact_gap,
                     offset: sand.grain_radius,
@@ -1203,7 +1206,7 @@ pub fn build(
         .into_par_iter()
         .enumerate()
         .map(|(i, hinge)| {
-            let x = vertex.column(hinge[0]) - vertex.column(hinge[1]);
+            let x = (vertex.column(hinge[0]) - vertex.column(hinge[1])).map(f32::from);
             let length = x.norm();
             // One definition of the hinge average, shared with the
             // per-frame animated path so the two cannot diverge.
@@ -1276,12 +1279,13 @@ pub fn build(
             // when the group's Rest Angle source is Flat.
             let from_reference = !bend_mask.is_empty() && bend_mask[hinge[0]];
             let rest_angle = if from_geometry || from_reference {
-                // Mirror the device-side `remap` in dihedral_angle.hpp:14
-                // before calling face_dihedral_angle: (h2, h1, h0, h3).
-                let v0 = bend_rest_v.column(hinge[2]).into_owned();
-                let v1 = bend_rest_v.column(hinge[1]).into_owned();
-                let v2 = bend_rest_v.column(hinge[0]).into_owned();
-                let v3 = bend_rest_v.column(hinge[3]).into_owned();
+                // Mirror the device-side `shell_bend_remap`
+                // (`kernels/energy/model/shell_bend.kernel.cpp`) before taking
+                // the dihedral angle: (h2, h1, h0, h3).
+                let v0 = bend_rest_v.column(hinge[2]).map(f32::from);
+                let v1 = bend_rest_v.column(hinge[1]).map(f32::from);
+                let v2 = bend_rest_v.column(hinge[0]).map(f32::from);
+                let v3 = bend_rest_v.column(hinge[3]).map(f32::from);
                 signed_dihedral_angle(&v0, &v1, &v2, &v3)
             } else {
                 0.0
@@ -1372,9 +1376,9 @@ pub fn build(
     // Compact enabled displacement-group locks into physical-mass groups. A
     // massless vertex has no contribution to either the center of mass or the
     // best-fit inertia, so it deliberately stays outside this map. Initial
-    // positions and each record's `anchor` give the CUDA side a fixed
-    // reference, so every relative coordinate is formed as a difference
-    // against it rather than from an absolute position.
+    // positions and each record's `anchor` let the device form every relative
+    // coordinate as a difference against a nearby reference point rather than
+    // from two absolute coordinates.
     const TRANSLATION_LOCK_UNSET: u32 = u32::MAX;
     let mut translation_locks = Vec::<TranslationLock>::new();
     let mut translation_lock_index = vec![TRANSLATION_LOCK_UNSET; n_vert];
@@ -1672,7 +1676,7 @@ pub fn build(
         index_sum += row.len();
     }
 
-    // ---- Slot-replay assembly tables. Precompute the FixedCSRMat
+    // ---- Slot-replay assembly tables (item 3). Precompute the FixedCSRMat
     // value-slot of every 3x3 block each topology-fixed element writes, so the
     // assembly kernels can replace FixedCSRMat::push's per-block row search with
     // a direct push_at(slot). Built AFTER the fixed sparsity (including the
@@ -1694,8 +1698,8 @@ pub fn build(
         rod_bend_hess_slots,
         stitch_hess_slots,
     ) = if slot_replay {
-        // Sentinel MUST match the 0xFFFFFFFFu literal in
-        // utility::atomic_embed_hessian_at (cpp/utility/utility.hpp).
+        // Sentinel MUST match the 0xFFFFFFFFu literal every Hessian scatter
+        // body in `kernels/utility/` tests a slot against.
         const FIXED_SLOT_SENTINEL: u32 = 0xFFFF_FFFF;
         // Row-major value base offset of each CSR row, mirroring the flat
         // FixedCSRMat `value` layout: row i occupies [row_offset[i],
@@ -1707,7 +1711,7 @@ pub fn build(
         // Mirror FixedCSRMat::push: only i <= j writes; the lower triangle is a
         // no-op, encoded as the sentinel. Every upper-triangle element block is
         // registered in the fixed sparsity by the insert loops above, so a miss
-        // is a builder bug and panics (this is the host assert that
+        // is a builder bug and panics (this is the M2 host assert that
         // fixed_index_table[i][pos] == j for every emitted slot).
         let slot_of = |i: usize, j: usize| -> u32 {
             if i > j {
@@ -1949,6 +1953,7 @@ pub fn make_param(args: &SimArgs) -> data::ParamSet {
     let wind = Vec3f::new(args.wind[0], args.wind[1], args.wind[2]);
     data::ParamSet {
         time: 0.0,
+        time_f32: 0.0,
         disable_contact: args.disable_contact,
         inactive_momentum: args.inactive_momentum,
         air_friction: args.air_friction,
@@ -2231,7 +2236,9 @@ pub fn rederive_animated_tables(
         // zero, so a schedule or a spatial map that starts at zero and rises
         // later would otherwise pass there and be discarded here: the device
         // drops warp and weft outright when the hinge has no UV direction
-        // (`HingeParam::directional_bend` in cpp/data.hpp).
+        // (`shell_bend_directional` in
+        // `kernels/energy/model/shell_bend_stiffness.kernel.cpp` returns `bend`
+        // alone for a negative `uv_edge_sin2`).
         assert!(
             !directional_bending_needs_uv(
                 hinge_props[i].uv_edge_sin2,
@@ -2300,7 +2307,9 @@ pub(crate) fn averaged_vertex_param(
 /// Whether a hinge asks for directional bending it has no direction for.
 ///
 /// The device drops warp and weft outright when the hinge carries the no-UV
-/// sentinel (`HingeParam::directional_bend` in `cpp/data.hpp`), so a scene that
+/// sentinel (`shell_bend_directional` in
+/// `kernels/energy/model/shell_bend_stiffness.kernel.cpp` returns `bend` alone
+/// for a negative `uv_edge_sin2`), so a scene that
 /// asks for anisotropy and cannot supply a direction is an authoring error
 /// rather than something to discard in silence. One definition, checked at
 /// build AND at every animated keyframe: the build sees only the value at time

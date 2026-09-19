@@ -9,8 +9,11 @@ $Example = "EXAMPLE_PLACEHOLDER"
 $Iteration = "ITERATION_PLACEHOLDER"
 $IterationNum = "ITERATION_NUM_PLACEHOLDER"
 
-# Set up environment like start.bat does (use local CUDA from build-win-native)
-$env:PATH = "C:\ppf-contact-solver\target\release;C:\ppf-contact-solver\crates\ppf-cts-solver\src\cpp\build\lib;C:\ppf-contact-solver\build-win-native\cuda\bin;C:\ppf-contact-solver\build-win-native\python;C:\ppf-contact-solver\build-win-native\python\Scripts;C:\ppf-contact-solver\build-win-native\mingit\cmd;" + $env:PATH
+# Set up environment like start.bat does (use local CUDA from build-win-native).
+# build.bat builds the CUDA backend into target\cuda\release, the directory
+# build.bat's own launcher puts first on PATH; the frontend resolves the solver
+# through the .ppf-backend markers under target\<backend>, not through PATH.
+$env:PATH = "C:\ppf-contact-solver\target\cuda\release;C:\ppf-contact-solver\crates\ppf-cts-compute\cuda\build\lib;C:\ppf-contact-solver\build-win-native\cuda\bin;C:\ppf-contact-solver\build-win-native\python;C:\ppf-contact-solver\build-win-native\python\Scripts;C:\ppf-contact-solver\build-win-native\mingit\cmd;" + $env:PATH
 $env:PYTHONPATH = "C:\ppf-contact-solver;" + $env:PYTHONPATH
 
 cd C:\ppf-contact-solver

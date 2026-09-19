@@ -647,30 +647,46 @@ class FixedSession:
         """
         Utils.check_gpu()
 
-        # Driver version check + error message templating live in Rust;
-        # detection (`nvidia-smi --query-gpu=driver_version`) stays in
-        # Python because it shells out.
-        err = _rust.validate_driver_version(Utils.get_driver_version(), 520)
-        if err is not None:
-            raise ValueError(err)
+        from . import get_backend
 
-        nvidia_smi_dir = os.path.join(self.info.path, "nvidia-smi")
-        os.makedirs(nvidia_smi_dir, exist_ok=True)
+        if get_backend() == "cuda":
+            # Ask the BACKEND THIS RUN USES, not the platform and not the
+            # extension module this process loaded, which in a distribution
+            # carrying several backends can be another backend's. Gated on the
+            # platform, this demands an NVIDIA driver version from a CPU or ROCm
+            # build, which has none and needs none, and its error pre-empts the
+            # backend's own message, which is the one that carries information:
+            # the CPU backend refuses a scene it cannot solve by name and by
+            # count at `initialize()`.
+            #
+            # NVIDIA driver validation and diagnostic dumps apply only to the
+            # CUDA backend. Utils.check_gpu() has already asked the resolved
+            # solver whether its device is usable.
+            err = _rust.validate_driver_version(
+                Utils.get_driver_version(), 520
+            )
+            if err is not None:
+                raise ValueError(err)
 
-        def _dump_nvidia_smi(args: list[str], out_filename: str):
-            out_path = os.path.join(nvidia_smi_dir, out_filename)
-            try:
-                result = subprocess.run(
-                    args, capture_output=True, text=True, timeout=10
-                )
-                if result.returncode == 0:
-                    with open(out_path, "w") as f:
-                        f.write(result.stdout)
-            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                print(f"Warning: Could not export {' '.join(args)} output: {e}")
+            nvidia_smi_dir = os.path.join(self.info.path, "nvidia-smi")
+            os.makedirs(nvidia_smi_dir, exist_ok=True)
 
-        _dump_nvidia_smi(["nvidia-smi"], "nvidia-smi.txt")
-        _dump_nvidia_smi(["nvidia-smi", "-q"], "nvidia-smi-q.txt")
+            def _dump_nvidia_smi(args: list[str], out_filename: str):
+                out_path = os.path.join(nvidia_smi_dir, out_filename)
+                try:
+                    result = subprocess.run(
+                        args, capture_output=True, text=True, timeout=10
+                    )
+                    if result.returncode == 0:
+                        with open(out_path, "w") as f:
+                            f.write(result.stdout)
+                except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                    print(
+                        f"Warning: Could not export {' '.join(args)} output: {e}"
+                    )
+
+            _dump_nvidia_smi(["nvidia-smi"], "nvidia-smi.txt")
+            _dump_nvidia_smi(["nvidia-smi", "-q"], "nvidia-smi-q.txt")
 
         if os.path.exists(self.save_and_quit_file_path()):
             os.remove(self.save_and_quit_file_path())
@@ -802,6 +818,12 @@ class FixedSession:
                             pbar.update(frame - last_frame)
                             last_frame = frame
                         time.sleep(1)
+                # The loop above ended because the child exited, so its status
+                # is available and it is the authoritative verdict: the solver
+                # exits 0 on a clean finish and non-zero on every abort,
+                # including a FATAL raised after initialize succeeded. Read it
+                # BEFORE anything else can overwrite it.
+                returncode = process.poll()
                 err_lines = _rust.read_lines_with_newlines(err_path)
                 if len(err_lines) > 0:
                     print("*** Solver FAILED ***")
@@ -817,6 +839,39 @@ class FixedSession:
                     for line in err_lines:
                         print(line.rstrip())
                     print(f">>> Error log path: {err_path}")
+                # A DEAD SOLVER MUST NOT RETURN A LIVE SESSION. Printing the
+                # failure and returning normally leaves the caller to continue
+                # into preview, stream and export against a truncated frame set
+                # and exit 0, which reports success for a run that aborted. The
+                # sibling branch above already raises when the solver dies
+                # during initialize; this is the same rule applied to a death
+                # after it, which is the case the notebooks meet.
+                #
+                # The test is the exit status alone. Non-empty stderr decides
+                # only what is PRINTED, because the solver writes diagnostics
+                # there on runs that go on to finish cleanly, so raising on it
+                # would fail a successful run.
+                if returncode != 0:
+                    message = self._analyze_solver_error(log_lines, err_lines)
+                    if not message:
+                        message = (
+                            "Solver exited with status "
+                            f"{returncode}; see {err_path}"
+                        )
+                    raise RuntimeError(message)
+                # Crash by absence, the second half of the same rule. The solver
+                # writes `finished.txt` on every normal return from its run
+                # loop, the frames-done and save-and-quit exits included, so a
+                # zero status with no marker is a death that did not manage to
+                # report itself. This is the check every notebook spells as
+                # `if app.ci: assert session.finished()`, which never runs
+                # outside CI; making it here covers every caller of a blocking
+                # start instead, and needs no environment to be true.
+                if not self.finished():
+                    raise RuntimeError(
+                        "Solver exited with status 0 but wrote no completion "
+                        f"marker, so the run did not finish; see {err_path}"
+                    )
 
             fixed_scene = self.fixed_scene
             vals = (
@@ -1615,4 +1670,3 @@ def fixed_session_to_cbor_dict(
         "params": params,
         "pickle_blob": _cbor.chunk_pickle_blob(pickle_blob),
     }
-

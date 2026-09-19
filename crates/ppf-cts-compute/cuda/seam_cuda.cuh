@@ -1,0 +1,534 @@
+// File: seam_cuda.cuh
+// Code: Claude Code
+// Review: Ryoichi Ando (ryoichi.ando@zozo.com)
+// License: Apache v2.0
+
+#pragma once
+
+// The backend seam as nvcc spells it. Reached only through seam.hpp, which is
+// the one file that decides between this prologue and the host one; see the
+// contract and the list of deliberate absences there.
+//
+// Every definition below is a flat `#define`. There is no conditional in this
+// file: the target is already decided by the time it is read.
+
+// ---------------------------------------------------------------------------
+// Inline annotations.
+//
+// THREE NAMES, AND THE DISTINCTION IS LOAD-BEARING. A `__host__ __device__`
+// function template is device code for every type it is instantiated with, so a
+// host caller passing a wider type emits that instantiation on the GPU even
+// though no kernel calls it. That is one of the ways float64 reaches device
+// code, which this solver forbids: GPU compute here is float32 only. So a body
+// that only the device runs must say so, and widening it to both execution
+// spaces is a change in what nvcc compiles rather than a tidy-up.
+//
+// SM_INLINE_DEVICE is the default for a kernel body. The two host-and-device
+// names differ only in the order of the two qualifiers, which nvcc reads
+// identically; they are separate names so a body keeps the token order it was
+// written with and the seam introduces no incidental edit.
+// ---------------------------------------------------------------------------
+
+#define SM_INLINE_DEVICE __device__ inline
+#define SM_INLINE_DEVICE_HOST __device__ __host__ inline
+
+// ---------------------------------------------------------------------------
+// Address spaces. MSL requires one on every pointer and reference; CUDA and the
+// host have a single address space and expand all three to nothing.
+// ---------------------------------------------------------------------------
+
+#define SM_THREAD
+#define SM_DEVICE
+#define SM_THREADGROUP
+
+// ---------------------------------------------------------------------------
+// Math.
+//
+// The float suffix is not decoration. `fabs`, `fmax`, `sqrt` and friends have
+// double overloads, and a promoted argument puts FP64 in the SASS, which the
+// release build's guard rejects.
+// ---------------------------------------------------------------------------
+
+#define SM_ABS fabsf
+#define SM_MAX fmaxf
+#define SM_MIN fminf
+#define SM_SQRT sqrtf
+#define SM_DIV(a, b) ((a) / (b))
+#define SM_FMA fmaf
+#define SM_ACOS acosf
+#define SM_ATAN2(y, x) atan2f((y), (x))
+#define SM_ISNAN isnan
+#define SM_ISINF isinf
+#define SM_NEXTAFTER(a, b) nextafterf((a), (b))
+#define SM_NUMERIC_MAX(T) std::numeric_limits<T>::max()
+#define SM_INFINITY (std::numeric_limits<float>::infinity())
+
+// Trigonometry, exponential and logarithm go through float_math.hpp rather than
+// through the library. The library `sinf`, `cosf`, `expf` and `logf` reduce or
+// scale their argument in 64-bit integer and double arithmetic, so a kernel that
+// merely calls one emits I2F.F64 and DMUL with no `double` anywhere in the
+// source. The `fmath` forms are float throughout.
+//
+// The bounded and periodic sines are separate names because the hardware
+// special-function unit loses the argument's low bits as the argument grows. A
+// caller that can guarantee a bounded argument pays nothing; one that cannot has
+// to reduce first, which is what the periodic form does.
+#define SM_COS fmath::cos_bounded
+#define SM_COS_BOUNDED fmath::cos_bounded
+#define SM_SIN_BOUNDED fmath::sin_bounded
+#define SM_SIN_PERIODIC(x) fmath::sin_periodic(x)
+#define SM_LOG fmath::log
+#define SM_EXP fmath::exp
+
+// ---------------------------------------------------------------------------
+// Bit and lane intrinsics.
+// ---------------------------------------------------------------------------
+
+#define SM_CLZ(value) __clz(value)
+#define SM_POPCOUNT(value) __popc(value)
+
+// SIMD geometry. A CUDA warp is 32 lanes on every architecture this solver
+// ships cubins for.
+#define SM_SIMD_WIDTH 32u
+
+#define SM_SHUFFLE_DOWN(value, offset)                                         \
+    __shfl_down_sync(0xFFFFFFFFu, (value), (offset))
+#define SM_SHUFFLE_UP(value, offset)                                           \
+    __shfl_up_sync(0xFFFFFFFFu, (value), (offset))
+#define SM_SIMD_BALLOT(predicate) __ballot_sync(0xFFFFFFFFu, (predicate))
+
+#define SM_THREADGROUP_BARRIER() __syncthreads()
+
+// ---------------------------------------------------------------------------
+// Atomics.
+//
+// The load and the store are PLAIN dereferences, not atomic intrinsics. Every
+// call site pairs them with an atomic read-modify-write on the same address
+// within one kernel, where a 32-bit aligned access is already indivisible, so
+// what the shared contract asks of them is atomicity of the read-modify-write
+// alone. Substituting an intrinsic here would change the emitted code on a path
+// nothing has asked to change; the Metal prologue routes them through relaxed
+// atomics because MSL types the address as `atomic_uint` and gives no way to
+// read it plainly.
+//
+// The type names here are the plain scalars the buffers hold. The `compute::`
+// table further down types the address as a SLOT instead, and that is the table
+// a neutral kernel body reaches, since a body carries no preprocessor and
+// cannot name a macro at all.
+// ---------------------------------------------------------------------------
+
+#define SM_ATOMIC_UINT unsigned
+#define SM_ATOMIC_FLOAT float
+
+#define SM_ATOMIC_LOAD_UINT(pointer) (*(pointer))
+#define SM_ATOMIC_STORE_UINT(pointer, value) (*(pointer) = (value))
+#define SM_ATOMIC_ADD_UINT(pointer, value) atomicAdd((pointer), (value))
+#define SM_ATOMIC_ADD_FLOAT(pointer, value) atomicAdd((pointer), (value))
+
+// ===========================================================================
+// The `ppf` namespace: the same table as ordinary C++ names.
+//
+// A neutral kernel source (`*.kernel.cpp`, rendered by seam/kernelgen.py) has
+// no preprocessor at all, so it cannot name a macro. It calls these instead,
+// and each backend prologue defines them with that backend's spelling. The
+// replacement text is the same as the macro directly above it, name for name,
+// so a call through either form compiles to the same thing.
+//
+// A function carries two properties a macro does not. It is TYPE CHECKED where
+// it is defined rather than where it is expanded, so a wrong body on one
+// backend is a compile error on that backend's own build rather than at a call
+// site somewhere else. And it fixes the argument type: every one below takes
+// `float`, not a template parameter, which is what keeps a widened argument
+// from emitting a float64 device instantiation, which the float32-only rule
+// for GPU compute forbids.
+//
+// EXECUTION SPACE IS PART OF THE TABLE. Arithmetic is `__host__ __device__`,
+// so an oracle and a kernel run the same body. Everything reaching a warp
+// intrinsic, a threadgroup barrier or `atomicAdd` is `__device__` alone,
+// because nvcc has no host form of it. seam_host.h defines the arithmetic and
+// deliberately defines none of the lane operations; the reason is written down
+// there.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// The device QUEUE a host launcher orders its work on.
+//
+// DELIBERATELY NOT A SEAM NAME, and the difference is the point. Everything in
+// the seam namespaces below is reachable from a neutral kernel body, so every
+// target must declare it and rule 6 of check-shared-wiring.py fails the build
+// when one does not. A queue is the opposite kind of name: it appears only in
+// the HOST declaration a launcher is declared with, no kernel body names one,
+// and the Metal driver is handed a concatenated shader source that reads none
+// of those headers, so there is no MSL counterpart to require. It sits at file
+// scope for that reason rather than by oversight.
+//
+// The alias is what lets a launcher declaration in the neutral tree name a
+// queue without naming a backend, exactly as `ArenaVec<T>` lets one name an
+// owning array without naming the allocator that reserves it. nvcc's own
+// spelling stays underneath, so a definition in a `.cu` written against
+// `cudaStream_t` and a declaration written against `DeviceQueue` declare the
+// same function.
+//
+// `cuda_runtime.h` is named explicitly rather than left to nvcc's implicit
+// pre-include, so the alias resolves wherever this prologue is read.
+// ---------------------------------------------------------------------------
+
+#include <cuda_runtime.h>
+
+using DeviceQueue = cudaStream_t;
+
+#include "float_math.hpp"
+
+#include <limits>
+
+namespace fmath {
+
+// --- Arithmetic ------------------------------------------------------------
+
+__host__ __device__ inline float abs(float x) {
+    return ::fabsf(x);
+}
+__host__ __device__ inline float max(float a, float b) {
+    return ::fmaxf(a, b);
+}
+__host__ __device__ inline float min(float a, float b) {
+    return ::fminf(a, b);
+}
+__host__ __device__ inline float sqrt(float x) {
+    return ::sqrtf(x);
+}
+__host__ __device__ inline float div(float a, float b) {
+    return a / b;
+}
+__host__ __device__ inline float fma(float a, float b, float c) {
+    return ::fmaf(a, b, c);
+}
+__host__ __device__ inline float acos(float x) {
+    return ::acosf(x);
+}
+__host__ __device__ inline float atan2(float y, float x) {
+    return ::atan2f(y, x);
+}
+__host__ __device__ inline bool isnan(float x) {
+    return ::isnan(x);
+}
+__host__ __device__ inline bool isinf(float x) {
+    return ::isinf(x);
+}
+__host__ __device__ inline float nextafter(float a, float b) {
+    return ::nextafterf(a, b);
+}
+
+// cos_bounded, sin_bounded, sin_periodic, log and exp are NOT here, and their
+// absence is the point: float_math.hpp, included above, declares them in this
+// same namespace, so this file adds the rest of the table around them rather
+// than forwarding to them. They live there because the library forms reduce or
+// scale their argument in 64-bit integer and double arithmetic, so a kernel
+// that merely calls one emits I2F.F64 and DMUL with no `double` in the source.
+// The bounded and periodic sines are separate names because the hardware
+// special-function unit loses the argument's low bits as the argument grows.
+
+__host__ __device__ inline float infinity() {
+    return std::numeric_limits<float>::infinity();
+}
+__host__ __device__ inline float float_max() {
+    return std::numeric_limits<float>::max();
+}
+
+}  // namespace fmath
+
+// --- Bit intrinsics --------------------------------------------------------
+//
+// `bits::` rather than `compute::`: these are integer, so `fmath::` is the
+// wrong side of the float line, and they compute the same value on every
+// target, so `compute::` would overstate what varies.
+
+namespace bits {
+
+__device__ inline int clz(unsigned value) {
+    return __clz(static_cast<int>(value));
+}
+__device__ inline unsigned popcount(unsigned value) {
+    return static_cast<unsigned>(__popc(value));
+}
+// The 64-bit overload exists so a caller counting a `compute::ballot_t` keeps
+// compiling when that type is 64 bits on another target. It is unreachable on
+// this one, where `ballot_t` is `unsigned` and the overload above wins.
+__device__ inline unsigned popcount(unsigned long long value) {
+    return static_cast<unsigned>(__popcll(value));
+}
+
+}  // namespace bits
+
+// --- SIMD geometry ---------------------------------------------------------
+//
+// `compute::`, because a lane is exactly what differs per backend: the width,
+// the shuffle and the ballot are the hardware's, and a target with one thread
+// per body has no meaning for any of them at all.
+
+namespace compute {
+
+// A CUDA warp is 32 lanes on every architecture this solver ships cubins for.
+constexpr unsigned simd_width = 32u;
+
+// GENERIC OVER THE SHUFFLED TYPE, because a lane shuffle moves a value between
+// lanes and does not care what the value means. SM_SHUFFLE_DOWN below is a
+// macro and so was type-generic by construction; these carry the same
+// replacement text and must stay as generic, or a body it already serves stops
+// compiling. `ppf_warp_reduce` (primitives/reduce.kernel.cpp) is the caller that
+// needs it: it is a template over the reduced type and kernels/reduce.cu
+// instantiates it on float, unsigned and char.
+//
+// Routing a wider type through an `unsigned` parameter instead would be a
+// silent wrong answer rather than a compile error: a float argument would
+// CONVERT, truncating its fractional part on the way in and back, inside every
+// reduction a caller builds on this.
+//
+// The float32-only rule applies to a caller, not here:
+// __shfl_down_sync has a double overload, so an instantiation on double would
+// emit FP64, which is exactly the exposure the macro already had and which
+// build.rs's fp64_guard fails the build on.
+template <class T>
+__device__ inline T shuffle_down(T value, unsigned offset) {
+    return __shfl_down_sync(0xFFFFFFFFu, value, offset);
+}
+template <class T>
+__device__ inline T shuffle_up(T value, unsigned offset) {
+    return __shfl_up_sync(0xFFFFFFFFu, value, offset);
+}
+// THE BALLOT'S TYPE IS NAMED, BECAUSE IT IS NOT THE SAME WIDTH EVERYWHERE.
+//
+// A ballot returns one bit per lane, so its type is a function of `simd_width`
+// and not of the target's word size. On CUDA and on Metal a subgroup is 32
+// lanes and this is `unsigned`; an AMD wave64 target needs 64 bits and a
+// neutral body that spelled `unsigned` would silently drop the upper half of
+// the group.
+//
+// It is a TYPEDEF rather than a fixed spelling so that the one neutral body
+// that ballots (primitives/radix.kernel.cpp) can form its lane mask without
+// naming a width. Nothing changes for this target: `ballot_t` is `unsigned`
+// here, and the emitted code is what it was when the return type was written
+// out.
+using ballot_t = unsigned;
+
+__device__ inline ballot_t simd_ballot(bool predicate) {
+    return __ballot_sync(0xFFFFFFFFu, predicate);
+}
+
+__device__ inline void threadgroup_barrier() {
+    __syncthreads();
+}
+
+// ---------------------------------------------------------------------------
+// THE BLOCK FOLD. Every lane's value summed across the group, the total left on
+// lane 0, and `is_block_writer` naming that lane.
+//
+// IT IS A `compute::` NAME BECAUSE ITS MEANING DIFFERS PER BACKEND, which is
+// what that namespace is for: a warp tree plus a walk over the warp partials
+// here, an in-order accumulation into the same scratch on the host, whose group
+// shim runs lanes one after another. The two agree on WHAT is computed and
+// differ on where the answer lands, which is why the writer lane is a name and
+// not a literal.
+//
+// THE CROSS-WARP STEP IS A DETERMINISTIC WALK, NOT AN ATOMIC. Each warp leader
+// stores its partial and lane 0 sums them in ascending warp order, so the
+// association is fixed and this fold gives the same bits run to run. An
+// `atomicAdd` would be shorter and would make the order the scheduler's, which
+// is exactly what a reduction feeding a convergence test must not have.
+//
+// `scratch` holds one element PER WARP, which the entry states with
+// `[[seam::scratch(N)]]`.
+template <class T>
+__device__ inline T block_sum(T value, T *scratch, unsigned thread_index,
+                              unsigned threads_per_group) {
+    for (unsigned offset = simd_width / 2u; offset > 0u; offset >>= 1) {
+        value += shuffle_down(value, offset);
+    }
+    const unsigned warps =
+        (threads_per_group + simd_width - 1u) / simd_width;
+    if (warps == 1u) {
+        return value;
+    }
+    const unsigned lane = thread_index & (simd_width - 1u);
+    const unsigned warp = thread_index / simd_width;
+    if (lane == 0u) {
+        scratch[warp] = value;
+    }
+    threadgroup_barrier();
+    T total = scratch[0];
+    if (thread_index == 0u) {
+        for (unsigned w = 1u; w < warps; ++w) {
+            total += scratch[w];
+        }
+    }
+    return total;
+}
+
+__device__ inline bool is_block_writer(unsigned thread_index,
+                                       unsigned threads_per_group) {
+    (void)threads_per_group;
+    return thread_index == 0u;
+}
+
+// The bounded fold `seam_host.h` documents: `lanes` consecutive threads share
+// one work item and this folds their values into the first of them.
+//
+// THE ORDER IS THE WIDTH-`lanes` TREE, and it is load-bearing rather than
+// incidental: the solver's curvature round-off bound is calibrated against the
+// round-off of THIS sum, so the Metal arm reproduces this association exactly.
+// `scratch` is unused here, the shuffle carrying the partials; it is in the
+// signature because the host arm has no shuffle and must accumulate somewhere.
+template <class T>
+__device__ inline T lane_reduce_add(T value, T *scratch, unsigned lane,
+                                    unsigned lanes) {
+    (void)scratch;
+    (void)lane;
+    for (unsigned reach = lanes / 2u; reach > 0u; reach >>= 1) {
+        value += shuffle_down(value, reach);
+    }
+    return value;
+}
+// Lane 0 of each run, where the tree above leaves the total. The host arm says
+// the LAST lane, which is why this is a name and not a literal.
+__device__ inline bool is_lane_writer(unsigned lane, unsigned lanes) {
+    return (lane % lanes) == 0u;
+}
+
+// --- Atomics ---------------------------------------------------------------
+//
+// `compute::` for the same reason the lane names above are: what an atomic
+// read-modify-write costs and how the address is typed is the backend's, and
+// a target running one thread through a body reaches the same answer with a
+// plain read, add and write back.
+//
+// The load and the store are PLAIN dereferences, not atomic intrinsics. Every
+// call site pairs them with an atomic read-modify-write on the same address
+// within one kernel, where a 32-bit aligned access is already indivisible, so
+// what the shared contract asks of them is atomicity of the read-modify-write
+// alone. The Metal prologue routes them through relaxed atomics because MSL
+// types the address as `atomic_uint` and gives no way to read it plainly.
+//
+// Every operation returns the PRE-IMAGE, which is CUDA's native convention and
+// the one the shared contract adopts.
+//
+// AN ACCUMULATOR SLOT IS ITS OWN TYPE, AND THE OPERATIONS BELOW ARE THE ONLY
+// WAY TO REACH ONE.
+//
+// A slot holds the same 4 bytes an ordinary `float` or `unsigned` buffer holds,
+// and the same bytes are reached plainly elsewhere: one kernel clears a buffer
+// with an ordinary store, a second accumulates into it, and the host reads it
+// back. Atomicity is a property of how a PARTICULAR kernel reaches the storage,
+// so it is carried by the parameter type and not by the buffer. One entry
+// declares `compute::atomic_float_t *` over an allocation and another declares
+// `float *` over the same one, and both are correct.
+//
+// Three properties hold, and a reader can check each of them in this file. The
+// storage member is private and the operations below are its only friends, so a
+// plain read, a plain store, a compound assignment, a slot-to-slot copy and a
+// conversion to `float *` are each a compile error. Only the default
+// constructor is declared and it is defaulted, so the type is trivially default
+// constructible and standard layout: an array of slots is valid, a `__shared__`
+// array of them is valid, and the raw bytes an arena hands out are valid
+// storage for one. And each class is 4 bytes at 4-byte alignment, asserted
+// below, which is what the `[[seam::pod(4)]]` on every entry field naming one
+// declares. `&pointer->storage` is therefore the address `pointer` already
+// held, which is what the intrinsics below are handed.
+//
+// A CAST STILL REACHES THE STORAGE, AND NOTHING REFUSES ONE.
+// `*(float *) pointer += value` compiles here. What the type gives is that
+// every ordinary spelling of a non-atomic touch is refused, so reaching the
+// storage plainly costs a cast, which is visible at the call site and greppable
+// across the tree.
+//
+// The Metal prologue declares no class of its own: `atomic_float` and
+// `atomic_uint` are already distinct types in MSL, with no conversion to the
+// scalar and no assignment, so it names them and its table is complete. See
+// metal/shader_compiler.mm.
+
+class AtomicFloatSlot;
+class AtomicUintSlot;
+
+// Declared ahead of the classes so that each friend declaration inside them
+// names a function this namespace already has rather than introducing one.
+__device__ inline float atomic_add(AtomicFloatSlot *pointer, float value);
+__device__ inline unsigned atomic_add(AtomicUintSlot *pointer, unsigned value);
+__device__ inline unsigned atomic_load(AtomicUintSlot *pointer);
+__device__ inline void atomic_store(AtomicUintSlot *pointer, unsigned value);
+__device__ inline void atomic_max(AtomicUintSlot *pointer, float value);
+
+class AtomicFloatSlot {
+  public:
+    AtomicFloatSlot() = default;
+    AtomicFloatSlot(const AtomicFloatSlot &) = delete;
+    AtomicFloatSlot &operator=(const AtomicFloatSlot &) = delete;
+
+  private:
+    float storage;
+
+    friend __device__ inline float atomic_add(AtomicFloatSlot *pointer,
+                                              float value);
+};
+
+class AtomicUintSlot {
+  public:
+    AtomicUintSlot() = default;
+    AtomicUintSlot(const AtomicUintSlot &) = delete;
+    AtomicUintSlot &operator=(const AtomicUintSlot &) = delete;
+
+  private:
+    unsigned storage;
+
+    friend __device__ inline unsigned atomic_add(AtomicUintSlot *pointer,
+                                                 unsigned value);
+    friend __device__ inline unsigned atomic_load(AtomicUintSlot *pointer);
+    friend __device__ inline void atomic_store(AtomicUintSlot *pointer,
+                                               unsigned value);
+    friend __device__ inline void atomic_max(AtomicUintSlot *pointer,
+                                             float value);
+};
+
+// The seam names, which are what a neutral kernel body and an entry argument
+// record spell. The class names above are deliberately not the seam names: a
+// backend defines the seam name as whatever that backend's slot is, which on
+// this target is the class and on Metal is `atomic_float`.
+using atomic_uint_t = AtomicUintSlot;
+using atomic_float_t = AtomicFloatSlot;
+
+static_assert(sizeof(atomic_float_t) == 4 && alignof(atomic_float_t) == 4,
+              "a slot must lay out as the 4 bytes its buffer holds");
+static_assert(sizeof(atomic_uint_t) == 4 && alignof(atomic_uint_t) == 4,
+              "a slot must lay out as the 4 bytes its buffer holds");
+
+__device__ inline unsigned atomic_load(atomic_uint_t *pointer) {
+    return pointer->storage;
+}
+__device__ inline void atomic_store(atomic_uint_t *pointer, unsigned value) {
+    pointer->storage = value;
+}
+__device__ inline unsigned atomic_add(atomic_uint_t *pointer, unsigned value) {
+    return atomicAdd(&pointer->storage, value);
+}
+__device__ inline float atomic_add(atomic_float_t *pointer, float value) {
+    return atomicAdd(&pointer->storage, value);
+}
+
+// A LARGEST-WINS ACCUMULATOR OVER UINT-TYPED STORAGE, FOR NON-NEGATIVE VALUES.
+//
+// TWO THINGS ABOUT THE SIGNATURE ARE FORCED RATHER THAN CHOSEN, and both come
+// from MSL. The storage is `atomic_uint_t` and not `atomic_float_t` because
+// Metal has no float atomic max at all; what it has is an integer one, and the
+// IEEE-754 bit pattern of a NON-NEGATIVE float orders the same way as the float
+// itself, so the integer maximum of the bits IS the maximum of the values.
+// A negative argument compares inverted and would silently return the wrong
+// extremum, which is why the precondition is stated rather than assumed:
+// callers pass a magnitude.
+//
+// AND IT RETURNS NOTHING, unlike every other operation here, so that no caller
+// needs a bitcast. A neutral kernel body has no spelling for one; the pattern
+// this serves accumulates on the device and converts the bits back to float on
+// the HOST, after the readback, where a bitcast is ordinary code.
+__device__ inline void atomic_max(atomic_uint_t *pointer, float value) {
+    atomicMax(&pointer->storage, __float_as_uint(value));
+}
+
+}  // namespace compute

@@ -4,7 +4,7 @@
 # License: Apache v2.0
 #
 # Lock in the launcher to Rust-binary handshake. Distinct from
-# bl_connect_local in that it (a) asserts the binary on disk is the
+# bl_connect_linux_native in that it (a) asserts the binary on disk is the
 # Rust port (target/release/ppf-cts-server, not the retired server.py)
 # and (b) reads the binary's --version output to verify the reported
 # PROTOCOL_VERSION matches what the addon negotiates against. The
@@ -19,13 +19,14 @@ import os
 import re
 import subprocess
 
+from . import _driver_lib as dl
 from . import _runner as r
 from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
 # Launcher -> Rust-binary handshake + --version; backend-agnostic.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 # Linux runs the Rust binary directly via the LOCAL backend. macOS
 # usually goes through SSH/Docker; Windows uses bl_connect_win_native
 # which probes ppf-cts-server.exe at a different code path.
@@ -60,13 +61,11 @@ try:
     client = __import__(pkg + ".core.client", fromlist=["communicator"])
     groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
     root = groups.get_addon_data(bpy.context.scene)
-    root.ssh_state.server_type = "LOCAL"
-    root.ssh_state.local_path = <<LOCAL_PATH_REPR>>
-    root.ssh_state.docker_port = <<SERVER_PORT>>
+    SOLVER_ROOT = <<LOCAL_PATH_REPR>>
+    SERVER_PORT = <<SERVER_PORT>>
 
     com = client.communicator
-    com.connect_local(root.ssh_state.local_path,
-                      server_port=root.ssh_state.docker_port)
+    connect_platform_native(com, pkg, root.ssh_state, SOLVER_ROOT, SERVER_PORT)
 
     deadline = time.time() + 20.0
     while time.time() < deadline:
@@ -91,16 +90,27 @@ except Exception as exc:
 def build_driver(ctx: r.ScenarioContext) -> str:
     repo_root = REPO_ROOT_POSIX
     return (
-        _DRIVER_TEMPLATE
+        dl.BUILD_FAILURE_LIB
+        + _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH_REPR>>", repr(repo_root))
         .replace("<<SERVER_PORT>>", str(ctx.server_port))
     )
 
 
 def _binary_path() -> str:
-    """Resolve the production server binary on this host."""
+    """Resolve the production server binary on this host.
+
+    ASKED OF THE ORCHESTRATOR, not spelled out. `target/release` is one of
+    several directories a build lands in, and it is not the one a CPU build or
+    a multi-backend build uses; the orchestrator already resolves which
+    directory this host's server comes from, by the frontend's own rule, and
+    drives that binary. Naming a path here instead reported "not built" on a
+    host that had built one.
+    """
+    import orchestrator
+
     name = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
-    return os.path.join(REPO_ROOT_POSIX, "target", "release", name)
+    return os.path.join(orchestrator.server_build_dir(), name)
 
 
 def _probe_protocol_version(binary: str, timeout: float = 10.0) -> str | None:

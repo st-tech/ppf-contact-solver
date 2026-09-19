@@ -67,11 +67,15 @@ ppf-cts-core = { path = "../ppf-cts-core", default-features = false }
 
 [features]
 default = []
-# When set, the server hosts the in-process kinematic emulator instead
-# of launching the real CUDA solver. Cascades from ppf-cts-core's
-# workspace-level `emulated` feature so the root solver crate and
-# this crate can't drift out of sync.
-emulated = ["ppf-cts-core/emulated"]
+# Cascade the workspace-level `cpu` flag, as ppf-cts-core's own manifest asks
+# every dependent to. This crate reads it through `ppf_cts_core::utils`: a CPU
+# build must not be asked for an NVIDIA device, and its hardware probe must not
+# report one. Without this line the flag reached here only by cargo unifying
+# features across a workspace build that happened to also select the solver,
+# which is true of the release build and not a property to rest on: `cargo build
+# -p ppf-cts-server --features cpu` would have been an error, and a server built
+# alone would have named the wrong backend on every row it reports.
+cpu = ["ppf-cts-core/cpu"]
 
 [lints]
 workspace = true

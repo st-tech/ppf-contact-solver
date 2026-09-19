@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Fetch cbor2 wheels listed in blender_manifest.toml from PyPI.
 
-The Blender extension manifest references six cbor2 wheels (cp311/cp313
-times macOS arm64 / manylinux x86_64 / Windows amd64). They are NOT
+The Blender extension manifest references ten cbor2 wheels (cp311/cp313
+times macOS arm64 / manylinux x86_64 / manylinux aarch64 / Windows amd64 /
+Windows arm64). They are NOT
 checked into the repo; CI and local installs run this script to pull
 them from files.pythonhosted.org and verify each against the SHA-256
 digest published on PyPI.
@@ -27,12 +28,19 @@ from pathlib import Path
 CBOR2_VERSION = "6.0.1"
 
 # (filename, packages-prefix on files.pythonhosted.org, sha256)
-# Hashes taken from https://pypi.org/pypi/cbor2/6.0.1/json on 2026-05-07.
+# Hashes taken from https://pypi.org/pypi/cbor2/6.0.1/json, the x86_64,
+# amd64 and macOS entries on 2026-05-07 and the aarch64 and arm64 entries
+# on 2026-09-15.
 WHEELS: list[tuple[str, str, str]] = [
     (
         "cbor2-6.0.1-cp311-cp311-macosx_11_0_arm64.whl",
         "32/7d/b2f9cd0c27bce0415a7dec71d0073e29b8e3f5bf45ea25f6874392c24add",
         "4d8dba16aa67ca13aa85849c5cbe4a88a353d6ed28ca8c11afc2ad9bc96b7ea7",
+    ),
+    (
+        "cbor2-6.0.1-cp311-cp311-manylinux_2_28_aarch64.whl",
+        "f2/24/0d42399c25cdf9310f7a980c52a178dcc4cc4cc2786d435601396875ed3a",
+        "3dfe0bf4dbd0e522d0446c5e544b5e43fcb23115996f556b7d02092fc07bb0a1",
     ),
     (
         "cbor2-6.0.1-cp311-cp311-manylinux_2_28_x86_64.whl",
@@ -45,9 +53,19 @@ WHEELS: list[tuple[str, str, str]] = [
         "ce23169d812f37636dbf92af67460a4eee5c340c4b838b883e307ac1cde9f67e",
     ),
     (
+        "cbor2-6.0.1-cp311-cp311-win_arm64.whl",
+        "58/48/f4a9250e17341341d6014cb45e9f5f01990fec00ebf32fd743c48dd99680",
+        "b7958d97f6d8646a336f035cfa7da74eccef4ce4295ae948e2f0f50210c2e8ee",
+    ),
+    (
         "cbor2-6.0.1-cp313-cp313-macosx_11_0_arm64.whl",
         "08/ee/d11300317773bc8e85e23f59fc71c732ba1176d059341588318cab81f501",
         "067d23ac75bfa35bed0e795169139259dc9d9bae503c8ede29740f99b37415f3",
+    ),
+    (
+        "cbor2-6.0.1-cp313-cp313-manylinux_2_28_aarch64.whl",
+        "fb/be/0bc836d8259333277fc532d13197238b7c097e83c8ee3df13e8c5e418ec1",
+        "5df6d0cd72c62dfb300facd6ccb982214fe3376b69f393d0d271e4436fd7b624",
     ),
     (
         "cbor2-6.0.1-cp313-cp313-manylinux_2_28_x86_64.whl",
@@ -58,6 +76,11 @@ WHEELS: list[tuple[str, str, str]] = [
         "cbor2-6.0.1-cp313-cp313-win_amd64.whl",
         "9f/3e/c86f51bc78c211bcf685485a8c888713d714ebd64192435a45b68bef2b0b",
         "897f6fe58d1522608b6b71a7aa964f31c40deed5fff2d00511233bacb396dded",
+    ),
+    (
+        "cbor2-6.0.1-cp313-cp313-win_arm64.whl",
+        "97/e9/4670d40a86ae74b0afcb976e346d5429d745b6780a0407143346b4dab408",
+        "80765e22c387fb489102ed751f5706fc184c9cdb34257df3dab4d393564b00e6",
     ),
 ]
 

@@ -34,3 +34,27 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 Write-Host "Addon installed."
+
+# paramiko INTO BLENDER'S OWN PYTHON, for the same reason the Linux GPU leg
+# installs it: `bl_mcp_connection_refusals` is declared for the real backend on
+# this branch, and its connect-family check drives `connect_ssh`, whose operator
+# polls on `module_exists(["paramiko"])`. A failed poll surfaces as "Operator
+# bpy.ops.ssh.run_command.poll() failed, context is incorrect", which reads like
+# a UI-context bug rather than a missing module, and the scenario's own install
+# call is asynchronous so the check would otherwise race a pip download.
+#
+# Blender's bundled interpreter is the one that matters here, NOT
+# PPF_BUILD_PYTHON: the operator polls inside Blender. Mirrors the addon's
+# install_module(): ensurepip, then pip --target the addon modules dir, which is
+# on Blender's sys.path.
+Write-Host "=== install paramiko into Blender's Python ==="
+& "$env:PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "paramiko install failed (exit $LASTEXITCODE)"
+    exit $LASTEXITCODE
+}
+& "$env:PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "paramiko not importable inside Blender (exit $LASTEXITCODE)"
+    exit $LASTEXITCODE
+}

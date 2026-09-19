@@ -12,7 +12,7 @@
 # Why ``param.toml`` is enough proof:
 #   - Blender state -> encoder -> frontend -> ``param.toml``: the
 #     file's existence with the right key is the witness.
-#   - ``param.toml`` -> ``SimArgs`` -> ``ParamSet``: the emulated
+#   - ``param.toml`` -> ``SimArgs`` -> ``ParamSet``: the solver
 #     Rust binary deserializes ``param.toml`` during build. A missing
 #     or unknown ``friction_mode`` would fail deserialization, and an
 #     unknown value would panic in ``builder.rs::make_param``. So a
@@ -29,6 +29,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -99,7 +104,7 @@ try:
     cloth.add(plane.name)
     cloth.create_pin(plane.name, "AllPin")
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

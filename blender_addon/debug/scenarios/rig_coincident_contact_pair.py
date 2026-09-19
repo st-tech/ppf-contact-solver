@@ -37,9 +37,8 @@
 #   settles which scenes the allowance ADMITS, and admitting this one is only
 #   the precondition here; what the solver then does with it is a separate
 #   question and needs the solver to run.
-#   The emulated tier cannot host it at all: the emulated backend compiles only
-#   `cpp_emul/main.cpp` and has no contact assembly to reach, so this is
-#   `BACKENDS = ("real",)` and runs on the GPU jobs only.
+#   So the check needs a solver that assembles contact and runs a line
+#   search, which is `BACKENDS = ("real",)`, and on CI that is the GPU jobs.
 #
 # WHY `status.cbor` AND NOT THE CRASH DUMP. Not every build of the solver
 # writes the dump, so a check written against it reports a missing file rather
@@ -81,7 +80,7 @@ from . import _runner as r
 
 
 # Real backend only: the reported condition is evaluated in device contact
-# assembly, which the emulated backend does not compile. Selected by the AWS
+# assembly, which the solver does not compile. Selected by the AWS
 # GPU jobs via ``runtests --backend real``.
 BACKENDS = ("real",)
 

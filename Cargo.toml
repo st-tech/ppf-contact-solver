@@ -11,6 +11,7 @@
 resolver = "2"
 members = [
     "crates/ppf-cts-formats",
+    "crates/ppf-cts-compute",
     "crates/ppf-cts-core",
     "crates/ppf-cts-py",
     "crates/ppf-cts-server",
@@ -26,8 +27,9 @@ members = [
 # cargo cdylib: there is no maturin wheel step. `frontend/__init__.py`
 # loads `target/<profile>/lib_ppf_cts_py.{so,dylib}` (or `_ppf_cts_py.dll`
 # on Windows) directly via importlib, so it is never installed into a venv
-# or site-packages. On macOS (no nvcc) use `cargo build-emul` for the
-# emulated backend (see .cargo/config.toml).
+# or site-packages. On macOS `cargo build --release` selects Metal, and on a
+# host with no GPU toolkit it hard-errors naming what it looked for: there is
+# no fallback build, so a tree either holds a real backend or holds nothing.
 default-members = [
     "crates/ppf-cts-solver",
     "crates/ppf-cts-server",

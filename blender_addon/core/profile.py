@@ -6,18 +6,45 @@
 # Connection profile loading from TOML files.
 
 import os
+import sys
 import tomllib
 
 # TOML "type" string → SSHState.server_type enum value
 PROFILE_TYPE_MAP = {
-    "Local": "LOCAL",
     "SSH": "CUSTOM",
     "SSH Command": "COMMAND",
     "Docker": "DOCKER",
     "Docker over SSH": "DOCKER_SSH",
     "Docker over SSH Command": "DOCKER_SSH_COMMAND",
     "Windows Native": "WIN_NATIVE",
+    "macOS Native": "MAC_NATIVE",
+    "Linux Native": "LINUX_NATIVE",
 }
+
+# Types a profile file may still name that the add-on no longer offers, mapped
+# to what they became. A profile is a file the USER wrote and keeps, so a name
+# that was documented has to keep working: `apply_profile` answers False for an
+# unknown type and the caller reports the profile as invalid, which for a
+# retired name would tell the artist their own file is wrong rather than that
+# the type moved. "Local" became the platform's native connection, the same
+# place `core.migrate_renames.migrate_retired_connection` sends a saved .blend.
+_RETIRED_PROFILE_TYPES = {
+    "Local": {
+        "win32": "WIN_NATIVE",
+        "darwin": "MAC_NATIVE",
+    },
+}
+_RETIRED_PROFILE_DEFAULT = {"Local": "LINUX_NATIVE"}
+
+# TOML keys a profile file may still carry for a field that no longer exists,
+# mapped to the field that replaced it, per platform.
+_RETIRED_PROFILE_KEYS = {
+    "local_path": {
+        "win32": "win_native_path",
+        "darwin": "mac_native_path",
+    },
+}
+_RETIRED_PROFILE_KEY_DEFAULT = {"local_path": "linux_native_path"}
 
 # TOML key → SSHState property name (keys not listed here are ignored)
 _SSH_STATE_FIELDS = {
@@ -30,8 +57,9 @@ _SSH_STATE_FIELDS = {
     "container": "container",
     "remote_path": "ssh_remote_path",
     "docker_path": "docker_path",
-    "local_path": "local_path",
     "win_native_path": "win_native_path",
+    "mac_native_path": "mac_native_path",
+    "linux_native_path": "linux_native_path",
     "solver_gpu": "solver_gpu_index",
     "solver_gpu_uuid": "solver_gpu_uuid",
     "docker_port": "docker_port",
@@ -74,7 +102,7 @@ def apply_profile(profile: dict, ssh_state) -> bool:
     """
     # Set server_type from "type" key
     type_str = profile.get("type", "")
-    server_type = PROFILE_TYPE_MAP.get(type_str)
+    server_type = PROFILE_TYPE_MAP.get(type_str) or _retired_type(type_str)
     if server_type is None:
         return False
     ssh_state.server_type = server_type
@@ -87,7 +115,32 @@ def apply_profile(profile: dict, ssh_state) -> bool:
         if toml_key in profile:
             setattr(ssh_state, prop_name, profile[toml_key])
 
+    # A key for a field that no longer exists, landed on the field that
+    # replaced it.
+    #
+    # APPLIED WHENEVER THE PROFILE CARRIES IT, and skipped only when the same
+    # profile also carries the CURRENT key, which the loop above has already
+    # applied. Gating it on the field being empty instead would make applying
+    # one profile after another keep the first one's directory: a profile is an
+    # explicit choice the artist just made, so every key in it is authoritative
+    # over whatever the panel held a moment ago.
+    for toml_key, platforms in _RETIRED_PROFILE_KEYS.items():
+        if toml_key not in profile:
+            continue
+        prop_name = platforms.get(sys.platform, _RETIRED_PROFILE_KEY_DEFAULT[toml_key])
+        if prop_name in profile:
+            continue
+        setattr(ssh_state, prop_name, profile[toml_key])
+
     return True
+
+
+def _retired_type(type_str: str):
+    """The current type a retired profile type became, or ``None``."""
+    platforms = _RETIRED_PROFILE_TYPES.get(type_str)
+    if platforms is None:
+        return None
+    return platforms.get(sys.platform, _RETIRED_PROFILE_DEFAULT[type_str])
 
 
 # Reverse map: server_type enum → TOML type string

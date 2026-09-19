@@ -6,24 +6,21 @@ lifecycle inside a background (``blender.exe -b``) session:
     connect  →  server detected running  →  stop_server  →  disconnect
 
 Passes only if no error state is produced at any step. This is the
-regression guard for the three bash-syntax bugs in
+regression guard for the three ``win_native`` branches in
 ``blender_addon/core/effect_runner.py`` (``_do_validate_path``,
-``_do_stop_server``, ``_count_remote_frames``) plus the port-threading
-fix in ``ui/connection_ops.py``.
+``_do_stop_server``, ``_count_remote_frames``) and for the port
+threading in ``ui/connection_ops.py``.
 
 Run:
 
-    # Source-tree layout
+    # Dev layout
     "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" \\
-        -b --python \\
-        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
+        -b --python C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
 
     # Bundle layout (override via env)
-    set T2_ROOT=C:\\ppf-contact-solver\\build-win-native\\dist && \\
-        set T2_PORT=9092 && \\
+    set T2_ROOT=C:\\ppf-contact-solver\\build-win-native\\dist && set T2_PORT=9092 && \\
         "C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe" \\
-        -b --python \\
-        C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
+        -b --python C:\\ppf-contact-solver\\build-win-native\\scripts\\test_backend_e2e.py
 
 Env:
     T2_ROOT — solver root directory. Default ``C:\\ppf-contact-solver``.

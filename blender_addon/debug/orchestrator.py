@@ -45,12 +45,246 @@ import scenarios  # noqa: E402
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
-SERVER_BIN = os.path.join(
-    REPO_ROOT,
-    "target",
-    "release",
-    "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server",
-)
+SERVER_EXE = "ppf-cts-server.exe" if os.name == "nt" else "ppf-cts-server"
+SOLVER_EXE = "ppf-contact-solver.exe" if os.name == "nt" else "ppf-contact-solver"
+# Long enough for a GPU runtime's first initialization on a cold machine
+# (`frontend._PROBE_TIMEOUT_S`).
+_PROBE_TIMEOUT_S = 120
+
+
+def _backend_rule():
+    """``frontend/_backends_.py``, loaded by path.
+
+    It holds the one rule for which build a run uses, and it imports nothing
+    of the package. Importing it as ``frontend._backends_`` would run
+    ``frontend/__init__.py``, which loads the extension module into THIS
+    process; the orchestrator only decides which server to spawn, and the
+    build worker the server starts is where ``frontend`` belongs.
+    """
+    import importlib.util
+    path = os.path.join(REPO_ROOT, "frontend", "_backends_.py")
+    spec = importlib.util.spec_from_file_location("_ppf_backend_rule", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _candidate_target_dirs() -> list[str]:
+    """The target directories a build may be in, most specific first.
+
+    The same list ``frontend._candidate_target_dirs`` searches:
+    ``CARGO_TARGET_DIR`` when set, then the tree's own ``target``, then the
+    named per-backend siblings a tree or a distribution holding several
+    backends uses (``target/cuda``, ...).
+    """
+    seen: list[str] = []
+    root = os.path.join(REPO_ROOT, "target")
+    override = os.environ.get("CARGO_TARGET_DIR")
+    if override:
+        seen.append(override if os.path.isabs(override)
+                    else os.path.join(REPO_ROOT, override))
+    if root not in seen:
+        seen.append(root)
+    for name in ("cpu", "cuda", "metal", "rocm", "gpu"):
+        cand = os.path.join(root, name)
+        if cand not in seen:
+            seen.append(cand)
+    return seen
+
+
+def _run_solver(directory: str, flag: str) -> subprocess.CompletedProcess:
+    """Run the solver in *directory* with one *flag*, bounded, output captured.
+
+    The solver imports its backend library; on Windows that is found through
+    PATH, and the launcher that runs this rig puts the build's library
+    directories there. The build's own directory goes first so a backend
+    whose library sits beside the solver resolves without any of that.
+    """
+    env = os.environ.copy()
+    env["PATH"] = directory + os.pathsep + env.get("PATH", "")
+    return subprocess.run(
+        [os.path.join(directory, SOLVER_EXE), flag], capture_output=True,
+        text=True, timeout=_PROBE_TIMEOUT_S, env=env,
+    )
+
+
+def _one_line(text: str) -> str:
+    """*text*'s non-empty lines joined with `` | ``, for a one-line log entry."""
+    return " | ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _solver_backend_answer(directory: str) -> str:
+    """What the solver in *directory* prints for ``--backend``, in one line.
+
+    The marker beside a build says what the bundler or build script believed
+    it produced; the binary says what it is, and prints a ``linked:`` line
+    when the library it loaded answers differently. This is the answer the
+    server asks for itself at startup, put in the rig's own log so a report
+    read after the machine is gone still carries it.
+    """
+    try:
+        result = _run_solver(directory, "--backend")
+    except (subprocess.TimeoutExpired, OSError) as error:
+        return f"<not answered: {error}>"
+    answer = _one_line(result.stdout) or "<no output>"
+    if result.returncode != 0:
+        answer += f" (exit status {result.returncode})"
+    return answer
+
+
+_LAUNCHER_NAMES = ("command.bat", "command.sh")
+_LAUNCHER_SOLVER_PREFIXES = ("set SOLVER_PATH=", 'SOLVER_PATH="')
+
+
+def _session_solvers(project_dir: str) -> list[str]:
+    """Every solver path a session launcher under *project_dir* names.
+
+    The build worker writes the launcher (``command.bat`` or ``command.sh``)
+    with the solver it resolved, so this is the one record of which binary a
+    scenario's solves executed, as opposed to which server they went through.
+    """
+    found: list[str] = []
+    for root, _dirs, files in os.walk(project_dir):
+        for name in files:
+            if name not in _LAUNCHER_NAMES:
+                continue
+            for line in _read_text(os.path.join(root, name)).splitlines():
+                stripped = line.strip()
+                for prefix in _LAUNCHER_SOLVER_PREFIXES:
+                    if stripped.startswith(prefix):
+                        path = stripped[len(prefix):].rstrip('"')
+                        if path not in found:
+                            found.append(path)
+    return found
+
+
+def _server_build_line(server_dir: str) -> str:
+    """The ``solver build: target_dir=... backend=...`` line the server logged.
+
+    ``ppf-cts-server`` prints it at startup, from its own environment and the
+    solver's ``--backend`` answer, so it names the build a server that has
+    already run its scenario was actually spawned with.
+    """
+    marker = "solver build:"
+    for name in ("stdout.log", "stderr.log"):
+        for line in _read_text(os.path.join(server_dir, name)).splitlines():
+            at = line.find(marker)
+            if at >= 0:
+                return line[at + len(marker):].strip()
+    return ""
+
+
+def _probe_build(rule, directory: str):
+    """Ask the solver in *directory* ``--probe`` whether its device is usable."""
+    solver = os.path.join(directory, SOLVER_EXE)
+    started = time.monotonic()
+    try:
+        result = _run_solver(directory, "--probe")
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"{solver} --probe did not answer within {_PROBE_TIMEOUT_S} s"
+        ) from error
+    except OSError as error:
+        raise RuntimeError(
+            f"{solver} --probe could not be started: {error}"
+        ) from error
+    # THE ANSWER AND ITS COST GO IN THE LOG, because both decide the run and
+    # neither is visible from outside it: which build the servers come from
+    # follows from these answers, and a probe is paid again by every build
+    # worker a scenario's server starts. Run 35095357463's Windows rig held
+    # every solving scenario for minutes and was never collected, and this
+    # line is what would have said whether the probe was part of that.
+    print(f"[orchestrator] probe {solver}: exit {result.returncode} in "
+          f"{time.monotonic() - started:.1f}s: "
+          f"{_one_line(result.stdout) or '<no output>'}",
+          flush=True)
+    # A solver whose backend DLLs are not on PATH does not answer "unusable":
+    # Windows refuses to start it, with STATUS_DLL_NOT_FOUND, and parse_probe
+    # would report that as a solver built before --probe existed. Name the
+    # actual cause, because the remedy is the launcher's PATH, not a rebuild.
+    if os.name == "nt" and result.returncode == 0xC0000135:
+        raise RuntimeError(
+            f"{solver} --probe could not start: a DLL it imports is not on PATH "
+            f"(STATUS_DLL_NOT_FOUND). Run the rig from the launcher build.bat "
+            f"writes, or put that backend's library directories on PATH the way "
+            f"scripts/win/run-blender-rig.ps1 does for every backend."
+        )
+    return rule.parse_probe(result.stdout, result.stderr, result.returncode,
+                            solver)
+
+
+def resolve_server_build() -> str:
+    """The build directory the rig's servers are spawned from.
+
+    THE RIG TAKES ITS SERVER FROM THE BUILD A RUN IN THIS TREE WOULD USE,
+    by the rule ``frontend/_backends_.py`` is the single source of: a tree
+    or a distribution can hold one directory per backend, every one of them
+    holding a ``ppf-cts-server`` beside its solver, and only the
+    ``.ppf-backend`` marker says which is which. A plain ``cargo build
+    --release`` marks ``target/release`` and that is the answer on a host
+    with one build; ``build-win-native/build.bat`` builds CUDA, ROCm and the
+    CPU backend each into ``target/<backend>/release`` and leaves no
+    ``target/release`` at all, and there the first GPU backend whose solver
+    reports a usable device is the answer, exactly as the add-on's launcher
+    and the server's build worker decide it.
+
+    Refused by name when nothing is built, when a build holds a marker but no
+    server, or when no GPU build here has a usable device: a server from a
+    directory the frontend would not choose is the split
+    ``blender_addon/core/connection.py`` (``_apply_target_dir``) exists to
+    prevent, and the rig must not be the one process that makes it.
+    """
+    rule = _backend_rule()
+    built = rule.builds(_candidate_target_dirs())
+    if not built:
+        searched = "\n".join(f"  {d}" for d in _candidate_target_dirs())
+        raise FileNotFoundError(
+            "no solver build found under any of\n"
+            f"{searched}\n"
+            "(a build directory carries a .ppf-backend marker beside its "
+            "solver). The rig drives a server binary; build one with a "
+            "solver beside it:\n"
+            "  cargo build --release                 (real backend: CUDA "
+            "on a CUDA host, Metal on macOS)\n"
+            "  cargo build --release -p ppf-cts-server\n"
+            "  cargo build --release --features cpu  (the Rust CPU "
+            "backend: real physics, about 30x slower; this rig does not "
+            "target it yet)"
+        )
+    # `resolve` answers with (backend, notice): the notice is the automatic
+    # rule explaining a choice the caller did not make, which today is the CPU
+    # backend taken because no GPU here can run. The rig prints it rather than
+    # dropping it, because a whole sweep landing on the CPU backend is the
+    # difference between minutes and hours and must not be discovered from the
+    # clock.
+    answer = rule.resolve(
+        built, None, lambda backend: _probe_build(rule, built[backend])
+    )
+    name = answer.backend
+    if answer.notice:
+        print(f"[orchestrator] {answer.notice}", flush=True)
+    directory = built[name]
+    server = os.path.join(directory, SERVER_EXE)
+    if not os.path.isfile(server):
+        raise FileNotFoundError(
+            f"the {name} build in {directory} holds no {SERVER_EXE}. The rig "
+            "drives a server binary out of the same directory as the solver; "
+            "build it there:\n"
+            "  cargo build --release -p ppf-cts-server   (with the same "
+            "CARGO_TARGET_DIR as the solver build)"
+        )
+    return directory
+
+
+_SERVER_BUILD_DIR: str | None = None
+
+
+def server_build_dir() -> str:
+    """`resolve_server_build`, decided once per orchestrator process."""
+    global _SERVER_BUILD_DIR
+    if _SERVER_BUILD_DIR is None:
+        _SERVER_BUILD_DIR = resolve_server_build()
+    return _SERVER_BUILD_DIR
 # The debug server runs the **real** ``frontend`` Python module, so it
 # needs numpy / scipy / numba / pythreejs / pytetwild / tetgen ... installed.
 # These are pre-installed in the project ``.venv``. Falls back to
@@ -228,6 +462,12 @@ class WorkerResult:
     # all, which means it never reached the addon's registration line and
     # so never ran. ``run_many`` stops a run on a second one in a row.
     blender_never_started: bool = False
+    # Filled for every result, pass or fail: the build the worker's server
+    # reported at startup, and the solver path each session launcher under
+    # the worker named. A passing scenario's worker directory is deleted, so
+    # without these the report cannot say which binary its solves ran on.
+    server_build: str = ""
+    session_solvers: list[str] = field(default_factory=list)
 
 
 def _provision_worker(run_root: str, slot: int) -> WorkerSpec:
@@ -252,8 +492,7 @@ def _provision_worker(run_root: str, slot: int) -> WorkerSpec:
 
 def _spawn_server(spec: WorkerSpec, *, python: str,
                   knobs: dict[str, str]) -> subprocess.Popen:
-    """Launch the Rust ``ppf-cts-server`` binary (built with
-    ``--features emulated``) with the worker's CWD and
+    """Launch the Rust ``ppf-cts-server`` binary with the worker's CWD and
     PPF_CTS_DATA_ROOT shadow. Returns the Popen handle so the
     orchestrator can wait/kill it.
 
@@ -262,14 +501,31 @@ def _spawn_server(spec: WorkerSpec, *, python: str,
     parses, and so callers don't need to thread a different argument
     through the orchestrator entry points."""
     del python  # native binary; no interpreter
-    if not os.path.isfile(SERVER_BIN):
-        raise FileNotFoundError(
-            f"ppf-cts-server binary not found at {SERVER_BIN!r}. "
-            "Build with `cargo build --release -p ppf-cts-server "
-            "--features emulated` first."
-        )
+    build_dir = server_build_dir()
+    server_bin = os.path.join(build_dir, SERVER_EXE)
     env = os.environ.copy()
     env["PPF_CTS_DATA_ROOT"] = spec.project_dir
+    # NAME THE BUILD THE SERVER CAME OUT OF, as the add-on's launcher does
+    # (`connection._apply_target_dir`). The server's build worker loads the
+    # cdylib from `CARGO_TARGET_DIR` when it is set and from the tree's
+    # `target` otherwise, and names the solver beside that cdylib in the
+    # session launcher; the server reports that directory as
+    # `solver_target_dir`, and a scenario that attaches the add-on to this
+    # server compares it with the build the add-on resolved under the same
+    # root (`connection.check_running_server`). A server spawned out of
+    # `target/cuda/release` with the variable unset would run the solve out
+    # of whichever directory `frontend` found first and report `target`, so
+    # the attach would be refused as another build, correctly.
+    env["CARGO_TARGET_DIR"] = os.path.dirname(build_dir)
+    # THE SERVER IS THE PROCESS THAT SCANS, so the worker-scoped flag belongs
+    # HERE and not only in the Blender environment. `solver_busy()` is
+    # host-global by default, and this server's monitor adopts any live
+    # `ppf-contact-solver` it finds: at `--parallel N` that is routinely
+    # another worker's, and the scenario then drives its state machine off a
+    # run it does not own. `PPF_SOLVER_SCAN_DESCENDANTS` restricts the scan to
+    # this server's own descendants, which is what
+    # `ppf-cts-core/src/utils.rs` provides it for.
+    env.setdefault("PPF_SOLVER_SCAN_DESCENDANTS", "1")
     # The Rust server spawns a python build worker that imports
     # ``frontend``. The orchestrator runs under the project venv (which
     # has ``frontend`` on its sys.path), so point the server's worker
@@ -283,7 +539,7 @@ def _spawn_server(spec: WorkerSpec, *, python: str,
     stdout = open(stdout_path, "wb")
     stderr = open(stderr_path, "wb")
     proc = subprocess.Popen(
-        [SERVER_BIN, "--port", str(spec.server_port), "--debug"],
+        [server_bin, "--port", str(spec.server_port), "--debug"],
         cwd=spec.server_dir,
         env=env,
         stdout=stdout,
@@ -401,13 +657,16 @@ def _attach_failure_logs(result: WorkerResult, spec: WorkerSpec, bspec=None) -> 
 # ---------------------------------------------------------------------------
 
 def run_one(scenario_name: str, *, slot: int, run_root: str,
+            backend: str,
             python: str = sys.executable,
             knobs: dict[str, str] | None = None,
-            timeout: float = 60.0,
-            backend: str = "emulated") -> WorkerResult:
+            timeout: float = 60.0) -> WorkerResult:
     """Provision a worker, launch the debug server, run the scenario,
     return the verdict. The worker dir is left in place so the caller
-    can decide whether to keep it (failure) or delete it (success)."""
+    can decide whether to keep it (failure) or delete it (success).
+
+    ``backend`` is a required keyword rather than a defaulted one: a
+    default here would silently mislabel every run that omitted it."""
     scenario = scenarios.get(scenario_name)
     if scenario is None:
         return WorkerResult(
@@ -416,14 +675,25 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
             violations=[f"unknown scenario: {scenario_name}"],
         )
 
-    spec = _provision_worker(run_root, slot)
-    # Scenarios may declare their own default knobs (e.g. the
-    # intersection-records test needs PPF_EMULATED_FAIL_AT_FRAME set
-    # so the Rust binary actually trips its synthetic failure). CLI
-    # ``--knob`` flags override per-scenario defaults so a developer
-    # can still poke at edge cases manually.
+    # The selection filter in scenarios.all_names() does NOT reach a
+    # scenario named explicitly on a command line, so this is the last
+    # gate before a scenario runs against a backend it was never written
+    # for. It FAILS rather than skips: a scenario the caller asked for
+    # and did not get must never be counted as fine.
+    reason = scenarios.backend_unsupported_reason(scenario, backend)
+    if reason is not None:
+        return WorkerResult(
+            slot=slot, scenario=scenario_name, status="fail",
+            duration_s=0.0,
+            violations=[f"{scenario_name} cannot run on backend "
+                        f"{backend!r}: {reason}"],
+        )
+
+    # Scenarios may declare their own default knobs. CLI ``--knob`` flags
+    # override per-scenario defaults so a developer can still poke at
+    # edge cases manually.
     scenario_knobs = dict(getattr(scenario, "KNOBS", {}) or {})
-    # Force the co-located backends (local / win_native) onto the
+    # Force the co-located backends (local / win_native / mac_native) onto the
     # streamed TCP transport by default so every scenario keeps
     # exercising the wire handlers that SSH/Docker rely on in
     # production. The one scenario that targets the direct-disk path
@@ -434,6 +704,7 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
         **scenario_knobs,
         **(knobs or {}),
     }
+    spec = _provision_worker(run_root, slot)
     proc = _spawn_server(spec, python=python, knobs=effective_knobs)
     started_at = time.monotonic()
     blender_proc = None
@@ -454,9 +725,8 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
         # ``<PPF_CTS_DATA_ROOT>/<name>`` (see crates/ppf-cts-server/src/
         # wire.rs::handle_tcmd's root synthesis). Scenarios need the same
         # absolute path so they can stat ``data.pickle`` etc. after the
-        # upload lands. The historical extra ``git-debug`` segment from
-        # the python emulator era is gone now that the Rust path
-        # resolver no longer goes through frontend's branch lookup.
+        # upload lands. There is no extra ``git-debug`` segment: the Rust
+        # path resolver does not go through frontend's branch lookup.
         project_name = f"slot{slot:02d}"
         project_root = os.path.join(spec.project_dir, project_name)
         os.makedirs(project_root, exist_ok=True)
@@ -558,6 +828,8 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
             duration_s=time.monotonic() - started_at,
             violations=list(verdict.get("violations") or []),
             notes=list(verdict.get("notes") or []),
+            server_build=_server_build_line(spec.server_dir),
+            session_solvers=_session_solvers(spec.project_dir),
         )
         if result.status != "pass":
             _attach_failure_logs(result, spec, bspec)
@@ -621,6 +893,13 @@ def _print_result(r_dict: dict) -> None:
           f"<- {r_dict['scenario']} {r_dict['status']} "
           f"({r_dict.get('duration_s', 0):.1f}s)",
           flush=True)
+    # Which build this worker's solves went through, on every result: a pass
+    # over the wrong backend is the case these two lines exist for.
+    if r_dict.get("server_build"):
+        print(f"[orchestrator]   server build: {r_dict['server_build']}",
+              flush=True)
+    for path in r_dict.get("session_solvers") or []:
+        print(f"[orchestrator]   session solver: {path}", flush=True)
     if r_dict.get("status") == "pass":
         return
     if r_dict.get("worker_dir"):
@@ -656,7 +935,38 @@ def _pool_task(task: dict) -> dict:
     return asdict(result)
 
 
+def _abort_summary(run_id: str, run_root: str, backend: str, parallel: int,
+                   repeat: int, unrunnable: dict[str, str], *,
+                   scenario: str, violation: str,
+                   note: str | None = None) -> dict:
+    """A one-failure summary for a run that aborted before any scenario.
+
+    It carries the SAME key set as a completed run, ``unrunnable``
+    included. A caller that reads a key here reads it on every path, so a
+    setup failure cannot turn into a KeyError that hides the setup
+    failure."""
+    return {
+        "run_id": run_id,
+        "run_root": run_root,
+        "backend": backend,
+        "parallel": parallel,
+        "repeat": repeat,
+        "total": 0,
+        "passed": 0,
+        "failed": 1,
+        "unrunnable_count": len(unrunnable),
+        "unrunnable": dict(unrunnable),
+        "results": [{
+            "slot": -1, "scenario": scenario,
+            "status": "fail", "duration_s": 0.0,
+            "violations": [violation],
+            "notes": [note] if note is not None else [],
+        }],
+    }
+
+
 def run_many(scenario_names: list[str], *,
+             backend: str,
              python: str = DEFAULT_PYTHON,
              knobs: dict[str, str] | None = None,
              keep_on_fail: bool = True,
@@ -665,7 +975,7 @@ def run_many(scenario_names: list[str], *,
              parallel: int = 1,
              repeat: int = 1,
              report_path: str | None = None,
-             backend: str = "emulated") -> dict:
+             unrunnable: dict[str, str] | None = None) -> dict:
     """Run every named scenario in its own fresh worker, optionally
     repeated and / or parallelized. Returns the aggregated report dict
     (also written to ``report_path`` if given).
@@ -674,11 +984,27 @@ def run_many(scenario_names: list[str], *,
     runs are dispatched via a ``multiprocessing.Pool`` of size ``parallel``;
     each pool worker provisions its own slot, so isolation is identical to
     the sequential path. Port allocation uses bind-to-zero in the
-    orchestrator before forking, so collisions are impossible across slots."""
+    orchestrator before forking, so collisions are impossible across slots.
+
+    ``unrunnable`` is the caller's map of scenario name -> why *backend*
+    cannot host it. It is recorded in the summary so a report artifact
+    carries the lost coverage beside the passing count, which otherwise
+    reads as a complete suite."""
     run_id = _new_run_id()
     run_root = _run_root(run_id)
+    unrunnable = dict(unrunnable or {})
     print(f"[orchestrator] run_id={run_id} root={run_root} "
-          f"parallel={parallel} repeat={repeat}")
+          f"backend={backend} parallel={parallel} repeat={repeat} "
+          f"selected={len(scenario_names)} unrunnable={len(unrunnable)}")
+    # Decide the server build here in the parent, before any worker: a tree
+    # with nothing built fails at once and by name, not at slot 00, and the
+    # log records which directory every server of this run came out of.
+    print(f"[orchestrator] server build: {server_build_dir()}", flush=True)
+    # And what the solver beside that server says it is. The directory's
+    # marker and the binary's answer can disagree, and only the binary is
+    # evidence about what the run's solves will call.
+    print(f"[orchestrator] solver --backend: "
+          f"{_solver_backend_answer(server_build_dir())}", flush=True)
 
     # Resolve the display once, here in the parent, so the spawned pool
     # workers inherit it through the environment and the whole run shares
@@ -691,17 +1017,10 @@ def run_many(scenario_names: list[str], *,
             bh.ensure_display()
         except RuntimeError as exc:
             print(f"[orchestrator] {exc}")
-            return {
-                "run_id": run_id, "run_root": run_root,
-                "parallel": parallel, "repeat": repeat,
-                "total": 0, "passed": 0, "failed": 1,
-                "results": [{
-                    "slot": -1, "scenario": "<display>",
-                    "status": "fail", "duration_s": 0.0,
-                    "violations": [str(exc)],
-                    "notes": [],
-                }],
-            }
+            return _abort_summary(
+                run_id, run_root, backend, parallel, repeat, unrunnable,
+                scenario="<display>", violation=str(exc),
+            )
 
     # Precompile + smoke-check numba kernels once. Failing here means
     # frontend's parallel njit code is broken on this host (e.g. the
@@ -717,18 +1036,13 @@ def run_many(scenario_names: list[str], *,
     if not cbor_ok:
         print("[orchestrator] addon warmup FAILED:")
         print(cbor_log[-2000:])
-        return {
-            "run_id": run_id, "run_root": run_root,
-            "parallel": parallel, "repeat": repeat,
-            "total": 0, "passed": 0, "failed": 1,
-            "results": [{
-                "slot": -1, "scenario": "<addon warmup>",
-                "status": "fail", "duration_s": 0.0,
-                "violations": ["cbor2 import inside Blender failed; "
-                               "manifest wheel install didn't satisfy import"],
-                "notes": [cbor_log[-1500:]],
-            }],
-        }
+        return _abort_summary(
+            run_id, run_root, backend, parallel, repeat, unrunnable,
+            scenario="<addon warmup>",
+            violation="cbor2 import inside Blender failed; "
+                      "manifest wheel install didn't satisfy import",
+            note=cbor_log[-1500:],
+        )
 
     print("[orchestrator] precompiling numba kernels...")
     ok, numba_log = precompile_numba(python=python)
@@ -738,17 +1052,13 @@ def run_many(scenario_names: list[str], *,
             f.write(numba_log)
         print(f"[orchestrator] numba precompile FAILED. log: {log_path}")
         print(numba_log[-2000:])
-        return {
-            "run_id": run_id, "run_root": run_root,
-            "parallel": parallel, "repeat": repeat,
-            "total": 0, "passed": 0, "failed": 1,
-            "results": [{
-                "slot": -1, "scenario": "<numba precompile>",
-                "status": "fail", "duration_s": 0.0,
-                "violations": ["numba precompile/smoke failed -- see numba_precompile.log"],
-                "notes": [numba_log[-1500:]],
-            }],
-        }
+        return _abort_summary(
+            run_id, run_root, backend, parallel, repeat, unrunnable,
+            scenario="<numba precompile>",
+            violation="numba precompile/smoke failed -- see "
+                      "numba_precompile.log",
+            note=numba_log[-1500:],
+        )
     print("[orchestrator] numba precompile OK")
 
     # Build the task list, partitioning serial-only scenarios from the
@@ -888,6 +1198,10 @@ def run_many(scenario_names: list[str], *,
         "total": len(results),
         "passed": sum(1 for x in results if x["status"] == "pass"),
         "failed": sum(1 for x in results if x["status"] != "pass"),
+        # "total" counts what was SELECTED. These two say what was not,
+        # so a shrinking suite cannot read as a healthy one.
+        "unrunnable_count": len(unrunnable),
+        "unrunnable": unrunnable,
         "results": results,
     }
 
@@ -918,6 +1232,12 @@ def _cli(argv: list[str]) -> int:
     )
     parser.add_argument("--list", action="store_true",
                         help="List registered scenarios and exit.")
+    parser.add_argument("--shard", default="",
+                        help="I/N: run only every N-th scenario of the "
+                             "selection, starting at the I-th (0-based). "
+                             "The split is over the registry's order, so "
+                             "N hosts given 0/N .. N-1/N together run the "
+                             "whole selection exactly once.")
     parser.add_argument("--python", default=DEFAULT_PYTHON,
                         help="Python interpreter for spawned servers "
                              "(default: project .venv).")
@@ -936,16 +1256,29 @@ def _cli(argv: list[str]) -> int:
                         help="Write the aggregated report to this path.")
     parser.add_argument("--knob", action="append", default=[],
                         help='Extra env knob, "KEY=value". Repeatable.')
-    parser.add_argument("--backend", choices=["emulated", "real"],
-                        default="emulated",
-                        help="Solver backend the run targets (default: "
-                             "emulated). 'real' selects only backend-agnostic "
-                             "scenarios plus real-only smokes.")
+    # Required and choice-free, matching main.py runtests. See the comment
+    # there: a defaulted backend name would label a run it never targeted,
+    # and an unknown one must answer through `resolve_backend` rather than
+    # with argparse's "invalid choice", which reads as a typo.
+    parser.add_argument("--backend", required=True,
+                        help="Solver backend the run targets. 'real' is a "
+                             "backend that computes real physics: CUDA, "
+                             "Metal or the Rust CPU backend, whichever the "
+                             "tree was built for.")
     args = parser.parse_args(argv)
 
+    try:
+        backend = scenarios.resolve_backend(args.backend)
+    except scenarios.BackendUnavailable as exc:
+        print(f"orchestrator: {exc}", file=sys.stderr)
+        return 2
+
+    unrunnable = scenarios.unrunnable_names(backend)
+
     if args.list:
-        for name in scenarios.all_names(args.backend):
+        for name in scenarios.all_names(backend):
             print(name)
+        _print_unrunnable(backend, unrunnable, stream=sys.stderr)
         return 0
 
     knobs = {}
@@ -956,7 +1289,29 @@ def _cli(argv: list[str]) -> int:
         k, v = kv.split("=", 1)
         knobs[k] = v
 
-    names = args.scenarios or scenarios.all_names(args.backend)
+    if args.scenarios:
+        # Explicit names bypass the selection filter; catch them here so a
+        # scenario that cannot run says so instead of running blind.
+        named_dead = {n: unrunnable[n] for n in args.scenarios
+                      if n in unrunnable}
+        if named_dead:
+            print(f"orchestrator: {len(named_dead)} named scenario(s) cannot "
+                  f"run on backend {backend!r}:", file=sys.stderr)
+            for name, reason in named_dead.items():
+                print(f"  {name}: {reason}", file=sys.stderr)
+            return 2
+        names = list(args.scenarios)
+    else:
+        names = scenarios.all_names(backend)
+        _print_unrunnable(backend, unrunnable, stream=sys.stdout)
+
+    if args.shard:
+        try:
+            names = select_shard(names, args.shard)
+        except ValueError as exc:
+            print(f"--shard: {exc}", file=sys.stderr)
+            return 2
+
     summary = run_many(
         names,
         python=args.python,
@@ -967,15 +1322,57 @@ def _cli(argv: list[str]) -> int:
         parallel=args.parallel,
         repeat=args.repeat,
         report_path=args.report,
-        backend=args.backend,
+        backend=backend,
+        unrunnable=unrunnable,
     )
     print(json.dumps({
         "run_id": summary["run_id"],
         "passed": summary["passed"],
         "failed": summary["failed"],
         "total": summary["total"],
+        "unrunnable": summary["unrunnable_count"],
     }, indent=2))
     return 0 if summary["failed"] == 0 else 1
+
+
+def select_shard(names: list[str], spec: str) -> list[str]:
+    """Return the ``I/N`` share of *names*: every N-th, starting at the I-th.
+
+    THE SPLIT IS BY INDEX IN THE REGISTRY'S ORDER, which is what ``--list``
+    prints and what every host sees identically, so N hosts given
+    ``0/N .. N-1/N`` partition the selection with no overlap and no gap;
+    CI runs one instance per shard. A malformed spec raises rather than
+    reading as "everything".
+    """
+    try:
+        index, count = (int(part) for part in spec.split("/", 1))
+    except ValueError:
+        raise ValueError(f"expected I/N, got {spec!r}") from None
+    if count < 1 or not 0 <= index < count:
+        raise ValueError(f"{spec!r}: need 0 <= I < N and N >= 1")
+    share = [n for k, n in enumerate(names) if k % count == index]
+    # On stderr: `runtests --list` prints the share on stdout, and a line
+    # about the share is not a scenario name.
+    print(f"[orchestrator] shard {index}/{count}: {len(share)} of "
+          f"{len(names)} scenarios", file=sys.stderr)
+    return share
+
+
+def _print_unrunnable(backend: str, unrunnable: dict, *, stream) -> None:
+    """Name every scenario this backend cannot host, and why."""
+    if not unrunnable:
+        return
+    print(f"\n[orchestrator] {len(unrunnable)} registered scenario(s) CANNOT "
+          f"RUN on backend {backend!r} and were not selected. This is lost "
+          f"coverage, not a pass:", file=stream)
+    by_reason: dict[str, list[str]] = {}
+    for name, reason in unrunnable.items():
+        by_reason.setdefault(reason, []).append(name)
+    for reason, names in by_reason.items():
+        print(f"  reason: {reason}", file=stream)
+        for name in sorted(names):
+            print(f"    {name}", file=stream)
+    print("", file=stream)
 
 
 if __name__ == "__main__":

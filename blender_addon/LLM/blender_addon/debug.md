@@ -44,7 +44,7 @@ The CLI lives at `blender_addon/debug/main.py` and talks to both the debug reloa
 | `scene`                  | Fetch the current Blender scene via the MCP `blender://scene/current` resource.            |
 | `resources`              | List MCP resources. `--json` for raw JSON.                                                 |
 | `read <uri>`             | Read an MCP resource by URI. Prints the text body to stdout; `--json` prints the raw envelope. |
-| `runtests [scenarios...]`| Run debug scenarios against an isolated emulated server. `--list` enumerates, `--parallel`, `--repeat`, `--knob`, `--timeout SEC` (default 60) available. |
+| `runtests [scenarios...]`| Run debug scenarios against an isolated real-backend server (CUDA, Metal or the Rust CPU backend). `--list` enumerates, `--parallel`, `--repeat`, `--knob`, `--timeout SEC` (default 60) available. |
 
 Global options:
 
@@ -83,7 +83,7 @@ The `exec` path goes through MCP's `run_python_script` tool if available and fal
 
 ### Running shell commands on the solver host
 
-`execute_shell_command(shell_command, use_shell=True)` runs an arbitrary shell command on whichever host the active connection points at (Local: the Blender machine; SSH / Docker / Docker over SSH: the remote host or its container; Windows Native: the Windows solver process's host). It is the generic counterpart to the dedicated `git_pull_remote`, `compile_project`, `install_paramiko`, and `install_docker` tools: reach for it when no dedicated tool covers the task (environment inspection, filesystem triage, ad-hoc one-shot commands during debugging).
+`execute_shell_command(shell_command, use_shell=True)` runs an arbitrary shell command on whichever host the active connection points at (SSH / Docker / Docker over SSH: the remote host or its container; Linux Native / macOS Native / Windows Native: the machine running Blender, where the solver subprocess lives). It is the generic counterpart to the dedicated `git_pull_remote`, `compile_project`, `install_paramiko`, and `install_docker` tools: reach for it when no dedicated tool covers the task (environment inspection, filesystem triage, ad-hoc one-shot commands during debugging).
 
 `use_shell=True` evaluates the command through the remote side's default shell (pipes, glob expansion, environment variables). Set `use_shell=False` only when the command is a single executable with explicit argv and you want to skip shell interpolation for safety.
 

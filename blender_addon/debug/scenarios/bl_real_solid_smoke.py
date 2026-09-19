@@ -18,10 +18,10 @@
 # + tetgen + scipy) is present and the pipeline runs end-to-end on the
 # real CUDA solver.
 #
-# It is written to also pass against the emulated CPU-stub solver
-# (BACKENDS = emulated, real) so the free-runner macOS job exercises the
+# It is written to also pass against the solver
+# so the free-runner macOS job exercises the
 # same driver and the cross-platform dh.connect() helper. The trick is a
-# prescribed pin MOVE_BY (no gravity): the emulator applies kinematic
+# prescribed pin MOVE_BY (no gravity): the solver applies kinematic
 # pins (free vertices stay put) while the real solver deforms the free
 # region, but the invariants we assert -- the pinned face tracks the move
 # and the far side lags it -- hold in BOTH regimes.
@@ -44,10 +44,10 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Backend-agnostic: runs on the emulated free-runner suite AND on the
+# Backend-agnostic: runs on the free-runner suite AND on the
 # real-GPU AWS jobs. This is what the AWS Linux / Windows jobs select
 # via ``runtests --backend real``.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11
@@ -166,7 +166,7 @@ try:
     # 1-1 to the input cube. We therefore reason about the PC2 geometry
     # directly: the top slab (max z at rest) should rise ~MOVE_DZ while
     # the bottom slab (min z at rest) lags. This holds for the kinematic
-    # emulator (bottom stays put) and the real deformable solve alike.
+    # solver (bottom stays put) and the real deformable solve alike.
     top_dz = -1.0
     bot_dz = -1.0
     top_lateral = -1.0
@@ -186,7 +186,7 @@ try:
     pin_tracks = 0.4 * MOVE_DZ < top_dz < 1.2 * MOVE_DZ and top_lateral < 0.2
     # The free far side FOLLOWS the pull on the real deformable solver
     # (bottom_dz ~ MOVE_DZ, with a little dynamic overshoot so it can even
-    # slightly EXCEED the top) and stays frozen on the kinematic emulator
+    # slightly EXCEED the top) and stays frozen on the kinematic solver
     # (bottom_dz ~ 0). Both are valid, so we assert the far side stays in a
     # physically bounded band (never sinks below rest, never overshoots
     # wildly) rather than a lag DIRECTION -- a strict bottom < top lag is

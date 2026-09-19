@@ -60,7 +60,12 @@ pub const KIND_RUN_STATUS: &str = "RunStatus";
 /// Version of the [`RunStatus`] layout, independent of the shared
 /// [`crate::SCHEMA_VERSION`]. Bump only when the record layout changes
 /// incompatibly; a bump here never invalidates Scene / Param files.
-pub const STATUS_VERSION: u32 = 1;
+///
+/// Version 2 removed a field that carried no `#[serde(default)]`, so a v1
+/// reader handed a v2 record cannot decode it; the envelope is version-first,
+/// so that surfaces as [`crate::FormatError::VersionMismatch`], which the
+/// server logs by name rather than misreading as a torn record.
+pub const STATUS_VERSION: u32 = 2;
 
 /// Lifecycle phase of a run. `Ended` is the only phase that carries a
 /// terminal [`Outcome`].
@@ -326,8 +331,9 @@ pub fn crash_kind_from_step(
 /// Fatal error codes set on the non-`StepResult` paths (init failure and
 /// the C++ `exit(1)` fatal-exit hook), mapped to a [`CrashKind`]. The
 /// numeric values are the contract between the C++ fatal hook
-/// (`cpp/main/fatal.hpp`, whose `PPF_FATAL_*` enumerators carry the same
-/// numbers) and the Rust host; the two must stay in sync.
+/// (`crates/ppf-cts-solver/src/kernels/main/fatal.hpp`, whose `FATAL_*`
+/// enumerators carry the same numbers) and the Rust host; the two must stay
+/// in sync.
 pub mod error_code {
     /// No fatal code set (the StepResult booleans are authoritative).
     pub const NONE: u8 = 0;
@@ -568,7 +574,6 @@ pub struct RunStatus {
     /// 12-hex identity stamped at launch; lets a reader reject a stale
     /// record left by a prior run in the same directory.
     pub launch_id: String,
-    pub emulated: bool,
 }
 
 impl RunStatus {
@@ -656,7 +661,6 @@ mod tests {
             seq: 43,
             pid: 81231,
             launch_id: "a1b2c3d4e5f6".into(),
-            emulated: false,
         }
     }
 
@@ -768,7 +772,6 @@ mod tests {
             seq: u64,
             pid: u32,
             launch_id: String,
-            emulated: bool,
         }
         #[derive(Serialize)]
         #[serde(tag = "kind", rename_all = "snake_case")]
@@ -787,7 +790,6 @@ mod tests {
             seq: 10,
             pid: 1,
             launch_id: "ffffffffffff".into(),
-            emulated: true,
         };
         let bytes = to_cbor_with_version(STATUS_VERSION, KIND_RUN_STATUS, &future).unwrap();
         std::fs::write(dir.path().join(files::STATUS_RECORD), &bytes).unwrap();
@@ -821,7 +823,6 @@ mod tests {
             seq: u64,
             pid: u32,
             launch_id: String,
-            emulated: bool,
         }
         let s = S {
             phase: Phase::Ended,
@@ -835,7 +836,6 @@ mod tests {
             seq: 4,
             pid: 1,
             launch_id: "ffffffffffff".into(),
-            emulated: true,
         };
         let bytes = to_cbor_with_version(STATUS_VERSION, KIND_RUN_STATUS, &s).unwrap();
         std::fs::write(dir.path().join(files::STATUS_RECORD), &bytes).unwrap();

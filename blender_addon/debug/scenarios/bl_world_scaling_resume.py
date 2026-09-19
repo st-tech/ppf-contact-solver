@@ -69,9 +69,9 @@ from . import REPO_ROOT_POSIX
 NEEDS_BLENDER = True
 # Cross-cycle solver/checkpoint state; keep it off the parallel batch.
 NOT_PARALLELIZABLE = True
-# Wall-clock ms the emulated backend sleeps per solver step (the sleep at
-# the end of cpp_emul advance()). Step count, derived from the state the
-# driver configures below:
+# The pacing below is `PPF_STEP_DELAY_MS`, wall-clock ms the driver delays
+# per solver step. Step count, derived from the state the driver configures
+# below:
 #   - FRAME_COUNT 12 is the Blender-side count; core/encoder/params.py
 #     sends "frames" = frame_count - 1, so the solver's output frames are
 #     0 through 11.
@@ -82,13 +82,13 @@ NOT_PARALLELIZABLE = True
 #     emits every frame up to floor(time * fps). Step n sits at time
 #     n * 0.009999, so frame f first appears on step f + 1.
 #   - The loop stops once curr_frame reaches 11, i.e. after 12 steps:
-#     ~7.2 s at this pacing.
+#     ~7.2 s at 600 ms per step.
 # The solver reads the save_and_quit marker at the TOP of a loop
 # iteration and checkpoints whatever frame it has reached, and it reads
 # that marker BEFORE the frames-done test. After step n the run stands at
 # frame n - 1, so the top of the 12th step carries frame 10, the highest
 # value that is still short of the last frame, and it is reached after 11
-# sleeps (~6.6 s). Past that the loop's next visit carries frame 11 and a
+# delays (~6.6 s). Past that the loop's next visit carries frame 11 and a
 # marker found there writes a last-frame checkpoint (subtest E rejects
 # it); past THAT the loop has exited and no checkpoint is written at all
 # (subtest B rejects it).
@@ -107,7 +107,12 @@ NOT_PARALLELIZABLE = True
 # top absorb the request's trip through the server to the output
 # directory. That budget is an argument for the pacing, not evidence
 # about a given host, which is why E asserts the outcome on disk.
-KNOBS = {"PPF_EMULATED_STEP_MS": "600"}
+KNOBS = {"PPF_STEP_DELAY_MS": "600"}
+
+# RUNS ON THE REAL BACKEND. What it needs is an observation window wide
+# enough to sample a running solve, which `PPF_STEP_DELAY_MS` above
+# supplies explicitly.
+BACKENDS = ("real",)
 
 WORLD_SCALING = 10.0
 
@@ -183,7 +188,7 @@ try:
     encoder_pkg = __import__(pkg + ".core.encoder", fromlist=["prepare_upload"])
     data_bytes, param_bytes, _d, _p = encoder_pkg.prepare_upload(bpy.context)
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.build_and_wait(data_bytes, param_bytes, "ws-resume:build", timeout=180.0)
     dh.log(f"built solver={dh.facade.engine.state.solver.name}")
@@ -201,8 +206,8 @@ try:
     # RunRequested resets state.frame to 0 and that same spawn scrubs the
     # prior run's status.cbor, so frame >= 1 is evidence THIS run
     # advanced, not a tail from the reference run above. The scenario
-    # declares no BACKENDS, i.e. emulated-only, so the gate only has to
-    # cover the CPU emulator: its first frame lands two steps in
+    # is not selected here, so the gate only has to
+    # cover the CPU solver: its first frame lands two steps in
     # (~1.2 s at the pacing above), with no CUDA cold start to absorb.
     GATE_TIMEOUT_S = 30.0
     dh.com.run()
@@ -238,7 +243,7 @@ try:
                 f"ws-resume gate: the run reached {s.solver.name} at "
                 f"frame={s.frame} before SaveAndQuitRequested could be "
                 f"dispatched, so no checkpoint can come out of it; widen "
-                f"the window with a larger PPF_EMULATED_STEP_MS "
+                f"the window with a larger PPF_STEP_DELAY_MS "
                 f"(error={(s.error or s.server_error or '')!r})"
             )
         if s.frame >= 1:

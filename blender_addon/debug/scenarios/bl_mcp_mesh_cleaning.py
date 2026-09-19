@@ -96,7 +96,7 @@ from . import _runner as r
 NEEDS_BLENDER = True
 # No solver, no build, no connection: bmesh and bpy.ops only, so the same
 # assertions hold on either backend and running it on the GPU jobs is free.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""

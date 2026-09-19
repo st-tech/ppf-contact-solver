@@ -51,7 +51,14 @@ if "%BUILD_LOGGING%"=="" (
     REM Tee pipeline, the `set ... &&` chain, `exit /b` from a nested block),
     REM so the fault appears only in composition and cannot be found by
     REM reading any single line.
-    powershell -NoProfile -Command "& { $env:BUILD_LOGGING='1'; $env:NOPAUSE='!NOPAUSE!'; cmd /c '%~f0' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
+    REM
+    REM `cmd /c call`, NOT `cmd /c`, for a failure signaled INSIDE A BLOCK:
+    REM without `call` an `exit /b 1` executed inside a parenthesized block
+    REM leaves cmd exiting 0, while a top-level one still gives 1. Measured on
+    REM Windows, invoked as GitHub's `shell: cmd` does: step exit code 0
+    REM through `cmd /c '%~f0'`, 1 through `cmd /c call '%~f0'`. warmup.bat
+    REM records the release run that found it.
+    powershell -NoProfile -Command "& { $env:BUILD_LOGGING='1'; $env:NOPAUSE='!NOPAUSE!'; cmd /c call '%~f0' 2>&1 | Tee-Object -FilePath '%LOGFILE%'; exit $LASTEXITCODE }"
     exit /b !ERRORLEVEL!
 )
 
@@ -62,33 +69,124 @@ echo.
 REM Get parent directory (SRC_DIR)
 for %%I in ("%BUILD_WIN%\..") do set SRC_DIR=%%~fI
 
-REM CUDA driver lives at crates\ppf-cts-solver\; its src\cpp tree
-REM (and the build\ output produced by nvcc) sits alongside the Rust
-REM source.
-set CPP_DIR=%SRC_DIR%\crates\ppf-cts-solver\src\cpp
+REM The CUDA backend's directories. scripts\build-cuda.bat, which builds that
+REM library, describes them; they are set here because the Rust step and the
+REM launchers below name them too.
+set CPP_DIR=%SRC_DIR%\crates\ppf-cts-compute\cuda
+set KERNEL_DIR=%SRC_DIR%\crates\ppf-cts-solver\src\kernels
+set KERNELGEN=%SRC_DIR%\crates\ppf-cts-compute\seam\kernelgen.py
 set OUT_DIR=%CPP_DIR%\build
+set KERNELGEN_DIR=%OUT_DIR%\kernelgen
 set LIB_DIR=%OUT_DIR%\lib
+REM The ROCm backend's. crates\ppf-cts-solver\build.rs links libppfbe_rocm out of
+REM ROCM_LIB_DIR on Windows and builds nothing there itself, so the library has to
+REM exist before cargo runs, exactly as the CUDA one does.
+set ROCM_SRC_DIR=%SRC_DIR%\crates\ppf-cts-compute\rocm
+set ROCM_OUT_DIR=%ROCM_SRC_DIR%\build
+set ROCM_LIB_DIR=%ROCM_OUT_DIR%\lib
+set ROCM_DIR=%BUILD_WIN%\rocm
 set DEPS=%BUILD_WIN%\deps
 set DOWNLOADS=%BUILD_WIN%\downloads
 set RUST_DIR=%BUILD_WIN%\rust
-
-REM Use local CUDA installed by warmup.bat (required)
 set CUDA_DIR=%BUILD_WIN%\cuda
-set CUDA_PATH=%CUDA_DIR%
-if not exist "%CUDA_DIR%\bin\nvcc.exe" (
-    echo ERROR: Local CUDA not found at %CUDA_DIR%
-    echo Please run warmup.bat first to install CUDA locally.
+
+call "%BUILD_WIN%\scripts\load-downloads.bat"
+if errorlevel 1 (
+    echo ERROR: Failed to load download manifest
     exit /b 1
 )
-echo Using local CUDA from %CUDA_PATH%
+REM The architecture and the backends this build makes, decided for warmup.bat,
+REM this script and bundle.bat in one place.
+call "%BUILD_WIN%\scripts\platform.bat"
+if errorlevel 1 (
+    echo ERROR: this host and PPF_WIN_BACKENDS do not describe a build this directory can make
+    exit /b 1
+)
 
-REM Embedded Python from warmup.bat. Runs JupyterLab via the launcher
-REM scripts written below. The PyO3 extension (_ppf_cts_py.dll) is built
-REM directly into target\release by `cargo build --release` and loaded
-REM by frontend/__init__.py from there, so no wheel is installed here.
+REM ============================================================
+REM The ROCm platform
+REM ============================================================
+REM ONE HIP SOURCE BUILDS FOR TWO PLATFORMS, and they are different libraries.
+REM The AMD platform is what ships: hipcc compiles it for every target in
+REM rocm_arch.txt, and nothing in this fleet can execute it. The NVIDIA platform
+REM compiles the same source through nvcc and runs on an NVIDIA GPU, which makes it
+REM the only way the Windows ROCm build can be EXECUTED without AMD hardware; it
+REM is a verification lever and never a distribution, which is why bundle.bat
+REM refuses a library built for it. A green NVIDIA-platform build establishes
+REM that this HIP source compiles and runs, and nothing about the code hipcc
+REM generates for the AMD targets.
+REM
+REM   PPF_WIN_ROCM_PLATFORM      amd (the default) or nvidia
+REM   PPF_WIN_HIP_ROOT           nvidia only: a directory whose include\hip holds
+REM                              nvidia_detail, which TheRock 10.0.0 does not
+REM                              carry and ROCm 7.2.4's hip-dev package does
+REM   PPF_WIN_ROCM_NVIDIA_ARCH   nvidia only: the one compute capability the staging
+REM                              library is compiled for, sm_89 unless given
+REM Membership, not equality: this build can carry CUDA and ROCm together.
+set "HAS_CUDA=0"
+set "HAS_ROCM=0"
+for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
+    if "%%B"=="cuda" set "HAS_CUDA=1"
+    if "%%B"=="rocm" set "HAS_ROCM=1"
+)
+set "ROCM_PLATFORM="
+if defined PPF_WIN_ROCM_PLATFORM if "!HAS_ROCM!"=="0" (
+    echo ERROR: PPF_WIN_ROCM_PLATFORM is set, and rocm is not one of the backends ^(!PPF_WIN_BACKENDS!^).
+    echo        Set PPF_WIN_BACKENDS to a set naming rocm, or clear PPF_WIN_ROCM_PLATFORM.
+    exit /b 1
+)
+if "!HAS_ROCM!"=="1" (
+    set "ROCM_PLATFORM=amd"
+    if defined PPF_WIN_ROCM_PLATFORM set "ROCM_PLATFORM=!PPF_WIN_ROCM_PLATFORM!"
+)
+if "!ROCM_PLATFORM!"=="amd" (
+    if not exist "%ROCM_DIR%\bin\hipcc.exe" (
+        echo ERROR: the ROCm SDK is not installed at %ROCM_DIR%
+        echo        Run warmup.bat with PPF_WIN_BACKENDS=rocm cpu first.
+        exit /b 1
+    )
+    set "HIP_ROOT=%ROCM_DIR%"
+) else if "!ROCM_PLATFORM!"=="nvidia" (
+    if not defined PPF_WIN_HIP_ROOT (
+        echo ERROR: PPF_WIN_ROCM_PLATFORM=nvidia needs PPF_WIN_HIP_ROOT, a directory whose
+        echo        include\hip holds nvidia_detail. See the note above this check.
+        exit /b 1
+    )
+    if not exist "!PPF_WIN_HIP_ROOT!\include\hip\nvidia_detail\nvidia_hip_runtime.h" (
+        echo ERROR: PPF_WIN_HIP_ROOT=!PPF_WIN_HIP_ROOT! has no include\hip\nvidia_detail\nvidia_hip_runtime.h
+        exit /b 1
+    )
+    set "HIP_ROOT=!PPF_WIN_HIP_ROOT!"
+    set "ROCM_NVIDIA_ARCH=sm_89"
+    if defined PPF_WIN_ROCM_NVIDIA_ARCH set "ROCM_NVIDIA_ARCH=!PPF_WIN_ROCM_NVIDIA_ARCH!"
+) else if defined ROCM_PLATFORM (
+    echo ERROR: PPF_WIN_ROCM_PLATFORM names "!ROCM_PLATFORM!", and the platforms are amd and nvidia.
+    exit /b 1
+)
+
+REM Use local CUDA installed by warmup.bat, wherever something here compiles with
+REM nvcc: the CUDA backend, and the ROCm backend's NVIDIA staging platform.
+set "NEED_CUDA=0"
+if "!HAS_CUDA!"=="1" set "NEED_CUDA=1"
+if "!ROCM_PLATFORM!"=="nvidia" set "NEED_CUDA=1"
+if "!NEED_CUDA!"=="1" (
+    set "CUDA_PATH=%CUDA_DIR%"
+    if not exist "%CUDA_DIR%\bin\nvcc.exe" (
+        echo ERROR: Local CUDA not found at %CUDA_DIR%
+        echo Please run warmup.bat first to install CUDA locally.
+        exit /b 1
+    )
+    echo Using local CUDA from %CUDA_DIR%
+)
+
+REM The bundled Python from warmup.bat. Runs JupyterLab via the launcher
+REM scripts written below. The PyO3 extension (_ppf_cts_py.dll) is built into
+REM each backend's target\<backend>\release by that backend's `cargo build
+REM --release` and loaded by frontend/__init__.py from the directory it
+REM resolves, so no wheel is installed here.
 set PYTHON_EXE=%BUILD_WIN%\python\python.exe
 if not exist "%PYTHON_EXE%" (
-    echo ERROR: Embedded Python not found at %PYTHON_EXE%
+    echo ERROR: Python not found at %PYTHON_EXE%
     echo Please run warmup.bat first.
     exit /b 1
 )
@@ -106,6 +204,17 @@ if exist "%RUST_DIR%\bin\cargo.exe" (
         exit /b 1
     )
 )
+REM THE TOOLCHAIN MUST BE THIS HOST'S, which warmup.bat checks when it installs one
+REM and is checked again here because a cargo on PATH can change between the two.
+set "RUST_HOST_SEEN="
+for /f "tokens=1,2" %%A in ('rustc -vV') do if "%%A"=="host:" set "RUST_HOST_SEEN=%%B"
+if not "!RUST_HOST_SEEN!"=="!PPF_WIN_RUST_HOST!" (
+    echo ERROR: rustc reports host "!RUST_HOST_SEEN!", and this is a !PPF_WIN_RUST_HOST! build.
+    echo        A toolchain for another architecture builds a solver that runs only under
+    echo        emulation and passes every check here. Re-run warmup.bat.
+    exit /b 1
+)
+echo Rust host: !RUST_HOST_SEEN!
 
 REM Use local MinGit if installed by warmup.bat
 set MINGIT_DIR=%BUILD_WIN%\mingit
@@ -121,199 +230,134 @@ if exist "%MINGIT_DIR%\cmd\git.exe" (
 )
 
 REM ============================================================
-REM Download Eigen if not present
+REM Download Eigen if not present (the CUDA build only)
 REM ============================================================
-call "%BUILD_WIN%\scripts\load-downloads.bat"
-if errorlevel 1 (
-    echo ERROR: Failed to load download manifest
-    exit /b 1
-)
-
 REM Eigen extracts to a directory whose name matches the archive stem
 for %%I in ("%FILE_EIGEN%") do set EIGEN_STEM=%%~nI
-if not exist "%DEPS%\%EIGEN_STEM%" (
-    echo [0/3] Downloading Eigen...
-    if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
-    if not exist "%DEPS%" mkdir "%DEPS%"
+if "!HAS_CUDA!"=="1" (
+    if not exist "%DEPS%\%EIGEN_STEM%" (
+        echo [0/3] Downloading Eigen...
+        if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
+        if not exist "%DEPS%" mkdir "%DEPS%"
 
-    set "EIGEN_ZIP=%DOWNLOADS%\%FILE_EIGEN%"
+        set "EIGEN_ZIP=%DOWNLOADS%\%FILE_EIGEN%"
 
-    if not exist "!EIGEN_ZIP!" (
-        curl.exe -fL -o "!EIGEN_ZIP!" "%URL_EIGEN%"
+        if not exist "!EIGEN_ZIP!" (
+            curl.exe -fL -o "!EIGEN_ZIP!" "%URL_EIGEN%"
+            if errorlevel 1 (
+                echo ERROR: Failed to download Eigen
+                exit /b 1
+            )
+        )
+
+        echo Extracting Eigen...
+        powershell -Command "Expand-Archive -Path '!EIGEN_ZIP!' -DestinationPath '%DEPS%' -Force"
         if errorlevel 1 (
-            echo ERROR: Failed to download Eigen
+            echo ERROR: Failed to extract Eigen
             exit /b 1
         )
+        echo   [DONE] Eigen ready
+        echo.
     )
-
-    echo Extracting Eigen...
-    powershell -Command "Expand-Archive -Path '!EIGEN_ZIP!' -DestinationPath '%DEPS%' -Force"
-    if errorlevel 1 (
-        echo ERROR: Failed to extract Eigen
-        exit /b 1
-    )
-    echo   [DONE] Eigen ready
-    echo.
 )
 
 REM Setup portable MSVC environment (required)
 set MSVC_DIR=%BUILD_WIN%\msvc
 echo [1/4] Setting up Visual Studio environment...
-if exist "%MSVC_DIR%\setup_x64.bat" (
-    echo Using portable MSVC from %MSVC_DIR%
-    call "%MSVC_DIR%\setup_x64.bat"
-) else if exist "%MSVC_DIR%\setup.bat" (
-    echo Using portable MSVC from %MSVC_DIR%
-    call "%MSVC_DIR%\setup.bat"
+if "!PPF_WIN_ARCH!"=="x64" (
+    if exist "%MSVC_DIR%\setup_x64.bat" (
+        echo Using portable MSVC from %MSVC_DIR%
+        call "%MSVC_DIR%\setup_x64.bat"
+    ) else if exist "%MSVC_DIR%\setup.bat" (
+        echo Using portable MSVC from %MSVC_DIR%
+        call "%MSVC_DIR%\setup.bat"
+    ) else (
+        echo ERROR: Portable MSVC not found at %MSVC_DIR%
+        echo Please run warmup.bat first to install MSVC locally.
+        exit /b 1
+    )
 ) else (
-    echo ERROR: Portable MSVC not found at %MSVC_DIR%
-    echo Please run warmup.bat first to install MSVC locally.
+    if exist "%MSVC_DIR%\setup_!PPF_WIN_MSVC_ARCH!.bat" (
+        echo Using portable MSVC from %MSVC_DIR%
+        call "%MSVC_DIR%\setup_!PPF_WIN_MSVC_ARCH!.bat"
+    ) else (
+        echo ERROR: Portable MSVC for !PPF_WIN_MSVC_ARCH! not found at %MSVC_DIR%\setup_!PPF_WIN_MSVC_ARCH!.bat
+        echo Please run warmup.bat first to install MSVC locally.
+        exit /b 1
+    )
+)
+REM THE COMPILER MUST TARGET THIS HOST. cl.exe names its target at the end of its
+REM banner, "for x64" or "for ARM64", and a setup script for another target would
+REM put that compiler first on PATH with nothing else changing.
+REM Percent expansion, not delayed: each side of a pipe runs in a child cmd.exe
+REM with delayed expansion off, where `!name!` would reach findstr as text.
+cl 2>&1 | findstr /i /c:"for %PPF_WIN_MSVC_ARCH%" >nul
+if errorlevel 1 (
+    echo ERROR: cl.exe on PATH does not target !PPF_WIN_MSVC_ARCH!. Its banner says:
+    cl 2>&1 | findstr /i /c:"compiler"
     exit /b 1
 )
+echo cl.exe targets !PPF_WIN_MSVC_ARCH!
 
-REM Create output directories
-if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
-if not exist "%OUT_DIR%\obj" mkdir "%OUT_DIR%\obj"
-if not exist "%LIB_DIR%" mkdir "%LIB_DIR%"
-
-echo.
-echo ============================================================
-echo [2/4] Building CUDA Library with nvcc
-echo ============================================================
-echo.
-
-set NVCC="%CUDA_PATH%\bin\nvcc.exe"
-set EIGEN_DIR=%DEPS%\%EIGEN_STEM%
-
-REM Source files
-set CPP_SRCS=%CPP_DIR%\simplelog\SimpleLog.cpp %CPP_DIR%\stub.cpp
-REM Keep this list in sync with BASE_DIRS in crates/ppf-cts-solver/src/cpp/Makefile
-REM (the Linux/macOS build). schwarz/schwarz.cu defines schwarz::build/apply that
-REM solver.cu references; omitting it here fails the link with unresolved externals.
-REM utility\dispatcher.cu is deliberately absent: it is an include, not a TU.
-REM dispatcher.hpp ends with `#include "dispatcher.cu"` and 11 TUs pull it in
-REM that way, so the Makefile's mechanical list never names it and compiling it
-REM standalone here only produced a dead object. Measured on Windows: it
-REM costs 4.0 s in the serial loop below, and the device link with its object
-REM dropped succeeds and yields SASS identical to the link that included it
-REM (925,904 instructions either way), so it carries no device code.
-set CU_SRCS=%CPP_DIR%\buffer\buffer.cu %CPP_DIR%\main\main.cu %CPP_DIR%\utility\utility.cu %CPP_DIR%\csrmat\csrmat.cu %CPP_DIR%\contact\contact.cu %CPP_DIR%\energy\energy.cu %CPP_DIR%\eigenanalysis\eigenanalysis.cu %CPP_DIR%\barrier\barrier.cu %CPP_DIR%\strainlimiting\strainlimiting.cu %CPP_DIR%\solver\solver.cu %CPP_DIR%\schwarz\schwarz.cu %CPP_DIR%\kernels\reduce.cu %CPP_DIR%\kernels\exclusive_scan.cu %CPP_DIR%\kernels\vec_ops.cu %CPP_DIR%\kernels\radix_sort.cu %CPP_DIR%\lbvh\lbvh.cu %CPP_DIR%\plasticity\plasticity.cu
-
-REM CUDA architectures, read from the same manifest the Linux Makefile reads
-REM (crates\ppf-cts-solver\src\cpp\cuda_arch.txt). Neither build spells the list
-REM out, so the two cannot come to ship different architectures, and neither can
-REM disagree with the SUPPORTED_SM gate that is generated from the same file.
-REM `for /f` skips blank lines and ';' comments by default, which is why the
-REM manifest comments with ';'. The floor is read in its own pass so the file
-REM does not have to list it before the cubins.
-set CUDA_ARCH_FILE=%CPP_DIR%\cuda_arch.txt
-if not exist "%CUDA_ARCH_FILE%" (
-    echo ERROR: CUDA architecture manifest not found: %CUDA_ARCH_FILE%
-    exit /b 1
+REM ============================================================
+REM [2/4] The GPU backend library
+REM ============================================================
+REM EACH LIBRARY IS BUILT ON ITS OWN TERMS, and a build carrying both builds both:
+REM they are separate files with separate toolchains, and neither is an
+REM alternative to the other.
+if "!HAS_CUDA!"=="1" (
+    call "%BUILD_WIN%\scripts\build-cuda.bat"
+    if errorlevel 1 (
+        echo ERROR: the CUDA backend library did not build ^(see above^)
+        exit /b 1
+    )
 )
-set ARCH_FLOOR=
-set GENCODE=
-set ARCH_LIST_STR=
-for /f "tokens=1,2" %%A in (%CUDA_ARCH_FILE%) do (
-    if "%%A"=="floor" set ARCH_FLOOR=%%B
-)
-if not defined ARCH_FLOOR (
-    echo ERROR: no 'floor' line in %CUDA_ARCH_FILE%
-    exit /b 1
-)
-for /f "tokens=1,2" %%A in (%CUDA_ARCH_FILE%) do (
-    if "%%A"=="cubin" (
-        set "GENCODE=!GENCODE! -gencode arch=compute_!ARCH_FLOOR!,code=sm_%%B"
-        if defined ARCH_LIST_STR (
-            set "ARCH_LIST_STR=!ARCH_LIST_STR!, sm_%%B"
-        ) else (
-            set "ARCH_LIST_STR=sm_%%B"
+if "!HAS_ROCM!"=="1" (
+    echo.
+    echo ============================================================
+    echo [2/4] Building the ROCm backend library for the !ROCM_PLATFORM! platform
+    echo ============================================================
+    echo.
+    REM hipcc drives the SDK's own clang and the offload tools beside it. -u
+    REM because the script's progress lines otherwise reach build.log only when
+    REM the build ends: Python buffers a pipe, and the logging relaunch is one.
+    if "!ROCM_PLATFORM!"=="amd" (
+        set "PATH=%ROCM_DIR%\bin;%ROCM_DIR%\lib\llvm\bin;!PATH!"
+        "%PYTHON_EXE%" -u "%BUILD_WIN%\scripts\build_rocm.py" --platform amd --kernel-root "%KERNEL_DIR%" --rocm-dir "%ROCM_SRC_DIR%" --cuda-prologue-dir "%CPP_DIR%" --kernelgen "%KERNELGEN%" --gen-def "%BUILD_WIN%\scripts\gen_def.py" --out-dir "%ROCM_OUT_DIR%" --hip-include "%ROCM_DIR%\include" --rocm-path "%ROCM_DIR%"
+    ) else (
+        "%PYTHON_EXE%" -u "%BUILD_WIN%\scripts\build_rocm.py" --platform nvidia --kernel-root "%KERNEL_DIR%" --rocm-dir "%ROCM_SRC_DIR%" --cuda-prologue-dir "%CPP_DIR%" --kernelgen "%KERNELGEN%" --gen-def "%BUILD_WIN%\scripts\gen_def.py" --out-dir "%ROCM_OUT_DIR%" --hip-include "!HIP_ROOT!\include" --cuda-path "%CUDA_DIR%" --arch !ROCM_NVIDIA_ARCH!
+    )
+    if errorlevel 1 (
+        echo ERROR: the ROCm backend library did not build ^(see above^)
+        exit /b 1
+    )
+    REM ASK THE LIBRARY WHAT IT IS. It must export the whole C ABI the module
+    REM definition lists, since the solver imports every be_* by name, and it must
+    REM import its own platform's device runtime and not the other's: the two
+    REM platforms write the same file name, so the name says nothing about which
+    REM one is on disk.
+    if "!ROCM_PLATFORM!"=="amd" (
+        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import amdhip64_7.dll --must-not-import cudart64_12.dll
+    ) else (
+        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import cudart64_12.dll --must-not-import amdhip64_7.dll
+    )
+    if errorlevel 1 exit /b 1
+    REM AND ASK THE DEVICE IMAGE WHICH TARGETS IT CARRIES, on the platform that
+    REM ships. Every target in rocm_arch.txt must be in the linked library, each
+    REM must disassemble to real instructions, and none may carry FP64: the same
+    REM gate the Linux build and .github/workflows/rocm.yml run.
+    if "!ROCM_PLATFORM!"=="amd" (
+        "%PYTHON_EXE%" "%SRC_DIR%\.github\workflows\scripts\check-rocm-code-objects.py" --library "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --arch-file "%ROCM_SRC_DIR%\rocm_arch.txt" --rocm-path "%ROCM_DIR%\lib"
+        if errorlevel 1 (
+            echo ERROR: the ROCm device image does not carry what rocm_arch.txt names ^(see above^)
+            exit /b 1
         )
     )
 )
-REM Stop here rather than link a DLL with no device code. That DLL builds and
-REM installs cleanly and then rejects every GPU at run time, and the run-time
-REM failure names the device rather than the manifest that went missing.
-if not defined GENCODE (
-    echo ERROR: no 'cubin' lines in %CUDA_ARCH_FILE%
-    exit /b 1
+if not defined PPF_WIN_GPU_BACKENDS (
+    echo.
+    echo [2/4] No GPU backend library: this build is !PPF_WIN_BACKENDS! on !PPF_WIN_ARCH!.
 )
-echo CUDA architectures from manifest: floor compute_!ARCH_FLOOR!, cubins !ARCH_LIST_STR!
-
-REM Compiler flags. Device link-time optimization (LTO), matching the Linux
-REM Makefile: compile each TU to an LTO intermediate (code=lto_<floor>), then
-REM device-link with -dlto so cross-TU device callees (notably
-REM barrier::compute_stiffness) inline into the contact-Hessian embed kernels,
-REM roughly halving contact matrix-assembly cost.
-REM IMPORTANT: device LTO CANNOT embed a JIT-able PTX (the -dlto link lowers its IR
-REM straight to SASS; a code=compute_XX request is silently dropped), so the .dll
-REM is frozen to the exact cubins we ship, no forward-JIT fallback. One native
-REM SASS cubin per supported arch is therefore emitted at the link, from the
-REM manifest above. nvcc forbids -dlto beside -gencode at compile (hence
-REM code=lto_<floor>), but needs the full -gencode list at the link.
-set NVCC_COMMON=-std=c++17 --expt-relaxed-constexpr --extended-lambda -O3 -Wno-deprecated-gpu-targets
-set NVCC_DEFINES=-DWIN32 -DNDEBUG -D_WINDOWS -D_USRDLL -D__NVCC__ -DEIGEN_WARNINGS_DISABLED -DTHRUST_IGNORE_DEPRECATED_CPP_DIALECT -DCUB_IGNORE_DEPRECATED_CPP_DIALECT -DPPF_SHIPPED_ARCH_STR="\"!ARCH_LIST_STR!\""
-set NVCC_INCLUDES=-I"%EIGEN_DIR%"
-set NVCC_XCOMPILER=-Xcompiler "/EHsc /W0 /MD /O2"
-set NVCC_SUPPRESS=--diag-suppress=1222,2527,2529,2651,2653,2668,2669,2670,2671,2735,2737,2739,20012,20011,20014,177,940,1394
-
-set OBJ_DIR=%OUT_DIR%\obj
-if not exist "%OBJ_DIR%" mkdir "%OBJ_DIR%"
-
-echo Compiling CUDA TUs to LTO intermediates (code=lto_!ARCH_FLOOR!)...
-set OBJS=
-for %%f in (%CU_SRCS%) do (
-    %NVCC% -dc -gencode arch=compute_!ARCH_FLOOR!,code=lto_!ARCH_FLOOR! %NVCC_COMMON% %NVCC_DEFINES% %NVCC_INCLUDES% %NVCC_XCOMPILER% %NVCC_SUPPRESS% "%%f" -o "%OBJ_DIR%\%%~nf.obj" || exit /b 1
-    set OBJS=!OBJS! "%OBJ_DIR%\%%~nf.obj"
-)
-
-echo Compiling host C++ TUs...
-for %%f in (%CPP_SRCS%) do (
-    %NVCC% -c %NVCC_COMMON% %NVCC_DEFINES% %NVCC_INCLUDES% %NVCC_XCOMPILER% %NVCC_SUPPRESS% "%%f" -o "%OBJ_DIR%\%%~nf.obj" || exit /b 1
-    set OBJS=!OBJS! "%OBJ_DIR%\%%~nf.obj"
-)
-
-echo Device-linking with LTO (-dlto: native SASS cubins !ARCH_LIST_STR!, no PTX)...
-REM SASS is forward-compatible within a major version, so a cubin covers a device
-REM of the same major whose minor is at or above it: sm_86 covers sm_87 (Orin) and
-REM sm_89 (Ada: RTX 40, L40S); sm_90 Hopper; sm_100 Blackwell DC (B200); sm_120
-REM Blackwell consumer (RTX 50-series). Adding a generation is one line in
-REM cuda_arch.txt plus a rebuild; the launch gate follows from the same file, so
-REM there is nothing here to keep in sync by hand.
-REM
-REM -t runs the per-arch optimizations concurrently (0 = one thread per CPU),
-REM matching the Linux Makefile. Each -gencode is an independent whole-program
-REM optimization of the same LTO IR, and nvcc runs them one after another
-REM without this, so the link costs the arch count times a single arch: measured
-REM here 180.0 s for the five against 56.3 s with -t 0.
-REM
-REM It is a scheduling flag only, selecting no optimization level and changing no
-REM codegen decision. Do NOT try to confirm that by hashing the DLL: a PE carries
-REM a timestamp, so two SERIAL links of the same objects already differ, and the
-REM hash says nothing either way (the Linux .so, which has no such field, does
-REM come out byte-identical). Compare SASS, which is identical across serial,
-REM serial-repeated and -t 0 at 925,904 instructions. Getting at it needs
-REM cuobjdump and nvdisasm, neither of which warmup.bat installs. Extract them
-REM from the CUDA installer warmup already downloaded, which leaves the
-REM toolchain untouched:
-REM   7zip\7z.exe x downloads\cuda_<ver>_windows.exe -oC:\tmp\cuobj ^
-REM       "cuda_cuobjdump\*" "cuda_nvdisasm\*" -r -y
-REM then put the nvdisasm bin directory on PATH, or cuobjdump reports
-REM "Could not find executable file 'nvdisasm'". Note that a dump which fails
-REM this way exits 0 and prints nothing, so check the instruction count before
-REM trusting any comparison drawn from it.
-REM
-REM Do NOT substitute --split-compile, which parallelizes by narrowing the
-REM optimizer's scope and emitted 1.6%% more SASS in the hottest device code.
-REM -Wno-deprecated-gpu-targets matches NVCC_COMMON: the -gencode list lands at
-REM the device link, and nvcc 12.8 warns per deprecated target now that the
-REM floor and the sm_61 cubin are both below 75.
-%NVCC% -shared -dlto -t 0 -Wno-deprecated-gpu-targets !GENCODE! -Xcompiler "/MD" !OBJS! -lcudart -o "%LIB_DIR%\libsimbackend_cuda.dll"
-if errorlevel 1 (
-    echo ERROR: nvcc device-link failed
-    exit /b 1
-)
-echo   [DONE] libsimbackend_cuda.dll created
 
 echo.
 echo ============================================================
@@ -329,57 +373,278 @@ REM PyO3 links _ppf_cts_py.dll against python3.lib (the abi3 stable lib).
 REM The embedded python\ ships no libs\, so point PyO3 at the full NuGet
 REM CPython (python_full\, provisioned by warmup.bat) for the cdylib link.
 REM Unlike macOS/Linux (which resolve Python symbols at load time), Windows
-REM must link the import library at build time.
-set "PYTHON_FULL_EXE=%BUILD_WIN%\python_full\python.exe"
-if not exist "%PYTHON_FULL_EXE%" (
-    echo ERROR: Full Python not found at %PYTHON_FULL_EXE%
-    echo Please run warmup.bat first ^(it installs python_full alongside the embedded python^).
+REM must link the import library at build time. On ARM64 the bundled
+REM interpreter is a full CPython tree carrying libs\python3.lib, so it is
+REM the build interpreter too.
+if "!PPF_WIN_ARCH!"=="x64" (
+    set "PYTHON_FULL_EXE=%BUILD_WIN%\python_full\python.exe"
+) else (
+    set "PYTHON_FULL_EXE=%PYTHON_EXE%"
+)
+if not exist "!PYTHON_FULL_EXE!" (
+    echo ERROR: Full Python not found at !PYTHON_FULL_EXE!
+    echo Please run warmup.bat first ^(it installs the interpreter PyO3 links against^).
     exit /b 1
 )
-set "PYO3_PYTHON=%PYTHON_FULL_EXE%"
+set "PYO3_PYTHON=!PYTHON_FULL_EXE!"
 
-cargo build --release
+REM The Rust build scripts render the transcompiler by invoking `python3`
+REM (Command::new("python3"), the name that exists on Linux and macOS). The
+REM embedded interpreter ships only python.exe, so on Windows a bare `python3`
+REM resolves to the App-execution-alias store stub and the render panics with
+REM "Python was not found". Provide a real python3.exe (a copy of the embedded
+REM interpreter, which already renders the CUDA side in step 2) and put its
+REM directory first on PATH so it wins over the stub.
+copy /y "%BUILD_WIN%\python\python.exe" "%BUILD_WIN%\python\python3.exe" >nul
+set "PATH=%BUILD_WIN%\python;%PATH%"
+
+REM EVERY BACKEND BUILDS INTO ITS OWN target\<backend>, which is what lets one
+REM distribution carry several: they link the same executable name, so
+REM crates\ppf-cts-solver\build.rs refuses to put two in one directory. Each
+REM build sets CARGO_TARGET_DIR for itself, and an inherited value is cleared
+REM first rather than obeyed, since it would send one backend's artifacts where
+REM another's checks look.
+set "CARGO_TARGET_DIR="
+
+if "!HAS_CUDA!"=="1" (
+    set "CARGO_TARGET_DIR=%SRC_DIR%\target\cuda"
+    REM ppf-cts-compute's build script (a build-dependency here) emits a link against
+    REM libsimbackend_cuda for its dependents' BUILD SCRIPTS on Windows, so those
+    REM build-script executables import be_* from the backend DLL. Windows resolves
+    REM a static import at executable LOAD time even when the function is never
+    REM called, so the build script cannot start unless the DLL is on the search
+    REM path when cargo runs it. Put the freshly built lib directory on PATH; cudart,
+    REM the DLL's own dependency, is already there from the CUDA setup above.
+    set "PATH=%LIB_DIR%;!PATH!"
+
+    cargo build --release --features cuda
+    if errorlevel 1 (
+        echo ERROR: Rust build failed
+        set "CARGO_TARGET_DIR="
+        exit /b 1
+    )
+
+    REM ONE WORKSPACE BUILD, NOT A SECOND `-p ppf-cts-server` ONE, which is the
+    REM rule the ROCm arm below states for its own reason. The build above
+    REM already produces ppf-cts-server, a workspace default-member beside
+    REM ppf-cts-solver and ppf-cts-py, and the Blender addon's Windows Native
+    REM launcher (blender_addon/core/connection.py:spawn_win_native_server)
+    REM spawns ppf-cts-server.exe out of whichever backend directory it
+    REM resolves. A second `-p ppf-cts-server --features cuda` build is not a
+    REM guard but an ERROR: the backend features are declared on
+    REM ppf-cts-solver, while ppf-cts-server declares only `cpu`, so cargo
+    REM refuses with "the package 'ppf-cts-server' does not contain this
+    REM feature: cuda". The guard is the existence check below, which fails the
+    REM build when either binary is missing.
+    set "CARGO_TARGET_DIR="
+)
+if "!HAS_ROCM!"=="1" (
+    set "CARGO_TARGET_DIR=%SRC_DIR%\target\rocm"
+    REM THE SAME LOAD-TIME RULE, TWO LEVELS DEEP. The build scripts import be_*
+    REM from libppfbe_rocm.dll, and that DLL imports its platform's runtime, so both
+    REM directories go on PATH: the SDK's bin, which holds amdhip64_7.dll, for the
+    REM AMD platform, and the CUDA toolkit's for the staging one.
+    REM ppf-cts-core compiles the check_gpu probe against the SDK named by
+    REM ROCM_PATH, for the platform HIP_PLATFORM names.
+    set "ROCM_PATH=!HIP_ROOT!"
+    set "HIP_PATH=!HIP_ROOT!"
+    set "HIP_PLATFORM=!ROCM_PLATFORM!"
+    if "!ROCM_PLATFORM!"=="amd" (
+        set "PATH=%ROCM_LIB_DIR%;%ROCM_DIR%\bin;!PATH!"
+    ) else (
+        set "PATH=%ROCM_LIB_DIR%;%CUDA_DIR%\bin;!PATH!"
+    )
+
+    REM ONE WORKSPACE BUILD, NOT A SECOND `-p ppf-cts-server` ONE. The server and
+    REM the cdylib take ppf-cts-core's rocm feature from the solver through feature
+    REM unification in this invocation; a separate server build without the
+    REM feature would replace target\rocm\release\ppf-cts-server.exe with one
+    REM whose check_gpu asks for an NVIDIA device.
+    cargo build --release --features rocm
+    if errorlevel 1 (
+        echo ERROR: Rust build failed
+        set "CARGO_TARGET_DIR="
+        exit /b 1
+    )
+    set "CARGO_TARGET_DIR="
+)
+
+REM EACH BACKEND'S THREE ARTIFACTS, in its own directory. The addon spawns the
+REM chosen directory's own ppf-cts-server, and the build worker it starts loads
+REM the cdylib beside it, so a missing one of the three is a backend that cannot
+REM be selected. frontend/__init__.py loads that cdylib by absolute path, which
+REM is why no wheel is installed into the bundled Python.
+for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
+    for %%F in (ppf-contact-solver.exe ppf-cts-server.exe _ppf_cts_py.dll) do (
+        if not exist "%SRC_DIR%\target\%%B\release\%%F" (
+            echo ERROR: target\%%B\release\%%F not found after build
+            exit /b 1
+        )
+    )
+    echo   [DONE] the %%B backend built into target\%%B\release
+)
+
+REM ASK THE BINARY WHETHER IT ACTUALLY IMPORTS THE GPU LIBRARY. Naming the
+REM library on the link line does NOT mean the binary uses it: the linker drops
+REM an unreferenced import, so a build whose dispatch path resolved to the host
+REM renderings links clean, runs, computes the right numbers and never touches
+REM the GPU. That shipped. `crates\ppf-cts-solver\build.rs` had emitted
+REM `abi_backend_linked` on every platform but Windows, so `driver/launch.rs`
+REM resolved `Backend` to `HostDevice` here, and the whole solve ran on the CPU
+REM under a binary that answers `--backend cuda`.
+REM
+REM MEASURED ON THE UNFIXED TREE, on one box: `dumpbin /dependents` listed only
+REM system DLLs, with neither libsimbackend_cuda.dll nor cudart present;
+REM nvidia-smi read 210 MHz and 0 percent utilization in all 27 samples of a
+REM solve; and examples/headless.py took about 6.9 sec per step against 84 msec
+REM for the same commit on Linux. Every CI gate was green throughout.
+REM
+REM So this checks the ARTIFACT rather than the intent: ask what a thing IS,
+REM never infer it from the path or the command that produced it. build.rs now
+REM fails such a build outright; this is the second, independent witness, and it
+REM catches any future cause rather than only a missing cfg. The ROCm build is
+REM asked the same question about its own library.
+for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
+    set "GPU_LIBRARY="
+    if "%%B"=="cuda" set "GPU_LIBRARY=libsimbackend_cuda.dll"
+    if "%%B"=="rocm" set "GPU_LIBRARY=libppfbe_rocm.dll"
+    dumpbin /dependents "%SRC_DIR%\target\%%B\release\ppf-contact-solver.exe" | findstr /i "!GPU_LIBRARY!" >nul
+    if errorlevel 1 (
+        echo ERROR: target\%%B\release\ppf-contact-solver.exe does not import !GPU_LIBRARY!.
+        echo        The binary links no GPU backend, so the solve would run on the CPU
+        echo        while still reporting --backend %%B. See the note above this check.
+        exit /b 1
+    )
+    echo   [DONE] the %%B solver imports !GPU_LIBRARY!
+)
+
+REM AND THE ROCm SOLVER IS ASKED WHICH PLATFORM IT LOADED. `--backend` prints what
+REM build.rs selected and then, when the loaded library answers differently, a
+REM `linked:` line: the AMD library answers `rocm` and the staging library
+REM `hip-nvidia`. The platform this build was asked for must be the one that
+REM loads, since the two write the same file.
+if "!HAS_ROCM!"=="1" (
+    set "GOT_BACKEND="
+    set "GOT_LINKED="
+    for /f "tokens=1,2" %%A in ('"%SRC_DIR%\target\rocm\release\ppf-contact-solver.exe" --backend') do (
+        if "%%A"=="linked:" (
+            set "GOT_LINKED=%%B"
+        ) else (
+            set "GOT_BACKEND=%%A"
+        )
+    )
+    set "WANT_LINKED="
+    if "!ROCM_PLATFORM!"=="nvidia" set "WANT_LINKED=hip-nvidia"
+    if not "!GOT_BACKEND!"=="rocm" (
+        echo ERROR: target\rocm\release\ppf-contact-solver.exe --backend answers "!GOT_BACKEND!", expected "rocm"
+        exit /b 1
+    )
+    if not "!GOT_LINKED!"=="!WANT_LINKED!" (
+        echo ERROR: the ROCm solver loaded a library for another platform than !ROCM_PLATFORM!:
+        echo        --backend reports linked "!GOT_LINKED!", and this build expects "!WANT_LINKED!"
+        exit /b 1
+    )
+    echo   [DONE] the solver answers --backend rocm and loads the !ROCM_PLATFORM! platform library
+)
+
+REM ============================================================
+REM The CPU backend, into its OWN target directory
+REM ============================================================
+REM TWO BACKENDS CANNOT SHARE ONE DIRECTORY. Every backend links the same
+REM executable name, so crates\ppf-cts-solver\build.rs refuses to put a second
+REM one where another already sits: --features cpu against target\cuda would
+REM replace the CUDA solver in place with one roughly 30x slower, leaving
+REM nothing to say it had changed. CARGO_TARGET_DIR is the variable that file
+REM names in its own refusal, and the frontend reads it too, so the cdylib
+REM lands beside the binary it belongs to.
+REM
+REM WHY THE BUNDLE CARRIES IT. The Blender addon offers a GPU/CPU choice and a
+REM device is available exactly when a build for it exists under the selected
+REM root, so without this the choice can never be satisfied by a download: the
+REM artist is told to run a cargo command, which is the one thing someone
+REM running an unzipped release cannot do.
+REM
+REM THE SAME DIRECTORY WHATEVER ELSE WAS BUILT. On ARM64, and on x64 with
+REM PPF_WIN_BACKENDS=cpu, no GPU backend is built at all, and the CPU build still
+REM goes to target\cpu, so the addon's device table, the frontend and bundle.bat
+REM read one layout whatever else sits beside it.
+REM
+REM MEASURED RATHER THAN ASSUMED. .github\workflows\unit-tests.yml recorded
+REM that the CPU backend's entrypoints shim had never been compiled with MSVC
+REM and that enabling it was "a change that has to be tried rather than
+REM assumed". It was tried on a Windows Server 2025 machine, the same family
+REM as the CI image: the build completes and the binary answers --backend cpu.
+echo.
+echo Building the CPU backend into target\cpu...
+set "CARGO_TARGET_DIR=%SRC_DIR%\target\cpu"
+cargo build --release --features cpu
 if errorlevel 1 (
-    echo ERROR: Rust build failed
+    echo ERROR: CPU backend build failed
+    set "CARGO_TARGET_DIR="
     exit /b 1
 )
+REM CLEARED IMMEDIATELY, and on the failure path above as well. Every step after
+REM this one names the directory it means, so a value left set would silently
+REM point one of them at the CPU build.
+set "CARGO_TARGET_DIR="
 
-REM `cargo build --release` above already builds ppf-cts-server (it is a
-REM workspace default-member alongside ppf-cts-solver and ppf-cts-py). The
-REM Blender addon's Windows Native launcher
-REM (blender_addon/core/connection.py:spawn_win_native_server) spawns
-REM target\release\ppf-cts-server.exe whenever the user picks "Windows
-REM Native" mode in the addon UI, so rebuild explicitly as a guard and
-REM verify it exists below so the bundle always ships both binaries.
-echo Building ppf-cts-server...
-cargo build --release -p ppf-cts-server
-if errorlevel 1 (
-    echo ERROR: ppf-cts-server build failed
+if not exist "%SRC_DIR%\target\cpu\release\ppf-contact-solver.exe" (
+    echo ERROR: target\cpu\release\ppf-contact-solver.exe not found after build
     exit /b 1
 )
-if not exist "%SRC_DIR%\target\release\ppf-cts-server.exe" (
-    echo ERROR: target\release\ppf-cts-server.exe not found after build
+if not exist "%SRC_DIR%\target\cpu\release\ppf-cts-server.exe" (
+    echo ERROR: target\cpu\release\ppf-cts-server.exe not found after build
     exit /b 1
 )
-echo   [DONE] Rust build complete
-
-REM `cargo build --release` above also builds the ppf-cts-py crate
-REM (a workspace default-member) into target\release\_ppf_cts_py.dll.
-REM frontend/__init__.py loads that cdylib directly by absolute path, so
-REM no wheel install into the embedded Python is needed. The launcher
-REM scripts below put %SRC%\target\release on PATH and %SRC% on
-REM PYTHONPATH, which is all frontend needs to find it.
-if not exist "%SRC_DIR%\target\release\_ppf_cts_py.dll" (
-    echo ERROR: target\release\_ppf_cts_py.dll not found after build
+REM ALL THREE TRAVEL, not just the solver. The addon spawns the chosen
+REM directory's own ppf-cts-server, and the build worker that server starts
+REM loads the cdylib beside it, which is what makes the session script name the
+REM CPU solver rather than the CUDA one.
+if not exist "%SRC_DIR%\target\cpu\release\_ppf_cts_py.dll" (
+    echo ERROR: target\cpu\release\_ppf_cts_py.dll not found after build
     exit /b 1
 )
-echo   [DONE] _ppf_cts_py.dll built
+echo   [DONE] CPU backend built
 
 echo.
 echo ============================================================
 echo [4/4] Creating Launcher Scripts
 echo ============================================================
 echo.
+
+REM WHAT THE LAUNCHERS PUT ON PATH IS EVERY BUILT BACKEND'S LIBRARY DIRECTORY,
+REM because which backend a run uses is decided when the run starts
+REM (frontend.get_backend) rather than here: each solver imports its own backend
+REM library, so all of them have to be findable, and the solver directories
+REM themselves go on PATH for the same reason.
+REM
+REM NO TARGET DIRECTORY IS PINNED where a GPU backend was built. The frontend
+REM searches target\<backend> itself and resolves the choice; a CARGO_TARGET_DIR
+REM here would make that choice for every run instead. A CPU-only build is the
+REM one case with nothing to resolve, and naming it keeps the frontend from
+REM searching for a GPU build that was never made.
+REM
+REM The lines are held in variables with the launcher's own %SRC% and %BUILD_WIN%
+REM written literally, and echoed through delayed expansion, which inserts them
+REM after cmd.exe has parsed the block, so no character in them needs escaping.
+set "LAUNCH_ENV="
+set "LAUNCH_PATH=%%SRC%%\target\cpu\release"
+set "PYW_DIRS=[os.path.join(src, 'target', 'cpu', 'release')"
+set "PYW_TARGET=# the frontend searches this tree's target\<backend> and resolves the backend itself"
+if "!HAS_CUDA!"=="1" (
+    set "LAUNCH_ENV=set CUDA_PATH=%%BUILD_WIN%%\cuda"
+    set "LAUNCH_PATH=%%SRC%%\target\cuda\release;%%SRC%%\crates\ppf-cts-compute\cuda\build\lib;%%CUDA_PATH%%\bin;!LAUNCH_PATH!"
+    set "PYW_DIRS=!PYW_DIRS!, os.path.join(src, 'target', 'cuda', 'release'), os.path.join(src, 'crates', 'ppf-cts-compute', 'cuda', 'build', 'lib'), os.path.join(script_dir, 'cuda', 'bin')"
+)
+if "!HAS_ROCM!"=="1" (
+    set "LAUNCH_PATH=%%SRC%%\target\rocm\release;%%SRC%%\crates\ppf-cts-compute\rocm\build\lib;%%BUILD_WIN%%\rocm\bin;!LAUNCH_PATH!"
+    set "PYW_DIRS=!PYW_DIRS!, os.path.join(src, 'target', 'rocm', 'release'), os.path.join(src, 'crates', 'ppf-cts-compute', 'rocm', 'build', 'lib'), os.path.join(script_dir, 'rocm', 'bin')"
+)
+set "PYW_DIRS=!PYW_DIRS!]"
+if not defined PPF_WIN_GPU_BACKENDS (
+    set "LAUNCH_ENV=set CARGO_TARGET_DIR=%%SRC%%\target\cpu"
+    set "PYW_TARGET=os.environ['CARGO_TARGET_DIR'] = os.path.join(src, 'target', 'cpu')"
+)
 
 REM Create launcher script that sets up PATH to reference binaries directly
 (
@@ -391,10 +656,10 @@ echo set BUILD_WIN=%%~dp0
 echo set BUILD_WIN=%%BUILD_WIN:~0,-1%%
 echo for %%%%I in ^("%%BUILD_WIN%%\.."^) do set SRC=%%%%~fI
 echo.
-echo set CUDA_PATH=%%BUILD_WIN%%\cuda
+echo !LAUNCH_ENV!
 echo.
 echo REM Set PATH to include binaries from their source locations
-echo set PATH=%%BUILD_WIN%%\python;%%BUILD_WIN%%\python\Scripts;%%SRC%%\target\release;%%SRC%%\crates\ppf-cts-solver\src\cpp\build\lib;%%CUDA_PATH%%\bin;%%PATH%%
+echo set PATH=%%BUILD_WIN%%\python;%%BUILD_WIN%%\python\Scripts;!LAUNCH_PATH!;%%PATH%%
 echo set PYTHONPATH=%%SRC%%;%%PYTHONPATH%%
 echo.
 echo REM Set Jupyter/IPython config to build-win-native relative paths
@@ -429,13 +694,11 @@ echo script_dir = os.path.dirname^(os.path.abspath^(__file__^)^)
 echo src = os.path.dirname^(script_dir^)
 echo.
 echo python_exe = os.path.join^(script_dir, "python", "pythonw.exe"^)
-echo bin_dir = os.path.join^(src, "target", "release"^)
-echo lib_dir = os.path.join^(src, "crates", "ppf-cts-solver", "src", "cpp", "build", "lib"^)
-echo cuda_path = os.path.join^(script_dir, "cuda"^)
-echo cuda_bin = os.path.join^(cuda_path, "bin"^)
+echo dll_dirs = !PYW_DIRS!
 echo.
-echo os.environ["PATH"] = bin_dir + ";" + lib_dir + ";" + cuda_bin + ";" + os.environ.get^("PATH", ""^)
+echo os.environ["PATH"] = ";".join^(dll_dirs^) + ";" + os.environ.get^("PATH", ""^)
 echo os.environ["PYTHONPATH"] = src + ";" + os.environ.get^("PYTHONPATH", ""^)
+echo !PYW_TARGET!
 echo.
 echo # Set Jupyter/IPython config to build-win-native relative paths
 echo os.environ["JUPYTER_CONFIG_DIR"] = os.path.join^(script_dir, "jupyter", "config"^)
@@ -453,14 +716,21 @@ echo time.sleep^(3^)
 echo webbrowser.open^("http://localhost:8080"^)
 ) > "%BUILD_WIN%\start-jupyterlab.pyw"
 
-REM Update Python path configuration (embedded Python uses .pth file)
-(
-echo python311.zip
-echo .
-echo Lib\site-packages
-echo %SRC_DIR%
-echo import site
-) > "%BUILD_WIN%\python\python311._pth"
+REM Update Python path configuration (embedded Python uses .pth file). x64 only:
+REM the python.org embeddable interpreter reads its search path from this file
+REM and nothing else. The ARM64 interpreter is a full CPython installation that
+REM honors PYTHONPATH, which the launchers above set, and it is given no ._pth in
+REM the development tree because an isolated base interpreter also isolates every
+REM venv made from it, which scripts\source-wheel.py builds wheels in.
+if "!PPF_WIN_ARCH!"=="x64" (
+    (
+    echo python311.zip
+    echo .
+    echo Lib\site-packages
+    echo %SRC_DIR%
+    echo import site
+    ) > "%BUILD_WIN%\python\python311._pth"
+)
 
 echo   [DONE] Launcher scripts created
 

@@ -20,12 +20,12 @@
 #
 # This scenario reproduces that transform structure with a single SHELL plane
 # (local verts ~+/-100, object scale 0.01, non-origin location) and checks that
-# the round-tripped geometry matches the input local verts. The emulated
+# the round-tripped geometry matches the input local verts. The solver
 # advance is a no-op, so the solver output must equal the decoded input; a
 # correct decode round-trips to numeric noise, the translation-drop bug is off
 # by hundreds of units.
 #
-# Blender + emulated solver end to end (build / run / fetch), so it exercises
+# Blender + solver end to end (build / run / fetch), so it exercises
 # the real frontend decode that writes the session vertex buffers.
 #
 # Subtests:
@@ -42,6 +42,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r"""
@@ -89,9 +94,9 @@ try:
     rig.rotation_euler = (0.0, 0.0, -1.5707963)  # -90 deg Z, not captured by mpi
     bpy.context.view_layer.update()
 
-    # Log the world bbox so a failure can be attributed to the transform
-    # round-trip rather than to the scene sitting at a coordinate magnitude
-    # where the positions themselves lose resolution.
+    # World bbox must stay inside the coordinate domain the solver bounds a
+    # scene to (~+/-16) or the solver rejects it for a reason unrelated to
+    # this test.
     import numpy as _np
     _mw = _np.array(plane.matrix_world)
     _co = _np.empty(len(plane.data.vertices) * 3)
@@ -115,7 +120,7 @@ try:
     shell.add(plane.name)
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.build_and_wait(data_bytes, param_bytes, message="xform:build",
                       timeout=120.0)
@@ -134,7 +139,7 @@ try:
     if arr is not None and arr.shape[0] >= 2 and arr.shape[1] == n:
         n_samples = int(arr.shape[0])
         # Sample 0 is the addon rest geometry; sample 1 is the round-tripped
-        # solver output (emulated advance is a no-op, so it must equal the
+        # solver output (advance is a no-op, so it must equal the
         # decoded input). Compare the solver output back to the original local
         # verts: a translation-drop leaves it off by ~inv(0.01)*translation
         # (hundreds of units), a correct decode round-trips to numeric noise.

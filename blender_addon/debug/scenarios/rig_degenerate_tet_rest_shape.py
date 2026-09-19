@@ -23,7 +23,7 @@
 #   * REACHABILITY. `compute_inv_rest` runs the tet arm only over
 #     `mesh.mesh.mesh.tet`, and the shell scenario's geometry has no tets at
 #     all, so `rig_degenerate_rest_shape` leaves this arm untouched. A marker
-#     placed in this panic branch was never written across a full emulated
+#     placed in this panic branch was never written across a full
 #     sweep, so `ascii_matrix3` and the tet wording were reached by no rig
 #     scenario at all.
 #   * WHICH GATE OWNS THE CASE. `main.rs` asserts `triutils::tet_volumes` over
@@ -64,7 +64,7 @@
 #     on its way to the solver.
 #
 # NO BLENDER AND NO GPU. The gate is host-side Rust in the solver driver,
-# shared by both backends, so this runs anywhere the emulated server runs and
+# shared by both backends, so this runs anywhere the server runs and
 # holds on the real-GPU jobs unchanged. `rig_degenerate_rest_shape` is the
 # shell arm of the same gate; the two arms build the same quantity for the same
 # energy out of the same arithmetic and must refuse on the same grounds.
@@ -110,7 +110,7 @@ from . import _runner as r
 
 # No Blender and no GPU: this is the host-side build check in the solver
 # driver, so it holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _PROBE = r'''
@@ -261,9 +261,10 @@ print("PPFRESULT" + json.dumps(cases))
 def run(ctx: r.ScenarioContext) -> dict:
     env = dict(os.environ)
     env["PPF_CTS_DATA_ROOT"] = ctx.workspace
-    # The emulator's default step is 1000 ms; only one case here runs frames
-    # and none of them measures time, so the sleep is pure sweep cost.
-    env["PPF_EMULATED_STEP_MS"] = "0"
+    # No `PPF_STEP_DELAY_MS`. Only one case here runs frames, none of them
+    # measures time, and nothing watches a run in progress, so a per-step delay
+    # would be pure sweep cost. The knob defaults to zero, so the absence is
+    # also the default.
     env["PYTHONPATH"] = REPO_ROOT_POSIX
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE, REPO_ROOT_POSIX],

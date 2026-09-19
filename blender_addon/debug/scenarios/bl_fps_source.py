@@ -46,7 +46,7 @@ NEEDS_BLENDER = True
 
 # Backend-agnostic: every assertion is a value-propagation invariant, and
 # param.toml is written by the frontend before any backend runs.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 _FRAME_COUNT = 6
 # Deliberately different from each other, and from every default, so a hop
@@ -154,7 +154,7 @@ try:
     state.use_scene_fps = True
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="fps_source:build")

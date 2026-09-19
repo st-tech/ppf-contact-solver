@@ -6,6 +6,20 @@
 mod args;
 mod backend;
 mod builder;
+// The neutral driver: the Newton loop, the linear solve, the assembly order and
+// every dispatch decision, written once and driven through the `Device` seam.
+// It defines the `extern "C"` surface the unconditional declarations in
+// `backend.rs`, `main.rs` and `status_writer.rs` bind to, so not one call site
+// moves when it is the thing running.
+//
+// The gate names no backend, which is what rule (1d) asks of every name in this
+// crate. What it names is the fact that decides the question: whether this
+// build links an implementation of the seam for the driver to drive. `build.rs`
+// answers that in `Backend::links_neutral_driver`, in the one file that is
+// allowed to know a target's name at all, and the reason a C++ backend answers
+// no is written there rather than here.
+#[cfg(neutral_driver)]
+mod driver;
 mod cvec;
 mod cvecvec;
 mod data;
@@ -52,7 +66,88 @@ extern "C" fn print_rust(message: *const libc::c_char) {
     info!("{message}");
 }
 
+/// The exit status of `--probe` when this build has no usable device here. Not
+/// 1, which a panic or a refused argument also produces, so a crash is never
+/// read as the answer "unusable".
+const PROBE_UNUSABLE: i32 = 3;
+
+/// `--probe`: whether this binary can run on this machine, answered by the
+/// backend itself.
+///
+/// A distribution carries one directory per backend, and choosing among them
+/// needs "this backend has a usable device here", which only the backend can
+/// say. The answer is the preflight a session runs (`check_gpu`), which carries
+/// the precise refusals, followed by opening the device through the constructor
+/// a run uses, with its failure reported instead of panicked on.
+///
+/// The output is `key: value` lines on stdout, which the frontend's backend
+/// resolution reads: `backend`, `linked` where a library is linked, `stamp`
+/// (`ppf_cts_formats::SOURCE_STAMP`), then `device` with exit 0 or `unusable`
+/// with [`PROBE_UNUSABLE`].
+fn probe() -> i32 {
+    println!("backend: {}", env!("PPF_BACKEND"));
+    #[cfg(abi_backend_linked)]
+    {
+        println!("linked: {}", ppf_cts_compute::abi::linked_backend_name());
+    }
+    println!("stamp: {}", ppf_cts_formats::SOURCE_STAMP);
+    if let Err(error) = ppf_cts_core::utils::check_gpu() {
+        println!("unusable: {error}");
+        return PROBE_UNUSABLE;
+    }
+    #[cfg(not(neutral_driver))]
+    compile_error!("--probe opens the device through the neutral driver, which this build does not link");
+    match driver::probe_device() {
+        Ok(name) => {
+            println!("device: {name}");
+            0
+        }
+        Err(fault) => {
+            println!("unusable: {fault}");
+            PROBE_UNUSABLE
+        }
+    }
+}
+
 fn main() {
+    // WHETHER THIS BINARY CAN RUN HERE; see `probe`. Handled before the
+    // argument parser for the same reason `--backend` below is.
+    if std::env::args().any(|argument| argument == "--probe") {
+        std::process::exit(probe());
+    }
+    // WHICH BACKEND THIS BINARY IS, asked of the artifact itself.
+    //
+    // Every backend links this same executable name, because launch scripts,
+    // the Windows batch files and the CI runners invoke it by that name, so
+    // neither the path nor the file name says what is inside it. `build.rs`
+    // compiles the answer in and this prints it. Handled before the argument
+    // parser, which knows nothing of this flag and would reject it.
+    if std::env::args().any(|argument| argument == "--backend") {
+        // TWO ANSWERS, AND THE SECOND IS THE ONE THAT CAN DISAGREE.
+        //
+        // `PPF_BACKEND` is what `build.rs` SELECTED. It is not evidence about
+        // what the binary can CALL: a build whose `abi_backend_linked` cfg is
+        // missed on one platform still reports `cuda` from this string while
+        // running the whole solve on the host renderings. A build-time label
+        // cannot catch that, since it is produced by the very step that went
+        // wrong.
+        //
+        // `be_backend_name` is answered by the LOADED library, so it reports
+        // what is actually linked. When a library is linked, both are printed
+        // and a disagreement is named rather than hidden. One source can build
+        // for two platforms (a HIP backend compiles for AMD and, through nvcc,
+        // for NVIDIA), so "selected rocm" and "linked hip-nvidia" are both true
+        // and mean different things.
+        println!("{}", env!("PPF_BACKEND"));
+        #[cfg(abi_backend_linked)]
+        {
+            let linked = ppf_cts_compute::abi::linked_backend_name();
+            if linked != env!("PPF_BACKEND") {
+                println!("linked: {linked}");
+            }
+        }
+        return;
+    }
     let mut program_args = ProgramArgs::parse();
     // `--load -1` is the "resume from latest checkpoint" sentinel the
     // server emits when the user clicks Resume (see
@@ -80,7 +175,7 @@ fn main() {
         }
     }
     // Initialize the logger before emitting any diagnostics. The git
-    // info! lines below (and the print_rust FFI bridge)
+    // and float info! lines below (and the print_rust FFI bridge)
     // route to the global NOP logger until log4rs is installed inside
     // setup(), so they are silently dropped if setup() runs later.
     // setup() only reads program_args (load/output, both resolved by
@@ -170,6 +265,7 @@ fn main() {
         let mut backend = backend::Backend::load_state(program_args.load, &program_args.output);
         info!("Data loaded successfully");
         param.time = backend.state.time;
+        param.time_f32 = param.time as f32;
         param.prev_dt = backend.state.prev_dt;
         builder::copy_to_dataset(
             &backend.state.curr_vertex,
@@ -226,7 +322,7 @@ fn main() {
                 let rod = mesh.mesh.mesh.edge.column(i);
                 let x0 = mesh.vertex.column(rod[0]);
                 let x1 = mesh.vertex.column(rod[1]);
-                let length = (x1 - x0).norm();
+                let length = (x1 - x0).map(f32::from).norm();
                 let param = builder::averaged_edge_param(
                     &mesh.mesh.neighbor.edge.face[i],
                     &props.face,
@@ -525,13 +621,62 @@ fn setup(program_args: &ProgramArgs) {
     // intent. Don't preemptively delete it: the run() loop will pick
     // it up on the first iteration and call save_state.
 
+    // TWO WRITERS SHARE THIS STDOUT STREAM, AND ONLY ONE OF THEM IS TIMESTAMPED.
+    // This pattern prefixes every `::log::` record, which is the whole of the
+    // solver's Rust-side output. The other writer is `driver::log`, which
+    // reproduces `src/kernels/simplelog/SimpleLog.cpp` and prints with
+    // `println!` and no prefix at all: the mark lines (`* iter: 199`), the
+    // phase lines (`> linsolve...7 msec`) and the section brackets
+    // (`====== advance ======`). A solve's transcript therefore carries
+    // `===== advance: 28 msec =====` bare and
+    // `[2026-09-08 07:26:36] GPU SM Clock: 2520 MHz` prefixed one line later.
+    //
+    // So the missing prefix on those lines is the specification rather than an
+    // oversight, and routing them through `info!` to make the stream uniform
+    // would restore the prefix and change what every reader of this log sees:
+    // the frontend's `>>> Log:` tail, the addon's log panel and a person
+    // watching a solve. Those lines are a host contract, not free-form output.
+    //
+    // Interleaving is exact and needs no coordination. log4rs's
+    // `ConsoleAppender` writes through `io::stdout()` whenever stdout is not a
+    // tty, which is the shipped case (the solver's stdout is redirected into
+    // `session/stdout.log`), so it shares the handle and the lock `println!`
+    // uses. On a tty it writes to fd 1 directly, but it flushes per record and
+    // `println!` flushes per line, so neither writer leaves a partial line
+    // outstanding across the other.
+    // THE LEVEL IS READ FROM `RUST_LOG`, AND WITHOUT THAT A DEMOTION IS A
+    // DELETION. Diagnostics that carry more than a shipped transcript needs sit
+    // at `debug!`, so the default stream stays the one the addon's log panel
+    // and the frontend's tail were written against. That is only a demotion if
+    // something can still ask for them: with the level hardcoded at `Info` the
+    // `debug!` call is unreachable in the shipped binary, and the fixtures that
+    // assert on those lines fail with no way to switch them back on.
+    fn level_from_environment() -> LevelFilter {
+        // An unparseable value is reported rather than silently ignored: a
+        // typo in `RUST_LOG` that quietly gave the default would be read as
+        // the diagnostic having gone missing.
+        match std::env::var("RUST_LOG") {
+            Ok(text) => match text.trim().parse::<LevelFilter>() {
+                Ok(level) => level,
+                Err(_) => {
+                    eprintln!(
+                        "solver: RUST_LOG={text:?} is not a log level; \
+                         using info. Valid: error, warn, info, debug, trace."
+                    );
+                    LevelFilter::Info
+                }
+            },
+            Err(_) => LevelFilter::Info,
+        }
+    }
+
     let pattern = "[{d(%Y-%m-%d %H:%M:%S)}] {m}{n}";
     let stdout = ConsoleAppender::builder()
         .encoder(Box::new(PatternEncoder::new(pattern)))
         .build();
     let config = Config::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
-        .build(Root::builder().appender("stdout").build(LevelFilter::Info))
+        .build(Root::builder().appender("stdout").build(level_from_environment()))
         .unwrap();
 
     log4rs::init_config(config).unwrap();

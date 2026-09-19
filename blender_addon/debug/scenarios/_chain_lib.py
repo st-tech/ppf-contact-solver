@@ -43,7 +43,7 @@ STEP_NAMES = (
     "abort_midbuild",            # build + abort same tick
     "abort_during_run",          # run, then abort while RUNNING
     "disconnect",                # com.disconnect()
-    "reconnect",                 # connect_local again, hashes echo
+    "reconnect",                 # connect again, hashes echo
     "stop_server",               # com.stop_server() — kills the proc
     "start_server",              # com.start_server() — relaunches
     "verify_idle",               # asserts activity=IDLE, no work in flight
@@ -192,7 +192,7 @@ class ChainHarness:
 # ---- step bodies --------------------------------------------------
 
 def step_connect(h):
-    h.dh.connect_local(local_path=h.local_path, server_port=h.server_port,
+    h.dh.connect(local_path=h.local_path, server_port=h.server_port,
                        project_name=h.root.state.project_name)
     s = h.dh.facade.engine.state
     assert s.phase.name == "ONLINE"
@@ -427,7 +427,7 @@ def step_disconnect(h):
 
 
 def step_reconnect(h):
-    h.dh.connect_local(local_path=h.local_path, server_port=h.server_port,
+    h.dh.connect(local_path=h.local_path, server_port=h.server_port,
                        project_name=h.root.state.project_name)
     h.wait_until(
         lambda s: bool(s.server_data_hash) and bool(s.server_param_hash),

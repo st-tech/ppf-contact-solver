@@ -70,9 +70,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
-# No physics: the picker is add-on logic and panel drawing, so the emulated
-# build exercises it exactly as the real one does.
-BACKENDS = ("emulated",)
+# No physics: the picker is add-on logic and panel drawing, and the device
+# list is a RECORDED nvidia-smi answer, so every assertion holds on a host
+# with no NVIDIA driver. It declared the solver only because that
+# was the cheap CPU-capable one; nothing here reads a solve.
+BACKENDS = ("real",)
 
 
 _DRIVER_TEMPLATE = r"""
@@ -269,10 +271,26 @@ try:
     # ----- G: a Stop/Start cycle re-launches on the same GPU ------------
     seen = {}
 
+    # THREE AXES REACH THE SPAWN, and the double must accept every one or the
+    # scenario fails on the signature instead of on what it asserts. `device`
+    # is the COMPUTE DEVICE (GPU or CPU); `gpu_backend` is WHICH ACCELERATOR
+    # (CUDA, ROCm, or automatic) where a root carries more than one build;
+    # `cuda_device` picks WHICH GPU. The backend remembers all three and
+    # passes them on every re-spawn. Measured: a double missing the third
+    # failed every run with "_fake_spawn() takes from 2 to 5 positional
+    # arguments but 6 were given". Each is recorded so a regression that
+    # dropped one on restart shows up here.
     def _fake_spawn(
-        root, port, cuda_device=gpu.AUTOMATIC, cuda_device_uuid=""
+        root,
+        port,
+        cuda_device=gpu.AUTOMATIC,
+        cuda_device_uuid="",
+        device="GPU",
+        gpu_backend=conn.GPU_BACKEND_AUTO,
     ):
         seen["args"] = (root, port, cuda_device, cuda_device_uuid)
+        seen["device"] = device
+        seen["gpu_backend"] = gpu_backend
         return None
 
     original_spawn = conn.spawn_win_native_server
@@ -320,12 +338,22 @@ try:
     silent_server = _confirmation_text({"GPU": "NVIDIA L4"}, 2)
     no_device = _confirmation_text(
         {"GPU Index": -1, "GPU": "CUDA_VISIBLE_DEVICES is set to '9', which selects no GPU"}, 9)
+    # A server that is not on CUDA is asked none of this. It reports no GPU
+    # index because it has no such concept, and the silent_server case above is
+    # what that would otherwise be mistaken for: an old server failing to answer
+    # rather than a backend the question does not apply to. The fixtures above
+    # carry no "Backend" key on purpose, which is the pre-field server, and it
+    # still takes the CUDA path.
+    metal_server = _confirmation_text({"Backend": "metal", "GPU": "Apple M2 Max"}, 2)
+    cpu_server = _confirmation_text({"Backend": "cpu"}, 2)
     cases = {
         "agreed": agreed,
         "disagreed": disagreed,
         "under_auto": under_auto,
         "silent_server": silent_server,
         "no_device": no_device,
+        "metal_server": metal_server,
+        "cpu_server": cpu_server,
     }
     # The GPU Index row feeds the comparison but is never listed: the GPU row
     # already leads with the same number.
@@ -337,7 +365,8 @@ try:
            and "not the selected GPU 2" in disagreed
            and "Stop Server" in disagreed
            and "does not report" in silent_server
-           and "selects no GPU" in no_device,
+           and "selects no GPU" in no_device
+           and metal_server == "" and cpu_server == "",
            {"cases": cases})
 
     # ----- J: every server start is recorded in the console -------------
@@ -427,6 +456,19 @@ try:
             # will never come up.
             return {"exit_code": 1, "stdout": [], "stderr": []}
 
+    # THE REMOTE LAUNCH RESOLVES ITS BUILD FROM THE LISTING THE SOLVER HOST
+    # GAVE, so the listing is what says which directory the command below
+    # names. A root holding only the checkout layout is the shape this check
+    # has always assumed, spelled out now that it is asked rather than
+    # hard-coded. `bl_remote_device_select` covers the choosing itself.
+    remote_builds = __import__(pkg + ".core.remote_builds",
+                               fromlist=["load_builds"])
+    # `<marker><TAB><directory>`, which is the order the probe prints and the
+    # only one that survives a transport stripping the whole output.
+    # The ROOT goes in with the listing, because that is what the panel and
+    # the launch both resolve against now.
+    remote_builds.load_builds(["cuda\t/home/u/ppf-contact-solver/target/release"],
+                              "/home/u/ppf-contact-solver")
     saved_backend = runner._backend
     runner._backend = _FakeBackend()
     try:
@@ -435,6 +477,7 @@ try:
         pass
     finally:
         runner._backend = saved_backend
+        remote_builds.forget_builds()
     script = launched_script.get("script", "")
     record("L_shell_launch_carries_the_device",
            prefixes == ("", f"CUDA_VISIBLE_DEVICES={devices[1].uuid} ")
@@ -474,15 +517,21 @@ try:
     ready = False
     exit_error = ""
     try:
-        runner._backend = _WaitingBackend(None)
+        # THE BACKEND IS PASSED, not left to be read off the runner. The wait
+        # takes the backend its caller bound, because a disconnect runs on the
+        # main thread and can clear `runner._backend` mid-wait; the attribute is
+        # still set here so anything else that reads it sees the same object.
+        waiting = _WaitingBackend(None)
+        runner._backend = waiting
         conn._probe_ppf_cts_server = lambda *a, **k: True
-        runner._wait_for_win_native_server(timeout=0.01)
+        runner._wait_for_native_server(waiting, "Windows Native", timeout=0.01)
         ready = True
 
-        runner._backend = _WaitingBackend(_ExitedProcess())
+        exited = _WaitingBackend(_ExitedProcess())
+        runner._backend = exited
         conn._probe_ppf_cts_server = lambda *a, **k: False
         try:
-            runner._wait_for_win_native_server(timeout=0.01)
+            runner._wait_for_native_server(exited, "Windows Native", timeout=0.01)
         except RuntimeError as exc:
             exit_error = str(exc)
     finally:
@@ -517,20 +566,24 @@ try:
 
     saved_backend = runner._backend
     saved_engine = runner._engine
-    saved_wait = runner._wait_for_win_native_server
+    saved_wait = runner._wait_for_native_server
     failed_backend = _FailedLaunchBackend()
     capture = _CaptureEngine()
 
-    def _fail_wait():
+    # MIRRORS THE REAL SIGNATURE, backend first. It ignores its arguments, so a
+    # stale spelling would still raise and the subtest would pass for the wrong
+    # reason; matching the method it replaces is what keeps this a stand-in
+    # rather than a coincidence.
+    def _fail_wait(backend, label, timeout=16.0):
         raise TimeoutError("not ready")
 
     try:
         runner._backend = failed_backend
         runner._engine = capture
-        runner._wait_for_win_native_server = _fail_wait
+        runner._wait_for_native_server = _fail_wait
         runner._do_launch_server(1)
     finally:
-        runner._wait_for_win_native_server = saved_wait
+        runner._wait_for_native_server = saved_wait
         runner._engine = saved_engine
         runner._backend = saved_backend
     launch_errors = [

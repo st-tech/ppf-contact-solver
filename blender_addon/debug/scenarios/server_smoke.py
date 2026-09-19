@@ -16,7 +16,7 @@ from . import _runner as r
 
 # Server-only plumbing (no Blender, no physics); runs on the real-GPU
 # jobs too, where it talks to the real ppf-cts-server.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 def _load_protocol_version() -> str:

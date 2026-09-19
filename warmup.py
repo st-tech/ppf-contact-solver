@@ -200,6 +200,11 @@ def python_packages():
         # path installs it for that reason; build-win-native/warmup.bat
         # pins it against the numpy ABI it is built for.
         "scipy",
+        # frontend/_rasterizer_.py imports PIL at top level. matplotlib and
+        # pyvista both depend on pillow, which is the only reason a set
+        # without it would still import, so it is named rather than inherited:
+        # build-win-native/warmup.bat's ARM64 set carries neither of the two.
+        "pillow",
         "numba",
         "plyfile",
         "requests",
@@ -235,7 +240,12 @@ def python_packages():
 
 
 def tetra_packages():
-    return ["pytetwild", "tetgen", "pyvista"]
+    # pytetwild carries a version pin because a SOLID scene's tetrahedral mesh
+    # is its output: two versions mesh the same surface differently, so hosts
+    # on different releases run different scenes and a cross-backend figure
+    # compares meshes rather than backends. Every provisioning path installs
+    # this list, which makes it the one place the version is named.
+    return ["pytetwild==0.4.2", "tetgen", "pyvista"]
 
 
 # Packages a provisioned host cannot do without. Each name is an IMPORT
@@ -264,8 +274,10 @@ def verify_required_packages():
     quietly differs from the other hosts. The check runs in the venv that
     was just provisioned, so it sees what a later run will see.
     """
-    installed = {requirement.split("==")[0] for requirement in python_packages()}
-    installed.update(tetra_packages())
+    installed = {
+        requirement.split("==")[0]
+        for requirement in python_packages() + tetra_packages()
+    }
     unknown = sorted(name for name in REQUIRED_PACKAGES if name not in installed)
     if unknown:
         raise SystemExit(

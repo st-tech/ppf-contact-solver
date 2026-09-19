@@ -64,7 +64,7 @@ on:
       region:
         description: 'AWS Region'
         required: true
-        default: 'us-east-2'
+        default: 'ap-northeast-1'
         type: choice
         options:
           - us-east-1
@@ -308,11 +308,38 @@ jobs:
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i /tmp/ec2key Administrator@localhost \\
-            "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && warmup.bat /nopause'"
+            "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && call warmup.bat /nopause'"
 
           # Close tunnel
           kill $TUNNEL_PID 2>/dev/null || true
 
+      # THE OIDC CREDENTIAL LASTS ONE HOUR AND THE REMOTE WORK BELOW FILLS IT,
+      # SO EVERY STEP THAT OPENS A TUNNEL FROM HERE ON REFRESHES FIRST. `aws
+      # ec2-instance-connect open-tunnel` authenticates when it opens, runs in
+      # the BACKGROUND, and its exit status is never checked, so an expired
+      # credential does not report itself as one: the tunnel never binds port
+      # 2222 and the ssh that follows reports `connect to host localhost port
+      # 2222: Connection refused`, which reads as the instance being down.
+      # Measured on run 35069498252 (RequestExpired at 60m17s) against run
+      # 35056934927 (passed at 59m32s). build.bat builds every backend the
+      # toolchain supports, each into its own target\\<backend>, so the build
+      # alone can occupy most of an hour, and each example after it opens a
+      # tunnel of its own. A refresh costs about one second.
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
+
+      # ONE BUILD PRODUCES EVERY BACKEND AND ITS SERVER. build.bat builds each
+      # backend into its own target\\<backend>\\release with ppf-cts-server.exe
+      # and the cdylib beside the solver, writes the .ppf-backend marker there,
+      # and fails when any of the three is missing. The addon launcher
+      # (blender_addon/core/connection.py) and frontend/_backends_.py read
+      # those markers, so no separate server build into target\\release is run
+      # here: one would leave an unmarked directory holding a server with no
+      # solver beside it.
       - name: Run build.bat
         run: |
           echo "Running build.bat..."
@@ -329,40 +356,17 @@ jobs:
           ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
             -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
             -i /tmp/ec2key Administrator@localhost \\
-            "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && build.bat /nopause'"
+            "cmd /c 'cd C:\\\\ppf-contact-solver\\\\build-win-native && call build.bat /nopause'"
 
           # Close tunnel
           kill $TUNNEL_PID 2>/dev/null || true
 
-      - name: Build ppf-cts-server binary
-        # build.bat only builds the root `ppf-contact-solver` crate.
-        # The Blender addon launcher
-        # (blender_addon/core/connection.py:spawn_win_native_server)
-        # always launches target\\release\\ppf-cts-server.exe, so this
-        # step builds it and smoke-tests --help.
-        run: |
-          echo "Building ppf-cts-server..."
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-
-          # Open tunnel for this step
-          aws ec2-instance-connect open-tunnel \\
-            --instance-id "$INSTANCE_ID" \\
-            --remote-port 22 \\
-            --local-port 2222 &
-          TUNNEL_PID=$!
-          sleep 5
-
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i /tmp/ec2key .github/workflows/scripts/win/build-ppf-cts-server.ps1 Administrator@localhost:C:/build_ppf_cts_server.ps1
-
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-            -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \\
-            -i /tmp/ec2key Administrator@localhost \\
-            "powershell -ExecutionPolicy Bypass -File C:/build_ppf_cts_server.ps1"
-
-          # Close tunnel
-          kill $TUNNEL_PID 2>/dev/null || true
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
       - name: Setup CI directory
         run: |
@@ -385,9 +389,17 @@ jobs:
 
 """
 
-        # Generate a step for each example
+        # Generate a step for each example, each refreshing the credential
+        # first: see the comment above the build.bat step.
         for example in chunk:
-            workflow += f"""      - name: Run {example}
+            workflow += f"""      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
+
+      - name: Run {example}
         run: |
           echo "Running {example}..."
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
@@ -418,6 +430,14 @@ jobs:
 
         # Cleanup steps
         workflow += f"""
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
+
       - name: Collect results
         if: success() || failure()
         run: |
@@ -463,6 +483,14 @@ jobs:
           name: ci-win-batch-{idx}
           path: ci
           retention-days: 3
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{{{ secrets.AWS_ROLE_ARN }}}}
+          aws-region: ${{{{ env.AWS_REGION }}}}
+          role-duration-seconds: 21600
 
       - name: GPU information
         if: success() || failure()

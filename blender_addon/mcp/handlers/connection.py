@@ -1,4 +1,4 @@
-"""Connection management handlers (SSH, Docker, local)."""
+"""Connection management handlers (SSH, Docker, and the three natives)."""
 
 from typing import Optional
 
@@ -140,38 +140,54 @@ def connect_docker(container: str, path: str, port: int = DEFAULT_SERVER_PORT):
 
 
 @mcp_handler
-def connect_local(path: str):
-    """Establish local connection for contact solver.
+def connect_linux_native(
+    path: str, port: int = DEFAULT_SERVER_PORT, gpu_backend: str = ""
+):
+    """Establish Linux native connection for contact solver.
 
     Args:
-        path: Local working directory path
+        path: Path to the Linux native build or distribution directory
+        port: Port for the solver server
+        gpu_backend: Which accelerator to run where the directory holds more
+            than one GPU build: "AUTO", "CUDA" or "ROCM". Empty keeps whatever
+            the scene already holds.
     """
     _require_offline()
 
     # Set connection parameters in scene state
     _, props = _get_connection_state()
 
-    # Configure local connection parameters
-    props.server_type = "LOCAL"
-    props.local_path = path
+    # Configure Linux native connection parameters
+    props.server_type = "LINUX_NATIVE"
+    props.linux_native_path = path
+    props.docker_port = port
+    if gpu_backend:
+        props.native_gpu_backend = gpu_backend.upper()
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
 
     return {
-        "message": f"Local connection initiated to path '{path}'",
-        "connection_type": "local",
+        "message": f"Linux native connection initiated to path '{path}'",
+        "connection_type": "linux_native",
         "path": path,
+        "port": port,
     }
 
 
 @mcp_handler
-def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
+def connect_win_native(
+    path: str, port: int = DEFAULT_SERVER_PORT, gpu_backend: str = ""
+):
     """Establish Windows native connection for contact solver.
 
     Args:
         path: Path to the Windows native build or distribution directory
         port: Port for the solver server
+        gpu_backend: Which accelerator to run where the directory holds more
+            than one GPU build: "AUTO", "CUDA" or "ROCM". Empty keeps whatever
+            the scene already holds, which is what every caller before this
+            argument existed did.
     """
     _require_offline()
 
@@ -181,6 +197,8 @@ def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
     props.server_type = "WIN_NATIVE"
     props.win_native_path = path
     props.docker_port = port
+    if gpu_backend:
+        props.native_gpu_backend = gpu_backend.upper()
 
     # Use bpy.ops for the modal timer loop required by connection lifecycle
     bpy.ops.ssh.run_command()
@@ -188,6 +206,37 @@ def connect_win_native(path: str, port: int = DEFAULT_SERVER_PORT):
     return {
         "message": f"Windows native connection initiated to path '{path}'",
         "connection_type": "win_native",
+        "path": path,
+        "port": port,
+    }
+
+
+@mcp_handler
+def connect_mac_native(path: str, port: int = DEFAULT_SERVER_PORT):
+    """Establish macOS native connection for contact solver.
+
+    Args:
+        path: Path to the macOS native build or distribution directory
+        port: Port for the solver server
+    """
+    # REFUSED BEFORE THE SETTINGS ARE WRITTEN, like every sibling here, so a
+    # refused call leaves the panel holding the settings of the connection that
+    # is actually in play rather than of one that was never started.
+    _require_offline()
+
+    _, props = _get_connection_state()
+
+    # Configure macOS native connection parameters
+    props.server_type = "MAC_NATIVE"
+    props.mac_native_path = path
+    props.docker_port = port
+
+    # Use bpy.ops for the modal timer loop required by connection lifecycle
+    bpy.ops.ssh.run_command()
+
+    return {
+        "message": f"macOS native connection initiated to path '{path}'",
+        "connection_type": "mac_native",
         "path": path,
         "port": port,
     }

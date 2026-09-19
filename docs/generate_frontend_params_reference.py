@@ -6,15 +6,15 @@ Emits three auto-generated pages under ``docs/jupyterlab_api/``:
 * ``simulation_parameters.rst`` from :func:`frontend._param_.app_param`
 * ``material_parameters.rst`` from :func:`frontend._param_.object_param`
 * ``log_channels.rst`` from the ``//``-comment blocks parsed out of
-  ``crates/`` ``.cu`` / ``.rs`` / ``.cpp`` sources by
+  ``crates/`` ``.cu`` / ``.rs`` sources by
   :meth:`frontend._parse_.CppRustDocStringParser.get_logging_docstrings`
 
-Both ``_param_.py`` and ``_parse_.py`` now wrap the maturin-built
-``_ppf_cts_py`` PyO3 extension (the parameter defaults live in
+Both ``_param_.py`` and ``_parse_.py`` wrap the ``_ppf_cts_py`` PyO3
+extension (the parameter defaults live in
 ``crates/ppf-cts-core/src/datamodel/params.rs``; the log-channel scanner
 in ``crates/ppf-cts-core/src/parsers.rs``). ``docs/build.sh`` runs
-``maturin develop --release`` from ``crates/ppf-cts-py/`` into the docs
-venv before invoking this script, so the imports below resolve cleanly.
+``cargo build --release -p ppf-cts-py`` before invoking this script, and
+the cdylib is loaded below by absolute path rather than installed.
 
 Run from anywhere::
 
@@ -154,7 +154,7 @@ def _render_logs(parse_mod: ModuleType) -> str:
         "=" * (len(title) + 4),
         "",
         ".. This file is auto-generated from ``crates/`` ``.cu`` / "
-        "``.rs`` / ``.cpp`` sources.",
+        "``.rs`` sources.",
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Named log streams emitted by the solver "
@@ -180,7 +180,7 @@ def _render_logs(parse_mod: ModuleType) -> str:
 
 
 def main() -> int:
-    # Bind directly to the maturin-built `_ppf_cts_py` extension. The
+    # Bind directly to the `_ppf_cts_py` extension. The
     # Python wrappers in `frontend/_param_.py` and `frontend/_parse_.py`
     # are thin pass-throughs to these same symbols, but importing
     # `frontend.*` here would trigger `frontend/__init__.py`, which

@@ -6,7 +6,7 @@
 # The Windows Native probe accepts the layout the published bundle really has,
 # on Windows, with Windows paths.
 #
-# ``release-win.yml`` zips the CONTENTS of ``build-win-native\dist`` (it passes
+# ``release.yml`` zips the CONTENTS of ``build-win-native\dist`` (it passes
 # ``dist\*``), so the extracted root is the dist tree itself, with no wrapper
 # directory. ``bundle.bat`` copies the two Rust executables into
 # ``dist\target\release`` and puts only DLLs and ffmpeg in ``dist\bin``. So the
@@ -45,7 +45,7 @@ from . import _runner as r
 NEEDS_BLENDER = True
 PLATFORMS = ("win32",)
 # Pure path logic; nothing here reaches a solver.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''
@@ -86,7 +86,7 @@ try:
     record("temp_dir_is_on_a_drive", len(os.path.splitdrive(tmp)[0]) == 2,
            {"tmp": tmp})
 
-    # ---- the layout release-win.yml actually publishes ----
+    # ---- the layout release.yml actually publishes ----
     # bundle.bat: TARGET_DIR = dist\target\release holds the two .exe files,
     # BIN_DIR = dist\bin holds the CUDA DLLs and ffmpeg.
     dist = os.path.join(tmp, "ppf-contact-solver-2026-01-01-00-00-win64")

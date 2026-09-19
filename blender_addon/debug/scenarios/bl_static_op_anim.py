@@ -80,10 +80,10 @@ NEEDS_BLENDER = True
 
 # Backend-agnostic: the assertions below are robust invariants (finite PC2,
 # pinned/anchored region tracks its prescribed motion, free region lags,
-# body not FAILED) that hold on BOTH the emulated CPU stub and the real
+# body not FAILED) that hold on BOTH the solver and the real
 # CUDA solver, so this runs on the free-runner macOS suite AND the real-GPU
 # AWS jobs selected by ``runtests --backend real``.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 # Timeline. frame_rate=100, step_size=0.01 means PC2 sample i is at

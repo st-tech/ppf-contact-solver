@@ -10,7 +10,8 @@
 # always did. There is no maturin wheel step (see build.rs for the macOS
 # link flag).
 #
-# abi3-py38: one cdylib works for any CPython >= 3.8.
+# abi3-py38: one cdylib works for any CPython >= 3.8, so a system
+# interpreter and the project venv load the same build.
 
 [package]
 name = "ppf-cts-py"

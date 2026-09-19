@@ -37,6 +37,47 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ADDON_ROOT = REPO_ROOT / "blender_addon"
 
 
+def _install_stub_mathutils() -> None:
+    """Register a ``mathutils`` deep enough for the modules loaded here.
+
+    `mathutils` is Blender's own, so it does not exist on this interpreter any
+    more than `bpy` does, and the chain that reaches it is not obvious from a
+    test's own imports: `core/backends.py` imports `models/console.py`, which
+    imports `core/utils.py`, which imports `core/transform.py`, whose first
+    line is `from mathutils import Matrix`. A suite that only wanted the ssh
+    transport therefore fails at collection with a name none of its own code
+    mentions.
+
+    ONLY THE IMPORT HAS TO SUCCEED. Nothing loaded here computes a transform:
+    the matrix helpers in `core/transform.py` are reached from the encoder,
+    which needs real Blender objects and belongs in the rig. So `Matrix` is a
+    placeholder that raises if anything actually tries to USE it, which keeps
+    a future test from silently asserting against a fake linear algebra.
+    """
+    if "mathutils" in sys.modules:
+        return
+    mathutils = types.ModuleType("mathutils")
+
+    class _Matrix:
+        """Importable, and loud if exercised."""
+
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "mathutils.Matrix is a stub here: this tier runs on a plain "
+                "interpreter and computes no transforms. A test that needs "
+                "real matrix maths belongs in the Blender rig "
+                "(blender_addon/debug/scenarios)."
+            )
+
+        @staticmethod
+        def Identity(*args, **kwargs):  # noqa: N802 - Blender's own spelling
+            raise RuntimeError("mathutils.Matrix.Identity is a stub here")
+
+    mathutils.Matrix = _Matrix
+    mathutils.Vector = _Matrix
+    sys.modules["mathutils"] = mathutils
+
+
 def _install_stub_bpy() -> None:
     """Register a ``bpy`` package deep enough for the loaded modules.
 
@@ -134,6 +175,7 @@ def load_addon_module(dotted: str):
         return sys.modules[fqname]
 
     _install_stub_bpy()
+    _install_stub_mathutils()
 
     _ensure_package("blender_addon", ADDON_ROOT)
     parts = dotted.split(".")
@@ -219,6 +261,16 @@ def addon_utils():
         "models.groups",
         decode_vertex_group_identifier=lambda *a, **k: None,
         iterate_active_object_groups=lambda *a, **k: iter(()),
+        # THE STUB IS SESSION-SCOPED AND LEAKS, so it has to satisfy every
+        # importer this tier reaches, not only `core/utils.py`. Once it is
+        # installed no later module gets the real `models/groups.py`, and
+        # `models/console.py` imports `get_addon_data` from it: a suite that
+        # loads `core/backends.py` (the ssh transport one does) then fails at
+        # collection with "cannot import name get_addon_data ... (unknown
+        # location)", which names neither this fixture nor the ordering that
+        # produced it. It only appears when that suite RUNS, which needs
+        # paramiko, so it is invisible locally and red on the POSIX CI legs.
+        get_addon_data=lambda *a, **k: None,
     )
     _stub_submodule("core.transform", world_matrix=lambda *a, **k: None)
     return load_addon_module("core.utils")

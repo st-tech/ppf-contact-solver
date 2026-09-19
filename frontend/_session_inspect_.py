@@ -113,6 +113,8 @@ class SessionExport:
                 path = session.export.shell_command(session.session.param)
                 print(path)
         """
+        from . import _run_directory
+
         param.export(self._fixed_session.info.path)
         which = Utils.platform_which()
         return _rust.write_shell_command_script(
@@ -120,6 +122,11 @@ class SessionExport:
             self._fixed_session.output.path,
             self._session.proj_root,
             which,
+            # THE BUILD DIRECTORY OF THE BACKEND THIS RUN RESOLVES TO
+            # (``frontend.get_backend``), checked to hold a solver built from
+            # the same sources as this process's extension module. A path
+            # composed here instead would name a build nobody asked about.
+            _run_directory(),
         )
 
     def animation(
@@ -334,8 +341,10 @@ def _harvest_log_docstrings(proj_root: str) -> dict:
     """Walk every plausible source root for `// Name:` / `logging.push("...")`
     log-channel docstrings and return a merged ``name -> entry`` dict.
 
-    Two source roots host log-channel docstrings: the CUDA driver at
-    ``<proj_root>/crates/ppf-cts-solver/src`` and the Rust kernels at
+    Three source roots host log-channel docstrings: the neutral solver at
+    ``<proj_root>/crates/ppf-cts-solver/src``, which declares nearly all of
+    them beside the driver that pushes them, the CUDA mechanism at
+    ``<proj_root>/crates/ppf-cts-compute/cuda`` and the Rust kernels at
     ``<proj_root>/crates/ppf-cts-core/src``. The legacy
     ``<proj_root>/src`` is also probed for older checkouts that still
     carry it; missing roots are skipped so any subset still resolves
@@ -344,6 +353,7 @@ def _harvest_log_docstrings(proj_root: str) -> dict:
     roots = [
         os.path.join(proj_root, "src"),
         os.path.join(proj_root, "crates", "ppf-cts-solver", "src"),
+        os.path.join(proj_root, "crates", "ppf-cts-compute", "cuda"),
         os.path.join(proj_root, "crates", "ppf-cts-core", "src"),
     ]
     merged: dict = {}

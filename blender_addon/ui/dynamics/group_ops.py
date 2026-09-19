@@ -228,13 +228,13 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
 
                 # A SAND group accepts ONLY a committed particle mesh: a
                 # faceless cloud of loose vertices (grain centers) with the
-                # ``ppf_particle_mesh`` stamp, no polygons and no edges. A
+                # ``particle_mesh`` stamp, no polygons and no edges. A
                 # raw solid mesh must be converted first (Convert To Solid
                 # Particle Mesh in the group panel).
                 if group.object_type == "SAND":
                     is_particle_mesh = (
                         obj.type == "MESH"
-                        and obj.get("ppf_particle_mesh")
+                        and obj.get("particle_mesh")
                         and len(obj.data.polygons) == 0
                         and len(obj.data.edges) == 0
                     )

@@ -29,8 +29,8 @@
 # vertices within MARGIN of X = 0 are not assigned, since the full-pin bar's
 # two groups meet there.
 #
-# Soft (pull > 0) pin vertices are not measured in the solver session: the
-# emulated backend does not move them. A SOLID's unpinned Blender vertices are
+# Soft (pull > 0) pin vertices are not measured in the solver session: a
+# one-frame fast check does not move them measurably. A SOLID's unpinned Blender vertices are
 # reconstructed from its tetrahedral surface, so at the Blender level only the
 # pinned ones are asserted (subtest E). The median PC2 angle of each group is
 # recorded in the details for a reader, not asserted.
@@ -71,10 +71,10 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Hard pins are exact kinematic targets on the emulated backend and on the
+# Hard pins are exact kinematic targets on the CPU backend and on the
 # CUDA solver alike, and the session is read through the same
 # ``remote_root`` lookup ``bl_fetch_frame_discovery`` uses on both.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11

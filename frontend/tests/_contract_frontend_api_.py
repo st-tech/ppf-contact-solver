@@ -71,8 +71,13 @@ EXPECTED_PUBLIC_NAMES = {
     "TriMesh",
     "Utils",
     "Wall",
+    "fetch_asset",
     "get_cache_dir",
     "sdf",
+    "list_backends",
+    "probe_backend",
+    "set_backend",
+    "get_backend",
 }
 
 

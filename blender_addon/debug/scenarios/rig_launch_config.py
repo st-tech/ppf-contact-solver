@@ -32,7 +32,7 @@ import blender_harness as bh
 from . import _runner as r
 
 # No solver and no Blender, so this holds on the real-GPU jobs too.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 def _check_window(violations: list[str]) -> None:

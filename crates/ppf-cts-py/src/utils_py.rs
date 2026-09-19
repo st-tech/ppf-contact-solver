@@ -237,6 +237,15 @@ pub fn check_gpu() -> PyResult<()> {
     utils::check_gpu().map_err(crate::errors::into_py_err)
 }
 
+/// Does this build talk to CUDA? Published so the frontend asks the BACKEND
+/// rather than the platform: gating on `platform.system() != "Darwin"` demands
+/// an NVIDIA driver version from a CPU build on Linux, which has none and needs
+/// none, and the resulting error pre-empts the backend's own precise refusal.
+#[pyfunction]
+pub fn needs_nvidia_driver() -> bool {
+    utils::needs_nvidia_driver()
+}
+
 #[pyfunction]
 pub fn solver_busy() -> bool {
     utils::solver_busy()
@@ -258,9 +267,18 @@ pub fn set_fast_check(enabled: bool) {
     utils::set_fast_check(enabled);
 }
 
+/// The cache directory for the tree at `base_dir`.
+///
+/// `base_dir` is the tree root, which the caller resolves from
+/// `frontend/__file__`. It is a parameter rather than something this side
+/// works out, for the same reason `get_data_dirpath` takes one: a packaged
+/// tree keeps its cache inside itself, and only the caller knows which tree it
+/// is running out of.
 #[pyfunction]
-pub fn get_cache_dir() -> String {
-    utils::get_cache_dir().to_string_lossy().into_owned()
+pub fn get_cache_dir(base_dir: &str) -> String {
+    utils::get_cache_dir(std::path::Path::new(base_dir))
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[pyfunction]
@@ -273,8 +291,8 @@ pub fn process_name() -> &'static str {
 
 /// Resolve the export base path, honoring fast-check mode.
 #[pyfunction]
-pub fn get_export_base_path() -> String {
-    utils::get_export_base_path()
+pub fn get_export_base_path(base_dir: &str) -> String {
+    utils::get_export_base_path(std::path::Path::new(base_dir))
 }
 
 /// Render a column-oriented mapping to an HTML table. Mirrors
@@ -296,14 +314,18 @@ pub fn ci_name(frontend_dir: &str) -> PyResult<Option<String>> {
 
 /// Path to the CI root directory: `<cache_dir>/ci`.
 #[pyfunction]
-pub fn get_ci_root() -> String {
-    utils::get_ci_root().to_string_lossy().into_owned()
+pub fn get_ci_root(base_dir: &str) -> String {
+    utils::get_ci_root(std::path::Path::new(base_dir))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Path to a specific CI's directory: `<cache_dir>/ci/<ci_name>`.
 #[pyfunction]
-pub fn get_ci_dir(ci: &str) -> String {
-    utils::get_ci_dir(ci).to_string_lossy().into_owned()
+pub fn get_ci_dir(base_dir: &str, ci: &str) -> String {
+    utils::get_ci_dir(std::path::Path::new(base_dir), ci)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// True if `.CLI` or `.CI` marker file is present in the given
@@ -332,5 +354,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_ci_dir, m)?)?;
     m.add_function(wrap_pyfunction!(has_cli_or_ci_marker, m)?)?;
     m.add_function(wrap_pyfunction!(make_dir, m)?)?;
+    m.add_function(wrap_pyfunction!(needs_nvidia_driver, m)?)?;
     Ok(())
 }

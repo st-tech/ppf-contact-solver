@@ -25,11 +25,17 @@
 from __future__ import annotations
 
 
+from . import _driver_lib as dl
 from . import _runner as r
 from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 PLATFORMS = ("linux",)
 
 
@@ -41,16 +47,14 @@ try:
     events = __import__(pkg + ".core.events", fromlist=["ServerLost", "PollTick"])
     groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
     root = groups.get_addon_data(bpy.context.scene)
-    root.ssh_state.server_type = "LOCAL"
-    root.ssh_state.local_path = <<LOCAL_PATH_REPR>>
-    root.ssh_state.docker_port = <<SERVER_PORT>>
+    SOLVER_ROOT = <<LOCAL_PATH_REPR>>
+    SERVER_PORT = <<SERVER_PORT>>
 
     com = client.communicator
     com.set_project_name("server_unknown_recovery")
-    com.connect_local(root.ssh_state.local_path,
-                      server_port=root.ssh_state.docker_port)
+    connect_platform_native(com, pkg, root.ssh_state, SOLVER_ROOT, SERVER_PORT)
 
-    # Mirrors _driver_lib.DriverHelpers.connect_local: dispatching
+    # Mirrors _driver_lib.DriverHelpers.connect_native: dispatching
     # PollTick in the wait loop is what queues DoQuery on the worker.
     # Without it, the engine has no reason to talk to the server, so
     # state.server stays at the default UNKNOWN even with a live rig.
@@ -117,7 +121,8 @@ except Exception as exc:
 def build_driver(ctx: r.ScenarioContext) -> str:
     repo_root = REPO_ROOT_POSIX
     return (
-        _DRIVER_TEMPLATE
+        dl.BUILD_FAILURE_LIB
+        + _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH_REPR>>", repr(repo_root))
         .replace("<<SERVER_PORT>>", str(ctx.server_port))
     )

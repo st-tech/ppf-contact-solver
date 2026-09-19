@@ -43,7 +43,6 @@ fn live_status(frame: i32, phase: Phase) -> RunStatus {
         seq: frame as u64 + 1,
         pid: std::process::id(),
         launch_id: "testlaunch00".into(),
-        emulated: true,
     }
 }
 

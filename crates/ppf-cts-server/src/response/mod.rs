@@ -99,6 +99,11 @@ mod tests {
         assert_eq!(m["upload_id"], "abc123abc123");
         assert_eq!(m["protocol_version"], PROTOCOL_VERSION);
         assert!(m.contains_key("hardware"));
+        // The build this server's runs use is on every response, empty when
+        // unknown, because an attaching add-on refuses a server that does not
+        // say.
+        assert_eq!(m["solver_target_dir"], "");
+        assert_eq!(m["solver_backend"], "");
         // No build progress when not building.
         assert!(!m.contains_key("progress"));
     }

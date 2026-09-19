@@ -20,11 +20,17 @@ from __future__ import annotations
 
 import os
 
+from . import _driver_lib as dl
 from . import _runner as r
 from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _DRIVER_TEMPLATE = r"""
@@ -59,12 +65,8 @@ try:
     root = groups_mod.get_addon_data(bpy.context.scene)
     root.state.project_name = "load_disconnect"
 
-    root.ssh_state.server_type = "LOCAL"
-    root.ssh_state.local_path = LOCAL_PATH
-    root.ssh_state.docker_port = SERVER_PORT
     com.set_project_name(root.state.project_name)
-    com.connect_local(root.ssh_state.local_path,
-                      server_port=root.ssh_state.docker_port)
+    connect_platform_native(com, pkg, root.ssh_state, LOCAL_PATH, SERVER_PORT)
 
     deadline = time.time() + 30.0
     while time.time() < deadline:
@@ -130,7 +132,8 @@ except Exception as exc:
 def build_driver(ctx: r.ScenarioContext) -> str:
     repo_root = REPO_ROOT_POSIX
     return (
-        _DRIVER_TEMPLATE
+        dl.BUILD_FAILURE_LIB
+        + _DRIVER_TEMPLATE
         .replace("<<LOCAL_PATH>>", repo_root)
         .replace("<<SERVER_PORT>>", str(ctx.server_port))
     )

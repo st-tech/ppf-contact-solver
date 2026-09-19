@@ -1,0 +1,38 @@
+; Which physical AMD parts each GENERIC target in rocm_arch.txt covers.
+;
+; WHY THIS FILE EXISTS. A generic target emits one code object for a whole
+; family, but a device reports a SPECIFIC name: `hipDeviceProp_t::gcnArchName`
+; says `gfx1100`, never `gfx11-generic`. Anything that answers "can this machine
+; run what we ship" therefore has to expand rocm_arch.txt through this table
+; first. rocm_arch.txt stays the single source for what is BUILT; this is the
+; single source for what that BUILD covers.
+;
+; READ FROM THE TOOLCHAIN, NOT ASSUMED, and that is not a formality: the
+; mapping moves under the name, and
+; the obvious guess is wrong in both directions. `gfx9-generic` does NOT cover
+; gfx908 or gfx90a even though both are gfx9 parts, and `gfx11-generic` DOES
+; cover gfx1150 through gfx1153 even though AMD ships those as a separate
+; distribution from gfx110X. The second is the one that invites doubt; the
+; toolchain settles it the other way.
+;
+; SOURCE: llvm/docs/AMDGPUUsage.rst, "Generic Processor" table, at
+;   https://github.com/ROCm/llvm-project
+;   commit f58b06dce1f9c15707c5f808fd002e18c2accf7e
+; which is the commit the pinned toolchain's own compiler names:
+;   AMD clang version 22.0.0git (... roc-7.2.4 26084 f58b06dce1f9c...)
+;
+; WHEN THE PINNED ROCm VERSION MOVES, RE-READ THIS FROM THE NEW TOOLCHAIN. A
+; newer LLVM can add parts to a family, and a table that is quietly a version
+; behind refuses hardware the build actually supports, which is a worse failure
+; than the check it replaces.
+;
+; Format: `generic <target> <part> [<part> ...]`, ';' comments, blank lines
+; ignored. Parsed by crates/ppf-cts-core/build.rs the way rocm_arch.txt is
+; parsed by the Makefile, with awk-friendly whitespace separation.
+
+generic gfx9-generic     gfx900 gfx902 gfx904 gfx906 gfx909 gfx90c
+generic gfx9-4-generic   gfx942 gfx950
+generic gfx10-1-generic  gfx1010 gfx1011 gfx1012 gfx1013
+generic gfx10-3-generic  gfx1030 gfx1031 gfx1032 gfx1033 gfx1034 gfx1035 gfx1036
+generic gfx11-generic    gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1153
+generic gfx12-generic    gfx1200 gfx1201

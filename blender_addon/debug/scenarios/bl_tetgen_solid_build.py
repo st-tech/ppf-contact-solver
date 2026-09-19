@@ -18,7 +18,7 @@
 # The top face is pinned with a prescribed MOVE_BY so the real solve is
 # deterministic (no dependence on gravity / stiffness). Exact SOLID pins
 # form an independent surface set, leaving compliant pins on every contact
-# primitive. The kinematic-only emulator moves that exact subset and ignores
+# primitive. The solver moves that exact subset and ignores
 # the compliant remainder; the real solver moves the whole anchored region.
 #
 # Subtests:
@@ -42,10 +42,10 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
-# Runs on the emulated free-runner suite and the real-GPU jobs. The runtime
-# assertion accounts for the emulator's kinematic-only contract while keeping
+# Runs on the free-runner suite and the real-GPU jobs. The runtime
+# assertion accounts for the solver's kinematic-only contract while keeping
 # the whole-anchor deformation assertion on the real solver.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11
@@ -130,7 +130,6 @@ try:
     dh.log("built")
     dh.run_and_wait(timeout=120.0)
     solver_state = dh.facade.engine.state.solver.name
-    is_emulated = bool(dh.facade.engine.state.emulated)
     dh.log(f"ran solver={solver_state}")
     dh.force_frame_query(expected_frames=FRAME_COUNT - 1, timeout=30.0)
     dh.settle_idle(timeout=15.0)
@@ -186,27 +185,21 @@ try:
             moving_anchor_lateral = float(
                 np.max(np.abs(moving_delta[:, :2]))
             )
-    if is_emulated:
-        # The emulator applies exact FixPair targets but performs no SOLID
-        # physics, so the compliant anchor pins do not follow their pulls.
-        pin_tracks = (
-            moving_anchor_count > 0
-            and 0.4 * MOVE_DZ < moving_anchor_dz < 1.2 * MOVE_DZ
-            and moving_anchor_lateral < 0.2
-        )
-    else:
-        pin_tracks = (
-            0.4 * MOVE_DZ < anchor_dz < 1.2 * MOVE_DZ
-            and anchor_lateral < 0.2
-        )
+    # ONE PATH, because there is one backend that can reach here. This used to
+    # branch on an server, which applied exact FixPair targets while
+    # computing no SOLID physics, so its compliant anchor pins did not follow
+    # their pulls and needed a weaker assertion. That backend is deleted, and
+    # the flag it was read from is gone with it, so what is left is the real
+    # one: the anchor itself tracks the pull.
+    pin_tracks = (
+        0.4 * MOVE_DZ < anchor_dz < 1.2 * MOVE_DZ
+        and anchor_lateral < 0.2
+    )
     far_lags = bottom_dz < anchor_dz          # deformable body, not a rigid block
-    if is_emulated:
-        far_lags = bottom_dz < moving_anchor_dz
     dh.record(
         "B_tetgen_pin_tracks_move",
         pin_tracks and far_lags,
         {
-            "emulated": is_emulated,
             "move_dz": MOVE_DZ,
             "anchor_dz_median": anchor_dz,
             "anchor_lateral_max": anchor_lateral,

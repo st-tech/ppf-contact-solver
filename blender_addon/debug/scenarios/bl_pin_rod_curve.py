@@ -32,6 +32,11 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 # Bezier curve with N control points laid out along +X. With N=4
 # and t = {0, 1} per segment, sample_curve produces N=4 sampled
@@ -174,7 +179,7 @@ try:
                                   fromlist=["encode_param"])
     param_bytes = encode_param_mod.encode_param(bpy.context)
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
         data=data_bytes, param=param_bytes,

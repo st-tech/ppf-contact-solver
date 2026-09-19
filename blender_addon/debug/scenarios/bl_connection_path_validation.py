@@ -14,9 +14,8 @@
 #     path and stays silent for a good one (a fake layout records the
 #     label() calls, since a real UILayout can't be built outside draw).
 #   * ssh.run_command.poll() (the Connect button's enable gate) returns
-#     False for a bad path and True for a clean one, for the two backend
-#     types whose poll has no external-module dependency: LOCAL and
-#     WIN_NATIVE.
+#     False for a bad path and True for a clean one, for the backend types
+#     whose poll has no external-module dependency: the three natives.
 #   * the project name is held to a stricter rule (find_invalid_name_char):
 #     no spaces, special characters, or path separators. The same warning
 #     line and poll gate apply.
@@ -46,7 +45,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Connection-path validation UI behavior; backend-agnostic.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 # Directory segments the server puts between the solver root and the
 # tetrahedralize cache file (``datamodel/app.rs`` ``compose_data_dir``). The
@@ -150,8 +149,8 @@ try:
     )
 
     # ---- Connect button poll() gate (real operator) ----
-    # LOCAL and WIN_NATIVE poll branches don't require paramiko/docker, so
-    # the gate is exercised purely through path validity + project name.
+    # The native poll branches do not require paramiko or docker, so the gate
+    # is exercised purely through path validity plus the project name.
     root = groups.get_addon_data(bpy.context.scene)
     root.state.project_name = "path_validation"
     props = root.ssh_state
@@ -159,27 +158,28 @@ try:
     def connect_enabled():
         return bool(bpy.ops.ssh.run_command.poll())
 
-    props.server_type = "LOCAL"
-    props.local_path = "/home/user/work"
-    record("poll_local_clean_enabled", connect_enabled() is True,
-           {"path": props.local_path})
-    props.local_path = "/home/user/my work"
-    record("poll_local_space_disabled", connect_enabled() is False,
-           {"path": props.local_path})
-    props.local_path = "/data&run"
-    record("poll_local_ampersand_disabled", connect_enabled() is False,
-           {"path": props.local_path})
-    props.local_path = ""
-    record("poll_local_empty_enabled", connect_enabled() is True,
+    # A NATIVE PATH NEVER REACHES A SHELL: it is an os.path.join base, a
+    # subprocess.Popen argv element, and that Popen's cwd. So it is held to the
+    # metacharacter rule alone. A space is ordinary in a path on every platform
+    # ("C:/Program Files/...", "/Users/me/My Work"), and refusing it greyed the
+    # Connect button out with nothing the user could act on. The remote types
+    # keep the whitespace rule, because their launch writes the directory into
+    # a generated shell script; they are covered by the predicate checks below
+    # rather than through poll(), which needs paramiko for them.
+    props.server_type = "LINUX_NATIVE"
+    props.linux_native_path = "/home/user/work"
+    record("poll_linux_native_clean_enabled", connect_enabled() is True,
+           {"path": props.linux_native_path})
+    props.linux_native_path = "/home/user/my work"
+    record("poll_linux_native_space_enabled", connect_enabled() is True,
+           {"path": props.linux_native_path})
+    props.linux_native_path = "/data&run"
+    record("poll_linux_native_ampersand_disabled", connect_enabled() is False,
+           {"path": props.linux_native_path})
+    props.linux_native_path = ""
+    record("poll_linux_native_empty_disabled", connect_enabled() is False,
            {"path": "<empty>"})
 
-    # Windows Native is the one backend whose path never reaches a shell: it
-    # is an os.path.join base, a subprocess.Popen argv element, and that
-    # Popen's cwd. So it is held to the metacharacter rule alone. A space is
-    # ordinary in a Windows path ("C:/Program Files/..."), and refusing it
-    # here greyed the Connect button out with nothing the user could act on.
-    # LOCAL above keeps the whitespace rule because its launch path writes
-    # the directory into a generated shell script.
     props.server_type = "WIN_NATIVE"
     props.win_native_path = "C:/ppf-contact-solver/build"
     record("poll_win_clean_enabled", connect_enabled() is True,
@@ -308,9 +308,9 @@ try:
         main_panel.windows_long_paths_enabled = _orig_lpe
 
     # ---- Connect button poll() gate on project name ----
-    # Hold a known-clean LOCAL path so only the project name varies.
-    props.server_type = "LOCAL"
-    props.local_path = "/home/user/work"
+    # Hold a known-clean native path so only the project name varies.
+    props.server_type = "LINUX_NATIVE"
+    props.linux_native_path = "/home/user/work"
     root.state.project_name = "clean_name"
     record("poll_name_clean_enabled", connect_enabled() is True,
            {"name": root.state.project_name})

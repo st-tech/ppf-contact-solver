@@ -103,7 +103,8 @@ def _build_operator_class(name: str, handler_info: dict[str, Any]) -> type:
         "bl_options": {"REGISTER"},
     }
 
-    # Add properties — Blender 4.x requires property descriptors in __annotations__
+    # Add properties. Blender takes property descriptors from __annotations__,
+    # not from plain class attributes.
     for param_name, (python_type, default, is_json) in params_info.items():
         desc = schema_props.get(param_name, {}).get("description", param_name)
         prop = _make_property(python_type, default, desc)
@@ -183,13 +184,12 @@ def register():
 
     state_ops.register()
 
-    # Note: the addon previously injected
-    # ``sys.modules["zozo_contact_solver"] = api`` here so user scripts
-    # could write ``from zozo_contact_solver import solver``. Blender 5
-    # extensions cannot register top-level Python modules outside their
-    # own extension id (else two extensions would collide on the global
-    # name), and the validator flags it as a policy violation. Users
-    # should now import from the extension's package path:
+    # NO TOP-LEVEL MODULE NAME IS REGISTERED HERE. A Blender 5 extension may
+    # not register a Python module outside its own extension id, since two
+    # extensions would then collide on one global name, and the extension
+    # validator reports such a registration as a policy violation. So
+    # ``sys.modules["zozo_contact_solver"] = api`` does not belong in this
+    # function, and a script reaches the API by the extension's package path:
     # ``from bl_ext.user_default.ppf_contact_solver.ops.api import solver``.
 
     print(f"Registered {len(_generated_classes)} zozo_contact_solver.* operators")

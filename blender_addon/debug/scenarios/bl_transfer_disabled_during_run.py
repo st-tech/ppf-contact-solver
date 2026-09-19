@@ -47,6 +47,21 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# AN OBSERVATION WINDOW, for the same reason the resume scenarios ask for
+# one. This scenario samples a solve WHILE IT RUNS, and a real backend
+# finishes a scene this size faster than the addon polls: the failure is
+# `saw_running: false`, or a mid-run step finding the state already
+# READY, which reads like a broken transition and is a race lost. The
+# delay is per STEP, so the run lasts substeps times this; what has to be
+# long is the RUN, not any budget.
+KNOBS = {"PPF_STEP_DELAY_MS": "1000"}
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it. The sweep that had
+# failed it loaded a DIFFERENT tree's addon through the shared extension
+# symlink, so that verdict was about other code; against this tree it
+# passes unchanged.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import os
@@ -89,7 +104,7 @@ try:
     com = dh.com
 
     data, param, dhash, phash = encoder_pkg.prepare_upload(bpy.context)
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

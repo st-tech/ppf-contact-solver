@@ -57,7 +57,7 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 _FRAME_COUNT = 10
 # Object-level travel across the timeline. ~0.1 units/frame: the bug's
@@ -190,7 +190,7 @@ try:
     dh.log(f"captured {captured.shape}")
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes,

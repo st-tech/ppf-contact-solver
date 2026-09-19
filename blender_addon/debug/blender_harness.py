@@ -648,14 +648,44 @@ def spawn(spec: BlenderSpec) -> subprocess.Popen:
     env = os.environ.copy()
     env["PPF_DEBUG_PROBE"] = "1"
     env["PPF_DEBUG_PROBE_DIR"] = spec.probe_dir
-    # Tell the addon's WIN_NATIVE backend to skip its own
-    # ``ppf-cts-server.exe`` spawn: the orchestrator already started a
-    # rig-owned server for this worker, and the addon would otherwise
-    # try to relaunch one (and likely race the existing port binding).
-    # The bl_connect_win_native scenario documents this as a hard
-    # requirement; setting it here so individual scenarios don't have
-    # to opt in.
+    # Tell the addon's native backends to skip their own ppf-cts-server spawn:
+    # the orchestrator already started a rig-owned server for this worker, and
+    # the addon would otherwise try to relaunch one (and likely race the
+    # existing port binding). The bl_connect_win_native scenario documents this
+    # as a hard requirement; setting it here so individual scenarios do not
+    # have to opt in.
     env.setdefault("PPF_WIN_NATIVE_NO_SPAWN", "1")
+    # Same contract for the macOS native backend: the orchestrator owns the
+    # server for this worker, so the addon's connect_mac_native skips its
+    # ppf-cts-server Popen and attaches to the port already listening. The
+    # bl_mac_native_real_solve scenario depends on this being set here rather
+    # than opting in itself.
+    env.setdefault("PPF_MAC_NATIVE_NO_SPAWN", "1")
+    # And the Linux native backend, which is what the rig connects through on
+    # a Linux leg now that the Local connection is retired. Without it the
+    # add-on would spawn a second ppf-cts-server against the port the rig's own
+    # one already holds, and the scenario would drive whichever of the two won
+    # the race.
+    env.setdefault("PPF_LINUX_NATIVE_NO_SPAWN", "1")
+    # ONE WORKER'S SERVER MUST NOT SEE ANOTHER WORKER'S SOLVER. The server
+    # adopts a live solver it did not spawn, which is right for a notebook run
+    # launched outside the effect pipeline and wrong here: `solver_busy()` is
+    # host-global by default, so at `--parallel N` worker A's monitor finds
+    # worker B's `ppf-contact-solver`, logs "Adopting externally-launched
+    # solver", and drives its own state machine off a run it does not own. The
+    # scenario then reports a broken transition, and its own session directory
+    # holds a built scene with no `output/` at all, because its solver never
+    # started.
+    #
+    # `PPF_SOLVER_SCAN_DESCENDANTS` restricts that scan to the server's OWN
+    # descendants, which is exactly what the flag exists for
+    # (`ppf-cts-core/src/utils.rs`: "so several workers can run on one host
+    # without each reporting the others' solvers as its own"). The rig never
+    # set it, so every parallel sweep has been exposed to this. It bites the
+    # scenarios that hold a solver LONGEST, which is why the ones carrying an
+    # observation window and the multi-session chains fail a parallel sweep and
+    # pass in isolation.
+    env.setdefault("PPF_SOLVER_SCAN_DESCENDANTS", "1")
 
     # Scenario knobs that the addon (not just the server) reads, e.g.
     # PPF_FORCE_TCP_TRANSFER selecting the co-located transport. These

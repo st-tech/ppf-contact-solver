@@ -29,7 +29,8 @@
 #      same assigned object names are present on the scene
 #      PropertyGroup, the reload-server status sentinel survived the
 #      handoff (the reload server is running again), and the saved
-#      ``ssh_state`` (server_type, local_path, docker_port) is intact.
+#      ``ssh_state`` (server_type, the native solver path, docker_port) is
+#      intact.
 #
 # Notes on what does and does not survive a reload:
 #   - PropertyGroup state on ``bpy.context.scene`` survives because
@@ -56,6 +57,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 def _alloc_local_port() -> int:
@@ -164,7 +170,7 @@ try:
     encoder_params = __import__(pkg + ".core.encoder.params",
                                 fromlist=["compute_param_hash"])
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
 
     dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
@@ -188,9 +194,11 @@ try:
     pre_server_state = dh.facade.engine.state.server.name
     pre_upload_id = dh.facade.engine.state.server_upload_id
     pre_is_connected = bool(dh.com.is_connected())
-    # Capture ssh_state AFTER connect_local has run; that's the state
-    # we expect the reload to preserve.
-    pre_ssh_local_path = root.ssh_state.local_path
+    # Capture ssh_state AFTER the connect has run; that is the state the
+    # reload is expected to preserve. The path field is this platform's own,
+    # since the connection is its native one.
+    _, PATH_FIELD, _ = platform_native()
+    pre_ssh_local_path = getattr(root.ssh_state, PATH_FIELD)
     pre_ssh_docker_port = root.ssh_state.docker_port
     pre_ssh_server_type = root.ssh_state.server_type
     dh.log(
@@ -297,7 +305,7 @@ try:
         sorted(a.name for a in post_group.assigned_objects if a.name)
         if post_group else []
     )
-    post_ssh_local_path = post_root.ssh_state.local_path
+    post_ssh_local_path = getattr(post_root.ssh_state, PATH_FIELD)
     post_ssh_docker_port = post_root.ssh_state.docker_port
     post_ssh_server_type = post_root.ssh_state.server_type
 

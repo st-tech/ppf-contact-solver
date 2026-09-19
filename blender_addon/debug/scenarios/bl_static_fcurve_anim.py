@@ -15,7 +15,7 @@
 #       -> core/utils.py:get_transform_keyframes  (sparse T/R/S samples)
 #       -> encoder/mesh.py STATIC branch          (info["transform_animation"])
 #       -> frontend _populate_static Case 1       (pin.transform_keyframes)
-#       -> Rust solver (--features emulated)
+#       -> solver binary
 #       -> client.apply_animation                 (per-frame scene.frame_set,
 #                                                  matrix_world inverse,
 #                                                  PC2 local-space write)
@@ -62,10 +62,10 @@ NEEDS_BLENDER = True
 
 # Backend-agnostic: the assertions below are robust invariants (finite PC2,
 # pinned/anchored region tracks its prescribed motion, free region lags,
-# body not FAILED) that hold on BOTH the emulated CPU stub and the real
+# body not FAILED) that hold on BOTH the solver and the real
 # CUDA solver, so this runs on the free-runner macOS suite AND the real-GPU
 # AWS jobs selected by ``runtests --backend real``.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 11

@@ -27,9 +27,21 @@ fn main() {
 
     // Mirror the runtime harvest in main.rs: walk every directory
     // that holds `// Name:` / `// Map:` annotated logging sites.
+    //
+    // THE CUDA DRIVER IS ONE OF THEM AND IT IS NOT IN THE SOLVER CRATE. Nearly
+    // every channel is declared in the CUDA driver, which lives with the rest
+    // of the CUDA target in `ppf-cts-compute`. A root that no longer holds them
+    // is skipped in silence below, so dropping it costs no build error and
+    // surfaces much later as N/A rows in the addon panel and a notebook failing
+    // an assert on a log name after a correct simulation.
+    //
+    // It names `cuda`, not the whole crate: the compute crate's regression
+    // binaries write into a sibling `build-tests`, and a `rerun-if-changed` on
+    // the crate root would make every one of those runs dirty this crate.
     let roots = [
         workspace.join("src"),
         workspace.join("crates").join("ppf-cts-solver").join("src"),
+        workspace.join("crates").join("ppf-cts-compute").join("cuda"),
         workspace.join("crates").join("ppf-cts-core").join("src"),
     ];
 

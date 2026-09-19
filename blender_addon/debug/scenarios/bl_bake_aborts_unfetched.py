@@ -35,6 +35,30 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
+# NOT ON WINDOWS, WHICH RUNS THE RIG HEADLESS AND SO HAS NO MODAL LOOP.
+#
+# This scenario needs a Blender that owns a window: the PC2 it asserts on is
+# written by `PPF_OT_FramePump.modal` AFTER the driver's exec returns, and a
+# modal operator needs an event loop to run in. Measured on the Windows leg of
+# Blender CI: the driver reached `fetched queued=9 total=9`, the probe recorded
+# `modal_seen: []`, and the scenario finished with ZERO checks and no error,
+# because nothing it asserts on had been written yet. The drawing scenarios in
+# the same set fail one step earlier and say so outright, with "GPU functions
+# for drawing requires the gpu module to be initialized".
+#
+# Two requirements collide here: a full build/run/fetch scenario must NOT be
+# run with `--background`, because the modal operator above needs an event
+# loop, and the Windows leg of CI has no window server, so it runs headless.
+# There is no configuration in which both hold, so this declares where it can
+# run rather than failing there every time. Linux gives the rig its own Xvfb
+# and macOS has a real window server.
+PLATFORMS = ("linux", "darwin")
+
 _FRAME_COUNT = 6
 
 
@@ -83,7 +107,7 @@ try:
 
     # Full pipeline: build, run, fetch every frame.
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="bake:build")

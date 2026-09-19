@@ -14,7 +14,8 @@
 #     script gen) and `tetgen.TetGen` (TetGen backend; in-process,
 #     surface-preserving).
 #   * `triangle.triangulate` (CGAL Python binding).
-#   * `urllib.request` for preset downloads.
+#   * `frontend._utils_.fetch_asset` for preset downloads, retried with
+#     backoff on transient failures.
 #   * `hashlib.sha256` for cache-key digesting.
 #   * `np.load` / `np.savez` for `.npz` cache I/O (numpy lib).
 
@@ -40,6 +41,34 @@ _SHELL_NOT_SOLID_HINT = (
     "Assign thin, open, coplanar, or non-manifold surfaces to a SHELL "
     "group instead of SOLID, or use the fTetWild backend."
 )
+
+
+def _refuse_ftetwild_where_unshipped():
+    """Refuse the fTetWild backend by name where the distribution carries none.
+
+    pytetwild publishes no Windows on ARM wheel, and the Windows ARM64
+    distribution does not build fTetWild from source
+    (build-win-native/warmup.bat says why), so there `import pytetwild` would
+    fail with a bare ModuleNotFoundError that names a package rather than the
+    platform. The refusal says what is missing and why, and it does NOT fall back
+    to TetGen: the two meshers produce different meshes, so a quiet switch would
+    simulate a different scene under the same arguments. Anywhere pytetwild is
+    importable, this does nothing, including an ARM64 machine that has built it.
+    """
+    import importlib.util
+    import platform
+
+    if sys.platform != "win32" or platform.machine().upper() != "ARM64":
+        return
+    if importlib.util.find_spec("pytetwild") is not None:
+        return
+    raise RuntimeError(
+        "Tetrahedralization with backend='ftetwild' is not available on Windows "
+        "on ARM: pytetwild publishes no win_arm64 wheel, and this distribution "
+        "does not build fTetWild from source. Pass backend='tetgen' to "
+        "tetrahedralize with TetGen, which is included. The scene is not switched "
+        "to TetGen automatically because the two produce different meshes."
+    )
 
 # Empirical target-density factor for triangulate: scales the requested
 # triangle count into a per-triangle area budget. Keep the value stable to
@@ -457,10 +486,11 @@ class MeshManager:
     def preset(self, name: str) -> "TriMesh":
         """Load a preset mesh, downloading it from a remote source on first use and caching it locally."""
         import ssl
-        import urllib.request
 
         import certifi
         import trimesh
+
+        from ._utils_ import fetch_asset
 
         # Legacy preset cache path: `<cache_dir>/preset__{name}.npz`.
         # Mirrors `mesh_cache_path(cache_dir, "preset", name)`
@@ -480,27 +510,7 @@ class MeshManager:
         temp_path = os.path.join(downloads_dir, f"{stem}.ply")
 
         ssl_context = ssl.create_default_context(cafile=certifi.where())
-
-        # Download with retry logic.
-        num_try, max_try, success, wait_time = 0, 5, False, 3
-        while num_try < max_try:
-            try:
-                with (
-                    urllib.request.urlopen(url, context=ssl_context) as response,
-                    open(temp_path, "wb") as out_file,
-                ):
-                    out_file.write(response.read())
-                success = True
-                break
-            except Exception as e:
-                num_try += 1
-                print(
-                    f"Mesh {name} could not be downloaded: {e}. Retrying... in {wait_time} seconds"
-                )
-                time.sleep(wait_time)
-
-        if not success:
-            raise Exception(f"Mesh {name} could not be downloaded")
+        fetch_asset(url, temp_path, ssl_context=ssl_context)
 
         mesh = trimesh.load_mesh(temp_path, process=False)
         vert = np.asarray(mesh.vertices)
@@ -918,6 +928,7 @@ class TriMesh(tuple[np.ndarray, np.ndarray]):
         leaked temp file or a surviving child, neither of which affects
         the build result.
         """
+        _refuse_ftetwild_where_unshipped()
         # Run fTetWild in a subprocess to avoid holding the GIL.
         import tempfile as _tf
 

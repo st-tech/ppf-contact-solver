@@ -51,7 +51,7 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 # Pure error-plumbing logic; no solver is involved.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 
 _DRIVER_BODY = r'''
@@ -251,6 +251,7 @@ try:
     # the rig runs on, the add-on installed there must have had a wheel to
     # install. A Blender version bump that outruns the manifest fails here
     # rather than in a user's first Transfer.
+    import platform as _platform
     import re
     import sys as _sys
     manifest_path = os.path.join(
@@ -260,10 +261,20 @@ try:
     manifest = open(manifest_path, encoding="utf-8").read()
     wheels = re.findall(r'"\./wheels/([^"]+)"', manifest)
     abi = f"cp{_sys.version_info.major}{_sys.version_info.minor}"
-    plat_key = {"win32": "win_amd64", "darwin": "macosx", "linux": "manylinux"}[
-        "linux" if _sys.platform.startswith("linux") else _sys.platform
-    ]
-    matching = [w for w in wheels if abi in w and plat_key in w]
+    # The platform tag is keyed on the OS AND the machine. Keyed on the OS
+    # alone, an arm64 host passes on the strength of the x86_64 wheel, which
+    # Blender does not install there. An unlisted pair is named in the key
+    # itself, so it fails with the pair in the record.
+    os_key = "linux" if _sys.platform.startswith("linux") else _sys.platform
+    machine = _platform.machine().lower()
+    plat_key = {
+        ("darwin", "arm64"): "macosx_11_0_arm64",
+        ("linux", "x86_64"): "manylinux_2_28_x86_64",
+        ("linux", "aarch64"): "manylinux_2_28_aarch64",
+        ("win32", "amd64"): "win_amd64",
+        ("win32", "arm64"): "win_arm64",
+    }.get((os_key, machine), f"<no wheel platform for {os_key}/{machine}>")
+    matching = [w for w in wheels if w.endswith(f"-{abi}-{abi}-{plat_key}.whl")]
     record("manifest_has_a_wheel_for_this_blender",
            bool(matching),
            {"abi": abi, "platform_key": plat_key, "wheels": wheels})

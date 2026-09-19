@@ -11,16 +11,13 @@
 # (world_scaling=1) and at 10x size (world_scaling=0.1) and assert the
 # 10x run reproduces 10x the base run's per-frame positions.
 #
-# IMPORTANT (emulated-solver limitation): the CUDA-free emulator has NO
-# contact / BVH pipeline (cpp_emul/main.cpp: "No contact assembly
-# happens in the emulator"), so the colliders do not deflect the cloth
-# here. What this rig DOES lock in is that world_scaling != 1.0 with
-# colliders present builds and runs without panic -- it drives the
-# scene.rs ingest that scales wall position, sphere position, sphere
-# radius, and collider thickness -- and that the solved geometry still
-# round-trips at the authored scale. The contact RESPONSE to a scaled
-# collider is GPU-only and is verified there (commit 2ada05b5); the
-# encoder-side relative-vs-absolute gap scaling is checked in
+# WHAT THIS LOCKS IN is the scene.rs ingest that scales wall position,
+# sphere position, sphere radius and collider thickness: the two runs differ
+# in world_scaling alone, so any length the ingest scales by the wrong power
+# breaks the 10x correspondence rather than merely moving the cloth. The
+# assertion is that correspondence and not a particular deflection, which is
+# what makes it a check of the scaling and not of the contact response. The
+# encoder-side relative-vs-absolute gap scaling is checked separately, in
 # bl_world_scaling_encoder_scales.
 
 from __future__ import annotations
@@ -31,7 +28,13 @@ from . import _runner as r
 
 NEEDS_BLENDER = True
 
-KNOBS = {"PPF_EMULATED_ELASTIC": "1", "PPF_EMULATED_STEP_MS": "0"}
+# RUNS ON THE REAL BACKEND, established by RUNNING it: it passes a
+# real-backend run unchanged.
+BACKENDS = ("real",)
+
+# This scenario carries no pacing or elasticity knobs: a real backend has
+# no artificial per-step sleep and always computes real elasticity, so the
+# intent is preserved by asking for neither.
 
 
 _DRIVER_BODY = r"""

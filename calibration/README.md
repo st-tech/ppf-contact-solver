@@ -5,9 +5,12 @@ material presets in `blender_addon/presets/materials.toml`. Standard textile
 tests, plus a report (Markdown + HTML) that renders the results so they can be
 reviewed at a glance.
 
-Everything here runs on a **real CUDA GPU host** (the underlying solver session
-needs a GPU; the emulated backend has no physics). Run from the worktree root
-with `PYTHONPATH=.` and the project Python environment.
+Everything here runs on a **real CUDA GPU host**, because a calibration figure
+needs real physics at a speed a sweep of this size can afford. The Rust CPU
+backend (`--features cpu`) computes the same physics from the same neutral
+kernels at about 30x the wall clock, so it can smoke the pipeline but is not
+where a figure should be taken from. Run from the worktree root with
+`PYTHONPATH=.` and the project Python environment.
 
 ## What is measured, and what it means
 

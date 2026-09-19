@@ -8,6 +8,7 @@
 from . import _asset_ as asset_tests
 from . import _bvh_ as bvh_tests
 from . import _cbor_bridge_ as cbor_bridge_tests
+from . import _device_diagnostics_ as device_diagnostics_tests
 from . import _invisible_collider_ as invisible_collider_tests
 from . import _object_visibility_ as object_visibility_tests
 from . import _proximity_ as proximity_tests
@@ -72,6 +73,13 @@ def run_all_tests() -> bool:
 
     # Run object visibility tests
     if not object_visibility_tests.run_tests():
+        all_passed = False
+    print()
+
+    # Run device diagnostic channel tests. LAST because it is the only group
+    # that opens a device: it runs the solver binary this tree built, so a
+    # machine with no device for a backend reports that rather than failing.
+    if not device_diagnostics_tests.run_tests():
         all_passed = False
     print()
 

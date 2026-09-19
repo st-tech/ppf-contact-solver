@@ -112,7 +112,7 @@ _CAPABILITIES = {
 }
 
 _INSTRUCTIONS = (
-    "Drives the ZOZO contact solver add-on inside a running Blender. Read "
+    "Drives ZOZO's Contact Solver add-on inside a running Blender. Read "
     "llm://index with resources/read first: it routes to the topic documents "
     "that every tool description points at, and the scene-setup rules there "
     "are prerequisites, not background. Scene construction has a required "

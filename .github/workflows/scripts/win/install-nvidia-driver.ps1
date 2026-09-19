@@ -7,7 +7,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host "=== Installing NVIDIA Driver Only (No CUDA Toolkit) ==="
 
-# For AWS G6e instances with L4 GPUs, use the Windows Server data center
+# For AWS G6 (L4) and G6e (L40S) instances, use the Windows Server data center
 # driver. NVIDIA splits client (win10/win11) and Server builds; the EC2
 # AMI is Server, so use the winserver-2022-2025 build.
 $driverUrl = "https://us.download.nvidia.com/tesla/580.88/580.88-data-center-tesla-desktop-winserver-2022-2025-dch-international.exe"

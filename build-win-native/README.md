@@ -15,10 +15,12 @@
 warmup.bat
 ```
 
-This downloads and installs locally (no admin required):
+This downloads and installs locally (no admin required), provisioning the
+toolkit each backend in `PPF_WIN_BACKENDS` needs:
 - 7-Zip (portable, for CUDA extraction)
 - MinGit (portable)
-- CUDA Toolkit 12.8 (extracted locally)
+- CUDA Toolkit 12.8 (extracted locally), where cuda is among the backends
+- The ROCm SDK (unpacked locally), where rocm is among the backends
 - MSVC compiler (portable, via [portable-msvc](https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977))
 - Rust (local installation)
 - Embedded Python 3.11 with required packages
@@ -37,10 +39,16 @@ aborts with the failing URL listed; fix the entry in
 build.bat
 ```
 
-This builds:
-- CUDA library (`libsimbackend_cuda.dll`)
-- Rust executable (`ppf-contact-solver.exe`)
+This builds, for each backend in `PPF_WIN_BACKENDS`:
+- The backend library, `libsimbackend_cuda.dll` for CUDA and
+  `libppfbe_rocm.dll` for ROCm
+- Rust executable (`ppf-contact-solver.exe`), into `target\<backend>\release`
 - Launcher scripts (`start.bat`, `start-jupyterlab.pyw`)
+
+`PPF_WIN_BACKENDS` defaults to `cuda rocm cpu` on x64 and `cpu` on ARM64, which
+neither NVIDIA nor AMD publishes a Windows toolkit for. Every backend links the
+same executable name, so each one builds into its own target directory, and
+`frontend.get_backend` resolves which build a run uses.
 
 ## Running
 
@@ -57,7 +65,7 @@ bundle.bat
 ```
 
 Creates a self-contained distribution in `dist/` containing:
-- Solver binaries and CUDA runtime
+- Solver binaries for every backend built, each with its own runtime DLLs
 - Embedded Python environment
 - MinGit for repository cloning
 - Example notebooks
@@ -110,7 +118,7 @@ download.
 | Script | Purpose |
 |--------|---------|
 | `warmup.bat` | First-time environment setup (downloads all tools locally) |
-| `build.bat` | Compile CUDA library and Rust binary |
+| `build.bat` | Compile each backend's library and Rust binary |
 | `bundle.bat` | Create distribution package |
 | `start.bat` | Launch JupyterLab |
 | `fast-check-all.bat` | Run all example notebooks as tests |

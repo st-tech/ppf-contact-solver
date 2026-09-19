@@ -7,7 +7,8 @@ one that matches where the solver runs.
 | ---- | -------- | --- |
 | **Docker over SSH** / **Docker over SSH Command** | Solver runs inside a container on a remote Docker host | [Docker over SSH](docker_over_ssh.md) |
 | **Docker** | Solver runs inside a container on the local Docker daemon | [Docker (Local)](docker.md) |
-| **Windows Native** | Solver runs as a Windows subprocess using a bundled Python + CUDA | [Windows](windows.md) |
+| **Windows Native** | Solver runs as a Windows subprocess using a bundled Python, on CUDA, ROCm, or the CPU build | [Windows](windows.md) |
+| **macOS Native** | Solver runs as a subprocess on this Apple-silicon Mac, on Metal | {ref}`macOS Native <macos-native>` |
 | **SSH** / **SSH Command** | Solver runs **directly** on a remote Linux host | [SSH (Direct)](ssh.md) |
 | **Local** | Solver runs on the same machine as Blender | [Local](local.md) |
 
@@ -23,11 +24,13 @@ flow.
 :width: 820px
 
 Where each piece lives, and how the add-on reaches it, for the five
-connection types. Blue solid arrows carry lifecycle commands
-(start / stop / exec / port check); purple dashed arrows carry the TCP
-connection to the `ppf-cts-server` binary. The three Docker sub-modes
-of rows 3 and 4 are broken out separately in [Docker (Local)](docker.md) and
-[Docker over SSH](docker_over_ssh.md).
+connection types the diagram covers. Blue solid arrows carry lifecycle
+commands (start / stop / exec / port check); purple dashed arrows carry
+the TCP connection to the `ppf-cts-server` binary. The three Docker
+sub-modes of rows 3 and 4 are broken out separately in
+[Docker (Local)](docker.md) and [Docker over SSH](docker_over_ssh.md).
+macOS Native has the same shape as the Windows Native row: a subprocess
+on the same machine, reached over a loopback socket.
 ```
 
 ## What Happens When You Connect
@@ -64,6 +67,53 @@ container, or port. See [Connection Profiles](profiles.md) for the full
 workflow.
 :::
 
+(macos-native)=
+
+## macOS Native
+
+Blender and the solver both run on the same Apple-silicon Mac, and the
+solver is the Metal build. Set **Type** to `macOS Native` and point
+**Solver Path** at the folder that has `target/release/ppf-cts-server`
+in it: the extracted macOS distribution, or a checkout you built. A
+subfolder of it is accepted and resolved upward to the real root, as on
+Windows Native.
+
+**Connect** resolves the root and refuses one that holds no solver,
+naming the folder it looked in. **Start Server on Remote** launches the
+server as a child process and waits up to **16 seconds** for it to
+answer the solver protocol.
+
+No **GPU** row is drawn on this type. The Metal build opens the system
+default device and offers no way to name another, so there is nothing to
+pick. A **Compute Device** row is drawn: `GPU` runs the Metal build and
+`CPU` the portable one, which needs no GPU and is substantially slower.
+It is disabled only when the one build present is the one already
+selected, and **Connect** refuses a device the folder has no build
+for by name rather than running the other one.
+
+:::{admonition} Under the hood
+:class: toggle
+
+**Gatekeeper quarantine**
+
+macOS marks every file extracted from a download, and a marked binary is
+stopped when it is loaded rather than when it is started, so clearing the
+mark on the server alone would move the failure into the backend library
+or the build worker. Before spawning, the add-on clears
+`com.apple.quarantine` from the whole selected folder, and only for a
+packaged distribution, which it recognizes by the `.ppf-selfcontained`
+marker the bundler writes. A developer checkout is never downloaded as a
+unit and is never marked.
+
+**Which Python the build worker runs under**
+
+The interpreter belongs to the folder, not to the machine. A
+distribution ships its own at `<root>/python/bin/python3` with the
+frontend dependencies already installed into it; a checkout ships none
+and uses the developer environment at
+`~/.local/share/ppf-cts/venv/bin/python`.
+:::
+
 (gpu-picker)=
 
 ## Picking a GPU
@@ -76,11 +126,20 @@ only place to say which device a run uses: the choice is delivered as
 server's own hardware probe reads the same variable, so the **Remote
 Hardware** block below the box names the device the solver ended up on.
 
-The row appears **only while connected**, on every connection type. The
+The row appears **only while connected**, on every connection type
+except **macOS Native**, which draws no picker at all: the Metal build
+opens the system default device and offers no way to name another. The
 list is read from the solver host by running `nvidia-smi` through the
 connection, so before **Connect** there is nothing to offer, and the
 devices named are those of the machine that will run the server -- which
 for SSH and both Docker modes is not the machine Blender runs on.
+
+The picker is a CUDA control: `nvidia-smi` names NVIDIA devices only,
+and the choice is delivered as `CUDA_VISIBLE_DEVICES`. A ROCm, Metal, or
+CPU solver is unaffected by it, and on a host with no NVIDIA driver the
+dropdown holds **Automatic** alone with a probe message beneath it. That
+is not a refusal, and it does not stop **Start Server on Remote**; see
+**Hosts with one GPU, or none** below.
 
 Dropdown and Refresh grey out together **while the server is running or
 launching**, because the selection is applied at **Start Server on Remote**
@@ -164,14 +223,19 @@ reason is spelled out on a line beneath it, one of:
 
 > Could not run nvidia-smi on the solver host: *(the backend error)*
 
+All three are about NVIDIA devices. A host with no NVIDIA driver, which
+is the ordinary case for a ROCm, Metal, or CPU solver, reaches one of
+them and still runs; only the GPU picker is unavailable.
+
 The last of the three is what an unreachable host or a backend command error
 looks like; the probe is given five seconds. None of them blocks **Start
 Server on Remote** -- with nothing enumerated there is no list to check a
 request against -- so the launch goes ahead and a genuinely missing GPU
-surfaces from the solver instead: a server that starts but resolves no
+surfaces from the solver instead: a CUDA server that starts but resolves no
 device turns the outcome line under the picker red, reading *Server resolved
-no CUDA device*. Treat the probe error as the panel saying it could not
-confirm the host has a usable device, not as a refusal.
+no CUDA device*. That line is drawn only for a server that reports CUDA.
+Treat the probe error as the panel saying it could not confirm the host
+has a usable device, not as a refusal.
 
 ## Port Usage at a Glance
 
@@ -244,7 +308,9 @@ lines of `server.log`.
 Windows Native launches the server from the **Start Server on Remote** step
 too, but as a Win32 subprocess rather than through a shell script, and it
 waits for a TCMD probe instead of a `progress.log` marker.
-See {ref}`Windows - Under the hood <windows-under-the-hood>`.
+See {ref}`Windows - Under the hood <windows-under-the-hood>`. macOS
+Native does the same, spawning the server directly rather than through
+the launch script.
 
 **Docker port pre-launch check**
 

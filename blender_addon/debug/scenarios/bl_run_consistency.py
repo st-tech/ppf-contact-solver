@@ -60,6 +60,11 @@ from . import REPO_ROOT_POSIX
 
 NEEDS_BLENDER = True
 
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
+
 
 _DRIVER_BODY = r"""
 import bmesh
@@ -114,7 +119,7 @@ try:
     pre_data_hash = encoder_mesh.compute_data_hash(bpy.context)
     pre_param_hash = encoder_params.compute_param_hash(bpy.context)
 
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
 

@@ -68,7 +68,7 @@ NEEDS_BLENDER = True
 
 # Backend-agnostic: every assertion is a value-propagation invariant, and
 # param.toml is written by the frontend before any backend runs.
-BACKENDS = ("emulated", "real")
+BACKENDS = ("real",)
 
 # Above the `frame_count` property's min=10, so the host-side `frames` check
 # asserts the value it was actually given rather than a silently clamped one.
@@ -314,7 +314,7 @@ try:
     state.use_scene_frame_start = True
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes, message="frame_start:build")

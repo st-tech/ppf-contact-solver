@@ -9,10 +9,10 @@
 // preview and simulation produce bit-identical positions.
 //
 // Primitive types only ([f64; 3], &[f64], etc.). The two callers wrap
-// with their own vector library: scene_build uses ndarray slices,
-// the solver crate uses nalgebra Vector3<f32>. Their nalgebra
-// majors differ (workspace 0.33 vs root 0.32), so this module keeps
-// the API free of nalgebra types.
+// with their own vector library: scene_build uses ndarray slices, the
+// solver crate uses nalgebra `Vector3`. Their nalgebra majors differ
+// (workspace 0.33 vs root 0.32), so this module keeps the API free of
+// nalgebra types.
 //
 // The `transition` argument is a string (`"linear"`, `"smooth"`,
 // `"bezier"`) for wire compatibility with the on-disk TOML; a `None`

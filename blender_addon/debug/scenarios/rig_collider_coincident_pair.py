@@ -53,9 +53,8 @@
 #   `rig_coincident_contact_pair` cannot reach it either. Two dynamic sheets
 #   settle the shared embed, kind 6, which is the one branch these three are
 #   distinguished FROM.
-#   The emulated tier cannot host it at all: the emulated backend compiles only
-#   `cpp_emul/main.cpp` and has no contact assembly, so this is
-#   `BACKENDS = ("real",)` and runs on the GPU jobs only.
+#   So the check needs a solver that assembles contact, which is
+#   `BACKENDS = ("real",)`, and on CI that is the GPU jobs.
 #
 # WHY THE SOLVER LOG AND NOT ONLY `status.cbor`. The status record carries the
 # verdict (`payload.outcome.sub_kind`) and the `StepResult` booleans behind it
@@ -112,7 +111,7 @@ from . import _runner as r
 
 
 # Real backend only: the reported condition is evaluated in device contact
-# assembly, which the emulated backend does not compile. Selected by the AWS
+# assembly, which the solver does not compile. Selected by the AWS
 # GPU jobs via ``runtests --backend real``.
 BACKENDS = ("real",)
 

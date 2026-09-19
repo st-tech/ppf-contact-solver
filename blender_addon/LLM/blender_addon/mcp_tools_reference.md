@@ -78,14 +78,6 @@ Establish Docker connection for contact solver.
 - **container**: Docker container name
 - **path**: Working directory path in container
 
-### connect_local(path: str)
-
-Establish local connection for contact solver.
-
-**Parameters:**
-
-- **path**: Local working directory path
-
 ### connect_win_native(path: str, port: int=DEFAULT_SERVER_PORT)
 
 Establish Windows native connection for contact solver.
@@ -94,6 +86,27 @@ Establish Windows native connection for contact solver.
 
 - **path**: Path to the Windows native build or distribution directory
 - **port**: Port for the solver server
+
+### connect_mac_native(path: str, port: int=DEFAULT_SERVER_PORT)
+
+Establish macOS native connection for contact solver.
+
+**Parameters:**
+
+- **path**: Path to the macOS native build or distribution directory
+- **port**: Port for the solver server
+
+### connect_linux_native(path: str, port: int=DEFAULT_SERVER_PORT, gpu_backend: str="")
+
+Establish Linux native connection for contact solver.
+
+**Parameters:**
+
+- **path**: Path to the Linux native build or distribution directory
+- **port**: Port for the solver server
+- **gpu_backend**: Which accelerator to run where the directory holds more than
+  one GPU build: "AUTO", "CUDA" or "ROCM". Empty keeps whatever the scene
+  already holds.
 
 ### disconnect()
 
@@ -356,7 +369,7 @@ Per-type property notes:
 - deformation_damping: stiffness-proportional Rayleigh damping (seconds) for stretch/membrane/solid deformation; default 0.0, min 0.0. Applies to SOLID, SHELL, ROD. 0 disables it. PDRD groups are not Rayleigh-damped.
 - bending_damping: stiffness-proportional Rayleigh damping (seconds) for bending; default 0.0, min 0.0. SHELL and ROD only (SOLID/tet has no bending term; rejected for SOLID and PDRD). 0 disables it.
 - length_factor (ROD, UI label Shrink): multiplies every rod edge's rest length, so below 1.0 it tensions a pinned rod and above 1.0 it slackens it. Mass is taken from the drawn length and does not move with it. Rod bending stiffness is normalized against that same rest length and varies as its inverse square, so halving length_factor also makes the rod about four times stiffer in bending.
-- sand_grain_radius (SAND): the group-level fallback only. `convert_to_particle_mesh` stamps the radius it seeded with onto the object as `ppf_grain_radius`, and both the panel and the encoder prefer that stamped value over this one, so setting it here changes nothing once an included object has been converted. The panel draws the radius read-only either way. To change the radius, convert again from an unconverted copy of the source mesh.
+- sand_grain_radius (SAND): the group-level fallback only. `convert_to_particle_mesh` stamps the radius it seeded with onto the object as `grain_radius`, and both the panel and the encoder prefer that stamped value over this one, so setting it here changes nothing once an included object has been converted. The panel draws the radius read-only either way. To change the radius, convert again from an unconverted copy of the source mesh.
 - sand_particle_mass (SAND): mass of one grain in GRAMS, default 1.0, min 1e-6. The add-on multiplies by 1e-3 and ships kilograms to the solver, so a value chosen as if it were SI is off by a thousand.
 - SAND contact keys: the locked grain radius is sent as the group's contact OFFSET, because a grain's skin is its radius. `contact_gap` is the extra barrier distance on top of that skin and is always the absolute field: `contact_offset`, `contact_gap_rat`, `contact_offset_rat` and `use_group_bounding_box_diagonal` are accepted by the validator but the encoder ignores them for SAND.
 - young_mod_density_normalized: SOLID/SHELL/ROD only. True (default) interprets the Young's modulus field as a density-normalized value (Pa/rho), the solver's native convention. False interprets it as a true Young's modulus in pascals, which the addon divides by this group's density before sending it.

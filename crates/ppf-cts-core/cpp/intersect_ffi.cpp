@@ -4,7 +4,7 @@
 // License: Apache v2.0
 //
 // Host-callable C ABI over the shared edge-triangle pierce predicate that
-// lives in the CUDA solver tree (ppf-cts-solver/src/cpp/contact/
+// lives in the CUDA solver tree (ppf-cts-solver/src/kernels/contact/
 // intersect_core.hpp). This is the single source of truth: the same
 // templated routine is instantiated for float by the device contact
 // kernels and for double here, so the Rust build-time self-intersection
@@ -19,10 +19,10 @@
 
 #include "contact/intersect_core.hpp"
 
-extern "C" bool ppf_isect_edge_triangle_intersect(const double *e0,
+extern "C" bool isect_edge_triangle_intersect(const double *e0,
                                                   const double *e1,
                                                   const double *v0,
                                                   const double *v1,
                                                   const double *v2) {
-    return ppf_isect::edge_triangle_intersect<double>(e0, e1, v0, v1, v2);
+    return isect::edge_triangle_intersect<double>(e0, e1, v0, v1, v2);
 }

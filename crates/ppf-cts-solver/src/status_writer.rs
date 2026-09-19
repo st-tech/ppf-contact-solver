@@ -20,7 +20,7 @@
 //!   Finished / SavedAndQuit) and `Crashed` from the `StepResult` booleans,
 //! * the Rust panic hook,
 //! * the `libc::atexit` hook, which covers every C++ `exit(1)` fatal path
-//!   (`ppf_fatal` and the CUDA error handler) since those never unwind Rust,
+//!   (`fatal` and the CUDA error handler) since those never unwind Rust,
 //! * the fatal-signal handler in [`crate::signal_sidecar`], which cannot
 //!   write a record at all and leaves a one-token sidecar for the server.
 //!
@@ -37,20 +37,24 @@ use ppf_cts_formats::status::{
 };
 
 extern "C" {
-    // Defined by the linked backend (libsimbackend_cuda / libsimbackend_cpu):
+    // Defined by the linked backend (libsimbackend_cuda / libsimbackend_metal):
     // the fatal-exit reason a C++ exit(1) path stamped before dying (see
     // `ppf_cts_formats::status::error_code`), or 0 for a clean run / panic.
-    fn ppf_fatal_code() -> u8;
+    fn fatal_code() -> u8;
     // First line of that path's report, or an empty string when the path set
     // a code without a message.
-    fn ppf_fatal_detail() -> *const std::os::raw::c_char;
+    fn fatal_detail() -> *const std::os::raw::c_char;
 }
 
 /// The backend's one-line fatal detail, or `None` when it is empty.
-fn fatal_detail() -> Option<String> {
+///
+/// Named apart from the `fatal_detail` C symbol it wraps: the two were
+/// distinguished by that symbol's prefix and now need distinguishing by this
+/// one's role.
+fn fatal_detail_string() -> Option<String> {
     // SAFETY: the backend returns a pointer to a process-lived static buffer
     // that is NUL-terminated by construction (`snprintf` into a fixed array).
-    let raw = unsafe { ppf_fatal_detail() };
+    let raw = unsafe { fatal_detail() };
     if raw.is_null() {
         return None;
     }
@@ -68,7 +72,6 @@ struct Inner {
     output_dir: PathBuf,
     pid: u32,
     launch_id: String,
-    emulated: bool,
     frame: i32,
     sim_time: f64,
     resumable: bool,
@@ -121,7 +124,6 @@ pub fn init(output_dir: &str, launch_id: String, resumable_initial: bool) {
         output_dir: dir,
         pid: std::process::id(),
         launch_id,
-        emulated: cfg!(feature = "emulated"),
         frame: 0,
         sim_time: 0.0,
         resumable: resumable_initial,
@@ -132,7 +134,7 @@ pub fn init(output_dir: &str, launch_id: String, resumable_initial: bool) {
     *writer_lock() = Some(inner);
     write(Phase::Starting, None);
     install_panic_hook();
-    // The backend's exit(1) paths (`ppf_fatal` and the CUDA error handler)
+    // The backend's exit(1) paths (`fatal` and the CUDA error handler)
     // bypass Rust unwinding and the panic hook, so catch them via a C atexit
     // hook that reads the backend's fatal code and detail.
     unsafe { libc::atexit(atexit_fatal_hook) };
@@ -144,14 +146,14 @@ pub fn init(output_dir: &str, launch_id: String, resumable_initial: bool) {
 /// (idempotent: a clean run leaves the code 0 and a terminal record
 /// already present, so this is a no-op then).
 extern "C" fn atexit_fatal_hook() {
-    let code = unsafe { ppf_fatal_code() };
+    let code = unsafe { fatal_code() };
     if code != 0 {
         let kind = crash_kind_from_error_code(code).unwrap_or(CrashKind::UnknownAbrupt);
         // The fallback covers a path that stamped a code without a message.
         // It names the code rather than inventing a cause, so a future path
         // that forgets its detail reports honestly instead of borrowing the
         // wrong text.
-        let detail = fatal_detail()
+        let detail = fatal_detail_string()
             .unwrap_or_else(|| format!("solver exited via fatal hook (code {code}); see solver log"));
         terminal_crash(kind, detail);
     }
@@ -167,8 +169,8 @@ extern "C" fn atexit_fatal_hook() {
 /// would only see a process that exited), and an honest unknown outranks
 /// attributing the failure to the one path that does set a code.
 pub fn terminal_init_failure() {
-    let code = unsafe { ppf_fatal_code() };
-    let (kind, detail) = init_failure_outcome(code, fatal_detail());
+    let code = unsafe { fatal_code() };
+    let (kind, detail) = init_failure_outcome(code, fatal_detail_string());
     terminal_crash(kind, detail);
 }
 
@@ -215,6 +217,7 @@ pub fn terminal(outcome: Outcome) {
     write(Phase::Ended, Some(outcome));
 }
 
+
 /// Convenience for the crash terminal.
 pub fn terminal_crash(kind: CrashKind, detail: String) {
     terminal(Outcome::Crashed {
@@ -247,7 +250,6 @@ fn write(phase: Phase, outcome: Option<Outcome>) {
             seq: inner.seq,
             pid: inner.pid,
             launch_id: inner.launch_id.clone(),
-            emulated: inner.emulated,
         };
         (inner.output_dir.clone(), record, is_terminal)
     };

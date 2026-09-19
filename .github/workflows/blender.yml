@@ -2,34 +2,45 @@
 # Purpose: Run the headless Blender debug rig (blender_addon/debug/)
 # across several platforms:
 #
-#   * macos       - free GitHub-hosted runner, EMULATED CPU-stub solver,
-#                   the FULL scenario suite (physics-reference scenarios
-#                   included). This is the fast correctness smoke.
-#   * linux-emulated - free GitHub-hosted runner, EMULATED CPU-stub solver,
-#                   the FULL scenario suite on x86 Linux under Xvfb. Same
-#                   role as the macOS job but broadens the emulated canary
-#                   beyond macOS/ARM and exercises the server-side frontend
-#                   decode (fTetWild + the scipy partial-pin SOLID Poisson
-#                   diffusion) on Linux without a GPU.
-#   * linux-gpu   - disposable AWS L4 GPU instance, REAL CUDA solver,
+#   * macos-ssh   - free macOS runner driving a disposable AWS GPU box over the
+#                   addon's SSH backend.
+#   * linux-gpu   - disposable AWS GPU instance (L40S on the default
+#                   g6e.2xlarge, L4 on the g6 types), REAL CUDA solver,
 #                   the backend-agnostic subset + the real SOLID smoke.
 #                   Blender's window runs under Xvfb (software GL) while
-#                   the solver uses the real GPU.
-#   * windows-gpu - disposable AWS L4 GPU instance, REAL Windows-native
+#                   the solver uses the real GPU. It also builds the CPU
+#                   backend into target/cpu, so the two scenarios that
+#                   compare the Compute Device's two answers on ONE machine
+#                   have both builds to compare.
+#   * windows-gpu - disposable AWS GPU instance, REAL Windows-native
 #                   build (warmup.bat + build.bat + ppf-cts-server.exe).
 #                   The rig runs Blender headless (--background, via
 #                   PPF_BLENDER_HEADLESS=1), which needs no OpenGL/WGL
 #                   context or desktop, so it runs directly over the
-#                   Session-0 SSH shell. The L4 comes up in TCC
-#                   (compute-only) mode with no OpenGL, so a GUI launch is
+#                   Session-0 SSH shell. The GPU (L40S or L4, whichever
+#                   instance type is chosen) comes up in TCC (compute-only)
+#                   mode with no OpenGL, so a GUI launch is
 #                   avoided entirely (see scripts/win/run-blender-rig.ps1).
 #
 # The GPU jobs reuse the disposable-AWS launcher pattern from
 # template/aws-template.yml (Linux) and template/aws-template-win.yml
-# (Windows). Only macOS uses the emulated build; Linux and Windows test
-# the real CUDA solver on a real L4. The real-vs-emulated scenario split
-# is enforced by the BACKENDS gate in scenarios/__init__.py and selected
-# with `runtests --backend real`.
+# (Windows).
+#
+# EVERY JOB HERE NOW RUNS THE REAL CUDA SOLVER, and this file selects the
+# scenarios with `runtests --backend real` in each of them.
+#
+# THERE IS NO FREE-RUNNER JOB HERE, and that is the deliberate cost. Two jobs
+# once ran the whole suite on GitHub-hosted runners, about an hour each, one of
+# them the only job that exercised the server-side frontend decode (fTetWild
+# plus the scipy partial-pin SOLID Poisson diffusion) on Linux. They ran on a
+# CPU stub that computed no physics, and they went with it.
+#
+# A free-runner job CAN come back, because the Rust CPU backend
+# (crates/ppf-cts-solver/src/driver, `cargo build --release --features cpu`)
+# runs every scene at about 30x the wall clock and every scenario is declared
+# against it. What must NOT come back is a job that runs "the suite" without
+# saying which backend it targeted: `runtests --backend` is required precisely
+# so a run cannot report a subset as a full green suite.
 #
 # License: Apache v2.0
 
@@ -45,22 +56,22 @@ on:
         type: choice
         options:
           - all
-          - macos
-          - linux-emulated
           - macos-ssh
           - linux-gpu
           - windows-gpu
       instance_type:
         description: 'EC2 instance type (linux-gpu / windows-gpu / macos-ssh)'
         required: true
-        default: 'g6.xlarge'
+        default: 'g6e.2xlarge'
         type: choice
         options:
-          # L4 (sm_89), minimal single-GPU current gen. g4dn (T4, sm_75)
-          # would now run too: the shipped cubins in
-          # crates/ppf-cts-solver/src/cpp/cuda_arch.txt include sm_75. It is
-          # left out here only because the Blender rig wants the faster card,
-          # not because the image lacks a kernel for it.
+          # g6.xlarge / g6.2xlarge carry an L4, g6e.2xlarge (the default) an
+          # L40S; both are sm_89. g4dn (T4, sm_75) would now run too: the
+          # shipped cubins in crates/ppf-cts-compute/cuda/cuda_arch.txt
+          # include sm_75. It is left out here only because the Blender rig
+          # wants the faster card, not because the image lacks a kernel for
+          # it.
+
           - g6.xlarge
           - g6.2xlarge
           - g6e.2xlarge
@@ -73,307 +84,102 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+      # A RE-RUN AFTER A FIX SHOULD NOT COST THE WHOLE SET. Naming the scenarios
+      # that failed runs only those on linux-gpu and windows-gpu (the rig
+      # takes names on its command line); macos-ssh always runs its two SSH
+      # scenarios, which are the only ones that leg exists for. Empty is the
+      # whole set, which stays the default and the only thing a merge is
+      # judged by.
+      scenarios:
+        description: 'Scenario names to run, space-separated (empty: the whole set)'
+        required: false
+        default: ''
+        type: string
+      # WHICH BACKENDS THE WINDOWS BUILD MAKES. The rig there can execute only
+      # CUDA, so `cuda cpu` skips the ROCm SDK download and the ROCm library
+      # and Rust builds (about 20 minutes, measured on run 35151808761) and
+      # is the choice for iterating. It also skips the one place CI exercises
+      # a tree carrying TWO GPU builds, where the server is resolved by
+      # probing both, so the default keeps ROCm.
+      windows_backends:
+        description: 'Backends build.bat makes on windows-gpu'
+        required: true
+        default: 'cuda rocm cpu'
+        type: choice
+        options:
+          - cuda rocm cpu
+          - cuda cpu
+      # A PIPELINE TEST, IN MINUTES. The steps AFTER the rig (the wait windows,
+      # the collect, the gate) sit an hour of warmup and build past the start
+      # of the Windows leg and up to two more hours of waiting, and they failed
+      # twice at that mark before they had ever run against a rig that
+      # reported. With this set, linux-gpu and windows-gpu skip the driver,
+      # warmup, build and Blender and run a stand-in rig (phony-rig.ps1 on
+      # Windows, an inline stub on Linux) that writes every file those steps
+      # read, through the same launch, detachment, poll, collect and gate;
+      # macos-ssh is skipped. Green here proves the pipeline and nothing about
+      # the solver.
+      pipeline_test:
+        description: 'Skip build and rig; run a stand-in that exercises the wait, collect and gate steps'
+        required: false
+        default: false
+        type: boolean
+      # THE DISPATCH TEST, IN MINUTES, FOR THE WINDOWS SHARDS. No builder, no
+      # driver, no Blender, no payload: N small rig instances each get the
+      # source tree and the embeddable Python, and the REAL launcher and
+      # runner start `runtests --shard I/N --list`, so each rig prints its
+      # share; the gate then checks the shares partition the selection with
+      # no overlap and no gap. It exists because the first sharded runs ran
+      # the whole list on every rig for an hour and a half before anyone
+      # could read that off a log (a `$shard` local had emptied the `$Shard`
+      # parameter), and a real run costs an hour of building to find out.
+      # Only windows-gpu runs; linux-gpu and macos-ssh are skipped.
+      dispatch_test:
+        description: 'Windows only: no build, each shard rig lists its share with the real launch scripts, the gate checks the partition'
+        required: false
+        default: false
+        type: boolean
+      # THE RIG IS SHARDED ACROSS INSTANCES. Each shard is its own job on its
+      # own instance running every N-th scenario of the orchestrator's list
+      # (`runtests --shard I/N`), so N hosts run the whole set exactly once
+      # with no in-box parallelism, because one box running scenarios side by
+      # side is contention rather than speed. Measured
+      # sequential: the Linux rig 57 minutes, the Windows rig about 105. Each
+      # shard still builds its own solver, so the Windows build (about 55
+      # minutes) becomes the wall there. macos-ssh runs its two scenarios on
+      # one instance whatever this says.
+      shards:
+        description: 'Instances per platform for the rig (each runs 1/N of the scenarios)'
+        required: true
+        default: '4'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '4'
 
 permissions:
   contents: read
 
 jobs:
   # ====================================================================
-  # macOS - free GitHub-hosted runner, emulated solver, full suite.
-  # ====================================================================
-  macos:
-    name: macOS (emulated)
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos' }}
-    # Pinned, not macos-latest: that label flips to macos-26 (Xcode 26 /
-    # Clang 21 / OpenSSL 3.x) by 2026-07-15. Freeze on the validated arm64
-    # macos-15 image (what the emulated toolchain + arm64 Blender build are
-    # verified against) and migrate to macos-26 deliberately after testing.
-    runs-on: macos-15
-    # A healthy full suite measures about 61 min here, and it grows as
-    # scenarios land. Crossing the limit surfaces as a cancelled job, which
-    # reads as infrastructure noise rather than as a suite that outgrew its
-    # budget, so keep the headroom wide.
-    timeout-minutes: 120
-    env:
-      BLENDER_VERSION: '5.2.0'
-      PPF_EMULATED_STEP_MS: '100'
-      PYTHONUNBUFFERED: '1'
-      # Bound + retry a stalled fTetWild tetrahedralization (SOLID tests): a
-      # nondeterministic hang then fails fast and self-recovers instead of
-      # eating the per-scenario timeout. Normal runs are well under this.
-      PPF_FTETWILD_TIMEOUT: '120'
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Pin debug root under runner temp
-        shell: bash
-        run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
-
-      - name: macOS native deps
-        # ppf-cts-solver's build.rs invokes make under the `emulated`
-        # feature, and the C++ stub includes <Eigen/Dense>. Untap aws/tap
-        # first: the runner image pre-taps it and Homebrew's tap-trust check
-        # warns on every brew call, but we don't use it (the aws CLI is the
-        # runner's pkg install, not this tap). Non-fatal via `|| true`.
-        run: |
-          brew untap aws/tap 2>/dev/null || true
-          brew install eigen
-
-      - name: Download Blender (macOS)
-        run: |
-          # Derive the series directory from the version rather than
-          # spelling it out, so the two cannot disagree: a bump that
-          # edited only BLENDER_VERSION would otherwise build a URL for
-          # the new build under the old series and 404.
-          series="${BLENDER_VERSION%.*}"
-          url="https://download.blender.org/release/Blender${series}/blender-${BLENDER_VERSION}-macos-arm64.dmg"
-          curl -fL -o /tmp/blender.dmg "$url"
-          mount=$(hdiutil attach -nobrowse /tmp/blender.dmg | awk '/\/Volumes\// {print $NF; exit}')
-          cp -R "$mount/Blender.app" /Applications/
-          hdiutil detach "$mount"
-          echo "PPF_BLENDER_BIN=/Applications/Blender.app/Contents/MacOS/Blender" >> "$GITHUB_ENV"
-
-      - name: Probe Blender launch
-        shell: bash
-        run: |
-          set -euo pipefail
-          LOG="$RUNNER_TEMP/blender_probe.log"
-          "$PPF_BLENDER_BIN" \
-            --python-expr "import threading, os, time; threading.Thread(target=lambda: (time.sleep(3), os._exit(0)), daemon=True).start()" \
-            2>&1 | tee "$LOG" || true
-          tail -n 40 "$LOG"
-          if grep -qE 'Probably a libepoxy bug|missing WGL_ARB_extensions_string' "$LOG"; then
-            echo "::error::Blender failed to initialize OpenGL"
-            exit 1
-          fi
-          echo "Blender launch probe OK"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: emulated-macos
-
-      - name: Build emulated solver
-        env:
-          PPF_ALLOW_EMULATED: "1"
-        run: cargo build --release --features emulated --no-default-features
-
-      - name: Build ppf-cts-server (emulated)
-        shell: bash
-        env:
-          PPF_ALLOW_EMULATED: "1"
-        run: |
-          cargo build --release -p ppf-cts-server --features emulated
-          test -f target/release/ppf-cts-server
-          ./target/release/ppf-cts-server --help >/dev/null
-          echo "ppf-cts-server --help OK"
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Create venv + install Python deps
-        shell: bash
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install \
-            numpy scipy numba plyfile requests trimesh pywavefront \
-            matplotlib tqdm pythreejs ipywidgets fast-simplification \
-            tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
-
-      - name: Verify Rust extension importable
-        shell: bash
-        run: |
-          .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
-
-      - name: Install addon
-        run: ./install-blender-addon.sh
-
-      - name: Run all scenarios (emulated, full suite)
-        shell: bash
-        run: |
-          .venv/bin/python blender_addon/debug/main.py runtests \
-            --timeout 360 \
-            --report report.json
-
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: report-macos
-          path: report.json
-          if-no-files-found: warn
-
-      # cancelled() as well as failure(): GitHub reports a timeout-minutes
-      # kill as cancelled, and failure() is false for it. A hang is exactly
-      # when the worker logs are worth having, so keying only on failure()
-      # discards the evidence in the one case that needs it.
-      - name: Upload worker artifacts on failure or timeout
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v6
-        with:
-          name: ppf-debug-macos
-          path: ${{ runner.temp }}/ppf-debug/
-          if-no-files-found: ignore
-
-  # ====================================================================
-  # Linux - free GitHub-hosted runner, emulated solver, the full suite on
-  # x86 Linux under Xvfb (software GL). Mirrors the macOS emulated job.
-  # ====================================================================
-  linux-emulated:
-    name: Linux (emulated)
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux-emulated' }}
-    runs-on: ubuntu-latest
-    # A healthy full suite measures about 57 min here, and it grows as
-    # scenarios land. Crossing the limit surfaces as a cancelled job, which
-    # reads as infrastructure noise rather than as a suite that outgrew its
-    # budget, so keep the headroom wide.
-    timeout-minutes: 120
-    env:
-      PPF_EMULATED_STEP_MS: '100'
-      PYTHONUNBUFFERED: '1'
-      # See the macos job: bound + retry a stalled fTetWild run on SOLID tests.
-      PPF_FTETWILD_TIMEOUT: '120'
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Pin debug root under runner temp
-        shell: bash
-        run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
-
-      - name: Linux native deps
-        # ppf-cts-solver's build.rs invokes make under the `emulated`
-        # feature; the C++ stub Makefile compiles against Eigen at
-        # -I/usr/include/eigen3 on Linux (libeigen3-dev). install-blender.sh
-        # installs Blender's own runtime deps + Xvfb separately.
-        run: |
-          # DPkg::Lock::Timeout waits out unattended-upgrades on a freshly
-          # booted instance instead of failing the build on a held dpkg lock.
-          sudo apt-get -o DPkg::Lock::Timeout=300 update -qq
-          sudo apt-get -o DPkg::Lock::Timeout=300 install -y --no-install-recommends libeigen3-dev build-essential
-
-      - name: Install Blender (Linux) + Xvfb
-        run: |
-          ./install-blender.sh
-          # Export the Blender binary path so the addon-install and rig-run
-          # steps can locate it (install-blender-addon.sh needs PPF_BLENDER_BIN
-          # to derive the extensions dir). --env prints an eval-able block;
-          # capture just the binary line here (no eval, so no Xvfb side effect).
-          # The rig-run step re-evals --env to start Xvfb + set DISPLAY.
-          BIN=$(./install-blender.sh --env | sed -n 's/^export PPF_BLENDER_BIN=//p')
-          echo "PPF_BLENDER_BIN=$BIN" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: emulated-linux
-
-      - name: Build emulated solver
-        env:
-          PPF_ALLOW_EMULATED: "1"
-        run: cargo build --release --features emulated --no-default-features
-
-      - name: Build ppf-cts-server (emulated)
-        shell: bash
-        env:
-          PPF_ALLOW_EMULATED: "1"
-        run: |
-          cargo build --release -p ppf-cts-server --features emulated
-          test -f target/release/ppf-cts-server
-          ./target/release/ppf-cts-server --help >/dev/null
-          echo "ppf-cts-server --help OK"
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Create venv + install Python deps
-        shell: bash
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install \
-            numpy scipy numba plyfile requests trimesh pywavefront \
-            matplotlib tqdm pythreejs ipywidgets fast-simplification \
-            tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
-
-      - name: Verify Rust extension importable
-        shell: bash
-        run: |
-          .venv/bin/python -c "from frontend import _rust as m; print('schema_version', m.schema_version()); print('process_name', m.process_name())"
-
-      - name: Install addon + paramiko into Blender's Python
-        run: |
-          ./install-blender-addon.sh
-          # bl_mcp_connection_refusals drives connect_ssh, whose operator
-          # polls on module_exists(["paramiko"]); a failed poll surfaces
-          # as "context is incorrect", which reads like a UI-context bug
-          # rather than a missing module. The scenario's own
-          # install_paramiko call is asynchronous, so without this the
-          # check races a pip download. Mirror the addon's
-          # install_module(): ensurepip + pip --target the addon modules
-          # dir (on Blender's sys.path).
-          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess,os; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
-          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,os; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
-
-      - name: Run all scenarios (emulated, full suite, under Xvfb)
-        shell: bash
-        run: |
-          # --env exports PPF_BLENDER_BIN and starts an Xvfb on :99.
-          # ensure_display() in blender_harness.py can either use that
-          # server or bring up a private one from :100, and
-          # PPF_BLENDER_DISPLAY picks which. CI pins the ambient server:
-          # on a private one a long suite stops partway through, and every
-          # scenario after that point fails with its Blender never
-          # connecting to the X server. inherit also fails loudly if :99
-          # is missing or unreachable, so a broken display surfaces here
-          # rather than as a suite of timeouts.
-          eval "$(./install-blender.sh --env)"
-          export PPF_BLENDER_DISPLAY=inherit
-          echo "PPF_BLENDER_BIN=$PPF_BLENDER_BIN DISPLAY=$DISPLAY"
-          .venv/bin/python blender_addon/debug/main.py runtests \
-            --timeout 360 \
-            --report report.json
-
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: report-linux-emulated
-          path: report.json
-          if-no-files-found: warn
-
-      # cancelled() as well as failure(): GitHub reports a timeout-minutes
-      # kill as cancelled, and failure() is false for it. A hang is exactly
-      # when the worker logs are worth having, so keying only on failure()
-      # discards the evidence in the one case that needs it.
-      - name: Upload worker artifacts on failure or timeout
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v6
-        with:
-          name: ppf-debug-linux-emulated
-          path: ${{ runner.temp }}/ppf-debug/
-          if-no-files-found: ignore
-
-  # ====================================================================
-  # macOS -> L4 over SSH - the runner is a free macOS box running real
-  # Blender (installed the same way as the emulated macOS job), but the
-  # solver runs on a disposable AWS L4 that the addon reaches via its
-  # SSH backend (server_type CUSTOM / paramiko). This is the "local
-  # Blender + remote GPU box" workflow. The macOS side still builds the
-  # emulated backend because the rig's local-server spawn + numba
-  # precompile + addon warmup need `frontend` importable locally; that
-  # local server is spawned-and-unused (bl_ssh_remote_solve reaches the
-  # remote server independently).
+  # macOS -> GPU instance over SSH - the runner is a free macOS box running real
+  # Blender, but the solver runs on a disposable AWS GPU box that the addon
+  # reaches via its SSH backend (server_type CUSTOM / paramiko). This is
+  # the "local Blender + remote GPU box" workflow.
+  #
+  # The macOS side still builds a LOCAL server, because the rig gives every
+  # worker slot one and will not start without it; it is spawned-and-unused
+  # here (bl_ssh_remote_solve reaches the remote server independently). It
+  # local build is the Rust CPU backend, which computes REAL physics from the
+  # same neutral kernels as the GPU backends, about 30x slower. That is the
+  # point: if a scenario ever solves locally by mistake it produces a slow
+  # correct answer, or a refusal by name, and never a stub's kinematics
+  # passed off as the remote GPU's.
   # ====================================================================
   macos-ssh:
-    name: macOS -> L4 (real over SSH)
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-ssh' }}
+    name: macOS -> GPU (real over SSH)
+    if: ${{ (inputs.platforms == 'all' || inputs.platforms == 'macos-ssh') && !inputs.pipeline_test && !inputs.dispatch_test }}
     # Pinned to macos-15 (see the macos job): avoid the macos-latest ->
     # macos-26 flip landing on this job unvalidated by 2026-07-15.
     runs-on: macos-15
@@ -395,12 +201,11 @@ jobs:
         shell: bash
         run: echo "PPF_DEBUG_ROOT=$RUNNER_TEMP/ppf-debug" >> "$GITHUB_ENV"
 
-      - name: macOS native deps
-        # Untap aws/tap (unused here; only trips Homebrew's tap-trust
-        # warning). The aws CLI this job uses is the runner's pkg install.
-        run: |
-          brew untap aws/tap 2>/dev/null || true
-          brew install eigen
+      # No native-deps step. It installed Eigen, and nothing
+      # this job compiles includes Eigen (the CPU backend's entrypoints shim
+      # and ppf-cts-core's intersect_ffi.cpp both use the in-house linalg
+      # headers). With no brew call left, the aws/tap untap that guarded
+      # Homebrew's tap-trust warning has nothing to guard either.
 
       - name: Download Blender (macOS) + probe
         run: |
@@ -426,7 +231,8 @@ jobs:
           echo "Blender launch probe OK"
 
       # ------------------------------------------------------------------
-      # AWS side: launch the L4, build the REAL solver on it, and
+      # AWS side: launch the GPU instance (the instance_type input; L40S on
+      # the default g6e.2xlarge, L4 on g6), build the REAL solver on it, and
       # pre-start ppf-cts-server so the addon's SSH connect reaches
       # RUNNING without the start_server dance.
       # ------------------------------------------------------------------
@@ -489,6 +295,9 @@ jobs:
           cat > /tmp/user-data.sh << EOF
           #!/bin/bash
           set -x
+          # The eight-hour self-destruct (release/scripts/linux/user-data-verify.sh
+          # records why); this instance is never rebooted, so the plain timer holds.
+          shutdown -h +480 "CI self-destruct: this instance outlived its workflow"
           exec > >(tee /var/log/user-data.log) 2>&1
           sleep 5
           mkdir -p /home/ubuntu/.ssh
@@ -587,7 +396,7 @@ jobs:
           # The Deep Learning AMI ships several CUDA toolkits and points
           # /usr/local/cuda at the newest one (13.2 on this image). Every
           # host of this project builds against 12.8, and the solver's
-          # src/cpp/Makefile invokes /usr/local/cuda/bin/nvcc by absolute
+          # the CUDA Makefile invokes /usr/local/cuda/bin/nvcc by absolute
           # path, so the toolkit is selected at that symlink.
           echo "=== select CUDA 12.8 ==="
           test -x /usr/local/cuda-12.8/bin/nvcc
@@ -615,21 +424,26 @@ jobs:
           kill $TUNNEL_PID 2>/dev/null || true
 
       # ------------------------------------------------------------------
-      # macOS side: emulated build (for the rig's local server + numba +
-      # addon), venv, addon, and paramiko in Blender's Python.
+      # macOS side: local server (the rig gives every worker slot one),
+      # venv, addon, and paramiko in Blender's Python.
       # ------------------------------------------------------------------
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: emulated-macos
+          shared-key: cpu-macos
 
-      - name: Build emulated solver (local, for the rig)
-        env:
-          PPF_ALLOW_EMULATED: "1"
+      - name: Build the local solver + server (CPU backend)
+        # The CPU backend computes REAL physics from the same neutral
+        # kernels as CUDA and Metal, about 30x slower, so nothing here can
+        # produce fake physics; this job only needs
+        # the server binary to EXIST locally, and its actual solving
+        # happens on the remote GPU instance.
         run: |
-          cargo build --release --features emulated --no-default-features
-          cargo build --release -p ppf-cts-server --features emulated
+          cargo build --release --features cpu
+          cargo build --release -p ppf-cts-server
           test -f target/release/ppf-cts-server
+          ./target/release/ppf-cts-server --help >/dev/null
+          echo "ppf-cts-server --help OK"
 
       - uses: actions/setup-python@v6
         with:
@@ -641,11 +455,20 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
+          # The tetrahedralizers come from warmup.py's tetra_packages(), which
+          # pins pytetwild; reading them keeps that version named in one place.
+          # NOT `mapfile`: this step runs under the macOS runner's /bin/bash
+          # 3.2, which has no `mapfile` and fails the step with exit 127
+          # (measured on run 35072784186). Package names carry no whitespace,
+          # so a word-split substitution reads the same list.
+          # shellcheck disable=SC2207
+          TETRA=($(python -c "import runpy; print('\n'.join(runpy.run_path('warmup.py')['tetra_packages']()))"))
+          [ "${#TETRA[@]}" -gt 0 ] || { echo "warmup.py tetra_packages() returned nothing"; exit 1; }
           .venv/bin/python -m pip install \
             numpy scipy numba plyfile requests trimesh pywavefront \
             matplotlib tqdm pythreejs ipywidgets fast-simplification \
-            tabulate triangle psutil tomli ipython pillow pytetwild \
-            tetgen pyvista "$(python blender_addon/wheels/fetch.py --pin)"
+            tabulate triangle psutil tomli ipython pillow \
+            "${TETRA[@]}" "$(python blender_addon/wheels/fetch.py --pin)"
 
       - name: Verify Rust extension importable
         shell: bash
@@ -662,13 +485,25 @@ jobs:
           "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess,os; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
           "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,os; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
 
+      # The OIDC credential that opens a tunnel lasts an hour, and the instance
+      # wait, the remote CUDA build and the local CPU build above reach that
+      # from the last refresh. `open-tunnel` runs in the background unchecked,
+      # so an expired credential shows only as port 2222 refused (the Windows
+      # leg below records the measurement). A refresh costs about one second.
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
       # ------------------------------------------------------------------
-      # Drive the SSH scenario: macOS Blender -> remote L4 server. Keep an
+      # Drive the SSH scenario: macOS Blender -> remote GPU server. Keep an
       # ec2-instance-connect tunnel (localhost:2222 -> instance:22) alive
       # for the whole run; the addon's paramiko connects to localhost:2222
       # and opens a direct-tcpip channel to the remote server on :9090.
       # ------------------------------------------------------------------
-      - name: Run SSH rig (macOS Blender -> remote L4)
+      - name: Run SSH rig (macOS Blender -> remote GPU instance)
         run: |
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
@@ -692,6 +527,14 @@ jobs:
           kill $TUNNEL_PID 2>/dev/null || true
           echo "rig exit code: $RIG_RC"
           echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Collect remote server log
         if: success() || failure()
@@ -753,12 +596,16 @@ jobs:
           rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt
 
   # ====================================================================
-  # Linux GPU - disposable AWS L4 instance, REAL CUDA solver.
+  # Linux GPU - disposable AWS GPU instance, REAL CUDA solver.
   # Blender runs under Xvfb (software GL); the solver uses the real GPU.
   # ====================================================================
   linux-gpu:
-    name: Linux L4 (real)
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux-gpu' }}
+    name: Linux GPU (real) [shard ${{ matrix.shard }}/${{ inputs.shards }}]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shards == '4' && '[0,1,2,3]' || inputs.shards == '2' && '[0,1]' || '[0]') }}
+    if: ${{ (inputs.platforms == 'all' || inputs.platforms == 'linux-gpu') && !inputs.dispatch_test }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -832,6 +679,9 @@ jobs:
           cat > /tmp/user-data.sh << EOF
           #!/bin/bash
           set -x
+          # The eight-hour self-destruct (release/scripts/linux/user-data-verify.sh
+          # records why); this instance is never rebooted, so the plain timer holds.
+          shutdown -h +480 "CI self-destruct: this instance outlived its workflow"
           exec > >(tee /var/log/user-data.log) 2>&1
           sleep 5
           mkdir -p /home/ubuntu/.ssh
@@ -863,7 +713,7 @@ jobs:
               --user-data "$USER_DATA" \
               --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
               --tag-specifications \
-                "ResourceType=instance,Tags=[{Key=Name,Value=blender-linux-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
+                "ResourceType=instance,Tags=[{Key=Name,Value=blender-linux-${{ steps.ids.outputs.TIMESTAMP }}-s${{ matrix.shard }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
               --instance-initiated-shutdown-behavior terminate \
               --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
               break
@@ -913,6 +763,7 @@ jobs:
           kill $TUNNEL_PID 2>/dev/null || true
 
       - name: Warmup + build real solver + install Blender/addon
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
         run: |
           INSTANCE_ID=$(cat /tmp/instance_id.txt)
           aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
@@ -929,7 +780,7 @@ jobs:
           # The Deep Learning AMI ships several CUDA toolkits and points
           # /usr/local/cuda at the newest one (13.2 on this image). Every
           # host of this project builds against 12.8, and the solver's
-          # src/cpp/Makefile invokes /usr/local/cuda/bin/nvcc by absolute
+          # the CUDA Makefile invokes /usr/local/cuda/bin/nvcc by absolute
           # path, so the toolkit is selected at that symlink.
           echo "=== select CUDA 12.8 ==="
           test -x /usr/local/cuda-12.8/bin/nvcc
@@ -945,14 +796,54 @@ jobs:
           cargo build --release -p ppf-cts-server
           test -f target/release/ppf-cts-server
           ./target/release/ppf-cts-server --help >/dev/null
+          # THE CPU BACKEND BESIDE THE CUDA ONE, because two scenarios compare
+          # them on one machine: `bl_native_device_real_solve` runs a solve per
+          # Compute Device and asks each session launcher which solver it ran,
+          # and `bl_native_attach_build_check` needs a CPU selection to be a
+          # mismatch against the GPU server the rig started. Both fail by name
+          # on a root holding one build, which is the point: half of what they
+          # claim is not worth reporting as a pass.
+          #
+          # CARGO_TARGET_DIR IS WHAT KEEPS THEM APART. `--features cpu` links
+          # the CPU backend into `target/release` whenever that directory is
+          # free to take it, and `crates/ppf-cts-solver/build.rs` refuses to put
+          # it into one that already holds the CUDA build, so the variable is
+          # not a convenience here, it is the whole arrangement.
+          echo "=== cargo build --release --features cpu (SECOND target dir) ==="
+          CARGO_TARGET_DIR=target/cpu cargo build --release --features cpu
+          CARGO_TARGET_DIR=target/cpu cargo build --release -p ppf-cts-server
+          test -f target/cpu/release/ppf-cts-server
+          test "$(cat target/cpu/release/.ppf-backend)" = cpu
+          test "$(./target/release/ppf-contact-solver --backend)" = cuda
           echo "=== install Blender (Linux) + Xvfb ==="
           ./install-blender.sh
           eval "$(./install-blender.sh --env)"
           echo "PPF_BLENDER_BIN=$PPF_BLENDER_BIN"
           echo "=== install addon ==="
           ./install-blender-addon.sh
+          # paramiko INTO BLENDER'S OWN PYTHON, which this leg needs because
+          # `bl_mcp_connection_refusals` is declared for the real backend here
+          # and its connect-family check drives `connect_ssh`. That operator
+          # polls on `module_exists(["paramiko"])`, and a failed poll surfaces
+          # as "Operator bpy.ops.ssh.run_command.poll() failed, context is
+          # incorrect", which reads like a UI-context bug rather than a missing
+          # module. The scenario's own install call is asynchronous, so without
+          # this the check races a pip download. Mirrors the addon's
+          # `install_module()`: ensurepip, then pip --target the addon modules
+          # dir, which is on Blender's sys.path. The macos-ssh leg already does
+          # this for the SSH backend itself.
+          echo "=== install paramiko into Blender's Python ==="
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,subprocess,os; t=bpy.utils.user_resource('SCRIPTS', path='addons/modules', create=True); subprocess.run([sys.executable,'-m','ensurepip','--upgrade'], check=False); subprocess.check_call([sys.executable,'-m','pip','install','--target',t,'paramiko']); print('PARAMIKO_TARGET', t)"
+          "$PPF_BLENDER_BIN" -b --factory-startup --python-expr "import bpy,sys,os; sys.path.insert(0, bpy.utils.user_resource('SCRIPTS', path='addons/modules')); import paramiko; print('PARAMIKO_OK', paramiko.__version__)"
           ENDSSH
           kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Run Blender rig (real backend, under Xvfb)
         run: |
@@ -967,6 +858,28 @@ jobs:
           cd "$HOME"
           export PPF_DEBUG_ROOT=/home/ubuntu/ppf-debug
           export PYTHONUNBUFFERED=1
+          # NO `exit` IN THIS SCRIPT. It is read by the instance's bash LOGIN
+          # shell from a pipe, and on an explicit `exit` bash sources
+          # ~/.bash_logout, whose `clear_console -q` fails without a tty; with
+          # `set -e` in force that failure becomes the session's exit status.
+          # Measured: `set -e` + `exit 0` reports 1, falling off the end
+          # reports the last command's status (run 35173212812, and
+          # reproduced against the stock Ubuntu .bash_logout). So the stand-in
+          # is the `if` branch and the rig the `else`, and both fall off the end.
+          if [ "${{ inputs.pipeline_test }}" = "true" ]; then
+            # The stand-in: no Blender, no solver. It leaves the report and a
+            # worker directory where Collect results reads them, in their
+            # shapes, so the steps after this one run unchanged against it.
+            echo "PHONY rig (pipeline test): no Blender, no solver"
+            mkdir -p "$PPF_DEBUG_ROOT/phony/worker-00"
+            for n in phony_pipeline_a phony_pipeline_b phony_pipeline_c; do
+              echo "[orchestrator] slot 0 -> $n"; sleep 5
+              echo "$n: pass (phony)" >> "$PPF_DEBUG_ROOT/phony/worker-00/scenario.log"
+              echo "[orchestrator] slot 0 <- $n pass"
+            done
+            printf '{"run_id": "phony-pipeline-test", "passed": 3, "failed": 0, "total": 3, "unrunnable": 0, "phony": true}\n' \
+              > /home/ubuntu/report.json
+          else
           # PPF_BLENDER_BIN from the install helper, which also starts an
           # Xvfb on :99. PPF_BLENDER_DISPLAY=inherit makes the rig use that
           # server rather than a private one from :100 (ensure_display in
@@ -978,15 +891,25 @@ jobs:
           eval "$(./install-blender.sh --env)"
           export PPF_BLENDER_DISPLAY=inherit
           VENV="$HOME/.local/share/ppf-cts/venv/bin/python"
-          "$VENV" blender_addon/debug/main.py runtests \
+          "$VENV" blender_addon/debug/main.py runtests ${{ inputs.scenarios }} \
+            --shard ${{ matrix.shard }}/${{ inputs.shards }} \
             --backend real \
             --timeout 420 \
             --report /home/ubuntu/report.json
+          fi
           ENDSSH
           RIG_RC=$?
           kill $TUNNEL_PID 2>/dev/null || true
           echo "rig exit code: $RIG_RC"
           echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
       - name: Collect results
         if: success() || failure()
@@ -1010,7 +933,7 @@ jobs:
         if: success() || failure()
         uses: actions/upload-artifact@v6
         with:
-          name: report-linux-gpu
+          name: report-linux-gpu-shard-${{ matrix.shard }}
           path: ci
           retention-days: 5
 
@@ -1039,21 +962,39 @@ jobs:
           rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt
 
   # ====================================================================
-  # Windows GPU - disposable AWS L4 instance, REAL Windows-native build.
+  # Windows GPU - disposable AWS GPU instance, REAL Windows-native build.
   # The rig runs Blender headless (--background), which needs no OpenGL /
   # desktop, so it runs directly over SSH (no console session required).
   # ====================================================================
+  # ============================================================
+  # WINDOWS: ONE COMPUTE INSTANCE BUILDS, N GPU INSTANCES RUN THE RIG. The
+  # build (warmup.bat + build.bat) runs detached on a c7i.16xlarge while the
+  # rig instances take their driver and Blender in parallel; the builder then
+  # packs what a rig reads (make-rig-payload.ps1) and pushes it to every rig
+  # over the VPC (push-payload.ps1; the security group admits TCP 22 and one
+  # key pair serves every instance). Each rig unpacks it at the path it was
+  # built under (the embedded interpreter pins that path), installs the
+  # add-on, and runs its 1/N of the scenarios detached; wait-rigs.sh polls
+  # them all. Measured before this shape: 55 minutes of warmup and build on
+  # EVERY g6e, then 105 minutes of rig on one. The Build Release workflow's
+  # Windows job has the same builder-and-verifier shape.
+  # ============================================================
   windows-gpu:
-    name: Windows L4 (real)
+    name: Windows GPU (real)
     if: ${{ inputs.platforms == 'all' || inputs.platforms == 'windows-gpu' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 230
     permissions:
       id-token: write
       contents: read
     env:
       AWS_REGION: ${{ github.event.inputs.region }}
-      INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      # The rigs need the GPU; the builder needs cores.
+      RIG_INSTANCE_TYPE: ${{ github.event.inputs.instance_type }}
+      BUILD_INSTANCE_TYPE: c7i.16xlarge
+      # The dispatch test lists scenarios; no GPU, so a small general instance.
+      DISPATCH_RIG_TYPE: t3.large
+      SHARDS: ${{ inputs.shards }}
       BRANCH: ${{ github.ref_name }}
       BLENDER_VERSION: '5.2.0'
     steps:
@@ -1110,6 +1051,10 @@ jobs:
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
 
+      - name: Create Windows user data (SSH)
+        run: |
+          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
+
       - name: Create EC2 key pair
         id: keypair
         run: |
@@ -1119,204 +1064,465 @@ jobs:
           aws ec2 create-key-pair --key-name "$KEY_NAME" --query 'KeyMaterial' --output text > /tmp/ec2key.pem
           chmod 600 /tmp/ec2key.pem
 
-      - name: Create Windows user data (SSH)
+      # ONE LAUNCH FUNCTION, N+1 INSTANCES. Ids go to files the later steps
+      # and the cleanup read: /tmp/build_id.txt, and /tmp/rig_ids.txt in
+      # shard order. Every instance carries the run id and its role in tags.
+      - name: Launch the build instance and the rig instances
         run: |
-          sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/user-data.ps1
-
-      - name: Launch EC2 instance
-        id: instance
-        run: |
-          # A subnet pins the availability zone, so a zone with no capacity for
-          # this instance type refuses the launch while another zone in the same
-          # VPC would take it. Try each in turn, and report the refusals if none
-          # does, since "no capacity here" and "cannot launch at all" are
-          # different failures and only the second one is worth a rerun.
-          INSTANCE_ID=""
-          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
-            if INSTANCE_ID=$(aws ec2 run-instances \
-              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-              --instance-type "$INSTANCE_TYPE" \
-              --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
-              --subnet-id "$SUBNET" \
-              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-              --associate-public-ip-address \
-              --user-data file:///tmp/user-data.ps1 \
-              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3,DeleteOnTermination=true}" \
-              --tag-specifications \
-                "ResourceType=instance,Tags=[{Key=Name,Value=blender-win-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=RunId,Value=${{ github.run_id }}}]" \
-              --instance-initiated-shutdown-behavior terminate \
-              --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
-              break
-            fi
-            cat /tmp/run-instances.err
-            INSTANCE_ID=""
-          done
-          if [ -z "$INSTANCE_ID" ]; then
-            echo "ERROR: no subnet in the VPC could launch $INSTANCE_TYPE in $AWS_REGION"
-            exit 1
+          set -uo pipefail
+          launch() {  # launch TYPE NAME ROLE -> instance id on stdout
+            local type="$1" name="$2" role="$3" id="" subnet out
+            for subnet in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+              if out=$(aws ec2 run-instances \
+                  --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+                  --instance-type "$type" \
+                  --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+                  --subnet-id "$subnet" \
+                  --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+                  --associate-public-ip-address \
+                  --user-data file:///tmp/user-data.ps1 \
+                  --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=120,VolumeType=gp3,DeleteOnTermination=true}" \
+                  --tag-specifications \
+                    "ResourceType=instance,Tags=[{Key=Name,Value=$name},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=BlenderCI},{Key=Role,Value=$role},{Key=RunId,Value=${{ github.run_id }}}]" \
+                  --instance-initiated-shutdown-behavior terminate \
+                  --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
+                id="$out"; break
+              fi
+              cat /tmp/run-instances.err >&2
+            done
+            [ -n "$id" ] || { echo "ERROR: no subnet in the VPC could launch $type for $role" >&2; return 1; }
+            echo "$id"
+          }
+          STAMP="${{ steps.ids.outputs.TIMESTAMP }}"
+          RIG_TYPE="$RIG_INSTANCE_TYPE"
+          if [ "${{ inputs.dispatch_test }}" = "true" ]; then
+            # No builder: the rigs list their shares from the source alone.
+            : > /tmp/build_id.txt
+            RIG_TYPE="$DISPATCH_RIG_TYPE"
+            echo "dispatch test: no build instance; rigs are $RIG_TYPE"
+          else
+            BUILD_ID=$(launch "$BUILD_INSTANCE_TYPE" "blender-win-$STAMP-build" build) || exit 1
+            echo "$BUILD_ID" > /tmp/build_id.txt
+            echo "build instance: $BUILD_ID"
           fi
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "$INSTANCE_ID" > /tmp/instance_id.txt
-
-      - name: Wait for instance and SSH
-        run: |
-          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
-          aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
-          # Every tunnel in this job is released by an EXIT trap. The step
-          # shell runs under `bash -e`, so a failing command skips the
-          # explicit kill and leaves the tunnel holding local port 2222,
-          # which makes the NEXT step's tunnel fail to bind it.
-          for i in $(seq 1 30); do
-            timeout 15 aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-            TUNNEL_PID=$!; sleep 5
-            trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-            if nc -z localhost 2222 2>/dev/null; then kill $TUNNEL_PID 2>/dev/null || true; break; fi
-            kill $TUNNEL_PID 2>/dev/null || true
-            [ $i -eq 30 ] && echo "SSH not ready" && exit 1
-            sleep 10
+          : > /tmp/rig_ids.txt
+          for i in $(seq 0 $((SHARDS - 1))); do
+            RIG_ID=$(launch "$RIG_TYPE" "blender-win-$STAMP-rig$i" rig) || exit 1
+            echo "$RIG_ID" >> /tmp/rig_ids.txt
+            echo "rig instance $i: $RIG_ID"
           done
 
-      - name: Install NVIDIA driver
+      # Waits for one instance's SSH through a tunnel on PORT, then runs the
+      # per-instance commands the caller supplies. Shared by the builder and
+      # rig steps below through this file.
+      - name: Write the instance helper
         run: |
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
-            -i /tmp/ec2key.pem .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
-            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1"
-          kill $TUNNEL_PID 2>/dev/null || true
+          cat > /tmp/win-instance.sh <<'HELPER'
+          # source me: win_wait_ssh ID PORT; win_tunnel ID PORT (sets TUNNEL_PID); win_close
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 -i /tmp/ec2key.pem"
+          win_tunnel() {
+            local id="$1" port="$2" t
+            for t in $(seq 1 10); do
+              aws ec2-instance-connect open-tunnel --instance-id "$id" --remote-port 22 --local-port "$port" >/dev/null 2>&1 &
+              TUNNEL_PID=$!
+              sleep 5
+              if nc -z localhost "$port" 2>/dev/null; then return 0; fi
+              kill "$TUNNEL_PID" 2>/dev/null || true; wait "$TUNNEL_PID" 2>/dev/null || true; TUNNEL_PID=""
+              sleep 5
+            done
+            return 1
+          }
+          win_close() { [ -n "${TUNNEL_PID:-}" ] || return 0; kill "$TUNNEL_PID" 2>/dev/null || true; wait "$TUNNEL_PID" 2>/dev/null || true; TUNNEL_PID=""; }
+          win_wait_ssh() {
+            local id="$1" port="$2" n
+            aws ec2 wait instance-status-ok --instance-ids "$id" --region "$AWS_REGION"
+            for n in $(seq 1 30); do
+              if win_tunnel "$id" "$port" && ssh -p "$port" $SSH_OPTS -o ConnectTimeout=10 -o BatchMode=yes Administrator@localhost "echo SSH_READY" 2>/dev/null | grep -q SSH_READY; then
+                win_close; return 0
+              fi
+              win_close; sleep 10
+            done
+            echo "SSH never answered on $id" >&2; return 1
+          }
+          HELPER
+          echo "helper written"
 
-      - name: Transfer repository
+      - name: Wait for the build instance's SSH
+        if: ${{ !inputs.dispatch_test }}
         run: |
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          win_wait_ssh "$(cat /tmp/build_id.txt)" 2222
+
+      - name: Transfer the repository to the build instance
+        if: ${{ !inputs.dispatch_test }}
+        run: |
+          set -euo pipefail
+          . /tmp/win-instance.sh
           git archive --format=zip --output=/tmp/repo.zip HEAD
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
-            -i /tmp/ec2key.pem /tmp/repo.zip Administrator@localhost:C:/source.zip
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
-            -i /tmp/ec2key.pem Administrator@localhost \
+          trap win_close EXIT
+          win_tunnel "$(cat /tmp/build_id.txt)" 2222 || { echo "::error::no tunnel to the build instance"; exit 1; }
+          scp -P 2222 $SSH_OPTS /tmp/repo.zip Administrator@localhost:C:/source.zip
+          ssh -p 2222 $SSH_OPTS Administrator@localhost \
             "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'\""
-          kill $TUNNEL_PID 2>/dev/null || true
 
-      - name: Warmup (embedded Python + deps incl scipy)
+      # THE BUILD RUNS DETACHED, so the rigs can be prepared while it runs and
+      # no ssh has to outlive the tunnel's hour. run-build.ps1 records the
+      # files it leaves; poll-build.ps1 reads them.
+      - name: Start warmup and build on the build instance, detached
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
         run: |
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
-            -i /tmp/ec2key.pem Administrator@localhost \
-            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && warmup.bat /nopause'"
-          kill $TUNNEL_PID 2>/dev/null || true
+          set -euo pipefail
+          . /tmp/win-instance.sh
+          trap win_close EXIT
+          win_tunnel "$(cat /tmp/build_id.txt)" 2222 || { echo "::error::no tunnel to the build instance"; exit 1; }
+          for f in run-build launch-build poll-build; do
+            scp -P 2222 $SSH_OPTS ".github/workflows/scripts/win/$f.ps1" "Administrator@localhost:C:/${f//-/_}.ps1"
+          done
+          ssh -p 2222 $SSH_OPTS Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/launch_build.ps1 -Backends '${{ inputs.windows_backends }}'"
 
-      - name: Build real solver (build.bat)
+      # EVERY RIG IN PARALLEL: SSH, the driver, Blender, and the rig scripts,
+      # each through its own tunnel port, while the builder builds. Each
+      # rig's log is printed afterwards under its shard number, and one
+      # failure fails the step without hiding the others.
+      - name: Prepare the rig instances (driver, Blender), in parallel
         run: |
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
-            -i /tmp/ec2key.pem Administrator@localhost \
-            "cmd /c 'cd C:\\ppf-contact-solver\\build-win-native && build.bat /nopause'"
-          kill $TUNNEL_PID 2>/dev/null || true
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          if [ "${{ inputs.dispatch_test }}" = "true" ]; then
+            # What a listing rig needs: the source and an interpreter. The
+            # embeddable Python is the one build-win-native pins; it is the
+            # `python.exe` run-blender-rig.ps1 runs, at the path the payload
+            # would have put it.
+            git archive --format=zip --output=/tmp/repo.zip HEAD
+            PY_URL="$(grep '^URL_PYTHON_X64=' build-win-native/scripts/downloads.txt | cut -d= -f2-)"
+            [ -n "$PY_URL" ] || { echo "::error::no URL_PYTHON_X64 in build-win-native/scripts/downloads.txt"; exit 1; }
+          fi
+          prep() {
+            local i="$1" id="$2" port=$((2300 + i))
+            win_wait_ssh "$id" "$port" || return 1
+            win_tunnel "$id" "$port" || return 1
+            trap win_close RETURN
+            if [ "${{ inputs.dispatch_test }}" = "true" ]; then
+              scp -P "$port" $SSH_OPTS /tmp/repo.zip Administrator@localhost:C:/source.zip || return 1
+              ssh -p "$port" $SSH_OPTS Administrator@localhost \
+                "powershell -Command \"[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver' -Force | Out-Null; Expand-Archive -Path 'C:\\source.zip' -DestinationPath 'C:\\ppf-contact-solver' -Force; Remove-Item 'C:\\source.zip'; Invoke-WebRequest -Uri '$PY_URL' -OutFile 'C:\\py.zip'; New-Item -ItemType Directory -Path 'C:\\ppf-contact-solver\\build-win-native\\python' -Force | Out-Null; Expand-Archive -Path 'C:\\py.zip' -DestinationPath 'C:\\ppf-contact-solver\\build-win-native\\python' -Force; Remove-Item 'C:\\py.zip'; & 'C:\\ppf-contact-solver\\build-win-native\\python\\python.exe' --version\"" || return 1
+            elif [ "${{ inputs.pipeline_test }}" != "true" ]; then
+              scp -P "$port" $SSH_OPTS .github/workflows/scripts/win/install-nvidia-driver.ps1 Administrator@localhost:C:/install_driver.ps1 || return 1
+              ssh -p "$port" $SSH_OPTS Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_driver.ps1" || return 1
+              scp -P "$port" $SSH_OPTS .github/workflows/scripts/win/download-blender.ps1 Administrator@localhost:C:/download_blender.ps1 || return 1
+              ssh -p "$port" $SSH_OPTS Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version ${BLENDER_VERSION}" || return 1
+            fi
+            for f in run-blender-rig launch-rig poll-rig phony-rig install-addon; do
+              scp -P "$port" $SSH_OPTS ".github/workflows/scripts/win/$f.ps1" "Administrator@localhost:C:/${f//-/_}.ps1" || return 1
+            done
+            echo "rig $i prepared"
+          }
+          PIDS=(); for i in "${!RIGS[@]}"; do ( prep "$i" "${RIGS[$i]}" ) > "/tmp/rig-prep-$i.log" 2>&1 & PIDS+=($!); done
+          FAIL=0; for i in "${!PIDS[@]}"; do wait "${PIDS[$i]}" || { echo "::error::rig $i preparation failed"; FAIL=1; }; done
+          for i in "${!RIGS[@]}"; do echo "=== rig $i ==="; tail -20 "/tmp/rig-prep-$i.log"; done
+          exit $FAIL
 
-      - name: Build ppf-cts-server.exe
-        run: |
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=10 \
-            -i /tmp/ec2key.pem .github/workflows/scripts/win/build-ppf-cts-server.ps1 Administrator@localhost:C:/build_ppf_cts_server.ps1
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=30 \
-            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/build_ppf_cts_server.ps1"
-          kill $TUNNEL_PID 2>/dev/null || true
+      - name: Re-authenticate AWS credentials
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
-      - name: Download Blender + install addon
-        run: |
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
-            .github/workflows/scripts/win/download-blender.ps1 Administrator@localhost:C:/download_blender.ps1
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
-            .github/workflows/scripts/win/install-addon.ps1 Administrator@localhost:C:/install_addon.ps1
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 \
-            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/download_blender.ps1 -Version ${BLENDER_VERSION}"
-          # Install the addon (cold-start: derive version from the binary,
-          # fetch cbor2 wheels via the embedded Python). Run as a -File
-          # script; an inline -Command with $env: would be double-evaluated
-          # because the SSH DefaultShell is PowerShell.
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=60 -o ServerAliveCountMax=20 \
-            -i /tmp/ec2key.pem Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_addon.ps1"
-          kill $TUNNEL_PID 2>/dev/null || true
+      # The build is polled through wait-rig.sh's knobs. On a c7i.16xlarge
+      # warmup is about 14 minutes and build.bat well under 20; one window
+      # holds both, the second exists for a slow instance.
+      - name: Wait for the build (window 1)
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        env:
+          WAIT_INSTANCE_ID_FILE: /tmp/build_id.txt
+          WAIT_POLL_SCRIPT: C:/poll_build.ps1
+          WAIT_LOCAL_PORT: "2222"
+          WAIT_RC_VAR: BUILD_RC
+          WAIT_LABEL: build
+        run: bash .github/workflows/scripts/win/wait-rig.sh 40
 
-      - name: Run rig headless over SSH (no OpenGL/desktop)
-        run: |
-          # PPF_BLENDER_HEADLESS=1 (set inside run-blender-rig.ps1) launches
-          # Blender with --background, which needs NO WGL/OpenGL context and
-          # no desktop, so the rig runs directly in this Session-0 SSH shell.
-          # No auto-logon, console session, or interactive scheduled task
-          # required: the L4 comes up in TCC (compute-only) mode with no
-          # OpenGL, and the whole real subset is verified to pass headless.
-          # The run is synchronous; the build.bat step already proves long
-          # SSH runs survive this tunnel (strong keepalives below).
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          scp -P 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
-            .github/workflows/scripts/win/run-blender-rig.ps1 Administrator@localhost:C:/run_blender_rig.ps1
-          set +e
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 \
-            -i /tmp/ec2key.pem Administrator@localhost \
-            "powershell -ExecutionPolicy Bypass -File C:/run_blender_rig.ps1 -Timeout 420 -Parallel 1"
-          RIG_RC=$?
-          set -e
-          kill $TUNNEL_PID 2>/dev/null || true
-          echo "rig exit code: $RIG_RC"
-          echo "RIG_RC=$RIG_RC" >> "$GITHUB_ENV"
+      - name: Re-authenticate AWS credentials
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test && env.BUILD_RC == '' }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
 
-      - name: Collect results + read exit code
-        if: success() || failure()
+      - name: Wait for the build (window 2)
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test && env.BUILD_RC == '' }}
+        env:
+          WAIT_INSTANCE_ID_FILE: /tmp/build_id.txt
+          WAIT_POLL_SCRIPT: C:/poll_build.ps1
+          WAIT_LOCAL_PORT: "2222"
+          WAIT_RC_VAR: BUILD_RC
+          WAIT_LABEL: build
+        run: bash .github/workflows/scripts/win/wait-rig.sh 40
+
+      - name: Re-authenticate AWS credentials
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Collect the build log, and require a passing build
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
         run: |
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          trap win_close EXIT
           mkdir -p ci
-          INSTANCE_ID=$(cat /tmp/instance_id.txt)
-          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --remote-port 22 --local-port 2222 &
-          TUNNEL_PID=$!; sleep 5
-          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
-          RC=$(ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i /tmp/ec2key.pem Administrator@localhost \
-            "powershell -Command \"if (Test-Path 'C:\\ci\\rig_exit.txt') { Get-Content 'C:\\ci\\rig_exit.txt' -Raw } else { '1' }\"" 2>/dev/null | tr -d '\r\n ' || echo 1)
-          echo "RIG_RC=${RC:-1}" >> "$GITHUB_ENV"
-          # Prune heavy binaries, then pull report + logs.
-          ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem Administrator@localhost \
-            "powershell -Command \"Get-ChildItem -Path C:\\ppf-debug -Recurse -Include '*.bin','*.pickle','*.ply','*.blend' -ErrorAction SilentlyContinue | Remove-Item -Force\"" || true
-          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
-            "Administrator@localhost:C:/ci/*" ./ci/ 2>/dev/null || echo "no ci files"
-          scp -P 2222 -r -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /tmp/ec2key.pem \
-            "Administrator@localhost:C:/ppf-debug/*" ./ci/ppf-debug/ 2>/dev/null || echo "no worker dirs"
-          kill $TUNNEL_PID 2>/dev/null || true
-          ls -laR ci/ | head -60
+          if win_tunnel "$(cat /tmp/build_id.txt)" 2222; then
+            scp -P 2222 $SSH_OPTS Administrator@localhost:C:/ci/build.log ci/build.log 2>/dev/null || echo "no build.log yet"
+          fi
+          [ -f ci/build.log ] && { echo "=== build.log, last 40 lines ==="; tail -40 ci/build.log; }
+          case "${BUILD_RC:-}" in
+            0)  echo "warmup and build passed" ;;
+            "") echo "::error::the build did not report inside its windows"; exit 1 ;;
+            *)  echo "::error::warmup or build exited $BUILD_RC; see build.log above"; exit 1 ;;
+          esac
+
+      - name: Pack the rig payload on the build instance
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        run: |
+          set -euo pipefail
+          . /tmp/win-instance.sh
+          trap win_close EXIT
+          win_tunnel "$(cat /tmp/build_id.txt)" 2222 || { echo "::error::no tunnel to the build instance"; exit 1; }
+          # The GPU backends of the build; cpu is always in.
+          GPU="$(echo '${{ inputs.windows_backends }}' | tr ' ' '\n' | grep -v '^cpu$' | tr '\n' ' ' | sed 's/ $//')"
+          scp -P 2222 $SSH_OPTS .github/workflows/scripts/win/make-rig-payload.ps1 Administrator@localhost:C:/make_rig_payload.ps1
+          scp -P 2222 $SSH_OPTS .github/workflows/scripts/win/push-payload.ps1 Administrator@localhost:C:/push_payload.ps1
+          ssh -p 2222 $SSH_OPTS Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/make_rig_payload.ps1 -GpuBackends '$GPU'"
+
+      - name: Re-authenticate AWS credentials
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      # THE PAYLOAD CROSSES THE VPC FROM THE BUILDER TO EVERY RIG. The
+      # builder holds the shared key for this one step; push-payload.ps1
+      # deletes it in every exit path and exits with the number of rigs that
+      # did not receive the file.
+      - name: Push the payload to every rig over the VPC
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        run: |
+          set -euo pipefail
+          . /tmp/win-instance.sh
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          IPS=$(aws ec2 describe-instances --instance-ids "${RIGS[@]}" \
+            --query 'Reservations[].Instances[].PrivateIpAddress' --region "$AWS_REGION" --output text | tr '\t' ' ')
+          echo "rig private addresses: $IPS"
+          [ "$(echo $IPS | wc -w)" -eq "${#RIGS[@]}" ] || { echo "::error::not every rig has a private address"; exit 1; }
+          trap win_close EXIT
+          win_tunnel "$(cat /tmp/build_id.txt)" 2222 || { echo "::error::no tunnel to the build instance"; exit 1; }
+          scp -P 2222 $SSH_OPTS /tmp/ec2key.pem Administrator@localhost:C:/rig-key
+          ssh -p 2222 $SSH_OPTS Administrator@localhost \
+            "powershell -ExecutionPolicy Bypass -File C:/push_payload.ps1 -Archive C:/rig-payload.tar -Key C:/rig-key -Targets '$IPS'"
+
+      - name: Unpack the payload and install the add-on on every rig, in parallel
+        if: ${{ !inputs.pipeline_test && !inputs.dispatch_test }}
+        run: |
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          unpack() {
+            local i="$1" id="$2" port=$((2300 + i))
+            win_tunnel "$id" "$port" || return 1
+            trap win_close RETURN
+            # Unpacked at the path it was built under: the embedded interpreter pins it.
+            ssh -p "$port" $SSH_OPTS Administrator@localhost \
+              "powershell -Command \"if (Test-Path 'C:\\ppf-contact-solver') { Remove-Item -Recurse -Force 'C:\\ppf-contact-solver' }; & tar -xf C:\\rig-payload.tar -C C:\\; if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }; Remove-Item C:\\rig-payload.tar -Force; Write-Output 'unpacked'\"" || return 1
+            ssh -p "$port" $SSH_OPTS Administrator@localhost "powershell -ExecutionPolicy Bypass -File C:/install_addon.ps1" || return 1
+            echo "rig $i unpacked and add-on installed"
+          }
+          PIDS=(); for i in "${!RIGS[@]}"; do ( unpack "$i" "${RIGS[$i]}" ) > "/tmp/rig-unpack-$i.log" 2>&1 & PIDS+=($!); done
+          FAIL=0; for i in "${!PIDS[@]}"; do wait "${PIDS[$i]}" || { echo "::error::rig $i unpack failed"; FAIL=1; }; done
+          # The whole log, not a tail: on run 35180161718 the tail showed the
+          # installer's exit code and cut off the line that said why.
+          for i in "${!RIGS[@]}"; do echo "=== rig $i ==="; cat "/tmp/rig-unpack-$i.log"; done
+          exit $FAIL
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      # Each rig runs its 1/N detached (launch-rig.ps1 records the mechanism);
+      # the phony stand-in takes the same launch under pipeline_test.
+      - name: Launch every rig headless and detached
+        run: |
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          SCENARIOS="${{ inputs.scenarios }}"
+          NAMES=""; if [ -n "${SCENARIOS// /}" ]; then NAMES=" -Scenarios '$SCENARIOS'"; fi
+          PHONY=""; if [ "${{ inputs.pipeline_test }}" = "true" ]; then PHONY=" -Phony"; fi
+          LISTONLY=""; if [ "${{ inputs.dispatch_test }}" = "true" ]; then LISTONLY=" -ListOnly"; fi
+          FAIL=0
+          for i in "${!RIGS[@]}"; do
+            port=$((2300 + i))
+            if ! win_tunnel "${RIGS[$i]}" "$port"; then echo "::error::no tunnel to rig $i"; FAIL=1; continue; fi
+            ssh -p "$port" $SSH_OPTS Administrator@localhost \
+              "powershell -ExecutionPolicy Bypass -File C:/launch_rig.ps1 -Timeout 420 -Parallel 1$NAMES$PHONY$LISTONLY -Shard $i/$SHARDS" || { echo "::error::rig $i did not launch"; FAIL=1; }
+            win_close
+          done
+          exit $FAIL
+
+      - name: Wait for the rigs (window 1)
+        id: wait1
+        run: bash .github/workflows/scripts/win/wait-rigs.sh 40
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Wait for the rigs (window 2)
+        id: wait2
+        run: bash .github/workflows/scripts/win/wait-rigs.sh 40
+
+      - name: Re-authenticate AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Wait for the rigs (window 3)
+        id: wait3
+        run: bash .github/workflows/scripts/win/wait-rigs.sh 40
+
+      - name: Require every rig to have reported
+        run: |
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          MISSING=0
+          for i in "${!RIGS[@]}"; do
+            grep -q "^$i=" /tmp/rig_rc.txt 2>/dev/null || { echo "::error::rig $i had not written its exit file when the wait windows ran out; its last poll line says whether it was still advancing"; MISSING=1; }
+          done
+          cat /tmp/rig_rc.txt 2>/dev/null || true
+          exit $MISSING
+
+      - name: Re-authenticate AWS credentials
+        if: success() || failure()
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      # Every rig's evidence, under its shard number: the exit file, the
+      # rig log and report, the small per-worker logs first (robocopy, bounded
+      # by size), then the bounded whole-tree copy.
+      #
+      # NOT AFTER A FAILED WAIT WINDOW AND NOT AFTER A CANCEL. A window fails
+      # on its own script's error, never on a rig's verdict (a rig's failure is
+      # a recorded exit code), so the rigs are then still mid-run with nothing
+      # to collect, and `always()` here made run 35188362404 spend its next
+      # twenty minutes per rig on tunnels and copies before it could report
+      # the failure; a cancel from the UI met the same wait. A failed window
+      # now goes straight to the gate, the upload and the cleanup.
+      - name: Collect results from every rig
+        if: >-
+          !cancelled()
+          && steps.wait1.conclusion != 'failure'
+          && steps.wait2.conclusion != 'failure'
+          && steps.wait3.conclusion != 'failure'
+        run: |
+          set -uo pipefail
+          . /tmp/win-instance.sh
+          mapfile -t RIGS < /tmp/rig_ids.txt 2>/dev/null || RIGS=()
+          for i in "${!RIGS[@]}"; do
+            port=$((2300 + i)); D="ci/shard-$i"; mkdir -p "$D"
+            win_tunnel "${RIGS[$i]}" "$port" || { echo "rig $i: no tunnel"; continue; }
+            # ssh's FIRST -o wins, so these dead-peer limits (one minute) take
+            # precedence over SSH_OPTS' twenty; a tunnel that died under a
+            # copy must not hold this step, which a cancel then cannot end.
+            timeout 120 ssh -p "$port" -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS Administrator@localhost \
+              "cmd /c 'robocopy C:\\ppf-debug C:\\ci\\evidence *.log *.json *.jsonl *.txt /S /MAX:2000000 /NFL /NDL /NJH /NJS /NP & if errorlevel 8 (exit 1) else (exit 0)'" || echo "rig $i: the evidence copy did not finish"
+            timeout 120 scp -P "$port" -r -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS "Administrator@localhost:C:/ci/*" "$D/" 2>/dev/null || echo "rig $i: no ci files"
+            timeout 120 ssh -p "$port" -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS Administrator@localhost \
+              "powershell -Command \"Get-ChildItem -Path C:\\ppf-debug -Recurse -Include '*.bin','*.pickle','*.ply','*.blend' -ErrorAction SilentlyContinue | Remove-Item -Force\"" || true
+            timeout 300 scp -P "$port" -r -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS "Administrator@localhost:C:/ppf-debug/*" "$D/ppf-debug/" 2>/dev/null || echo "rig $i: the worker directories were not fully copied"
+            win_close
+          done
+          # THE LISTING IS NOT THE STEP'S VERDICT. `ls -laR ci | head -80` under
+          # pipefail failed this step with every rig collected the first time
+          # the tree exceeded 80 lines (run 35208519645, all 216 scenarios
+          # green): head closed the pipe, ls exited 2 on the write error, and
+          # pipefail handed that to the step. A capped listing goes through a
+          # file, and the step ends on its own status.
+          ls -laR ci > /tmp/ci-listing.txt 2>&1 || true
+          head -n 80 /tmp/ci-listing.txt
+          echo "($(wc -l < /tmp/ci-listing.txt) lines in the full listing)"
 
       - name: Upload report
-        if: success() || failure()
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: report-windows-gpu
           path: ci
           retention-days: 5
 
-      - name: Gate on rig result
+      - name: Gate on the rigs' results
         if: success() || failure()
         run: |
-          echo "rig exit code was: ${RIG_RC:-unknown}"
-          [ "${RIG_RC:-1}" = "0" ]
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          FAIL=0
+          for i in "${!RIGS[@]}"; do
+            RC=$(grep "^$i=" /tmp/rig_rc.txt 2>/dev/null | cut -d= -f2)
+            echo "rig $i exit code: ${RC:-unknown}"
+            [ "${RC:-1}" = "0" ] || FAIL=1
+          done
+          exit $FAIL
+
+      # THE DISPATCH TEST'S VERDICT: every rig received its shard (its log
+      # names it), listed a non-empty share, no scenario is in two shares,
+      # and the shares differ in size by at most one, which is what
+      # `select_shard` promises for N shards of one list.
+      - name: Verify the shards partition the selection (dispatch test)
+        if: ${{ inputs.dispatch_test && (success() || failure()) }}
+        run: |
+          set -uo pipefail
+          mapfile -t RIGS < /tmp/rig_ids.txt
+          N=${#RIGS[@]}; FAIL=0; MIN=; MAX=; : > /tmp/all_shards.txt
+          for i in "${!RIGS[@]}"; do
+            D="ci/shard-$i"
+            # rig.log is UTF-16 (PowerShell 5.1's Tee-Object), so it is
+            # decoded before the grep; the second dispatch test failed here
+            # with the line present.
+            if ! iconv -f UTF-16 -t UTF-8 "$D/rig.log" 2>/dev/null | grep -q -- "--shard $i/$N"; then
+              echo "::error::rig $i: its log does not show --shard $i/$N"; FAIL=1
+            fi
+            if [ ! -s "$D/shard_list.txt" ]; then
+              echo "::error::rig $i: no shard_list.txt, or empty"; FAIL=1; continue
+            fi
+            tr -d '\r' < "$D/shard_list.txt" | sed '/^[[:space:]]*$/d' > "/tmp/shard-$i.txt"
+            C=$(wc -l < "/tmp/shard-$i.txt"); echo "rig $i: $C scenario(s), first: $(head -n 1 "/tmp/shard-$i.txt")"
+            cat "/tmp/shard-$i.txt" >> /tmp/all_shards.txt
+            [ -z "$MIN" ] || [ "$C" -lt "$MIN" ] && MIN=$C
+            [ -z "$MAX" ] || [ "$C" -gt "$MAX" ] && MAX=$C
+          done
+          DUP=$(sort /tmp/all_shards.txt | uniq -d)
+          if [ -n "$DUP" ]; then echo "::error::scenarios in more than one share:"; echo "$DUP"; FAIL=1; fi
+          if [ -n "$MIN" ] && [ $((MAX - MIN)) -gt 1 ]; then echo "::error::share sizes range from $MIN to $MAX"; FAIL=1; fi
+          echo "total across $N shares: $(wc -l < /tmp/all_shards.txt) (sizes $MIN..$MAX, no duplicates: $([ -z "$DUP" ] && echo yes || echo no))"
+          exit $FAIL
 
       - name: Re-authenticate for cleanup
         if: always()
@@ -1327,14 +1533,71 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-duration-seconds: 21600
 
-      - name: Cleanup - terminate instance + delete key pair
+      - name: Cleanup - terminate every instance + delete key pair
         if: always()
         continue-on-error: true
         run: |
-          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
-            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          IDS="$(cat /tmp/build_id.txt /tmp/rig_ids.txt 2>/dev/null | tr '\n' ' ')"
+          [ -n "$IDS" ] && aws ec2 terminate-instances --instance-ids $IDS --region "$AWS_REGION" || true
+          ORPHANS=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunId,Values=${{ github.run_id }}" "Name=tag:Purpose,Values=BlenderCI" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' --region "$AWS_REGION" --output text || true)
+          [ -n "$ORPHANS" ] && aws ec2 terminate-instances --instance-ids $ORPHANS --region "$AWS_REGION" || true
+          aws ec2 delete-key-pair --key-name "${{ steps.keypair.outputs.KEY_NAME }}" --region "$AWS_REGION" || true
+          rm -f /tmp/ec2key.pem
+
+  # ====================================================================
+  # CLEANUP THAT DOES NOT DEPEND ON HOW ANY JOB ENDED. Each leg's own cleanup
+  # is a step at the end of its job, and a step is skipped whenever GitHub
+  # force-terminates the job: on run 35188362404 a cancel arrived while the
+  # Windows collect step was inside an ssh whose peer had died, the runner's
+  # cancel timed out, and every later step, the instance termination
+  # included, showed `skipped`, leaving five instances to the eight-hour
+  # self-destruct. A job under `always()` runs after its needed jobs were
+  # cancelled or force-terminated, so this one terminates every instance
+  # tagged with this run id and deletes this run's key pairs, whatever the
+  # legs reported. Only a force-cancel of the whole RUN skips it too, and
+  # the self-destruct timer is what covers that.
+  # ====================================================================
+  cleanup:
+    name: Terminate every instance of this run
+    runs-on: ubuntu-latest
+    needs: [macos-ssh, linux-gpu, windows-gpu]
+    if: always()
+    permissions:
+      id-token: write
+      contents: read
+    # The region is a JOB-level env in this file, so this job defines its own;
+    # without it the credentials step fails with "Input required and not
+    # supplied: aws-region" before a single instance is terminated (run
+    # 35193244970, whose five instances then outlived their cancel).
+    env:
+      AWS_REGION: ${{ github.event.inputs.region }}
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Terminate instances and delete key pairs tagged with this run
+        run: |
+          set -uo pipefail
+          IDS=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunId,Values=${{ github.run_id }}" "Name=tag:Purpose,Values=BlenderCI" \
+                      "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[].Instances[].InstanceId' --region "$AWS_REGION" --output text | tr '\t' ' ')
+          if [ -n "$IDS" ]; then
+            echo "terminating: $IDS"
+            aws ec2 terminate-instances --instance-ids $IDS --region "$AWS_REGION" --output text
+          else
+            echo "no instance of run ${{ github.run_id }} is left."
           fi
-          if [ -n "${{ steps.keypair.outputs.KEY_NAME }}" ]; then
-            aws ec2 delete-key-pair --key-name "${{ steps.keypair.outputs.KEY_NAME }}" || true
-          fi
-          rm -f /tmp/ec2key.pem /tmp/instance_id.txt
+          KEYS=$(aws ec2 describe-key-pairs --filters "Name=key-name,Values=*-${{ github.run_id }}" \
+            --query 'KeyPairs[].KeyName' --region "$AWS_REGION" --output text | tr '\t' ' ')
+          for k in $KEYS; do
+            echo "deleting key pair $k"
+            aws ec2 delete-key-pair --key-name "$k" --region "$AWS_REGION" || true
+          done

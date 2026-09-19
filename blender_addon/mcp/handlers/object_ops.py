@@ -2746,7 +2746,7 @@ def convert_to_particle_mesh(
             f"Object '{object_name}' has no faces. Conversion seeds grains "
             "inside a closed solid mesh."
         )
-    if obj.get("ppf_particle_mesh"):
+    if obj.get("particle_mesh"):
         raise ValidationError(f"Object '{object_name}' is already a particle mesh")
     if grain_radius <= 0.0:
         raise ValidationError("grain_radius must be positive")

@@ -36,7 +36,7 @@
 #         minimum does not cover this on its own: Blender clamps a plain 0.0,
 #         but a NaN defeats every clamp comparison and would reach the wire.
 #
-# Why this checks the BUILT scene rather than runtime motion: the emulated
+# Why this checks the BUILT scene rather than runtime motion: the solver
 # (CPU) solver the rig runs does not integrate a soft-pull follow, so a
 # spring-held collider stays bit-for-bit at rest there and no amount of
 # stiffness would show up in the PC2. What this proves end to end is that the
@@ -51,6 +51,11 @@ from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
+
+# RUNS ON THE REAL BACKEND, established by RUNNING it rather than by reading
+# it. A full rig sweep against a CPU build passed it, and that run is the
+# evidence this line rests on.
+BACKENDS = ("real",)
 
 
 _FRAME_COUNT = 6
@@ -214,7 +219,7 @@ try:
     )
 
     data_bytes, param_bytes = dh.encode_payload()
-    dh.connect_local(local_path=LOCAL_PATH, server_port=SERVER_PORT,
+    dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                      project_name=addon_root.state.project_name)
     dh.log("connected")
     dh.build_and_wait(data_bytes, param_bytes,

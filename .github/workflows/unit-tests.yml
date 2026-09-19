@@ -3,9 +3,9 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Purpose: run the repository's unit test suites on macOS, Linux and
-# Windows. That is the Rust workspace tests, the solver crate's own tests
-# against its emulated backend, the Python suites under pyproject.toml's
+# Purpose: run the repository's unit test suites on macOS, Linux (x86_64 and
+# aarch64) and Windows. That is the Rust workspace tests, the solver crate's own tests
+# against its CPU backend, the Python suites under pyproject.toml's
 # testpaths, and the host C++ test target.
 #
 # DISCOVERY, not enumeration: cargo reads its test targets from Cargo.toml,
@@ -14,18 +14,44 @@
 # Python one is named _something_.py or test_*.py and lives under one of the
 # declared testpaths.
 #
-# A single job, `unit`, selected by the `legs` input: free GitHub-hosted
-# runners, one matrix leg per platform. Everything it runs is pure logic.
+# Two job shapes, selected by the `legs` input:
+#
+#   unit          free GitHub-hosted runners, one matrix leg per platform.
+#                 Everything it runs is pure logic.
+#   cuda-kernels  a disposable AWS L4 instance with real nvcc and a real
+#                 GPU, for crates/ppf-cts-compute/cuda/tests. Those compile
+#                 with nvcc and execute kernels, so a free runner could host
+#                 only a CPU re-implementation of the algorithm under test,
+#                 which certifies nothing. About 10 instance-minutes per run,
+#                 so it is opt-in.
+#
+#                 WHAT IS NO LONGER HERE, so nobody adds it back: the gates
+#                 whose subject is SIMULATION rather than a device verb. Every
+#                 one of them launched at one thread per case with no shared
+#                 memory, no barrier and no warp intrinsic, so what it asserted
+#                 is a property of fp32 arithmetic and of the type system that
+#                 a host compiler reads out of the same neutral headers. They
+#                 are crates/ppf-cts-solver/tests/ now and run on the `unit`
+#                 leg above, on every platform rather than on one opt-in GPU.
+#
+# THE `cuda-kernels` JOB READS `crates/ppf-cts-compute/cuda/tests` and runs
+# only where that directory is present. The `unit` job needs nothing beyond a
+# hosted runner, which is why it is the one that runs on every platform.
 #
 # THIS TIER COMPILES NO CUDA SOLVER, on any platform. Nothing in the
 # workspace depends on ppf-cts-solver (cargo tree -i -p ppf-cts-solver
 # prints only itself), so --exclude ppf-cts-solver removes the one crate
 # whose default build.rs shells out to make and nvcc. The solver's own tests
-# are then run against its `emulated` feature, which compiles the CPU stub
-# under src/cpp_emul instead. PPF_ALLOW_EMULATED is set nowhere in this
-# file: a GitHub-hosted runner has no CUDA toolkit, so build.rs's guard does
-# not fire, and if a runner image ever ships one the guard fails this job
-# rather than quietly producing a stub.
+# are then run against its `cpu` feature, the Rust CPU backend under
+# src/driver, which needs neither nvcc nor a GPU.
+#
+# There is no opt-in guard on this: a stub backend that computed NO physics
+# while landing at the same target/release/ path would need one, and none
+# exists. The CPU backend computes the real physics from the same neutral
+# kernel bodies, so it is guarded by a banner rather than a wall.
+#
+# The Windows leg still does not run these tests; see the notice step for
+# the current reason.
 #
 # GATES AGAINST OPEN DEFECTS: several tests here assert a property the code
 # does not have yet. Each is armed rather than skipped. The Python ones
@@ -37,7 +63,7 @@
 # each Python gate with its reason, so the log carries the inventory of what
 # is still open.
 
-name: Unit tests (Rust, Python, C++)
+name: Unit tests (Rust, Python, C++, CUDA kernels)
 
 # Manual dispatch only, matching every other workflow in this repository.
 # A push trigger would run this on whatever a push contains, which for a
@@ -53,6 +79,34 @@ on:
         type: choice
         options:
           - unit
+          - cuda-kernels
+          - all
+      instance_type:
+        description: 'EC2 instance type (cuda-kernels only)'
+        required: true
+        default: 'g6.xlarge'
+        type: choice
+        options:
+          # L4 (sm_89), minimal single-GPU current gen. g4dn (T4, sm_75)
+          # is listed because the shipped cubins now include sm_75, confirmed
+          # on the self-hosted T4 by the Getting Started workflow; before that
+          # it would have failed "named symbol not found". The cubins are the
+          # ones in crates/ppf-cts-compute/cuda/cuda_arch.txt and there is
+          # still no JIT-able PTX, so an arch absent from that file cannot run.
+
+          - g6.xlarge
+          - g6.2xlarge
+          - g6e.2xlarge
+          - g4dn.xlarge
+      region:
+        description: 'AWS Region (cuda-kernels only)'
+        required: true
+        default: 'ap-northeast-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - ap-northeast-1
 
 permissions:
   contents: read
@@ -72,7 +126,7 @@ jobs:
   # ====================================================================
   unit:
     name: Unit (${{ matrix.name }})
-    if: inputs.legs == 'unit'
+    if: inputs.legs == 'unit' || inputs.legs == 'all'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -94,6 +148,13 @@ jobs:
           # real variable.
           - os: ubuntu-24.04
             name: Linux
+          # aarch64 Linux, on the same pinned image. It is the one leg where
+          # GCC compiles the CPU backend's shared bodies for a target whose
+          # base instruction set carries FMA, so contraction is decided by the
+          # flag alone, and where plain char is unsigned. Neither is exercised
+          # by the x86_64 leg or by Apple clang on the macOS one.
+          - os: ubuntu-24.04-arm
+            name: Linux arm64
           # Pinned for the same reason as the other two.
           - os: windows-2025
             name: Windows
@@ -107,7 +168,7 @@ jobs:
     steps:
       # A full checkout is required even though no CUDA solver is compiled.
       # ppf-cts-core's build.rs cc-compiles cpp/intersect_ffi.cpp against
-      # headers under crates/ppf-cts-solver/src/cpp, and ppf-cts-server's
+      # headers under crates/ppf-cts-solver/src/kernels, and ppf-cts-server's
       # build.rs reads blender_addon/protocol_version.toml at the
       # workspace root. A crates-only or sparse checkout fails to build.
       - uses: actions/checkout@v5
@@ -123,22 +184,10 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      # The emulated backend compiles src/cpp_emul with the host C++
-      # compiler, and that stub includes <Eigen/Dense>; so does the host
-      # C++ test below. blender.yml installs Eigen for the same reason.
-      # The Windows leg runs neither step, so it needs no Eigen.
-      - name: Install Eigen
-        if: matrix.os != 'windows-2025'
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            # The runner image pre-taps aws/tap and Homebrew warns about
-            # tap trust on every call; this workflow does not use it.
-            brew untap aws/tap 2>/dev/null || true
-            brew install eigen
-          else
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq libeigen3-dev
-          fi
+      # No Eigen step. Nothing in this tier reaches Eigen: the CPU
+      # backend's entrypoints shim and the host C++ test both compile against
+      # the in-house linalg headers (src/kernels/linalg), and ppf-cts-core's
+      # cc-compiled intersect_ffi.cpp includes only contact/intersect_core.hpp.
 
       - name: Install Python deps
         # The subset the collected suites import. The heavy geometry and
@@ -187,16 +236,31 @@ jobs:
 
       # The solver crate is excluded above because its default build.rs
       # runs make and nvcc. Its own tests are pure Rust, so they run here
-      # against the emulated backend, which compiles the CPU stub under
-      # src/cpp_emul with the host C++ compiler and no CUDA.
-      - name: Solver crate tests (emulated backend)
+      # against the CPU backend (src/driver plus the entrypoints shim, compiled by
+      # the host C++ compiler through cc-rs), which needs no CUDA and no
+      # GPU, and no opt-in guard: the CPU backend is not guarded.
+      - name: Solver crate tests (CPU backend)
         if: matrix.os != 'windows-2025'
-        run: cargo test -p ppf-cts-solver --no-default-features --features emulated
+        run: cargo test -p ppf-cts-solver --no-default-features --features cpu
 
       - name: Solver crate tests (not run on Windows)
         if: matrix.os == 'windows-2025'
+        #
+        # THE SHIM DOES COMPILE WITH MSVC, and that half is measured rather
+        # than assumed: on a Windows Server 2025 host, the same family as this
+        # image, `cargo build --release --features cpu` completes and the binary
+        # answers `--backend cpu`. `build-win-native/build.bat` runs that build
+        # for every release, so the compile is exercised on the shipping path
+        # rather than only here.
+        #
+        # WHAT IS STILL UNMEASURED IS RUNNING THE TESTS, which is a different
+        # question from building them: these assert fp32 arithmetic through the
+        # host C++ compiler, and MSVC is a third compiler whose results nothing
+        # has compared against the other two. Enabling this leg is therefore
+        # still a change to make deliberately, and a red Windows leg here would
+        # be a genuine CPU-backend portability finding rather than a flake.
         run: |
-          echo "::notice title=Subset not run::build.rs links the emulated backend on Windows from libsimbackend_cpu.lib, which build-win-native/build-emul.bat produces with the portable MSVC and Eigen that warmup.bat downloads. The solver crate's tests are covered on the macOS and Linux legs."
+          echo "::notice title=Subset not run::The solver crate's tests run against the CPU backend (--features cpu). That backend BUILDS with MSVC (measured, and build.bat builds it for every release); what is unmeasured is its test results under a third host compiler. They are covered on the macOS and Linux legs."
 
       # One invocation per testpath. pytest exits 5 only when the WHOLE run
       # collects nothing, so a single invocation over every path stays
@@ -221,9 +285,216 @@ jobs:
 
       - name: Host C++ test
         if: matrix.os != 'windows-2025'
-        run: make -C crates/ppf-cts-solver/src/cpp/energy/model/tests test
+        run: make -C crates/ppf-cts-compute/host/tests test
 
       - name: Host C++ test (not run on Windows)
         if: matrix.os == 'windows-2025'
         run: |
-          echo "::notice title=Subset not run::energy/model/tests uses POSIX make, which windows-2025 does not ship. test_pdrd_polar is covered on the macOS and Linux legs."
+          echo "::notice title=Subset not run::the host C++ tests use POSIX make, which windows-2025 does not ship. test_pdrd_polar is covered on the macOS and Linux legs."
+
+  # Reads crates/ppf-cts-compute/cuda/tests; see the header.
+  cuda-kernels:
+    name: CUDA kernels (L4, real)
+    if: inputs.legs == 'cuda-kernels' || inputs.legs == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ inputs.region }}
+      INSTANCE_TYPE: ${{ inputs.instance_type }}
+      WORKDIR: /home/ubuntu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      - name: Find Deep Learning AMI and network resources
+        id: setup
+        run: |
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 24.04)*" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
+            --region "$AWS_REGION" --output text)
+          if [ "$AMI_ID" = "None" ] || [ -z "$AMI_ID" ]; then
+            echo "ERROR: Deep Learning AMI not found in $AWS_REGION"; exit 1
+          fi
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_OUTPUT
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=github-actions-vpc" --query 'Vpcs[0].VpcId' --output text)
+          if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+            echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
+          fi
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
+          fi
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
+          if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
+            echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
+          fi
+          echo "::add-mask::$VPC_ID"
+          echo "::add-mask::$SUBNET_ID"
+          echo "::add-mask::$SG_ID"
+          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Generate identifiers and SSH key
+        id: ids
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_OUTPUT
+          rm -f /tmp/ec2key /tmp/ec2key.pub
+          ssh-keygen -t rsa -f /tmp/ec2key -N "" -q
+
+      - name: Create user data script
+        run: |
+          SSH_PUBKEY=$(cat /tmp/ec2key.pub)
+          cat > /tmp/user-data.sh << EOF
+          #!/bin/bash
+          set -x
+          exec > >(tee /var/log/user-data.log) 2>&1
+          sleep 5
+          mkdir -p /home/ubuntu/.ssh
+          echo "${SSH_PUBKEY}" >> /home/ubuntu/.ssh/authorized_keys
+          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+          chmod 700 /home/ubuntu/.ssh
+          chmod 600 /home/ubuntu/.ssh/authorized_keys
+          nvidia-smi | tee /tmp/nvidia-smi-output.txt || true
+          touch /tmp/setup-complete
+          EOF
+
+      - name: Launch EC2 instance
+        id: instance
+        run: |
+          USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
+            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+            --associate-public-ip-address \
+            --user-data "$USER_DATA" \
+            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=64,VolumeType=gp3,DeleteOnTermination=true}" \
+            --tag-specifications \
+              "ResourceType=instance,Tags=[{Key=Name,Value=tests-cuda-kernels-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=CudaKernelTests},{Key=RunId,Value=${{ github.run_id }}}]" \
+            --instance-initiated-shutdown-behavior terminate \
+            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "$INSTANCE_ID" > /tmp/instance_id.txt
+
+      - name: Wait for instance and setup-complete
+        run: |
+          INSTANCE_ID="${{ steps.instance.outputs.INSTANCE_ID }}"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
+          # Every tunnel in this job is released by an EXIT trap. The step
+          # shell runs under `bash -e`, so a failing command skips the
+          # explicit kill and leaves the tunnel holding local port 2222,
+          # which makes the NEXT step's tunnel fail to bind it.
+          for i in $(seq 1 60); do
+            aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+            TUNNEL_PID=$!; sleep 3
+            trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
+            if ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+              ubuntu@localhost "test -f /tmp/setup-complete && echo READY" 2>/dev/null | grep -q READY; then
+              kill $TUNNEL_PID 2>/dev/null || true; break
+            fi
+            kill $TUNNEL_PID 2>/dev/null || true
+            [ $i -eq 60 ] && echo "setup timeout, continuing" && break
+            sleep 10
+          done
+
+      - name: Transfer repository
+        run: |
+          git archive --format=tar.gz --output=/tmp/repo.tar.gz HEAD
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
+          rsync -az -e "ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            /tmp/repo.tar.gz ubuntu@localhost:${WORKDIR}/
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            ubuntu@localhost "cd ${WORKDIR} && tar -xzf repo.tar.gz && rm repo.tar.gz"
+          kill $TUNNEL_PID 2>/dev/null || true
+
+      - name: Run CUDA kernel tests
+        run: |
+          INSTANCE_ID=$(cat /tmp/instance_id.txt)
+          aws ec2-instance-connect open-tunnel --instance-id "$INSTANCE_ID" --local-port 2222 &
+          TUNNEL_PID=$!; sleep 5
+          trap 'kill $TUNNEL_PID 2>/dev/null || true' EXIT
+          set +e
+          ssh -i /tmp/ec2key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
+          set -u
+          # The Deep Learning AMI ships several CUDA toolkits and defaults
+          # to the newest. Every host of this project builds against 12.8,
+          # so pin it here and assert the version rather than print it.
+          export PATH=/usr/local/cuda-12.8/bin:$PATH
+          export CUDA_PATH=/usr/local/cuda-12.8
+          command -v nvcc >/dev/null || { echo "ERROR: nvcc not on PATH"; exit 1; }
+          nvcc --version | grep -q "release 12.8" || { echo "ERROR: expected CUDA 12.8"; exit 1; }
+          nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
+          # ONE RECIPE. What belongs on a real GPU is what exercises a
+          # device VERB: the arena and the diagnostic channel, which is what
+          # ppf-cts-compute implements and all that is left here. The binaries
+          # whose subject was simulation are host programs under
+          # crates/ppf-cts-solver/tests/ and run on the `unit` leg.
+          #
+          # The one place in this workflow that names targets rather than
+          # discovering them, because `make all` builds more than it runs. The
+          # list below is every target that runs something, so a target added
+          # to that Makefile and not added here is silently never exercised.
+          FAILED=""
+          cd "$HOME/crates/ppf-cts-compute/cuda/tests"
+          for t in test-arena test-diagnostics; do
+            echo "===== compute: make $t ====="
+            make "$t" || FAILED="$FAILED compute/$t"
+
+          done
+          if [ -n "$FAILED" ]; then echo "FAILED TARGETS:$FAILED"; exit 1; fi
+          echo "all CUDA kernel targets passed"
+          ENDSSH
+          KERNEL_RC=$?
+          kill $TUNNEL_PID 2>/dev/null || true
+          echo "kernel tests exit code: $KERNEL_RC"
+          echo "KERNEL_RC=$KERNEL_RC" >> "$GITHUB_ENV"
+
+      - name: Gate on kernel test result
+        if: success() || failure()
+        run: |
+          echo "kernel tests exit code was: ${KERNEL_RC:-unknown}"
+          [ "${KERNEL_RC:-1}" = "0" ]
+
+      # The OIDC role can lapse on a long job, and a failed cleanup leaves
+      # a paid instance running.
+      - name: Re-authenticate for cleanup
+        if: always()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 21600
+
+      # Second line of defense is
+      # --instance-initiated-shutdown-behavior terminate on run-instances,
+      # which covers a runner that dies without reaching this step.
+      - name: Cleanup - terminate instance
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -n "${{ steps.instance.outputs.INSTANCE_ID }}" ]; then
+            aws ec2 terminate-instances --instance-ids "${{ steps.instance.outputs.INSTANCE_ID }}" --region "$AWS_REGION" || true
+          fi
+          rm -f /tmp/ec2key /tmp/ec2key.pub /tmp/instance_id.txt

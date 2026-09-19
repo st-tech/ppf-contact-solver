@@ -1313,7 +1313,7 @@ class DYNAMICS_PT_Groups(Panel):
                     if not _convertible:
                         if _sand_obj is None or _sand_obj.type != "MESH" or not _sand_obj.select_get():
                             conv_box.label(text="Select a solid mesh to convert", icon="INFO")
-                        elif _sand_obj.get("ppf_particle_mesh"):
+                        elif _sand_obj.get("particle_mesh"):
                             conv_box.label(
                                 text="Active object is already a particle mesh", icon="INFO"
                             )
@@ -2044,7 +2044,7 @@ class DYNAMICS_PT_Groups(Panel):
                         if radius_obj is not None:
                             radius_row.prop(
                                 radius_obj,
-                                '["ppf_grain_radius"]',
+                                '["grain_radius"]',
                                 text="Grain Radius (m)",
                             )
                         else:
@@ -2216,7 +2216,7 @@ class UTILITY_PT_UtilityTools(Panel):
         col = tri_box.column()
         col.enabled = context.mode == "OBJECT" and n_mesh > 0
         col.operator(
-            "object.ppf_symmetric_triangulate",
+            "object.symmetric_triangulate",
             text="Symmetric Triangulate Selected",
             icon="MOD_TRIANGULATE",
         )
