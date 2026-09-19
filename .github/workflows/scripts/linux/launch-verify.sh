@@ -5,7 +5,7 @@
 # License: Apache v2.0
 #
 # Runs ON the verification instance, in $HOME, where release.yml copied the
-# archive and verify-distribution.sh:
+# archive, verify-distribution.sh and the scene harness it runs:
 #
 #     launch-verify.sh ARCHIVE DIST_NAME CUDA_SCENES [GPU_BACKEND]
 #
@@ -36,6 +36,10 @@ rm -f "$HOME/$ARCHIVE"
     exit 1
 }
 mv "$HOME/verify-distribution.sh" "$WORK/verify-distribution.sh"
+# run_suite.py IS NOT IN THE ARCHIVE, so it arrives beside the verifier and has
+# to stay beside it: verify-distribution.sh resolves the harness from its own
+# directory, which is $WORK once the move above has happened.
+mv "$HOME/run_suite.py" "$WORK/run_suite.py"
 
 # shellcheck disable=SC2016 # the inner script takes its values as arguments
 setsid nohup bash -c '

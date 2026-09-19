@@ -2691,8 +2691,8 @@ pub unsafe fn advance<D: Device>(
                 // a gate nothing can observe is not a gate, and a run that died
                 // in the first line search would otherwise report zero
                 // intersections while proving nothing.
-                // `examples/metal_pdrd_cloth_contact_fixture.py` asserts the
-                // gate RAN and sets `RUST_LOG=debug` to see it.
+                // A PDRD cloth contact scene asserts the gate RAN and
+                // sets `RUST_LOG=debug` to see it.
                 ::log::debug!("check_intersection: the committed pose carries no \
                               intersecting pair");
             } else {

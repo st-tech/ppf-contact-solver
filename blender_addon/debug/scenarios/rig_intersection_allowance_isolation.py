@@ -48,7 +48,7 @@
 # with coincident elements; the ACCD line search may find a pair whose start
 # separation is zero and refuse to advance into it (`### ccd failed` /
 # `contact starts overlapping`). That refusal is the penetration-free guarantee
-# working, not a defect (examples/allow_intersection_smoke.py states it), so
+# working, not a defect (the intersection-allowance smoke scene states it), so
 # this case accepts a completed run and a clean post-initialize stop alike, and
 # it is the reason the run assertion cannot be a bare `finished()`. A device
 # assert is still caught: it takes the probe down and the scenario fails on a
@@ -460,7 +460,7 @@ if run_session is not None:
     # the tangle is authored with coincident elements, so the line search may
     # find a pair whose start separation is zero and refuse to advance into it.
     # That refusal is the penetration-free guarantee working, not a defect
-    # (examples/allow_intersection_smoke.py states it directly), so a clean
+    # (the intersection-allowance smoke scene states it directly), so a clean
     # `overlapping_start` or `ccd` stop AFTER initialize counts the same as a
     # completed run. A device assert never reaches this line: it takes the whole
     # probe down and the scenario fails on a missing result marker instead.

@@ -17,7 +17,7 @@
 # start while the script still exits 0. So the scene's own output is read: at
 # least two frames written by this run, and a mean vertex displacement between the
 # first and the last that is not zero, read as float32 triples in numeric frame
-# order, which is how examples/run_suite.py reads them.
+# order, which is how tools/run_suite.py reads them.
 #
 # THE DISTRIBUTION IS RUN AS A USER RUNS IT: its own interpreter, its own bin\ and
 # MinGit on PATH, and CARGO_TARGET_DIR naming target\cpu, which is what the

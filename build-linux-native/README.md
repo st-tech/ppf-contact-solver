@@ -398,12 +398,17 @@ build-linux-native/scripts/verify-distribution.sh DIST REPORT_DIR \
   [--driver-only] [--cuda-scenes all|none|"a b"] [--cpu-scenes all|none|"a b"]
 ```
 
+Either scene option also needs `tools/run_suite.py` copied next to
+the script. The harness is repository-only and no distribution carries it, so a
+verification machine receives the two files together; `release.yml` sends both
+to the GPU instance and mounts both into the floor containers.
+
 It reads the backends the launcher was stamped with (`PPF_DIST_BACKENDS`) and
 checks the layout, the launcher, each shipped solver and server, where the
 loader takes the CUDA backend from when it ships, the interpreter through
 `ppf-contact-solver python`, and then runs example notebooks through
-`examples/run_suite.py --fast-check` on each backend, judged by the frames they
-produce. `--cuda-scenes` against a distribution without the CUDA backend fails
+`run_suite.py --fast-check` on each backend, with `--root` naming the
+distribution, judged by the frames they produce. `--cuda-scenes` against a distribution without the CUDA backend fails
 rather than skipping. While a CUDA
 scene runs it samples the shared libraries the solver maps, and requires that
 they come from the distribution or the system library directories, that no CUDA

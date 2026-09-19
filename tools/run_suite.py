@@ -1,4 +1,4 @@
-# File: examples/run_suite.py
+# File: tools/run_suite.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
@@ -49,37 +49,31 @@ from pathlib import Path
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parent.parent
+# TWO ROOTS, BECAUSE THE HARNESS AND THE TREE IT JUDGES ARE NOT ALWAYS THE SAME
+# TREE. `HERE` is this harness's own data, the execution-shape reference and the
+# self-test fixtures, which travel with the script. `ROOT` is the tree under
+# test: the one holding `frontend/` and `examples/`, which the notebooks are read
+# from and which every notebook process is given as its PYTHONPATH and working
+# directory. In a checkout both are the same repository. Against a release
+# distribution they are not, because no distribution ships this harness: it then
+# runs from a repository against an unpacked archive, and `--root` is what says
+# which tree the verdict is about.
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 VENV_PY = Path.home() / ".local/share/ppf-cts/venv/bin/python"
-
-
-# LARGE BY SIZE RATHER THAN BY NAME. The `large-` prefix is the suite's usual
-# way of saying a scene is too big for a first-step check, and it is a filename
-# rather than a measurement, so a scene can be large without being named that
-# way. This one is: it loads a 450,000 tetrahedron asset TWICE and builds
-# 346,526 vertices, about twice the next largest in the suite (`stack`, at
-# 167,446), and it exhausts 16 GB of unified memory on Metal, failing at
-# `initialize()` with `Insufficient Memory` from the GPU command buffer while
-# every smaller scene completes on the same host.
-#
-# It is excluded here rather than renamed because the file ships in the
-# public-bound tree, where the name is not this harness's to change.
-LARGE_BY_SIZE = ("trapped-919539a.ipynb",)
 
 
 def notebooks(skip_large: bool = True):
     """The suite, in a stable order. `large-*` is excluded by the goal.
 
-    `LARGE_BY_SIZE` names the scenes the goal's "except for large ones" covers
-    that the prefix does not, and the comment above it says what each measures.
+    THE SUITE IS WHAT `examples/` HOLDS, AND THAT IS THE WHOLE RULE. A scene
+    too big for a first-step check that the `large-` prefix does not name is
+    not filtered here: it lives in the private benchmark tree, which this glob
+    does not reach, beside a README saying what each one measures.
     """
-    out = sorted(p for p in (REPO / "examples").glob("*.ipynb"))
+    out = sorted(p for p in (ROOT / "examples").glob("*.ipynb"))
     if skip_large:
-        out = [
-            p
-            for p in out
-            if not p.name.startswith("large-") and p.name not in LARGE_BY_SIZE
-        ]
+        out = [p for p in out if not p.name.startswith("large-")]
     return out
 
 
@@ -479,7 +473,7 @@ SHAPE_MIN_WINDOWS = 2
 # widened with no stated evidence is how a gate stops seeing.
 SHAPE_BAND = 2.0
 
-SHAPE_REFERENCE = REPO / "examples" / "execution_shape_reference.json"
+SHAPE_REFERENCE = HERE / "execution_shape_reference.json"
 
 # Exact: an inequality is a defect, not spread.
 SHAPE_EXACT_CHECKS = (("newton_steps", "min"),)
@@ -1014,7 +1008,7 @@ def format_shape(verdict: dict) -> str:
     return head + " [" + ", ".join(parts) + "]"
 
 
-SHAPE_FIXTURES = REPO / "examples" / "execution_shape_fixtures"
+SHAPE_FIXTURES = HERE / "execution_shape_fixtures"
 
 
 def profile_from_files(iter_path: Path, newton_path: Path, vertices: int = 0,
@@ -1067,8 +1061,8 @@ def self_test() -> int:
     no built solver, no frontend venv. Measured at 0.06 s on a machine with
     neither backend, which is what makes it affordable on every build.
 
-    Every case below is measured data, not a construction. `examples/
-    execution_shape_fixtures/` holds three complete 101-frame `drape` runs,
+    Every case below is measured data, not a construction.
+    `execution_shape_fixtures/` beside this file holds three complete 101-frame `drape` runs,
     captured during the divergence audit and checked in beside this harness:
 
       drape.cuda-clean               the reference build
@@ -1099,7 +1093,7 @@ def self_test() -> int:
           open(p,'w').write(s.replace(old, '    minv(2, 1) = minv(1, 2);\\n' \\
             '    result.inverse = Mat3x3f::Identity();  // FAULT INJECTION'))"
         cargo build --release
-        python examples/run_suite.py --backend cuda-identity --only drape \\
+        python tools/run_suite.py --backend cuda-identity --only drape \\
             --shape-gate strict
 
     That run must report `shape=out-of-band` with `iter.mean` near 2.9x and exit
@@ -1115,7 +1109,7 @@ def self_test() -> int:
     The same replay works without rebuilding anything, from the streams the two
     builds already produced:
 
-        python examples/run_suite.py --only drape --shape-from \\
+        python tools/run_suite.py --only drape --shape-from \\
             <a directory holding advance.iter.out and advance.newton_steps.out>
 
     Case K below runs exactly that over all three fixtures and asserts the exit
@@ -1436,7 +1430,7 @@ def shape_from_dir(directory: Path, scene: str, reference: dict,
     not need the scene re-simulated. Two uses: checking a session captured
     before this gate existed, and exercising the gate itself on a machine with
     no GPU, where the fixture directories under
-    `examples/execution_shape_fixtures/` are not laid out as sessions but the
+    `tools/execution_shape_fixtures/` are not laid out as sessions but the
     comparator does not care where two streams came from.
 
     `directory` may be the session's `output/data`, or its `output`, or any
@@ -1510,7 +1504,7 @@ def run_one(nb: Path, backend: str, data_root: Path, timeout: int, claimed: dict
     sim = simulates(script)
 
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(REPO)
+    env["PYTHONPATH"] = str(ROOT)
     env.setdefault("PPF_CTS_HEADLESS", "1")
 
     started = time.time()
@@ -1523,7 +1517,7 @@ def run_one(nb: Path, backend: str, data_root: Path, timeout: int, claimed: dict
     # row on that box was a row about the orphan. On a platform with no process
     # groups the kill falls back to the notebook alone.
     popen_kw = {"start_new_session": True} if hasattr(os, "killpg") else {}
-    proc = subprocess.Popen([str(VENV_PY), str(script)], cwd=str(REPO), env=env,
+    proc = subprocess.Popen([str(VENV_PY), str(script)], cwd=str(ROOT), env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, **popen_kw)
     try:
@@ -1652,7 +1646,7 @@ def run_one(nb: Path, backend: str, data_root: Path, timeout: int, claimed: dict
 def main():
     # --python rebinds the interpreter for this run; run_one and the check below
     # read the module-level name, so it is replaced once, right after parsing.
-    global VENV_PY
+    global VENV_PY, ROOT
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--backend", help="label for the report; the key a recorded reference is stored under")
     ap.add_argument("--only", nargs="*", help="notebook stems; default is the whole suite")
@@ -1674,6 +1668,10 @@ def main():
                          "developer environment). A distribution passes its own "
                          "python/bin/python3, with --data-root naming its "
                          "local/share/ppf-cts")
+    ap.add_argument("--root", default=str(ROOT), metavar="PATH",
+                    help="the tree whose examples/ is run and whose frontend/ the "
+                         "notebooks import (default: this checkout). A "
+                         "distribution names its own unpacked directory")
     ap.add_argument("--reference", default=str(SHAPE_REFERENCE),
                     help="measured CUDA execution-shape reference to compare against")
     ap.add_argument("--shape-band", type=float, default=SHAPE_BAND,
@@ -1719,6 +1717,14 @@ def main():
     VENV_PY = Path(args.python)
     if not VENV_PY.exists():
         sys.exit(f"no interpreter at {VENV_PY}")
+    # BOTH HALVES ARE NAMED, BECAUSE EITHER ONE MISSING PRODUCES A RUN THAT
+    # LOOKS LIKE A SOLVER RESULT. A root with no `examples/` sweeps nothing and
+    # reports a clean zero-scene pass; a root with no `frontend/` lets every
+    # notebook fail its import, which reads as the backend refusing the scene.
+    ROOT = Path(args.root).resolve()
+    for needed in ("frontend", "examples"):
+        if not (ROOT / needed).is_dir():
+            sys.exit(f"--root {ROOT} has no {needed}/; it is not a solver tree")
 
     todo = notebooks()
     if args.only:

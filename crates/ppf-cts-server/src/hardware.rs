@@ -144,7 +144,7 @@ pub fn runtime_usage() -> RuntimeUsage {
 /// was busy, which is the question the row is asking.
 ///
 /// IT IS ACCURATE WHERE IT MATTERS, and that was measured rather than assumed:
-/// during `examples/bench_drape.py` on Metal, 5 res-128 sheets over a sphere,
+/// during a five sheet res-128 drape over a sphere on Metal,
 /// twelve consecutive 250 ms samples read 86 to 99 with a mean of 92.2% and no
 /// zeros. A quiet row on a small scene is the truth about that scene.
 #[cfg(target_os = "macos")]

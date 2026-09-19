@@ -667,6 +667,7 @@ jobs:
           trap close_tunnel EXIT
           open_tunnel
           to_remote build-linux-native/scripts/verify-distribution.sh \
+            tools/run_suite.py \
             .github/workflows/scripts/linux/launch-verify.sh \
             .github/workflows/scripts/linux/poll-verify.sh ubuntu@localhost:
           # cuda, because this instance has an NVIDIA GPU: a distribution that
@@ -1022,6 +1023,7 @@ jobs:
           docker run --rm \
             -v "$RUNNER_TEMP/floor:/floor" \
             -v "$GITHUB_WORKSPACE/build-linux-native/scripts/verify-distribution.sh:/opt/verify-distribution.sh:ro" \
+            -v "$GITHUB_WORKSPACE/tools/run_suite.py:/opt/run_suite.py:ro" \
             "$FLOOR_IMAGE" bash /opt/verify-distribution.sh "/floor/$DIST_NAME" /floor/report \
               --cpu-scenes "$CPU_SCENES"
 
@@ -1086,6 +1088,7 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v "$RUNNER_TEMP/floor:/floor" \
             -v "$GITHUB_WORKSPACE/build-linux-native/scripts/verify-distribution.sh:/opt/verify-distribution.sh:ro" \
+            -v "$GITHUB_WORKSPACE/tools/run_suite.py:/opt/run_suite.py:ro" \
             "$FLOOR_IMAGE" bash /opt/verify-distribution.sh "/floor/$DIST_NAME" /floor/report \
               --cpu-scenes "$CPU_SCENES"
 
@@ -1277,6 +1280,7 @@ jobs:
           trap close_tunnel EXIT
           open_tunnel
           to_remote "$ARCHIVE" build-linux-native/scripts/verify-distribution.sh \
+            tools/run_suite.py \
             .github/workflows/scripts/linux/launch-verify.sh \
             .github/workflows/scripts/linux/poll-verify.sh ubuntu@localhost:
           # cuda, because this instance has an NVIDIA GPU: a distribution that
@@ -2618,7 +2622,7 @@ jobs:
       # which is what a runner can answer, and the evidence that it SIMULATES
       # comes from real Apple Silicon: bl_mac_native_real_solve drives a scene
       # through the macOS Native backend on a physical Mac, and
-      # examples/run_suite.py --fail-fast is what a person runs there.
+      # tools/run_suite.py --fail-fast is what a person runs there.
 
       - name: Upload build logs
         if: always()

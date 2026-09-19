@@ -834,9 +834,12 @@ them.
 
 ## Running the example suite on a Mac with no egress
 
-`examples/run_suite.py` runs the notebooks on whichever backend the host carries.
-Getting it to run on a locked-down Mac took four fixes, all of them one-time and
-none of them obvious, so they are recorded rather than rediscovered.
+`tools/run_suite.py` runs the notebooks on whichever backend the host
+carries. It is repository-only, so against an unpacked distribution it is run
+from a checkout with `--root` naming the distribution and `--python` naming the
+interpreter inside it. Getting it to run on a locked-down Mac took four fixes,
+all of them one-time and none of them obvious, so they are recorded rather than
+rediscovered.
 
 - **`warmup.sh` / `warmup.py` cannot run there at all.** The box has an empty
   egress list, so pip does not fail, it HANGS on connect. Provision by carrying

@@ -426,7 +426,7 @@ fn record_backend(backend: Backend) {
                  frontend reads too, so the cdylib is found beside its own \
                  binary:\n\n      CARGO_TARGET_DIR=target/{name} cargo build \
                  --release --features {name}\n      CARGO_TARGET_DIR=target/{name} \
-                 python3 examples/run_suite.py --backend {name} --fast-check\n\n  \
+                 python3 tools/run_suite.py --backend {name} --fast-check\n\n  \
                  Or replace this one deliberately with `cargo clean --release`.\n\n",
                 profile_dir.display()
             );

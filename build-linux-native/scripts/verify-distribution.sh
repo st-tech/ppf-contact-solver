@@ -22,6 +22,11 @@
 #                        `none` to skip (the default)
 #   --cpu-scenes LIST    the same on the CPU backend (default `none`)
 #
+# EITHER SCENE OPTION ALSO NEEDS `run_suite.py` NEXT TO THIS SCRIPT. The harness
+# is repository-only, `tools/run_suite.py`, and no distribution ships
+# it, so whatever copies this script to a verification machine copies that file
+# beside it. A run that asks for scenes without it stops at once and says so.
+#
 # What it checks is what bundle.sh cannot, because bundle.sh runs on the machine
 # that built the distribution:
 #   - the launcher answers --help naming its real path, and both solvers, both
@@ -75,6 +80,20 @@ done
 
 LAUNCHER="$DIST/ppf-contact-solver"
 REPORT="$REPORT_DIR/report.txt"
+
+# THE SCENE HARNESS, WHICH IS NOT IN THE DISTRIBUTION. `tools/` is
+# repository-only, so run_suite.py reaches a verification machine beside this
+# script rather than inside the archive, and it is named here so a run that
+# asked for scenes stops at once instead of discovering it after the layout,
+# launcher and loader checks have all passed.
+RUN_SUITE="$(cd "$(dirname "$0")" && pwd -P)/run_suite.py"
+if [ "$CUDA_SCENES" != none ] || [ "$CPU_SCENES" != none ]; then
+    if [ ! -f "$RUN_SUITE" ]; then
+        printf 'ERROR: scenes were asked for but %s is missing.\n' "$RUN_SUITE" >&2
+        printf '       Copy tools/run_suite.py next to this script.\n' >&2
+        exit 2
+    fi
+fi
 
 # THE BACKENDS THIS DISTRIBUTION SHIPS, as bundle.sh stamped them into the
 # launcher. Every check below asks for exactly those, so a CPU-only distribution
@@ -365,6 +384,12 @@ for name in sorted(built):
 # suite BACKEND SCENES: run_suite.py through the launcher's own environment. The
 # CPU run names this distribution's CPU build, the one CARGO_TARGET_DIR value the
 # launcher keeps.
+#
+# THE HARNESS TRAVELS BESIDE THIS SCRIPT AND IS NOT IN THE ARCHIVE. It lives in
+# the repository under `tools/`, which no distribution ships, so whoever
+# copies this script to a verification machine copies `run_suite.py` next to it;
+# `--root` then names the tree under test, which is the distribution rather than
+# the repository the harness came from.
 suite() {
     local backend="$1" scenes="$2"
     local -a only=() selector=()
@@ -386,15 +411,32 @@ suite() {
     # guarantee-class checks report nothing, and the failure a firing check then
     # produces is an illegal-address fault naming no cause.
     selector=(env "CARGO_TARGET_DIR=$DIST/target/$backend" "PPF_DIAG_SELFTEST=1")
-    (cd "$DIST" && env -u PPF_CTS_VENV "${selector[@]}" "$LAUNCHER" python "$DIST/examples/run_suite.py" \
+    (cd "$DIST" && env -u PPF_CTS_VENV "${selector[@]}" "$LAUNCHER" python "$RUN_SUITE" \
         --backend "$backend" --fast-check --shape-gate off \
         --python "$DIST/python/bin/python3" \
+        --root "$DIST" \
         --data-root "$DIST/local/share/ppf-cts" \
         --out "$REPORT_DIR/suite-$backend.json" "${only[@]}")
 }
 
 # Samples the shared libraries every running CUDA solver of this distribution has
 # mapped, once a second, until told to stop.
+#
+# THE LOADER'S OWN CACHE IS EXCLUDED BY NAME, BECAUSE IT IS NOT A SHARED LIBRARY
+# and the substring ".so" inside "ld.so.cache" satisfies any pattern loose enough
+# to accept a versioned one. ld.so maps /etc/ld.so.cache while it resolves a
+# program's libraries, and again for each dlopen, then unmaps it before the
+# program's own code runs, so a process carries it only while loading and never
+# in steady state. That window is short and this sampler is slow, so the file
+# reaches the list only occasionally: measured, 102 of 400 launches showed it at
+# some sample. Once in the list it reads as a library mapped from outside the
+# distribution, and fails this check over an archive that is correct.
+#
+# BY NAME RATHER THAN BY DEMANDING A LIBRARY-SHAPED SUFFIX, because a suffix test
+# narrow enough to reject ".so.cache" also rejects a real library whose version
+# tail is not purely numeric: `ldconfig -p` on Ubuntu 24.04 lists libaio.so.1t64
+# and libstemmer.so.0d. Dropping one of those would take a mapped library out of
+# the list silently, and the list is the whole evidence this check reads.
 SAMPLER_PID=""
 MAPPED="$REPORT_DIR/mapped-libraries.txt"
 start_sampler() {
@@ -404,7 +446,7 @@ start_sampler() {
         while [ ! -e "$REPORT_DIR/.sampler-stop" ]; do
             for proc in /proc/[0-9]*; do
                 [ "$(readlink "$proc/exe" 2>/dev/null)" = "$DIST/target/$SUITE_BACKEND/release/ppf-contact-solver" ] || continue
-                awk '$6 ~ /\.so/ { print $6 }' "$proc/maps" 2>/dev/null
+                awk '$6 ~ /\.so/ && $6 != "/etc/ld.so.cache" { print $6 }' "$proc/maps" 2>/dev/null
             done >> "$MAPPED"
             sleep 1
         done

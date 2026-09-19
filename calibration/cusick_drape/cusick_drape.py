@@ -40,7 +40,7 @@
 # Coordinate convention: the solver's default gravity is (0, -9.8, 0), so "up"
 # is +Y. The specimen is built horizontal in the XZ plane and the shadow is its
 # projection onto XZ (the Y coordinate is dropped). This matches every cloth
-# example in examples/ (e.g. bench_drape.py: sheets in XZ, sphere below in -Y).
+# example: the sheets lie in XZ and the sphere sits below them in -Y.
 #
 # IMPORTANT: take the numbers that calibrate the presets from a real CUDA host
 # (see calibration/cusick_drape/README.md). Every backend computes the same

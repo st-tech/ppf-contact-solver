@@ -190,6 +190,6 @@ calibration/report_data/
 # it after a run, so one that survives is from a run that ended early.
 __tracked_surface.stl
 
-# Suite output written by examples/run_suite.py when --out is not given.
+# Suite output written by tools/run_suite.py when --out is not given.
 suite_results.json
 crates/ppf-cts-compute/rocm/build/

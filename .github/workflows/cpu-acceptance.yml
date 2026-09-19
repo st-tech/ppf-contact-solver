@@ -17,7 +17,7 @@
 #   5. every simulating example producing moving output under --fast-check, and
 #      disp_at_5 over repeated short runs of a set of scenes, which the compare
 #      job lays side by side for the two architectures;
-#   6. examples/cpu_contact_fixture.py, the penetration fixture with its
+#   6. tools/cpu_contact_fixture.py, the penetration fixture with its
 #      contact-disabled control.
 #
 # Item 7, the distribution's smoke test and license files, is release.yml's.
@@ -178,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" PYTHONPATH="$GITHUB_WORKSPACE" \
-            python examples/cpu_contact_fixture.py 2>&1 | tee "$REPORT/contact-fixture.log"
+            python tools/cpu_contact_fixture.py 2>&1 | tee "$REPORT/contact-fixture.log"
           grep -q 'cpu contact fixture: PASS' "$REPORT/contact-fixture.log"
 
       # ITEM 5, first half.
@@ -194,7 +194,7 @@ jobs:
             ONLY=(--only $SCENES)
             EXPECT=()
           fi
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python examples/run_suite.py --backend cpu --fast-check \
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python tools/run_suite.py --backend cpu --fast-check \
             --python "$(command -v python)" --data-root "$RUNNER_TEMP/ppf-data" --timeout 3600 \
             --out "$REPORT/fast-check.json" "${ONLY[@]}" 2>&1 | tee "$REPORT/fast-check.log" || true
           python .github/workflows/scripts/cpu-acceptance-report.py fast-check "$REPORT/fast-check.json" "${EXPECT[@]}"
@@ -208,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 # a space-separated list of notebook stems
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python examples/run_suite.py --backend cpu --frames 6 \
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/cpu" python tools/run_suite.py --backend cpu --frames 6 \
             --repeat "$REPEAT" --python "$(command -v python)" --data-root "$RUNNER_TEMP/ppf-data-frames" \
             --timeout 3600 --out "$REPORT/frames.json" --only $SCENES 2>&1 | tee "$REPORT/frames.log" || true
           [ -s "$REPORT/frames.json" ] || { echo "ERROR: the short runs wrote no report"; exit 1; }

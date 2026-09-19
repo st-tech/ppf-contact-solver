@@ -23,8 +23,8 @@
 #   C) disabling one body removes only its entry (per-object gating).
 #
 # Encoding-only: no build / run / fetch (mirrors bl_velocity_keyframes).
-# The hinge dynamics themselves are exercised on a real CUDA host by
-# examples/pdrd_hinge.py and examples/pdrd_gear.py; the solver
+# The hinge dynamics themselves are exercised on a real CUDA host by the
+# standalone hinge and gear driver scenes; the solver
 # has no physics, so this rig validates the Blender->encoder plumbing.
 
 from __future__ import annotations

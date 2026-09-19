@@ -48,7 +48,7 @@ def load(path):
 
 def simulating_notebooks():
     """The notebook stems run_suite.py runs and counts as simulations."""
-    spec = importlib.util.spec_from_file_location("run_suite", REPO / "examples" / "run_suite.py")
+    spec = importlib.util.spec_from_file_location("run_suite", REPO / "tools" / "run_suite.py")
     suite = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(suite)
     return sorted(nb.stem for nb in suite.notebooks() if suite.simulates(nb))
