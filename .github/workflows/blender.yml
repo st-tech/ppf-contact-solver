@@ -1426,9 +1426,27 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-duration-seconds: 21600
 
-      # Every rig's evidence, under its shard number: the exit file, the
-      # rig log and report, the small per-worker logs first (robocopy, bounded
-      # by size), then the bounded whole-tree copy.
+      # Every rig's evidence, under its shard number: the exit file, the rig
+      # log and report FIRST and on their own, then the small per-worker logs
+      # (robocopy, bounded by size), then the bounded whole-tree copy.
+      #
+      # THE VERDICT IS FETCHED BEFORE THE EVIDENCE THAT EXPLAINS IT, and the
+      # order is the whole point. `C:/ci/*` expands in directory order, so
+      # `evidence/` goes ahead of `report.json`, `rig.log` and `rig_exit.txt`;
+      # on 2026-09-19 a Windows rig exited 1 and its 120 s ran out inside that
+      # tree, so CI reported an exit code with nothing behind it while the
+      # three files that say what failed sat on a box about to be terminated.
+      # The artifact is the proof: its evidence tree stops at worker-14 of ~31
+      # and carries none of the three.
+      #
+      # REHEARSED ON A WINDOWS BOX, with this command and this cap: against a
+      # 24,003-file tree it transferred 15,946 files, stopped inside
+      # `evidence/` at the 120 s mark, printed `no ci files`, and delivered
+      # none of the three. The same box answers the three single-file copies
+      # below in under a second. It is the FILE COUNT that decides this, not
+      # the bytes: 7.4 ms per file on a direct link, and a rig that dies leaves
+      # every worker directory it ran, where a healthy one has deleted the
+      # passing ones.
       #
       # NOT AFTER A FAILED WAIT WINDOW AND NOT AFTER A CANCEL. A window fails
       # on its own script's error, never on a rig's verdict (a rig's failure is
@@ -1453,6 +1471,12 @@ jobs:
             # ssh's FIRST -o wins, so these dead-peer limits (one minute) take
             # precedence over SSH_OPTS' twenty; a tunnel that died under a
             # copy must not hold this step, which a cancel then cannot end.
+            # One file per call, so a rig that died before writing its
+            # report still yields its log and its exit code.
+            for f in rig_exit.txt report.json rig.log; do
+              timeout 60 scp -P "$port" -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS \
+                "Administrator@localhost:C:/ci/$f" "$D/" 2>/dev/null || echo "rig $i: no $f"
+            done
             timeout 120 ssh -p "$port" -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS Administrator@localhost \
               "cmd /c 'robocopy C:\\ppf-debug C:\\ci\\evidence *.log *.json *.jsonl *.txt /S /MAX:2000000 /NFL /NDL /NJH /NJS /NP & if errorlevel 8 (exit 1) else (exit 0)'" || echo "rig $i: the evidence copy did not finish"
             timeout 120 scp -P "$port" -r -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $SSH_OPTS "Administrator@localhost:C:/ci/*" "$D/" 2>/dev/null || echo "rig $i: no ci files"
