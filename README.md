@@ -43,7 +43,6 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **🖥️ Cross Platform**: Both the add-on and the solver engine run natively on macOS, Windows, and Linux.
 - **🎛️ Cross Architecture**: We natively support Apple silicon (Metal), NVIDIA (CUDA), and AMD (ROCm) GPUs.
 - **🧮 SIMD-Optimized CPU Backend**: Our CPU code runs natively on both x86_64 and ARM64.
-- **🪟 Windows Executable**: No installation wizard shown. Just unzip and run [(Video)](https://zozo.box.com/s/9rthkw122fyss5qxuf5mie9xywg7jzdz).
 - **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
 - **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8).
 - **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/module_reference.html) and lintable [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03).
@@ -57,10 +56,10 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 >
 > We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found in extreme cases, for example:
 >
-> - The target contact thickness is atom-level thin.
-> - An object collides at the speed of light.
+> - The target contact thickness is atom-level thin, with the object size being on the order of meters.
+> - An object collides at the speed of light, with the step size being 0.01 seconds.
 >
-> In such extreme cases, as well as with bugs, the solver may crash or stall. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
+> In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
 >
 > **Intersection errors can also indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
 
@@ -70,6 +69,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
 - **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
 - **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
+- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
 - **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
 - **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
 - **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
