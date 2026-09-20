@@ -14,11 +14,29 @@
 # local port 2222 + shard index, opened at the start of the window the way
 # wait-rig.sh opens its one (up to ten bind attempts) and held for the whole
 # window; a poll that fails closes that rig's tunnel and the next round opens
-# it again. Each round asks every rig that has not reported yet for its poll
-# line, prints its newest progress line labeled by shard, and records a
-# verdict as RIG_RC_<shard>=<code> in GITHUB_ENV the moment that rig writes
-# its exit file. The window ends early once every rig has reported. Later
-# windows skip rigs already recorded, by reading /tmp/rig_rc.txt.
+# it again. Each round asks every rig that has not reported yet for the
+# orchestrator lines it has produced since the last round, prints them
+# labeled by shard, and records a verdict as RIG_RC_<shard>=<code> in
+# GITHUB_ENV the moment that rig writes its exit file. The window ends early
+# once every rig has reported. Later windows skip rigs already recorded, by
+# reading /tmp/rig_rc.txt.
+#
+# THE CI LOG IS WHERE A DETACHED RIG'S PASSES AND FAILURES BECOME VISIBLE, so
+# this prints the rig's orchestrator stream rather than a sample of it: both
+# the `slot N -> <scenario>` that starts a scenario and the
+# `slot N <- <scenario> <status> (<seconds>)` that ends it, which is what a
+# Linux rig shows from inside its own step. A rig that has produced nothing
+# new since the last round prints its newest line again instead, so a stall
+# still reads as a REPEATED line rather than as a wait that runs out.
+#
+# THE CURSOR IS A FILE BECAUSE THE WINDOWS ARE SEPARATE PROCESSES.
+# blender.yml runs this in several windows with an AWS re-authentication
+# between them, for the reasons wait-rig.sh records: the credential that
+# opens a tunnel lasts an hour, and so does a tunnel. A cursor held in a
+# variable would therefore restart at zero each window and reprint the whole
+# run, so it lives in /tmp/rig_cursor_<shard>.txt beside /tmp/rig_rc.txt, and
+# only what a poll actually delivered advances it: a poll that dies in
+# transit is re-sent by the next one rather than lost.
 #
 # A POLL THAT FAILS SAYS WHY. A tunnel opened and closed per round bound in
 # five seconds often enough to pass the pipeline test and seldom enough on a
@@ -27,10 +45,6 @@
 # bound, a refused key and a poll script that did not parse all printed the
 # same line. Now the tunnel's bind is retried, and a failed ssh prints the
 # last line it wrote to stderr.
-#
-# blender.yml runs it in several windows with an AWS re-authentication
-# between them, for the reasons wait-rig.sh records: the credential that
-# opens a tunnel lasts an hour, and so does a tunnel.
 
 set -uo pipefail
 
@@ -40,6 +54,14 @@ RC_FILE=/tmp/rig_rc.txt
 touch "$RC_FILE"
 
 reported() { grep -q "^$1=" "$RC_FILE"; }
+
+cursor_file() { printf '/tmp/rig_cursor_%s.txt' "$1"; }
+cursor_read() {
+    local n
+    n="$(cat "$(cursor_file "$1")" 2>/dev/null)"
+    printf '%s' "${n:-0}"
+}
+cursor_write() { printf '%s\n' "$2" > "$(cursor_file "$1")"; }
 
 # One tunnel pid per shard, "" when that shard has no tunnel open.
 TUNNEL_PIDS=()
@@ -76,47 +98,62 @@ open_tunnel() {
 }
 
 poll_one() {
-    # poll_one SHARD -> prints STATE|code|progress; on failure prints the
-    # reason to stderr and returns 1, with that rig's tunnel closed.
-    local shard="$1"
-    local port=$((2222 + shard)) line err
+    # poll_one SHARD SINCE -> writes the rig's answer, one STATE| record and
+    # one LINE| record per orchestrator line past SINCE, to
+    # /tmp/rig-poll-SHARD.txt; on failure prints the reason to stderr and
+    # returns 1, with that rig's tunnel closed.
+    local shard="$1" since="$2"
+    local port=$((2222 + shard)) out err
+    out="/tmp/rig-poll-$shard.txt"
+    : > "$out"
     if ! open_tunnel "$shard"; then
         echo "tunnel to ${RIGS[$shard]} did not bind on port $port in ten attempts" >&2
         return 1
     fi
     err=$(mktemp)
-    line="$(ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=15 -i /tmp/ec2key.pem Administrator@localhost \
-        "powershell -ExecutionPolicy Bypass -File C:/poll_rig.ps1" 2>"$err" \
-        | tr -d '\r' | grep '^STATE|' | head -1)"
-    if [ -z "$line" ]; then
+        "powershell -ExecutionPolicy Bypass -File C:/poll_rig.ps1 -Since $since" \
+        2>"$err" | tr -d '\r' > "$out"
+    if ! grep -q '^STATE|' "$out"; then
         echo "ssh poll answered no STATE line; stderr: $(tail -n 1 "$err" 2>/dev/null)" >&2
         rm -f "$err"
         close_tunnel "$shard"
         return 1
     fi
     rm -f "$err"
-    printf '%s\n' "$line"
 }
 
 STARTED=$(date +%s)
 END=$(( STARTED + MINUTES * 60 ))
+stamp() { printf '[rig %s +%sm]' "$1" "$(( ( $(date +%s) - STARTED ) / 60 ))"; }
 while [ "$(date +%s)" -lt "$END" ]; do
     pending=0
     for i in "${!RIGS[@]}"; do
         reported "$i" && continue
         pending=$((pending + 1))
+        SINCE="$(cursor_read "$i")"
         # Not `$(poll_one ...)`: a subshell would lose the tunnel pid the
         # poll records, and the next round would open a second tunnel on a
         # port the first still holds.
-        if ! poll_one "$i" >/tmp/rig-poll-line.txt 2>/tmp/rig-poll-err.txt; then
-            echo "[rig $i +$(( ( $(date +%s) - STARTED ) / 60 ))m] poll failed: $(cat /tmp/rig-poll-err.txt)"
+        if ! poll_one "$i" "$SINCE" 2>/tmp/rig-poll-err.txt; then
+            echo "$(stamp "$i") poll failed: $(cat /tmp/rig-poll-err.txt)"
             continue
         fi
-        LINE="$(cat /tmp/rig-poll-line.txt)"
+        LINE="$(grep -m1 '^STATE|' "/tmp/rig-poll-$i.txt")"
         CODE="$(printf '%s' "$LINE" | cut -d'|' -f2)"
         PROGRESS="$(printf '%s' "$LINE" | cut -d'|' -f3-)"
-        echo "[rig $i +$(( ( $(date +%s) - STARTED ) / 60 ))m] ${PROGRESS:-no progress line yet}"
+        # The cursor advances by what ARRIVED, so a truncated answer costs a
+        # repeat and never a dropped line.
+        mapfile -t NEW < <(grep '^LINE|' "/tmp/rig-poll-$i.txt")
+        for line in ${NEW+"${NEW[@]}"}; do
+            echo "$(stamp "$i") ${line#LINE|}"
+        done
+        if [ "${#NEW[@]}" -gt 0 ]; then
+            cursor_write "$i" $(( SINCE + ${#NEW[@]} ))
+        else
+            echo "$(stamp "$i") ${PROGRESS:-no progress line yet}"
+        fi
         if [ -n "$CODE" ] && [ "$CODE" != "RUNNING" ]; then
             echo "$i=$CODE" >> "$RC_FILE"
             echo "RIG_RC_$i=$CODE" >> "$GITHUB_ENV"
