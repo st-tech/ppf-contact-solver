@@ -218,12 +218,23 @@ try:
     assigned_mod = p1.modifiers.new(pc2.MODIFIER_NAME, "MESH_CACHE")
     assigned_mod.filepath = "//data/clear_anim_poll/assigned_missing.pc2"
     # The copy points at the path from the report: a file that never existed.
-    dup.modifiers.get(pc2.MODIFIER_NAME).filepath = "//aa.pc2"
+    dup_mod = dup.modifiers.get(pc2.MODIFIER_NAME)
+    dup_mod.filepath = "//aa.pc2"
+    # RESOLVE BOTH PATHS AND TEST FOR THEM EXACTLY. A substring test cannot
+    # express "this path is absent", because an assigned object contributes
+    # TWO candidates: its `mod.filepath` and its canonical `<uuid>.pc2`. A v4
+    # UUID ends in `aa` once every 256 runs, and `"aa.pc2" in m` then matched
+    # the ASSIGNED object's own canonical candidate and read as the copy being
+    # counted. `bpy.path.abspath` is the same call the resolver makes, so
+    # equality here is exact. Blender CI run 35454255813 lost Linux shard 0 to
+    # the UUID `6ef3b326-...-461ab5aa`.
+    assigned_path = bpy.path.abspath(assigned_mod.filepath)
+    dup_path = bpy.path.abspath(dup_mod.filepath)
     missing = solver._find_missing_pc2_paths(ctx)
     record("I_missing_pc2_warning_ignores_unassigned_copy",
-           any(m.endswith("assigned_missing.pc2") for m in missing)
-           and not any("aa.pc2" in m for m in missing),
-           {"missing": missing})
+           assigned_path in missing and dup_path not in missing,
+           {"missing": missing, "assigned_path": assigned_path,
+            "copy_path": dup_path})
 
     # J: and it goes quiet once the assigned cache is cleared, even though
     #    the copy keeps its broken modifier. Warning about a path that Clear
