@@ -142,8 +142,8 @@ def run(ctx: r.ScenarioContext) -> dict:
         return r.failed(
             [str(e)],
             notes=[
-                f"stdout (tail): {open(bspec.stdout_path).read()[-1500:]!r}",
-                f"stderr (tail): {open(bspec.stderr_path).read()[-1500:]!r}",
+                f"stdout (tail): {r.log_tail(bspec.stdout_path)!r}",
+                f"stderr (tail): {r.log_tail(bspec.stderr_path)!r}",
             ],
         )
 

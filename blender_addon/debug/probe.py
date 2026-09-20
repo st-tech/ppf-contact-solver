@@ -99,7 +99,7 @@ class _Probe:
             **data,
         }
         try:
-            with open(self.events_path, "a") as f:
+            with open(self.events_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(line) + "\n")
             with self.lock:
                 self.event_count += 1
@@ -116,7 +116,7 @@ class _Probe:
         with self.lock:
             self.assertions.append(record)
         try:
-            with open(self.assertions_path, "a") as f:
+            with open(self.assertions_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")
         except OSError as e:
             self.errors.append(f"assertion write: {e}")
@@ -436,7 +436,7 @@ class _Probe:
             "assertions_path": self.assertions_path,
         }
         try:
-            with open(self.summary_path, "w") as f:
+            with open(self.summary_path, "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=2)
         except OSError as e:
             summary.setdefault("errors", []).append(f"summary write: {e}")

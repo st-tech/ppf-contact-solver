@@ -36,6 +36,7 @@ from . import rig_coincident_contact_pair
 from . import rig_backend_cleared_midflight
 from . import rig_device_diagnostic_channel
 from . import rig_launch_config
+from . import rig_log_decoding
 from . import rig_solver_log_format
 from . import rig_remote_kill_port_scope
 from . import rig_session_artifact_identity
@@ -363,6 +364,13 @@ REGISTRY = {
     # parsing, display probing). Server-only so it does not need the
     # Blender it configures.
     "rig_launch_config": rig_launch_config,
+
+    # How the rig DECODES the logs it collects. Every one of them comes
+    # from another process and is UTF-8; reading them under the host's
+    # locale killed a whole Windows shard on one byte of a tqdm bar. The
+    # check runs in a child under the C locale so it fails on a POSIX rig
+    # too, where `open()` defaults to UTF-8 and would agree by accident.
+    "rig_log_decoding": rig_log_decoding,
 
     # The identity the runner's cached session artifacts carry, driven
     # through the real fetch entry points against a fake backend. Needs

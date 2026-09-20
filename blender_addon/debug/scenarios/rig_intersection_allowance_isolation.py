@@ -448,7 +448,8 @@ if run_session is not None:
         pass
     finished = bool(run_session.finished())
     try:
-        with open(os.path.join(run_session.info.path, "stdout.log")) as _log:
+        with open(os.path.join(run_session.info.path, "stdout.log"),
+                  encoding="utf-8", errors="replace") as _log:
             solver_log = _log.read()
     except OSError:
         solver_log = ""

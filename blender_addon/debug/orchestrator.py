@@ -51,6 +51,29 @@ SOLVER_EXE = "ppf-contact-solver.exe" if os.name == "nt" else "ppf-contact-solve
 # (`frontend._PROBE_TIMEOUT_S`).
 _PROBE_TIMEOUT_S = 120
 
+# EVERY FILE THIS MODULE READS AS TEXT WAS WRITTEN BY ANOTHER PROCESS, so the
+# rig decodes them as UTF-8 and never as the locale's encoding. The server's
+# `stdout.log` and `stderr.log` are opened "wb" and carry whatever the Rust
+# server emitted, which includes the build worker's tqdm bars; Blender and the
+# solver are UTF-8 writers too. `open()` with no encoding picks
+# `locale.getpreferredencoding()`, which is cp1252 on the Windows rigs, and
+# cp1252 leaves five bytes undefined. A tqdm bar whose filled fraction is not a
+# whole eighth of its width draws a PARTIAL block, and U+258D encodes to
+# `e2 96 8d`: byte 0x8d, undefined in cp1252. Decoding that raised
+# UnicodeDecodeError, which is a ValueError and not an OSError, so it went
+# straight past `_read_text`'s guard, out of `run_one` and out of `main`.
+# Blender CI run 35448531061 died 30 scenarios into its Windows shard 3 that
+# way, and the 26 of 55 it had not reached reported no verdict at all.
+#
+# `errors="replace"` is deliberate and is not hiding a defect: these files are
+# EVIDENCE, read so a human can see what a run did. A byte that is not valid
+# UTF-8 is a byte of a log, and a run that crashed mid-write leaves plenty of
+# them; losing one to U+FFFD costs a character of a progress bar, while raising
+# costs every scenario the rig had left. Decisions are never taken on this
+# text, only reported.
+_LOG_ENCODING = "utf-8"
+_LOG_ERRORS = "replace"
+
 
 def _backend_rule():
     """``frontend/_backends_.py``, loaded by path.
@@ -104,7 +127,8 @@ def _run_solver(directory: str, flag: str) -> subprocess.CompletedProcess:
     env["PATH"] = directory + os.pathsep + env.get("PATH", "")
     return subprocess.run(
         [os.path.join(directory, SOLVER_EXE), flag], capture_output=True,
-        text=True, timeout=_PROBE_TIMEOUT_S, env=env,
+        text=True, encoding=_LOG_ENCODING, errors=_LOG_ERRORS,
+        timeout=_PROBE_TIMEOUT_S, env=env,
     )
 
 
@@ -336,6 +360,7 @@ def warmup_addon_install(*, timeout: float = 60.0) -> tuple[bool, str]:
              "--python-expr",
              "import cbor2; print('CBOR2_OK ' + getattr(cbor2, '__version__', '?'))"],
             capture_output=True, text=True, timeout=timeout,
+            encoding=_LOG_ENCODING, errors=_LOG_ERRORS,
         )
     except subprocess.TimeoutExpired as e:
         return False, f"Blender warmup timed out after {timeout}s\n{e}"
@@ -383,6 +408,8 @@ def precompile_numba(*, python: str = DEFAULT_PYTHON,
             timeout=timeout,
             capture_output=True,
             text=True,
+            encoding=_LOG_ENCODING,
+            errors=_LOG_ERRORS,
         )
     except subprocess.TimeoutExpired as e:
         return False, f"numba precompile timed out after {timeout}s\n{e}"
@@ -560,7 +587,8 @@ def _wait_for_server_ready(spec: WorkerSpec, *, timeout: float = 15.0) -> None:
     while time.monotonic() < deadline:
         if os.path.exists(progress_path):
             try:
-                with open(progress_path) as f:
+                with open(progress_path, encoding=_LOG_ENCODING,
+                          errors=_LOG_ERRORS) as f:
                     if "SERVER_READY" in f.read():
                         # Confirm the socket actually accepts.
                         try:
@@ -604,7 +632,7 @@ def _read_text(path: str) -> str:
     if not os.path.exists(path):
         return ""
     try:
-        with open(path) as f:
+        with open(path, encoding=_LOG_ENCODING, errors=_LOG_ERRORS) as f:
             return f.read()
     except OSError as e:
         return f"<read failed: {e}>"
@@ -1048,7 +1076,8 @@ def run_many(scenario_names: list[str], *,
     ok, numba_log = precompile_numba(python=python)
     if not ok:
         log_path = os.path.join(run_root, "numba_precompile.log")
-        with open(log_path, "w") as f:
+        with open(log_path, "w", encoding=_LOG_ENCODING,
+                  errors=_LOG_ERRORS) as f:
             f.write(numba_log)
         print(f"[orchestrator] numba precompile FAILED. log: {log_path}")
         print(numba_log[-2000:])
@@ -1208,10 +1237,11 @@ def run_many(scenario_names: list[str], *,
     if report_path:
         os.makedirs(os.path.dirname(os.path.abspath(report_path)) or ".",
                     exist_ok=True)
-        with open(report_path, "w") as f:
+        with open(report_path, "w", encoding=_LOG_ENCODING) as f:
             json.dump(summary, f, indent=2)
     # Always drop a copy inside the run dir so artifacts stay co-located.
-    with open(os.path.join(run_root, "report.json"), "w") as f:
+    with open(os.path.join(run_root, "report.json"), "w",
+              encoding=_LOG_ENCODING) as f:
         json.dump(summary, f, indent=2)
 
     return summary

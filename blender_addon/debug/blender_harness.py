@@ -444,7 +444,7 @@ DRIVER_PATH = {driver_path!r}
 
 def _write_result(result):
     try:
-        with open(RESULT_PATH, "w") as f:
+        with open(RESULT_PATH, "w", encoding="utf-8") as f:
             json.dump(result, f, default=str)
     except OSError as exc:
         print(f"bootstrap: result write failed: {{exc}}",
@@ -760,7 +760,8 @@ def wait_for_result(spec: BlenderSpec, proc: subprocess.Popen, *,
             parsed: dict | None = None
             for _ in range(20):
                 try:
-                    with open(spec.result_path) as f:
+                    with open(spec.result_path, encoding="utf-8",
+                              errors="replace") as f:
                         parsed = json.load(f)
                     break
                 except (OSError, ValueError):

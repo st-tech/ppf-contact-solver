@@ -55,7 +55,8 @@ class ScenarioContext:
     def log(self, message: str) -> None:
         line = f"[{time.strftime('%H:%M:%S')}] {message}\n"
         if self.log_path:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8",
+                      errors="replace") as f:
                 f.write(line)
 
 
@@ -195,6 +196,25 @@ def passed(notes: list[str] | None = None) -> dict:
 
 def failed(violations: list[str], notes: list[str] | None = None) -> dict:
     return {"status": "fail", "violations": violations, "notes": notes or []}
+
+
+def log_tail(path: str, limit: int = 1500) -> str:
+    """The last *limit* characters of a log ANOTHER PROCESS wrote.
+
+    Blender's ``stdout.log`` and ``stderr.log`` are opened "wb" by the
+    harness, so what is on disk is that process's own bytes, and it writes
+    UTF-8 whatever the host's locale says. Reading them under
+    `locale.getpreferredencoding()` is what ended Blender CI run
+    35448531061's Windows shard: cp1252 leaves byte 0x8d undefined, a tqdm
+    partial block emits one, and the UnicodeDecodeError is a ValueError that
+    no OSError guard catches. A scenario reads these on its FAILURE path,
+    where raising would throw away the failure it was called to report.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return handle.read()[-limit:]
+    except OSError as error:
+        return f"<{path} unreadable: {error}>"
 
 
 # ---------------------------------------------------------------------------
