@@ -30,7 +30,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## ✨ Highlights
 
-- **💪 100% Penetration-Free Upon Success**: No snagging intersections. <sup>[[1]](#note-penetration-free)</sup>
+- **💪 100% Penetration-Free Upon Success**: No snagging intersections [(Details)](#-our-penetration-free-guarantee).
 - **🦀 Rust-First**: We minimize the use of C++ to maximize safety. No performance compromised.
 - **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
 - **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
@@ -52,16 +52,19 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - **✨ Stay Clean**: You can remove all traces after use.
 - **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
 
-> <a name="note-penetration-free"></a>[1] **What the guarantee means:**
->
-> We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, whenever a solution is found. A solution may not be found in extreme cases, for example:
->
-> - The target contact thickness is atom-level thin, with the object size being on the order of meters.
-> - An object collides at the speed of light, with the step size being 0.01 seconds.
->
-> In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. What we guarantee is that every step that succeeds is free of intersections. An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
->
-> **Intersection errors can also indicate an impossible setup**, such as pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) or cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
+### 🔒 Our Penetration-free Guarantee
+
+We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, **only when a solution is found.** A solution may not be found in extreme cases, for example:
+
+- The target contact thickness is atom-level thin, with the object size being on the order of meters.
+- An object collides at the speed of light, with the step size being 0.01 seconds.
+- Objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
+
+In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.** An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
+
+#### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
+
+Examples include pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) and cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
 
 ### 🚧 Gentle Disclaimer and Limitations
 
