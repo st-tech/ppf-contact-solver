@@ -981,6 +981,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Question | Answer |
 | --- | --- |
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
+| Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. |
 | Is this better than &lt;Your Favorite Product&gt;? | Probably not. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
