@@ -41,6 +41,35 @@ solver.param.air_density  = 0.001225
 transparently. See [Scene Parameters](../workflow/params/scene.md) for
 the full list.
 
+### Connection Settings
+
+The same proxy reaches the **Backend Communicator**'s own properties, so
+a script can set up a connection and open it without touching the panel.
+`solver.connect()` falls through to the operator and starts the
+connection with whatever these hold:
+
+```python
+solver.param.server_type       = "LINUX_NATIVE"   # or WIN_NATIVE, MAC_NATIVE,
+                                                  # CUSTOM, COMMAND, DOCKER,
+                                                  # DOCKER_SSH, DOCKER_SSH_COMMAND
+solver.param.linux_native_path = "~/ppf-contact-solver"
+solver.param.native_device     = "CPU"            # or "GPU"
+solver.param.native_gpu_backend = "AUTO"          # or "CUDA", "ROCM"
+solver.param.docker_port       = 9090
+solver.connect()
+```
+
+`native_device` and `native_gpu_backend` name which **build** of the
+solver runs, and are read when the server is spawned rather than at
+connect; see {ref}`Choosing the build <choosing-the-build>`. The
+identifiers above are the enum values stored in the `.blend`, not the
+labels the panel shows, and `docker_port` is the server port for every
+connection type despite its name.
+
+MCP exposes the same thing as one tool per type -- `connect_ssh`,
+`connect_docker`, `connect_win_native`, `connect_mac_native`,
+`connect_linux_native` -- which set these properties and then connect.
+
 ### Dynamic Parameters
 
 :::{note}

@@ -72,7 +72,7 @@ table, one required discriminator and up to fifteen connection fields:
 
 | TOML key | Notes |
 | -------- | ----- |
-| `type` | Required. One of `Local`, `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`, `macOS Native`. |
+| `type` | Required. One of `SSH`, `SSH Command`, `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows Native`, `macOS Native`, `Linux Native`. The retired `Local` is still accepted; see below. |
 | `host` | SSH host / alias. |
 | `port` | SSH port. |
 | `username` | SSH user. |
@@ -82,9 +82,10 @@ table, one required discriminator and up to fifteen connection fields:
 | `container` | Docker container name. |
 | `remote_path` | Remote solver directory for SSH. |
 | `docker_path` | Solver directory inside a Docker container. |
-| `local_path` | Local solver directory. |
 | `win_native_path` | Windows solver root. |
 | `mac_native_path` | macOS solver root. |
+| `linux_native_path` | Linux solver root. |
+| `local_path` | Retired. The solver directory of the old `Local` type; see below. |
 | `docker_port` | Server TCP port (1024-65535). Applies to every type, not just the Docker ones. |
 | `solver_gpu` | CUDA device index for the solver, or `-1` for Automatic. Kept for display and backward compatibility. |
 | `solver_gpu_uuid` | Stable UUID of the selected GPU. This is the identity actually used at **Start Server on Remote**. An entry that carries `solver_gpu` but no `solver_gpu_uuid` clears the saved UUID. |
@@ -93,16 +94,38 @@ Unknown keys are silently ignored, so it is safe to sprinkle comments
 or future additions in the file.
 
 **Compute Device** and **GPU Backend** are not among them. They sit in
-the Connection box on the two native types but are not written to a
-profile, so loading an entry leaves whatever they are set to now.
+the Connection box on every connection type -- see
+{ref}`Choosing the build <choosing-the-build>` -- but are not written to
+a profile, so loading an entry leaves whatever they are set to now.
+
+### The retired `Local` type
+
+`Local` is no longer offered in the panel, but a profile is a file you
+wrote and keep, so an entry that still names it keeps working. It is
+applied as this platform's native type -- `Windows Native` on Windows,
+`macOS Native` on macOS, `Linux Native` everywhere else -- and a
+`local_path` key lands on that platform's path field. Refusing it
+instead would report your own file as invalid, when what actually
+happened is that the type moved; see
+{ref}`The retired Local type <retired-local>`.
+
+An entry that carries both `local_path` and the current key for the
+platform reading it keeps the current one. Otherwise `local_path` is
+applied whenever it is present, because every key in a profile is an
+explicit choice you just made and outranks whatever the panel held a
+moment ago.
+
+Saving that entry back writes the current type name and path key, so a
+round-trip through the **Save** icon is how a profile stops carrying the
+retired spelling.
 
 ## Example
 
 ```toml
 # connections.toml -- one entry per environment
-[Local]
-type = "Local"
-local_path = "~/ppf-contact-solver"
+[Workstation Linux]
+type = "Linux Native"
+linux_native_path = "~/ppf-contact-solver"
 docker_port = 9090
 
 [LocalDocker]
@@ -139,6 +162,11 @@ docker_port = 9090
 [Workstation Windows]
 type = "Windows Native"
 win_native_path = "C:\\Users\\alice\\ppf-win"
+docker_port = 9090
+
+[Workstation Mac]
+type = "macOS Native"
+mac_native_path = "~/ppf-contact-solver-macos"
 docker_port = 9090
 ```
 
@@ -186,9 +214,9 @@ loss.
 **`type` validation**
 
 The `type` value in each TOML entry must exactly match one of the
-server-type strings listed in the **File format** table. Any other
-value causes `apply_profile` to return early, before it touches
-anything: the previously selected connection type and every other field
-on screen are left as they were, none of the entry's values are
-applied, and no error is reported.
+server-type strings listed in the **File format** table, or the retired
+`Local`. Any other value causes `apply_profile` to return early, before
+it touches anything: the previously selected connection type and every
+other field on screen are left as they were, none of the entry's values
+are applied, and no error is reported.
 :::

@@ -93,23 +93,7 @@ with `docker run -p <port>:<port>` (or update `compose.yaml`).
 `docker version` should work as the same user. On Linux: `sudo usermod
 -aG docker $USER`, then log out and back in.
 
-## Connection: Windows Native
-
-### "Solver path is not set" / "ppf-cts-server.exe not found under the solver root"
-
-Set **Solver Path** to the directory that contains `ppf-cts-server.exe`.
-
-### "Embedded Python not found"
-
-Neither the dev layout (`build-win-native\python\python.exe`) nor the
-bundle layout (`python\python.exe`) resolved. Rebuild the dev tree, or
-unpack the shipped bundle zip next to `ppf-cts-server.exe`.
-
-### CUDA DLL load errors
-
-`server.log` shows a missing CUDA runtime DLL. The bundle layout
-expects CUDA on the system `PATH`; install a matching CUDA runtime, or
-switch to the developer build (which ships its own).
+## Connection: the solver path
 
 ### "Remote path not found (.../ppf-cts-server)"
 
@@ -117,13 +101,99 @@ The post-connect check looks for `<path>/target/release/ppf-cts-server`
 and did not find it. Point **Remote Path** / **Container Path** at the
 solver root - the directory that has `target/release/` under it, for
 example `/root/ppf-contact-solver` - not at `target/release` itself.
-Only the SSH and Docker types raise this message. The three co-located
-types each name the layouts they accept instead: **Local** reports
-"ppf-cts-server not found under ... in any layout" and lists them,
+Only the SSH and Docker types raise this message, and they raise it
+naming every layout they searched: `target/release`,
+`target/cuda/release`, `target/rocm/release`, and `target/cpu/release`.
+The three native types each name the layouts they accept instead:
 **Windows Native** reports "ppf-cts-server.exe not found under ..." for
-a **Solver Path** with no binary under `target\release\` or `bin\`, and
-**macOS Native** reports "ppf-cts-server not found under ..." for one
-with none under `target/release/`.
+a **Solver Path** with no binary under `target\release\`, a per-backend
+`target\<backend>\release\`, `target\cpu\release\`, or `bin\`;
+**macOS Native** and **Linux Native** report "ppf-cts-server not found
+under ..." for one with none under the POSIX equivalents (`bin/` is not
+a server directory on either).
+
+A folder that does hold a solver, but not for the **Compute Device** or
+**GPU Backend** you selected, is refused with a different message that
+names what is there; see
+{ref}`Choosing the build <choosing-the-build>`.
+
+## Connection: the native types
+
+These apply to **Windows Native**, **macOS Native**, and **Linux
+Native** -- the three types whose solver is a child process on the
+machine Blender runs on. See [Windows](connections/windows.md),
+[macOS](connections/macos.md), and [Linux](connections/linux.md).
+
+### "Solver path is not set" / "ppf-cts-server not found under ..."
+
+Set **Solver Path** to the root directory that holds the server, not to
+the `target/release` inside it and not to the folder you extracted the
+archive into. A subfolder is resolved upward automatically, so this
+message means no ancestor within six levels held a solver in any
+accepted layout.
+
+### "... holds the CPU build of the solver and no GPU build"
+
+The folder is right and **Compute Device** is not. Set it to the build
+that is actually there, or point **Solver Path** at a folder that has
+the one you want. The reverse message appears for a GPU-only folder with
+`CPU` selected. The add-on never runs the other build silently; see
+{ref}`Choosing the build <choosing-the-build>`.
+
+### "... holds these GPU builds: cuda, and no rocm build"
+
+Same situation one level down: **GPU Backend** names an accelerator this
+folder does not carry. Set it to one of the builds named, or to
+`Automatic`.
+
+### "No GPU build in this folder has a usable device"
+
+Raised at **Start Server on Remote** when **GPU Backend** is
+`Automatic`, the folder holds more than one GPU build, and none of them
+reports a device it can run on. The message carries what each backend
+said. Fix the driver, or set **Compute Device** to `CPU`.
+
+### "A solver server is already running on port N, and its runs use ..."
+
+A `ppf-cts-server` the add-on did not launch is on the port, running a
+different build from the one **Compute Device** names. Attaching to it
+would run every solve on that other build, so it is refused; the message
+names both build directories and the way out. See
+{ref}`Attaching to a running server <attach-mismatch>`.
+
+### "Embedded Python not found" (Windows)
+
+Neither the dev layout (`build-win-native\python\python.exe`) nor the
+bundle layout (`python\python.exe`) resolved. Rebuild the dev tree, or
+unpack the shipped bundle zip next to `ppf-cts-server.exe`.
+
+On macOS and Linux the equivalent is silent: the add-on names
+`<root>/python/bin/python3` for a distribution and
+`~/.local/share/ppf-cts/venv/bin/python` for a checkout, and if neither
+exists the build worker reports the missing module itself. A
+distribution complaining about a module it ships (for example
+`No module named 'pytetwild'`) means the wrong interpreter was picked --
+check whether `PPF_CTS_BUILD_PYTHON` is set in the environment Blender
+inherited, since an inherited value wins.
+
+### CUDA DLL load errors (Windows)
+
+`server.log` shows a missing CUDA runtime DLL. The shipped distribution
+carries the runtime in `bin\`, which the launcher puts on `PATH`, so
+this normally means the folder is incomplete or the NVIDIA driver is
+missing or too old. Update the driver, re-extract the distribution, or
+set **Compute Device** to `CPU`.
+
+### "... entries are still marked com.apple.quarantine" (macOS)
+
+The add-on clears the download mark from a packaged distribution before
+spawning, but could not write to this folder -- which is what a folder
+owned by another user or on a read-only volume looks like. Move it
+somewhere you own, or clear it yourself:
+
+```bash
+xattr -s -d -r com.apple.quarantine "<root>"
+```
 
 ## Connection profiles
 
@@ -136,9 +206,10 @@ are unclosed quotes or unescaped backslashes in Windows paths (use
 
 ### Profile loads but fields stay blank
 
-The `type` value does not match one of `Local`, `SSH`, `SSH Command`,
+The `type` value does not match one of `SSH`, `SSH Command`,
 `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows
-Native`, `macOS Native`. Case matters.
+Native`, `macOS Native`, `Linux Native`, or the retired `Local`. Case
+matters.
 
 :::{note}
 **Save** rewrites the whole TOML; comments and original formatting are
@@ -153,26 +224,42 @@ You connected but did not click **Start Server on Remote**, or
 `ppf-cts-server` exited before booting. Click **Start Server on
 Remote**; if it then times out, see the next entry.
 
+### "Connection timed out" / Cancel
+
+A connect that has not completed in 60 seconds is torn down and reported
+as *Connection timed out*; pressing **Cancel** under the status line
+does the same thing sooner. Either way the attempt is ended rather than
+abandoned, so the next **Connect** starts from a clean state. A connect
+that hangs this way is usually a host that is not up, a firewall
+swallowing the SSH port, or a jump host that cannot be reached.
+
 ### "Server startup timed out"
 
 Sixteen seconds passed without a ready marker. The panel pastes the
-last 20 lines of `server.log`. Usual causes:
+last 20 lines of `server.log`, and **Cancel** under the status line
+stops waiting and stops the server. Usual causes:
 
-- venv missing at `$HOME/.local/share/ppf-cts/venv`
-- CUDA driver missing or mismatched
+- the build worker's interpreter is missing: for the remote types that
+  is the venv at `$HOME/.local/share/ppf-cts/venv`; for the native
+  types it is `<root>/python/bin/python3` in a distribution or the same
+  venv in a checkout
+- GPU driver missing or mismatched
 - the bound port is already in use (every backend takes the port from
   **Docker Port**, which the panel draws only for the Docker types)
 
 ### "Port N is in use"
 
 Something is already bound to the port the server was told to use.
-The two native types, Windows Native and macOS Native, raise this.
+The three native types -- Windows Native, macOS Native, and Linux
+Native -- raise this.
 Each first probes the port: if it answers a ppf-cts-server protocol
 ping, the add-on attaches to that running server instead of erroring
 out (this is what lets you restart Blender without losing the
 server). If the holder is not a
 ppf-cts-server, the panel surfaces the error and shows a **Force
-Terminate Process** button. Clicking it walks the process tree and
+Terminate Process** button beside it, at panel level rather than inside
+the collapsible Connection box, with one line under it saying what is
+actually on the port. Clicking it walks the process tree and
 force-kills the listener on that port. If the squatter is not yours,
 stop it by hand, or move the solver off that port: the field that
 carries the port for every backend (**Docker Port**) is one shared
@@ -488,7 +575,7 @@ tool for the case where the server will not start: list the venv, run
 inside the container, not on the daemon host. **Run as Shell**, on by
 default, is what makes pipes, redirection and `&&` work - it wraps the
 command in `/bin/sh -c` on the SSH and Docker backends and hands it to a
-shell on the three co-located ones (Local, Windows Native, macOS
+shell on the three native ones (Windows Native, macOS Native, Linux
 Native) - and there is rarely a reason to untick it.
 
 ### Data Transfer Tests
@@ -513,8 +600,8 @@ is the number to compare against when a transfer merely feels slow.
 same Blender session: the reference copy it compares against is held in
 memory, so before then there is nothing to check a download against.
 Both need the server running, not just a connection. Two things worth
-knowing before you read the result: on the three co-located backends
-(Local, Windows Native, macOS Native) the payload is written straight
+knowing before you read the result: on the three native backends
+(Windows Native, macOS Native, Linux Native) the payload is written straight
 to the filesystem instead of through the socket (unless `PPF_FORCE_TCP_TRANSFER=1` is set in the
 environment), so there the round trip measures a file copy rather than a
 network; and the test file is left behind in the remote root - nothing

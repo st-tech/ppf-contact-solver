@@ -21,8 +21,9 @@ first_simulation
 ## Where to Go Next
 
 - **[Connections](../connections/index.md)**: set up the backend that matches
-  your environment (local, SSH, Docker, Windows native), and learn how
-  connection profiles let you switch between them in one click.
+  your environment (a native type on this machine, SSH, or Docker), pick
+  which build of the solver it runs, and learn how connection profiles
+  let you switch between them in one click.
 - **[Workflow](../workflow/index.md)**: material parameters, pin operations,
   keyframed scene parameters, invisible colliders, snap-and-merge, and the
   full lifecycle from **Transfer** through **Fetch**.

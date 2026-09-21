@@ -59,15 +59,15 @@
   <text x="732" y="48" class="note">TCP to ppf-cts-server</text>
 
   <!-- ============ Row 1: Local ============ -->
-  <text x="20" y="90" class="mode-title">Local</text>
+  <text x="20" y="90" class="mode-title">Linux Native  /  macOS Native</text>
   <text x="20" y="108" class="mode-sub">Add-on and <tspan class="lbl-mono">ppf-cts-server</tspan> share one workstation. Loopback TCP, no transport boundary.</text>
 
   <rect x="20" y="120" width="860" height="72" rx="8" class="machine-box" />
-  <text x="36" y="138" class="machine-lbl">Blender workstation</text>
+  <text x="36" y="138" class="machine-lbl">Blender workstation (Linux / macOS)</text>
 
   <rect x="60"  y="146" width="230" height="40" rx="6" class="hdr-addon" />
   <text x="175" y="163" text-anchor="middle" class="hdr-title">Blender + add-on</text>
-  <text x="175" y="179" text-anchor="middle" class="hdr-sub">local subprocess + socket</text>
+  <text x="175" y="179" text-anchor="middle" class="hdr-sub">child process + socket</text>
 
   <rect x="620" y="146" width="230" height="40" rx="6" class="hdr-container" />
   <text x="735" y="163" text-anchor="middle" class="hdr-title">ppf-cts-server</text>
@@ -75,7 +75,7 @@
 
   <line x1="290" y1="158" x2="620" y2="158" class="arr-ctl" marker-end="url(#f-arrow-b)" />
   <line x1="290" y1="174" x2="620" y2="174" class="arr-data" marker-end="url(#f-arrow-p)" />
-  <text x="455" y="154" text-anchor="middle" class="lbl-mono">nohup ./ppf-cts-server</text>
+  <text x="455" y="154" text-anchor="middle" class="lbl-mono">spawn ppf-cts-server</text>
   <text x="455" y="188" text-anchor="middle" class="lbl-mono">socket to localhost:&lt;port&gt;</text>
 
   <!-- ============ Row 2: SSH / SSH Command ============ -->

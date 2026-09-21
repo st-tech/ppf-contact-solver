@@ -1,17 +1,18 @@
 # 🔒 Security
 
-Most connection types ([SSH](connections/ssh.md),
+Four connection types ([SSH](connections/ssh.md),
 [SSH Command](connections/ssh.md#setup---command-mode),
 [Docker over SSH](connections/docker_over_ssh.md#setup---custom-mode), and
 [Docker over SSH Command](connections/docker_over_ssh.md#setup---command-mode))
-reach the solver over a network, so the add-on's security story is
-mostly the SSH endpoint's security story. This page collects the things
+reach the solver over a network, so for those the add-on's security
+story is mostly the SSH endpoint's security story. This page collects the things
 you need to know before pointing it at a host you do not fully control,
 or a host that is reachable from the wider internet.
 
-If you use [Local](connections/local.md),
-[Windows Native](connections/windows.md), or
-{ref}`macOS Native <macos-native>` the network-attacker sections
+If you use one of the three native types --
+[Windows Native](connections/windows.md),
+{ref}`macOS Native <macos-native>`, or
+[Linux Native](connections/linux.md) -- the network-attacker sections
 below do not apply: the solver is a child process on your own machine
 and no TCP socket leaves it. [Docker (Local)](connections/docker.md)
 sits in between: there is no SSH hop, but the server runs inside a
@@ -39,8 +40,8 @@ The important consequence: when you run Docker-over-SSH or plain SSH,
 the solver's TCP socket never crosses an untrusted network directly.
 paramiko opens a `direct-tcpip` channel to `localhost:<server_port>`
 *on the remote*. By default `ppf-cts-server` binds to `127.0.0.1`
-(loopback only) on the remote in plain SSH, Local, Windows Native, and
-macOS Native modes, so the SSH tunnel is the only way in. In Docker-family modes
+(loopback only) on the remote in plain SSH and in the three native
+modes, so the SSH tunnel is the only way in. In Docker-family modes
 the add-on launches `ppf-cts-server` with `--host 0.0.0.0` *inside the
 container*
 because docker `-p HOST:CONTAINER` forwards traffic to the container's
@@ -138,8 +139,8 @@ from depends on how the backend is deployed, not on the add-on:
   can expose the solver to any network that reaches that host. Prefer
   `-p 127.0.0.1:9090:9090` so the publish is loopback-only; the add-on
   will still reach it over the SSH tunnel.
-- **Windows Native / macOS Native / Local.** The server binds to the
-  local machine only (loopback). No container and no host firewall
+- **Windows Native / macOS Native / Linux Native.** The server binds to
+  the local machine only (loopback). No container and no host firewall
   change to worry about.
 
 A quick check on the remote (or inside the container):
@@ -147,7 +148,7 @@ A quick check on the remote (or inside the container):
 ```bash
 # On the solver host (plain SSH) or inside the container (Docker)
 ss -tlnp | grep 9090
-# LISTEN 0 ... 127.0.0.1:9090 ...  → loopback-only (default for plain SSH / Local / Windows / macOS)
+# LISTEN 0 ... 127.0.0.1:9090 ...  → loopback-only (default for plain SSH and the three native types)
 # LISTEN 0 ... 0.0.0.0:9090   ...  → all interfaces (default inside Docker; host -p mapping controls external exposure)
 ```
 
@@ -195,7 +196,7 @@ For a safer shared setup:
 - Give them distinct server ports too where you can, but note that the
   panel only draws the port field (**Docker Port**) in the
   Docker-family modes. One shared property sits behind that field, so on
-  SSH, SSH Command, Local, Windows Native, and macOS Native the port is
+  SSH, SSH Command, and the three native types the port is
   whatever it was last set to (`9090` by default): set it from a Docker mode and
   switch back, or give each entry its own with a
   [connection profile](connections/profiles.md)'s `docker_port` key.

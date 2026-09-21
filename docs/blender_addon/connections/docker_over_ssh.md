@@ -64,8 +64,16 @@ highlighted.
 | Field | Description |
 | ----- | ----------- |
 | Container | Container name on the *remote* Docker daemon. Must already exist. |
-| Container Path | Working directory **inside** the remote container that holds the `ppf-cts-server` binary. |
+| Container Path | Working directory **inside** the remote container that holds `ppf-cts-server`, under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`. |
 | Docker Port | Port inside the container where `ppf-cts-server` listens. Must be published on the container with `-p`. |
+
+Two more rows appear in the Connection box **once you are connected**:
+**Compute Device** (`GPU` or `CPU`) and, where the container holds more
+than one GPU build, **GPU Backend** (`Automatic`, `CUDA`, or `ROCm`).
+The builds are on the remote host, so the add-on lists them with one
+command at **Connect** and caches the answer; the choice is applied at
+**Start Server on Remote**. See
+{ref}`Choosing the build <choosing-the-build>`.
 
 :::{warning}
 The server port must be published on the container (`-p 9090:9090` or
@@ -148,8 +156,9 @@ an existing container.
 
 **Server startup path**
 
-Docker over SSH uses the same Unix server-launch path as the SSH and
-Local backends (see {ref}`Connections - Under the hood <connections-under-the-hood>`):
-a small script inside the container launches `ppf-cts-server` on the
-configured port and the UI waits up to 16 s for readiness.
+Docker over SSH uses the same Unix server-launch path as the SSH
+backends (see {ref}`Connections - Under the hood <connections-under-the-hood>`):
+a small script inside the container launches the `ppf-cts-server` that
+**Compute Device** and **GPU Backend** resolve to, on the configured
+port, and the UI waits up to 16 s for readiness.
 :::

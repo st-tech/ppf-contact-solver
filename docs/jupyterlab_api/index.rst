@@ -31,6 +31,33 @@ build: ``app = App.load("my-project")``, then
 ``session = app.session.create(scene)``,
 ``session.param.set("dt", 0.01)``, then ``session.build().run()``.
 
+Which backend a notebook runs on
+--------------------------------
+
+A tree or distribution can hold several solver builds at once -- CUDA,
+ROCm, Metal, and the portable CPU build, one per directory. The panel's
+**Compute Device** and **GPU Backend** rows answer that question for a
+connection; a notebook answers it with four module-level functions:
+
+.. code-block:: python
+
+   import frontend
+
+   frontend.list_backends()      # {'cuda': '.../target/cuda/release', ...}
+   frontend.probe_backend("rocm")  # can this machine run that build?
+   frontend.get_backend()        # what the next run will use
+   frontend.set_backend("rocm")  # pin it; None returns to the automatic rule
+
+The automatic rule is the same one the add-on applies: the first of
+CUDA, ROCm, and Metal whose own solver reports a usable device, and the
+CPU build if none does, with one line printed naming what each GPU
+backend said. An **explicit** choice never falls back -- naming a GPU
+backend on a machine that cannot run it raises rather than quietly
+running on the CPU. ``CARGO_TARGET_DIR``, which the add-on sets when it
+launches a server, counts as an explicit choice for the same reason.
+See :doc:`module_reference` for the full signatures, and
+:ref:`choosing-the-build` for the add-on's side of it.
+
 .. toctree::
    :maxdepth: 1
    :caption: Reference

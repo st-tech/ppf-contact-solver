@@ -129,11 +129,11 @@
   <text x="490" y="512" class="lbl-mono">TCP to ppf-cts-server</text>
 
   <!-- ============ Row 4: Transport ============ -->
-  <text x="20" y="548" class="row-lbl">across one of the five transports</text>
+  <text x="20" y="548" class="row-lbl">across one of the six transports</text>
 
   <rect x="30" y="558" width="900" height="46" rx="8" class="box-trans" />
   <text x="480" y="578" text-anchor="middle" class="hdr-title">Transport</text>
-  <text x="480" y="594" text-anchor="middle" class="hdr-mono">Local  /  SSH (+ Command)  /  Docker  /  Docker over SSH (+ Command)  /  Windows Native</text>
+  <text x="480" y="594" text-anchor="middle" class="hdr-mono">SSH (+ Command)  /  Docker  /  Docker over SSH (+ Command)  /  Windows, macOS, Linux Native</text>
 
   <!-- Arrow transport -> server -->
   <line x1="480" y1="604" x2="480" y2="614" class="arr-g" marker-end="url(#e-arrow-g)" />

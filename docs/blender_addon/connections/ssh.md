@@ -63,7 +63,18 @@ screenshot predates it.
 | User | `""` | Remote user. Leave empty to use SSH config's `User`. |
 | SSH Key | `~/.ssh/id_ed25519` or `~/.ssh/id_rsa` | Private key file. |
 | Proxy Jump | `""` | Jump host to tunnel through, written the way `ssh -J` takes it: `[user@]host[:port]`, comma separated for a chain. Leave empty to use the alias's `ProxyJump` from `~/.ssh/config`. See [Jump Hosts](#jump-hosts). |
-| Remote Path | `""` (e.g. `/root/ppf-contact-solver`) | Remote solver directory (must contain the `ppf-cts-server` binary). |
+| Remote Path | `""` (e.g. `/root/ppf-contact-solver`) | Remote solver root: the directory that holds `ppf-cts-server` under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`. Not the `target/release` directory itself. |
+
+Two more rows appear in the Connection box **once you are connected**:
+**Compute Device** (`GPU` or `CPU`) and, on a solver host holding more
+than one GPU build, **GPU Backend** (`Automatic`, `CUDA`, or `ROCm`).
+They are drawn only then because the builds are on the solver host: the
+add-on lists them with one command at **Connect** and caches the answer
+for the life of the connection, rather than reaching across the network
+on every panel redraw. The choice is applied at **Start Server on
+Remote**, so moving a running solver onto another build is Stop Server,
+pick, Start Server. See
+{ref}`Choosing the build <choosing-the-build>`.
 
 The panel does not expose a server port field in SSH modes -- the port
 field is drawn only for the Docker-family types -- so the port used here

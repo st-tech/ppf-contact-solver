@@ -4,7 +4,13 @@
 [ZOZO, Inc](https://corp.zozo.com/en/). The Blender 5.0+ add-on
 documented here is one front-end that ships with the engine: you
 model the scene in Blender, assign material groups and pins, and the
-add-on simulates remotely and fetches the animation back.
+add-on runs the solve -- on a remote host, or on the machine Blender
+runs on -- and fetches the animation back.
+
+The engine runs on NVIDIA GPUs through CUDA, on AMD GPUs through ROCm,
+on Apple silicon through Metal, and on any CPU through a portable
+SIMD build. Which of those a run uses is a per-connection choice; see
+{ref}`Choosing the build <choosing-the-build>`.
 
 If you are new, start with [Getting Started](getting_started/index.md). If you want to
 wire up a specific backend, jump to [Connections](connections/index.md). If you

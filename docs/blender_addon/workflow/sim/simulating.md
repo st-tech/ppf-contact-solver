@@ -536,13 +536,16 @@ to the host where the original run lives.
 ### Port-in-Use on Reconnect
 
 When you restart Blender while a previous `ppf-cts-server` is still
-listening on the configured port (typical for Windows Native and macOS
-Native, where the add-on owns the spawn), **Connect** does not error
+listening on the configured port (typical for the three native types,
+where the add-on owns the spawn), **Connect** does not error
 out: the add-on
 probes the port with a minimal TCMD ping, and if the response
 identifies a live `ppf-cts-server`, it attaches to that process
 instead of spawning a new one. Your previous run is still there,
-ready to **Fetch**. SSH and Docker backends always start the server
+ready to **Fetch**. The one case it refuses is a server running a
+different build from the one **Compute Device** names, since attaching
+would run every solve on that other build; see
+{ref}`Attaching to a running server <attach-mismatch>`. SSH and Docker backends always start the server
 out of band, so attaching is implicit there.
 
 If the port is held by a different process (or by a stale `ppf-cts-server`

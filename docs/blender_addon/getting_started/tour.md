@@ -6,24 +6,33 @@ All panels live in **View3D → Sidebar (`N`) → ZOZO's Contact Solver**.
 
 The main panel. Profile row (Open / Clear / Reload / Save), then a
 collapsible **Connection** box holding the server-type selector
-(**Local**, **SSH**, **SSH Command**, **Docker**, **Docker over SSH**,
-**Docker over SSH Command**, **Windows Native**, **macOS Native**), the
-path fields that type needs, a **GPU** picker naming the CUDA device on
-the solver host (it appears only once you are connected, is disabled
-while the server is running because the choice is applied at Start
-Server, and is not drawn on macOS Native at all; see
-{ref}`Picking a GPU <gpu-picker>`), the **Compute Device** row the two
-native types add and, on a folder holding more than one GPU build, a
-**GPU Backend** row beside it, Project Name,
+(**SSH**, **SSH Command**, **Docker**, **Docker over SSH**,
+**Docker over SSH Command**, **Windows Native**, **macOS Native**,
+**Linux Native**), the
+path fields that type needs, a **Compute Device** row (`GPU` or `CPU`)
+and, where more than one GPU build is available, a **GPU Backend** row
+beside it (see {ref}`Choosing the build <choosing-the-build>`; on the
+three native types both are drawn as soon as **Solver Path** names a
+root, on the remote types only once you are connected), a **GPU**
+picker naming the CUDA device on the solver host (it appears only once
+you are connected, is disabled while the server is running because the
+choice is applied at Start Server, and is drawn neither on macOS Native
+nor for a `CPU` device; see {ref}`Picking a GPU <gpu-picker>`),
+Project Name,
 **Connect** / **Disconnect**, and **Start Server on Remote** / **Stop
 Server on Remote**. Below the box sit the live status line and, as the
 connection and the run supply them, a **Remote Hardware** readout, a
 statistics box (**Realtime Statistics** during a run, **Average
-Statistics** once it ends), and a **Scene Info** box. When a port-in-use
-error is reported, a **Force Terminate Process** button surfaces so you
-can release the port; if the existing process is itself a
-`ppf-cts-server`, the two native types attach to it instead of erroring
-out.
+Statistics** once it ends), and a **Scene Info** box. While a connect or
+a server start is in flight, a **Cancel** button sits under the status
+line and tears the attempt down. When a connection failure or a
+port-in-use error is reported, a **Force Terminate Process** button
+surfaces beside the error -- at panel level, so collapsing the
+Connection box cannot hide it -- with one line under it saying what is
+actually on the port; if the existing process is itself a
+`ppf-cts-server`, the three native types attach to it instead of
+erroring out -- unless it is running a different build from the one
+**Compute Device** names, which is refused.
 Tick **Debug Options**, the checkbox sharing a row with **Update Stat**
 and **Show Console**, to unlock the shell, data-transfer, UUID-migration
 and reload-server tools, which appear in a block at the bottom of the

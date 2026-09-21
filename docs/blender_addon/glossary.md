@@ -265,10 +265,19 @@ documentation, grouped by subject and alphabetized within each group.
 : The add-on's single connection manager. It owns all remote operations
   from a background thread so the UI never blocks on the network.
 
+**Compute Device**
+: The Connection-box row that says whether a run uses the solver host's
+  accelerator (`GPU`: CUDA or ROCm on Windows and Linux, Metal on macOS)
+  or the portable `CPU` build. It names which build *directory* the
+  server comes out of, and a selection the host cannot serve is refused
+  rather than substituted. See
+  {ref}`Choosing the build <choosing-the-build>`.
+
 **Connection profile**
 : A saved TOML entry capturing every connection field of the Backend
   Communicator panel for one host, used to switch between hosts and
-  share presets across a team.
+  share presets across a team. **Compute Device** and **GPU Backend**
+  are not among them.
   See [Connection Profiles](connections/profiles.md).
 
 **Docker connection**
@@ -289,14 +298,27 @@ documentation, grouped by subject and alphabetized within each group.
   `run_python_script`, which runs inside Blender, as an escape hatch for
   provisioning and maintenance tasks not yet covered by dedicated tools.
 
+**GPU Backend**
+: The Connection-box row that says which accelerator a run uses when
+  **Compute Device** is `GPU` and the solver host holds more than one
+  GPU build. `Automatic`, `CUDA`, or `ROCm`. See
+  {ref}`Choosing the build <choosing-the-build>`.
+
+**Linux Native connection**
+: A connection type where the solver runs directly as a child process on
+  this Linux machine, on CUDA, ROCm, or the CPU build, with no SSH or
+  Docker. See [Linux Native](connections/linux.md).
+
 **Local connection**
-: A connection type where the solver runs on the same host as Blender,
-  reached over a loopback socket. See [Local](connections/local.md).
+: Retired. The connection type that reached a server started by hand on
+  the same machine as Blender. The three native types replaced it, and a
+  saved `.blend` or profile naming it is migrated automatically. See
+  {ref}`The retired Local type <retired-local>`.
 
 **macOS Native connection**
-: A connection type where the solver runs directly as a subprocess on an
-  Apple-silicon Mac, on Metal, with no SSH or Docker. See
-  {ref}`macOS Native <macos-native>`.
+: A connection type where the solver runs directly as a child process on
+  an Apple-silicon Mac, on Metal or the CPU build, with no SSH or
+  Docker. See {ref}`macOS Native <macos-native>`.
 
 **MCP resource**
 : A read-only asset exposed by the [MCP server](integrations/mcp.md) via
@@ -312,6 +334,14 @@ documentation, grouped by subject and alphabetized within each group.
 : A JSON-RPC method exposed by the [MCP server](integrations/mcp.md) and
   dispatched with `tools/call`. Goes through the same validation layer as
   the sidebar buttons.
+
+**Native connection**
+: Collectively, the three connection types whose solver is a child
+  process on the machine Blender runs on, started by the add-on:
+  [Windows Native](connections/windows.md),
+  {ref}`macOS Native <macos-native>`, and
+  [Linux Native](connections/linux.md). Only your own platform's type is
+  usable.
 
 **Protocol version**
 : The wire protocol version between the add-on and the `ppf-cts-server`
@@ -341,7 +371,7 @@ documentation, grouped by subject and alphabetized within each group.
 **`ppf-cts-server`**
 : The Rust solver binary (`ppf-cts-server` on Linux and macOS,
   `ppf-cts-server.exe` on Windows) launched on the remote side (or as a
-  local subprocess for the two native types) that listens for work over
+  child process for the three native types) that listens for work over
   TCP on the configured port (default 9090). Built from the `ppf-cts-server`
   crate, which wraps the algorithmic core in `ppf-cts-core`.
 
@@ -368,5 +398,6 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Windows Native connection**
 : A connection type where the solver runs directly as a Windows
-  subprocess, using a bundled Python interpreter and no SSH or Docker.
+  subprocess, on CUDA, ROCm, or the CPU build, using a bundled Python
+  interpreter and no SSH or Docker.
   See [Windows Native](connections/windows.md).

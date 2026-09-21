@@ -4,16 +4,23 @@
 
 - **Blender 5.0 or newer.** The extension manifest pins `blender_version_min =
   "5.0.0"`; older builds will refuse to enable it.
-- **A solver backend.** Build or deploy the engine from
-  [st-tech/ppf-contact-solver](https://github.com/st-tech/ppf-contact-solver)
-  on any one of: the same machine (simplest), an SSH-reachable Linux host, a
-  Docker container, a Windows workstation, or an Apple-silicon Mac. Which
+- **A solver backend.** Download a self-contained distribution from
+  [GitHub Releases](https://github.com/st-tech/ppf-contact-solver/releases),
+  or build the engine from
+  [st-tech/ppf-contact-solver](https://github.com/st-tech/ppf-contact-solver).
+  It can sit on the same machine as Blender -- a Windows, macOS, or Linux
+  workstation, which the three **Native** connection types drive directly --
+  or on an SSH-reachable Linux host or in a Docker container. Which
   build runs there depends on the hardware: CUDA on an NVIDIA GPU (the
   project builds against CUDA 12.8), ROCm on an AMD GPU (x86-64 Linux and
   x64 Windows), Metal on Apple silicon, and a CPU build that needs no GPU at
   all and is substantially slower than any of them. A solver binary reports
   which one it is: `ppf-contact-solver --backend` prints `cuda`, `rocm`,
-  `metal`, or `cpu`. See [Connections](../connections/index.md) for the
+  `metal`, or `cpu`. The x64 Windows and x86_64 Linux distributions carry
+  the CUDA, ROCm, and CPU builds together, and the panel is where you pick
+  between them; see
+  {ref}`Choosing the build <choosing-the-build>`. See
+  [Connections](../connections/index.md) for the
   transport that matches where the solver runs. The add-on is just a client
   and runs fine anywhere Blender runs on one of the platforms its manifest
   declares: Apple-silicon macOS, x86-64 and arm64 Linux, and x64 and arm64
@@ -34,10 +41,11 @@
   `scripts/addons/modules` directory.
 
 :::{note}
-The solver binary itself is not shipped with the add-on. You build or deploy
-it separately at the path you point the connection at. The add-on only looks
-for the `ppf-cts-server` binary (`ppf-cts-server.exe` on Windows Native) at
-that path.
+The solver binary itself is not shipped with the add-on. You download or
+build it separately at the path you point the connection at. The add-on
+only looks for the `ppf-cts-server` binary (`ppf-cts-server.exe` on
+Windows Native) under that path, in the build layouts listed in
+{ref}`Choosing the build <choosing-the-build>`.
 :::
 
 ## Install the Add-on

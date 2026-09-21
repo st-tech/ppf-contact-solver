@@ -54,8 +54,16 @@ module is not installed. **Connect** is highlighted.
 | Field | Description |
 | ----- | ----------- |
 | Container | Docker container name (default `ppf-contact-solver`). Must already exist on the daemon. |
-| Container Path | Working directory **inside** the container that holds the `ppf-cts-server` binary (e.g. `/root/ppf-contact-solver`). Not a host path. |
+| Container Path | Working directory **inside** the container that holds `ppf-cts-server`, under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/` (e.g. `/root/ppf-contact-solver`). Not a host path. |
 | Docker Port | TCP port inside the container where `ppf-cts-server` listens (default `9090`). Must be published with `-p` when the container was created. |
+
+Two more rows appear in the Connection box **once you are connected**:
+**Compute Device** (`GPU` or `CPU`) and, where the container holds more
+than one GPU build, **GPU Backend** (`Automatic`, `CUDA`, or `ROCm`).
+The builds are inside the container, so the add-on lists them with one
+command at **Connect** and caches the answer; the choice is applied at
+**Start Server on Remote**. See
+{ref}`Choosing the build <choosing-the-build>`.
 
 ## Installing docker-py
 
@@ -94,12 +102,13 @@ with `Container 'X' does not exist.`
 
 **Server startup path**
 
-Local Docker uses the same Unix server-launch path as the SSH and
-Local backends (see {ref}`Connections - Under the hood <connections-under-the-hood>`):
-a small script inside the container launches `ppf-cts-server` on the
-configured port and the UI waits up to 16 s for readiness. Local mode
-checks the published port as well, but at **Connect** rather than before
-Start Server, and it reads the container's own port map through
-docker-py instead of shelling out to `docker port`. A container on
+Local Docker uses the same Unix server-launch path as the SSH backends
+(see {ref}`Connections - Under the hood <connections-under-the-hood>`):
+a small script inside the container launches the `ppf-cts-server` that
+**Compute Device** and **GPU Backend** resolve to, on the configured
+port, and the UI waits up to 16 s for readiness. Local Docker checks the
+published port as well, but at **Connect** rather than before Start
+Server, and it reads the container's own port map through docker-py
+instead of shelling out to `docker port`. A container on
 `--network host` publishes nothing and is accepted as is.
 :::

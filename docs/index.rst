@@ -32,9 +32,10 @@ ZOZO's Contact Solver 🫶
    blender_addon/connections/index
    blender_addon/connections/docker_over_ssh
    blender_addon/connections/docker
-   blender_addon/connections/windows
    blender_addon/connections/ssh
-   blender_addon/connections/local
+   blender_addon/connections/windows
+   blender_addon/connections/macos
+   blender_addon/connections/linux
    blender_addon/connections/profiles
    blender_addon/security
 

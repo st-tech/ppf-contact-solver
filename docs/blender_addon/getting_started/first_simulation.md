@@ -75,23 +75,28 @@ a static collider for it to drape over.
 ## Register the Objects with the Add-on
 
 1. **Pick a connection type.** In the **Backend Communicator** panel,
-   choose `Local` if the solver lives on this machine. It has the
-   fewest moving parts. Fill **Path** with the solver checkout (the
-   folder whose `target/release/` contains `ppf-cts-server`) and set
+   choose your own platform's native type -- `Windows Native`,
+   `macOS Native`, or `Linux Native` -- if the solver lives on this
+   machine. Those have the fewest moving parts. Fill **Solver Path**
+   with the solver distribution or checkout (the folder whose
+   `target/release/` contains `ppf-cts-server`), leave **Compute
+   Device** on `GPU` unless this machine has none, and set
    **Project Name** to something short, using only letters, digits,
    `.`, `-` and `_` (no spaces). For other backends see
    [Connections](../connections/index.md) and the per-backend pages
-   ([local](../connections/local.md), [ssh](../connections/ssh.md),
-   [docker](../connections/docker.md),
-   [windows](../connections/windows.md)).
+   ([ssh](../connections/ssh.md), [docker](../connections/docker.md),
+   [windows](../connections/windows.md), [macos](../connections/macos.md),
+   [linux](../connections/linux.md)).
 
    ```{figure} ../images/getting_started/step1_pick_connection.png
-   :alt: Backend Communicator panel in Local mode, Connect highlighted
+   :alt: Backend Communicator panel with a co-located connection type selected and Connect highlighted
    :width: 500px
 
-   Step 1: pick **Local** from the **Type** dropdown, fill the **Path**
-   and **Project Name** fields, then click the highlighted **Connect**
-   button.
+   Step 1: pick the connection type from the **Type** dropdown, fill the
+   path and **Project Name** fields, then click the highlighted
+   **Connect** button. This screenshot was taken before `Local` was
+   replaced by the three native types, and before the **Compute
+   Device** row was added.
    ```
 
 2. **Connect, then start the server.** Click **Connect**. The status
@@ -100,9 +105,9 @@ a static collider for it to drape over.
    `ppf-cts-server` on the remote in the background and waits for it
    to answer. Status advances to *Waiting for Data* once the server
    responds. If the port is already in use, click **Force Terminate
-   Process** to release it; on the Local backend nothing attaches to an
-   existing `ppf-cts-server` (only the two native types, Windows Native
-   and macOS Native, do that).
+   Process** to release it. The three native types first check whether
+   the listener is a `ppf-cts-server` of their own and attach to it if
+   so, so that error means the holder is some other process.
 
 3. **Create the Cloth group (Shell).** In the **Dynamics Groups**
    panel, click **Create Group**, set the unlabelled type dropdown

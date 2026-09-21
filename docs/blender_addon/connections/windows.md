@@ -19,10 +19,9 @@ SSH and no Docker.
 ```
 
 :::{note}
-Unlike the [Local](local.md) (Linux) backend, the Windows Native build ships
-as a self-contained tree: the embedded Python interpreter, CUDA runtime, Rust
-solver binaries, and all third-party shared libraries live entirely under the
-install root. Nothing is installed into the system, no `apt` packages, no
+The Windows Native build ships as a self-contained tree: the embedded
+Python interpreter, CUDA runtime, Rust solver binaries, and all
+third-party shared libraries live entirely under the install root. Nothing is installed into the system, no `apt` packages, no
 shell rc edits, no global services. Uninstalling is just deleting the
 bundled directory; there is no contamination of the host to clean up.
 :::
@@ -48,10 +47,13 @@ bundled directory; there is no contamination of the host to clean up.
    `build-win-native\python\` subfolder (developer build). Picking a
    subfolder such as `target\release`, `bin`, or `python` is fine: the
    add-on walks up to the real root and names the one it used.
-3. Click **Connect**. The add-on resolves the solver root and refuses
-   one with no `ppf-cts-server.exe` under it. Connecting does not start
-   the server.
-4. Click **Start Server on Remote**. The add-on picks up the right Python
+3. Set **Compute Device**, and **GPU Backend** if the folder holds more
+   than one GPU build -- the x64 distribution carries CUDA and ROCm
+   together. See {ref}`Choosing the build <choosing-the-build>`.
+4. Click **Connect**. The add-on resolves the solver root and refuses
+   one with no `ppf-cts-server.exe` under it, or none for the device you
+   picked. Connecting does not start the server.
+5. Click **Start Server on Remote**. The add-on picks up the right Python
    runtime and launches the solver as a hidden subprocess on the
    configured port (`9090` by default). If a `ppf-cts-server` from a
    previous Blender session is still listening on that port, the add-on
@@ -83,6 +85,10 @@ fields. **Connect** is highlighted.
 | Compute Device | `GPU` or `CPU`, which build of the solver to run. Always drawn, so you can see which builds are there, and disabled only when the one build present is the one already selected. `CPU` needs no GPU and is substantially slower. **Connect** refuses a device the folder has no build for by name rather than running the other one. |
 | GPU Backend | `Automatic`, `CUDA`, or `ROCm`, drawn only when the folder holds more than one GPU build (a Windows x64 distribution carries CUDA and ROCm together) or when a saved choice names a build the folder does not hold. `Automatic` takes the only GPU build present, or, where there are several, the first whose solver reports a usable device, CUDA before ROCm. |
 
+Both rows, and the refusals they produce, are the same on every
+connection type; see
+{ref}`Choosing the build <choosing-the-build>`.
+
 ## Troubleshooting
 
 - **`ppf-cts-server.exe not found under <root>`** - the selection is not
@@ -98,6 +104,16 @@ fields. **Connect** is highlighted.
   runtime in `bin\`, so the CUDA toolkit does not have to be
   installed. Check that the NVIDIA driver is present and up to date,
   or set **Compute Device** to `CPU` to run without a GPU.
+- **`No GPU build in this folder has a usable device`** - raised at
+  **Start Server on Remote** when **GPU Backend** is `Automatic`, the
+  folder holds both the CUDA and the ROCm build, and neither reports a
+  device it can run on. The message carries what each backend said.
+  Check the GPU driver, or set **Compute Device** to `CPU`; the add-on
+  never falls back to the CPU build on its own.
+- **`A solver server is already running on port N, and its runs use the
+  build in ...`** - **Start Server on Remote** found a server it did not
+  launch, running a different build from the one selected. See
+  {ref}`Attaching to a running server <attach-mismatch>`.
 - **`Port N is in use`** - something is already bound to the configured
   server port and it is not a `ppf-cts-server` the add-on recognizes.
   Use the **Force Terminate Process** button shown next to the error to
@@ -196,7 +212,10 @@ on the port, **Start Server on Remote** sends a TCMD probe and reuses that
 server instead of failing with `Port N is in use`. The probe checks that the
 response is valid JSON containing `protocol_version`, so a non-server
 listener (for example a notebook server parked on the port) still surfaces
-as an error. In attach mode the add-on holds no process handle, so **Stop
+as an error. An adopted server running a different build from the one
+**Compute Device** names is refused rather than adopted, since the
+selection would otherwise reach nothing while every solve ran on the
+other build. In attach mode the add-on holds no process handle, so **Stop
 Server on Remote** falls back to
 `taskkill /F /IM ppf-cts-server.exe`, which stops the adopted server
 (along with any other instance). A foreign listener is cleared with the
@@ -215,5 +234,21 @@ Start Server is what spawns `ppf-cts-server.exe` (or attaches to one
 already listening on the port), then waits up to 16 seconds for it to
 answer a TCMD probe. It is also where the GPU selection is applied, as
 `CUDA_VISIBLE_DEVICES` on the child's environment, so moving a running
-solver to another device is Stop Server, pick, Start Server.
+solver to another device is Stop Server, pick, Start Server. It is
+likewise where **GPU Backend**'s `Automatic` runs each candidate
+solver's `--probe` when the folder holds more than one GPU build: a
+spawn is the one moment a solver is about to run, so it is the moment to
+ask which accelerator can run it.
+
+**`CARGO_TARGET_DIR`**
+
+The child is told which build directory its server came out of. A run
+takes three things out of one, and the server binary is only the first:
+the build worker loads the `_ppf_cts_py` cdylib from the first target
+directory it finds, and the session's `SOLVER_PATH` is written from that
+same directory. Without naming it, selecting `CPU` would start the CPU
+server and run the solve on the GPU solver in `target\release`, with
+nothing reporting the split. The bundle's `bin\` layout is not a cargo
+target directory, so there any inherited `CARGO_TARGET_DIR` is dropped
+rather than replaced.
 :::
