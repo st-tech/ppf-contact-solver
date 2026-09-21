@@ -989,6 +989,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than one. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 | Did you write everything using AI? | These days, we do try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. |
+| How large is your team? | Core development is done by a single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 
 ## 🙏 Acknowledgements
 
