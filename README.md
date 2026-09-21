@@ -988,6 +988,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Is this better than &lt;Your Favorite Product&gt;? | Probably not. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
+| Why did you make the setup this complicated? | For internal use reasons. For now, see the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg) and our [video tutorials](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). They are much cleaner. |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
 | I got an intersection error. Why is that? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than one. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
