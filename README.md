@@ -983,7 +983,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
-| Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. |
+| Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
 | Is this better than &lt;Your Favorite Product&gt;? | Probably not. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
@@ -993,9 +993,9 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
 | I got an intersection error. Why is that? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
-| Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than one. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
+| Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 | Did you write everything using AI? | These days, we do try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. |
-| How large is your team? | Core development is done by a single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
+| How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | How much should I trust your expertise? | The author spent more than a decade on fluid simulation research for graphics and published three first-authored SIGGRAPH (TOG) papers by 2020, before AI became prevalent. |
 
 ## 🙏 Acknowledgements
