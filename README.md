@@ -60,7 +60,11 @@ We employ Continuous Collision Detection (CCD), **not Discrete Collision Detecti
 - An object collides at the speed of light, with the step size being 0.01 seconds.
 - Objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
 
-In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.** An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
+In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.**
+
+#### ✅ How Do We Promise No Intersections?
+
+An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
 
 #### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
 
