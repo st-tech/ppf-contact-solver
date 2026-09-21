@@ -977,7 +977,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
-| Doesn't LLM-assisted coding compromise reliability? | The author cannot write smarter or more polished code than an LLM. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
+| Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than one. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 
 ## 🙏 Acknowledgements
 
