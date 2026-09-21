@@ -107,12 +107,6 @@ Useful environment knobs:
 | `PPF_DEBUG_ROOT` | `$TMPDIR/ppf-debug` | Where worker dirs are created. |
 | `PPF_BLENDER_BIN` | (auto) | Override Blender binary path. |
 
-The `PPF_EMULATED_*` knobs (`STEP_MS`, `ELASTIC`, `FAIL_AT_FRAME`,
-`SAND`, `VIOLATIONS`) are gone with the backend that read them. One
-left set in a script is an inert variable nothing consumes, which
-makes a scenario pass with its pacing or fault injection silently
-absent: delete it rather than leave it.
-
 Each run drops a `report.json` plus per-worker artifacts (server logs,
 Blender stdout/stderr, `scenario_result.json`) under
 `$PPF_DEBUG_ROOT/<run-id>/`. On failure the worker dir is preserved so

@@ -116,12 +116,6 @@ there is no default backend.
 - ``BACKENDS = ("real",)`` => runs against a backend that computes real
   physics. That is every scenario in the registry.
 
-``PPF_EMULATED_*`` knobs are refused. Nothing reads them now, so one left
-in a ``KNOBS`` dict or passed with ``--knob`` would be an inert
-environment variable that reads like working fault injection or working
-frame pacing. The orchestrator fails such a scenario by name rather than
-letting it assert against a premise that has evaporated.
-
 Every job in ``.github/workflows/blender.yml`` runs
 ``runtests --backend real``.
 When you add a real-capable scenario, remember the connection path:

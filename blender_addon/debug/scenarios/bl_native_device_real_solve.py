@@ -169,6 +169,10 @@ try:
     connect = getattr(dh.com, f"connect_{BACKEND_TYPE}")
     server_type = SERVER_TYPE
 
+    BUILD_CPU = ("CARGO_TARGET_DIR=target/cpu cargo build --release "
+                 "--features cpu")
+    BUILD_GPU = "cargo build --release"
+
     # ----- A: both builds exist ----------------------------------------
     gpu_bin = resolver(root, conn.DEVICE_GPU)
     cpu_bin = resolver(root, conn.DEVICE_CPU)
@@ -179,13 +183,21 @@ try:
             "root": root,
             "gpu_server": gpu_bin,
             "cpu_server": cpu_bin,
-            "build_cpu_with": "CARGO_TARGET_DIR=target/cpu cargo build "
-                              "--release --features cpu",
+            "build_cpu_with": BUILD_CPU,
+            "build_gpu_with": BUILD_GPU,
         },
     )
     if gpu_bin is None or cpu_bin is None:
+        # NAME THE HALF THAT IS MISSING AND THE COMMAND THAT MAKES IT.
+        # Every host that builds one backend reaches this line, so a message
+        # that only states the condition costs the reader a trip into this
+        # file to learn which half is absent and what to run.
+        missing = "GPU" if gpu_bin is None else "CPU"
+        how = BUILD_GPU if gpu_bin is None else BUILD_CPU
         raise RuntimeError(
-            "this root does not hold both a GPU and a CPU build; see check A"
+            f"this root holds no {missing} build, so the comparison this "
+            f"scenario makes would have one side; see check A. Build it "
+            f"under {root} with: {how}"
         )
 
     # The add-on launches its own server here, as it does for an artist. Its
