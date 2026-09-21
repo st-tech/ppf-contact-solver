@@ -971,25 +971,13 @@ If you used this project in a public piece of work, whether a paper, a productio
 
 ## ❓ Frequently Asked Questions
 
-**Q: Why did ZOZO, Inc. make this?**
-
-A: To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/>
-
-**Q: Should we use it?**
-
-A: Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved.
-
-**Q: Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup.**
-
-A: Our main target is cloud use, such as AWS, rather than running on a desktop computer.
-
-**Q: Is it really intersection-free?**
-
-A: If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall.
-
-**Q: Doesn't LLM-assisted coding compromise reliability?**
-
-A: The author cannot write smarter or more polished code than an LLM. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can.
+| Question | Answer |
+| --- | --- |
+| Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
+| Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. |
+| Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
+| Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
+| Doesn't LLM-assisted coding compromise reliability? | The author cannot write smarter or more polished code than an LLM. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 
 ## 🙏 Acknowledgements
 
