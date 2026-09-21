@@ -113,6 +113,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 - [📬 Contributing](#-contributing)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
+- [❓ Frequently Asked Questions](#-frequently-asked-questions)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -967,6 +968,28 @@ For bug reports or feature requests, please open an issue on GitHub. For usage q
 If you would prefer to reach out privately, you can also email the author at <ryoichi.ando@zozo.com>. Please do not send any copyrightable materials; anything of that kind will never be read by the author and will be deleted upon receipt.
 
 If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
+
+## ❓ Frequently Asked Questions
+
+**Q: Why did ZOZO, Inc. make this?**
+
+A: To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/>
+
+**Q: Should we use it?**
+
+A: Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved.
+
+**Q: Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup.**
+
+A: Our main target is cloud use, such as AWS, rather than running on a desktop computer.
+
+**Q: Is it really intersection-free?**
+
+A: If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall.
+
+**Q: Doesn't LLM-assisted coding compromise reliability?**
+
+A: The author cannot write smarter or more polished code than an LLM. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can.
 
 ## 🙏 Acknowledgements
 
