@@ -33,6 +33,19 @@ MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "color",
     "assigned_objects_index",
     "pin_vertex_groups_index",
+    # The two intersection-allowance subsets and the switch that selects
+    # them. The subset itself is a COLLECTION and is skipped anyway, and it
+    # could not cross a paste even in principle: it names objects of the
+    # SOURCE group, which the destination does not hold. So the switch must
+    # not cross either. Carrying "Apply to All Objects" off into a group
+    # whose list is empty would paste an allowance that reaches nothing,
+    # which is the opposite of what pasting an enabled allowance promises;
+    # the checkbox itself still copies, and lands on the destination's own
+    # scope.
+    "allow_self_intersection_all_objects",
+    "allow_self_intersection_objects_index",
+    "allow_inter_object_intersection_all_objects",
+    "allow_inter_object_intersection_objects_index",
     "active",
     "material_profile_path",
     "material_profile_selection",

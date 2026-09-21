@@ -9,6 +9,13 @@ import json
 import numpy as np
 
 from ...models.groups import get_addon_data, iterate_object_groups
+from ...models.intersection_allowances import (
+    INTER_OBJECT_ALLOWANCE,
+    SELF_ALLOWANCE,
+    allowance_applies_to_all,
+    allowance_enabled,
+    allowed_object_uuids,
+)
 from ...models.material_maps import to_solver_value
 from . import (
     _normalize_and_scale,
@@ -275,6 +282,32 @@ def _encode_lock_rotation_axis(assigned) -> list[float]:
             "Rotation."
         )
     return _swap_axes((axis / norm).tolist())
+
+
+def _encode_intersection_allowance(group, spec, object_uuids):
+    """One intersection allowance, as the decoder takes it.
+
+    The allowance is per OBJECT in the solver: the frontend reads each
+    object's own material and resolves one policy byte per vertex. So a
+    narrowed allowance needs no new mechanism below this line, only a value
+    the decoder can apply per object.
+
+    Returns a plain float while the allowance reaches every object of the
+    group, which keeps the payload of a scene that never narrows one exactly
+    what it was before narrowing existed. Once narrowed it returns
+    ``{uuid: 1.0 | 0.0}`` over every INCLUDED object, stating both answers
+    rather than leaving the unnamed objects to a default, so the payload says
+    what each object was given instead of what it was not.
+    """
+    if not allowance_enabled(group, spec):
+        return np.float32(0.0)
+    if allowance_applies_to_all(group, spec):
+        return np.float32(1.0)
+    allowed = allowed_object_uuids(group, spec)
+    return {
+        obj_uuid: np.float32(1.0 if obj_uuid in allowed else 0.0)
+        for obj_uuid in object_uuids
+    }
 
 
 def _encode_group_params(context, groups, state, fps, start_frame):
@@ -579,10 +612,14 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # pairs they name at the scene-build check and at every solver
             # intersection scan; no contact force and no CCD filter changes,
             # so the solver still resolves what it can.
-            "allow-self-intersection": np.float32(
-                1.0 if group.allow_self_intersection else 0.0),
-            "allow-inter-object-intersection": np.float32(
-                1.0 if group.allow_inter_object_intersection else 0.0),
+            #
+            # A scalar when the allowance reaches every object of the group,
+            # a per-uuid dict when it has been narrowed to a subset. See
+            # `_encode_intersection_allowance`.
+            "allow-self-intersection": _encode_intersection_allowance(
+                group, SELF_ALLOWANCE, object_uuids),
+            "allow-inter-object-intersection": _encode_intersection_allowance(
+                group, INTER_OBJECT_ALLOWANCE, object_uuids),
             "shrink": np.float32(group.shrink),
             "shrink-x": np.float32(group.shrink_x),
             "shrink-y": np.float32(group.shrink_y),

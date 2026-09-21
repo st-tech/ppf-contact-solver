@@ -289,11 +289,30 @@ Remove all objects from a dynamics group.
 
 ### get_group_objects(group_uuid: str)
 
-Get objects assigned to a dynamics group.
+Get objects assigned to a dynamics group. Each entry carries the per-object
+state the object tools write, including `intersection_allowances`, which says
+per allowance whether it reaches THAT object (`allowed`) and whether that came
+from the group-wide switch or from the object being named (`scope`).
 
 **Parameters:**
 
 - **group_uuid**: UUID of group
+
+### set_intersection_allowance_objects(group_uuid: str, allowance: str, object_names: list)
+
+Narrow one intersection allowance to named objects of a group. The allowance
+reaches every object of its group while the matching `..._all_objects` switch
+is on; this tool writes the subset it reaches instead and turns that switch
+off. An empty list leaves the allowance reaching nothing. Every name must be
+an object currently assigned to the group, or the call is refused and nothing
+is written. The subset is stored whether or not the allowance itself is
+enabled, and enabling it stays with set_group_material_properties.
+
+**Parameters:**
+
+- **group_uuid**: UUID of group
+- **allowance**: `"self"` or `"inter_object"`
+- **object_names**: Objects of this group the allowance is narrowed to
 
 ### set_group_type(group_uuid: str, type: str)
 
@@ -354,12 +373,12 @@ Set material properties for a dynamics group.
 
 Supported properties by group type:
 
-- SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference, allow_self_intersection, allow_inter_object_intersection
-- SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness, allow_self_intersection, allow_inter_object_intersection
-- ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference, allow_self_intersection, allow_inter_object_intersection
-- PDRD: pdrd_density, friction, stitch_stiffness, allow_self_intersection, allow_inter_object_intersection (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
-- SAND: sand_grain_radius, sand_particle_mass, sand_friction, allow_self_intersection, allow_inter_object_intersection (faceless granular body of loose grain-center vertices)
-- STATIC: friction, enable_soft_constraint, soft_constraint_stiffness, allow_self_intersection, allow_inter_object_intersection (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
+- SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects
+- SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects
+- ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness, bend_rest_angle_source, bend_rest_from_reference, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects
+- PDRD: pdrd_density, friction, stitch_stiffness, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects (the hinge joint is per-object; use the `set_pdrd_hinge` tool)
+- SAND: sand_grain_radius, sand_particle_mass, sand_friction, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects (faceless granular body of loose grain-center vertices)
+- STATIC: friction, enable_soft_constraint, soft_constraint_stiffness, allow_self_intersection, allow_self_intersection_all_objects, allow_inter_object_intersection, allow_inter_object_intersection_all_objects (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
 
 Per-type property notes:
 
@@ -374,7 +393,7 @@ Per-type property notes:
 - SAND contact keys: the locked grain radius is sent as the group's contact OFFSET, because a grain's skin is its radius. `contact_gap` is the extra barrier distance on top of that skin and is always the absolute field: `contact_offset`, `contact_gap_rat`, `contact_offset_rat` and `use_group_bounding_box_diagonal` are accepted by the validator but the encoder ignores them for SAND.
 - young_mod_density_normalized: SOLID/SHELL/ROD only. True (default) interprets the Young's modulus field as a density-normalized value (Pa/rho), the solver's native convention. False interprets it as a true Young's modulus in pascals, which the addon divides by this group's density before sending it.
 - stitch_stiffness: per-object soft cross-stitch force stiffness, default 1.0. Cross-stitch is a soft 6-slot barycentric force, not a topological weld: the two sides keep their own vertices and are pulled together by a spring. Supported pairs: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid, Rod-Rod, Solid-Solid, and any dynamic group stitched to a STATIC collider.
-- allow_self_intersection, allow_inter_object_intersection: accepted on every group type, both default off. They suppress the REPORT of an intersecting pair, so a run starts and keeps going through a tangled pose; contact, CCD and the line search are unchanged. The value is applied to every object assigned to the group, and self versus inter-object is decided per Blender object, not per group: an overlap between two objects of the same group is an inter-object pair. For the inter-object key either side is enough, so setting it on a garment also covers the body it is fitted to. On a STATIC group both keys reach the solver whenever the collider is part of the solved scene, which covers an animated collider, a soft-constrained one, and one named as a cross-stitch endpoint, since each decodes to a pin shell whose vertices carry the policy; a collider that is none of them stays a contact-only collision mesh carrying no object id and an empty policy, so a pair involving it is tolerated only when the opposing dynamic side opts in.
+- allow_self_intersection, allow_inter_object_intersection: accepted on every group type, both default off. They suppress the REPORT of an intersecting pair, so a run starts and keeps going through a tangled pose; contact, CCD and the line search are unchanged. Each one reaches every object assigned to the group while its `allow_self_intersection_all_objects` / `allow_inter_object_intersection_all_objects` switch is on (both default on); `set_intersection_allowance_objects` narrows it to named objects and turns that switch off. Self versus inter-object is decided per Blender object, not per group, whichever way the allowance is narrowed: an overlap between two objects of the same group is an inter-object pair. For the inter-object key either side is enough, so setting it on a garment also covers the body it is fitted to. On a STATIC group both keys reach the solver whenever the collider is part of the solved scene, which covers an animated collider, a soft-constrained one, and one named as a cross-stitch endpoint, since each decodes to a pin shell whose vertices carry the policy; a collider that is none of them stays a contact-only collision mesh carrying no object id and an empty policy, so a pair involving it is tolerated only when the opposing dynamic side opts in.
 
 Contact properties (mutually exclusive modes):
 

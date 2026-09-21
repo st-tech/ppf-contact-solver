@@ -597,8 +597,10 @@ class ParamDecoder:
 
         Call :meth:`set_path` first. Per-object dicts (velocity,
         velocity-schedule, collision-windows) are keyed by UUID; other
-        keys are forwarded to ``obj.param.set``. fTetWild overrides are
-        consumed at populate-time and skipped here.
+        keys are forwarded to ``obj.param.set``. The two intersection
+        allowances take either shape, a dict when the objects of one group
+        were given different answers and a plain value when they were not.
+        fTetWild overrides are consumed at populate-time and skipped here.
 
         Args:
             scene (Scene): The scene to which the parameters will be applied.
@@ -797,6 +799,22 @@ class ParamDecoder:
                                     "lock has no axis"
                                 )
                             obj.lock_all_rotations()
+                    elif key in ("allow-self-intersection",
+                                 "allow-inter-object-intersection"):
+                        # Intersection allowances (issue #138). Both are per
+                        # OBJECT here and per VERTEX below (`_scene_.py`
+                        # resolves each object's pair of values into one
+                        # policy byte), so a sender that gives the objects of
+                        # one group different answers sends a per-uuid dict
+                        # and one that gives them all the same sends a plain
+                        # float. A uuid the dict does not name keeps the
+                        # holder's default, which is the "report it" answer.
+                        if isinstance(val, dict):
+                            v = val.get(obj_uuid)
+                            if v is not None:
+                                obj.param.set(key, v)
+                        else:
+                            obj.param.set(key, val)
                     elif key in ("ftetwild", "soft-constraint"):
                         # Consumed at populate-time via the param.pickle peek;
                         # no per-object ParamHolder slot by design (would

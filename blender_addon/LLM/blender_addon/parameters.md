@@ -274,7 +274,7 @@ Every object group carries its own copy of the full material-parameter set, but 
 - **Sand**: a granular body of loose grain-center vertices. Only grain radius (locked at conversion), particle mass, an inter-grain friction, and a contact gap. See Sand-specific below, including how a mesh becomes a Sand body.
 - **Static**: friction, contact settings, and **Apply Soft Constraints** (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
-Every group type additionally carries **Allow Self-Intersections** and **Allow Inter-Object Intersections** (see Allow Intersections below).
+Every group type additionally carries **Allow Self-Intersections** and **Allow Inter-Object Intersections**, each with its own **Apply to All Objects** switch and object list (see Allow Intersections below).
 
 Rows that don't apply to the current type are hidden in the UI.
 
@@ -473,15 +473,34 @@ defaulting to off:
 | **Allow Self-Intersections**        | `allow_self_intersection`          | off     | every group type | Accept an overlap of an object with ITSELF instead of stopping the run.      |
 | **Allow Inter-Object Intersections**| `allow_inter_object_intersection`  | off     | every group type | Accept an overlap between two DIFFERENT objects instead of stopping the run. |
 
+Checking one opens a box under it holding **Apply to All Objects** and a list
+of objects:
+
+| UI label                 | Python / TOML key                                 | Default | Description                                                        |
+| ------------------------ | ------------------------------------------------- | ------- | ------------------------------------------------------------------ |
+| **Apply to All Objects** | `allow_self_intersection_all_objects`             | on      | The allowance above covers every object assigned to the group.      |
+| **Apply to All Objects** | `allow_inter_object_intersection_all_objects`     | on      | The same, for the inter-object allowance.                           |
+
+With **Apply to All Objects** on, the list and its **Add Selected Objects**,
+**Remove** and **Remove All** buttons are grayed out and the allowance covers
+the whole group, which is what the checkbox alone has always meant. Turn it off
+to name the objects yourself: **Add Selected Objects** adds every object you
+have selected in the viewport that is assigned to this group, and only the
+objects in the list are allowed to overlap. An empty list means the allowance
+covers nothing, which the panel says in place of the list's status line.
+
+The two lists are independent, because the two allowances are: one garment may
+arrive tangled in itself while another is only tangled against the body.
+
 What they do: they suppress the intersection REPORT for the pairs they name, at
 the scene-build check and at the solver's own check alike. Contact, CCD and the
 line search are unchanged, so the solver still pushes on the overlap; what the
 setting buys is that a run starts and keeps going instead of being refused.
 
-Granularity: the value is applied to every object assigned to the group, and
-self versus inter-object is decided per Blender OBJECT, not per group. Two
-meshes assigned to the same group form an INTER-OBJECT pair, so
-**Allow Self-Intersections** does not cover an overlap between them.
+Granularity: self versus inter-object is decided per Blender OBJECT, not per
+group, whichever objects the allowance was narrowed to. Two meshes assigned to
+the same group form an INTER-OBJECT pair, so **Allow Self-Intersections** does
+not cover an overlap between them.
 
 Either side is enough for the inter-object key, so setting it on a garment also
 covers the pair it forms with the character body it is fitted to.

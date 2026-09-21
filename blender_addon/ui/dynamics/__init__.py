@@ -10,6 +10,7 @@ from . import (
     material_map_ops,
     export_ops,
     group_ops,
+    intersection_allowance_ops,
     invisible_collider_ops,
     overlay,
     panels,
@@ -32,6 +33,11 @@ from .group_ops import (
     OBJECT_OT_DeleteGroup,
     OBJECT_OT_DuplicateGroup,
     OBJECT_OT_RemoveObjectFromGroup,
+)
+from .intersection_allowance_ops import (
+    OBJECT_OT_AddIntersectionAllowanceObjects,
+    OBJECT_OT_ClearIntersectionAllowanceObjects,
+    OBJECT_OT_RemoveIntersectionAllowanceObject,
 )
 from .invisible_collider_ops import (
     SCENE_OT_AddColliderKeyframe,
@@ -70,7 +76,12 @@ from .dyn_param_ops import (
     SCENE_OT_RemoveDynParam,
     SCENE_OT_RemoveDynParamKeyframe,
 )
-from .ui_lists import OBJECT_UL_AssignedObjectsList, OBJECT_UL_PinOperationsList, OBJECT_UL_PinVertexGroupsList
+from .ui_lists import (
+    OBJECT_UL_AssignedObjectsList,
+    OBJECT_UL_IntersectionAllowanceObjectsList,
+    OBJECT_UL_PinOperationsList,
+    OBJECT_UL_PinVertexGroupsList,
+)
 from .static_ops import (
     OBJECT_OT_AddStaticOp,
     OBJECT_OT_MoveStaticOp,
@@ -142,6 +153,10 @@ __all__ = [
     "OBJECT_OT_DeleteAllGroups",
     "OBJECT_OT_AddObjectsToGroup",
     "OBJECT_OT_RemoveObjectFromGroup",
+    # Intersection allowance object-subset operators
+    "OBJECT_OT_AddIntersectionAllowanceObjects",
+    "OBJECT_OT_RemoveIntersectionAllowanceObject",
+    "OBJECT_OT_ClearIntersectionAllowanceObjects",
     # Pin operators
     "OBJECT_OT_CreatePinVertexGroup",
     "OBJECT_OT_AddPinVertexGroup",
@@ -211,6 +226,7 @@ __all__ = [
     "OBJECT_OT_PastePinOps",
     # UI Lists
     "OBJECT_UL_AssignedObjectsList",
+    "OBJECT_UL_IntersectionAllowanceObjectsList",
     "OBJECT_UL_PinVertexGroupsList",
     "OBJECT_UL_PinOperationsList",
     # Dynamic parameter operators
@@ -240,6 +256,7 @@ __all__ = [
 def register():
     """Register all classes and handlers"""
     group_ops.register()
+    intersection_allowance_ops.register()
     bake_ops.register()
     export_ops.register()
     dyn_param_ops.register()
@@ -277,6 +294,7 @@ def unregister():
     pin_ops.unregister()
     material_map_ops.unregister()
     dyn_param_ops.unregister()
+    intersection_allowance_ops.unregister()
     export_ops.unregister()
     bake_ops.unregister()
     invisible_collider_ops.unregister()

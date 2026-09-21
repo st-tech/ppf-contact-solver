@@ -6,6 +6,12 @@ import struct
 import bpy  # pyright: ignore
 
 from ...models.collection_utils import safe_update_index
+from ...models.intersection_allowances import (
+    INTERSECTION_ALLOWANCES,
+    allowance_by_key,
+    allowance_objects,
+    allowed_object_uuids,
+)
 from ...models.groups import (
     assign_display_indices,
     decode_vertex_group_identifier,
@@ -523,11 +529,11 @@ def remove_object_from_group(group_uuid: str, object_name: str):
     # Direct manipulation instead of using UI operator to avoid poll issues
     # Clean up pin vertex groups for this object first
     from ...ui.dynamics.utils import (
-        cleanup_pin_vertex_groups_for_object,
+        cleanup_group_references_for_object,
         reset_object_display,
     )
 
-    cleanup_pin_vertex_groups_for_object(group, obj_uuid)
+    cleanup_group_references_for_object(group, obj_uuid)
 
     # Clear the display state the add-on put on this object while it is
     # still a member. Once the assignment is gone the object is the
@@ -604,6 +610,13 @@ def remove_all_objects_from_group(group_uuid: str):
     # Direct manipulation - clear all objects and related data
     group.pin_vertex_groups.clear()
     group.pin_vertex_groups_index = -1
+    # Both intersection-allowance subsets name members of this group, so
+    # emptying the group empties them: an entry that outlived its object
+    # would be drawn in the panel and would name a different object once
+    # this slot was reused.
+    for spec in INTERSECTION_ALLOWANCES:
+        allowance_objects(group, spec).clear()
+        setattr(group, spec.index_prop, -1)
     group.assigned_objects.clear()
     group.assigned_objects_index = -1
 
@@ -658,7 +671,32 @@ def _tet_settings(assigned) -> dict:
     }
 
 
-def _serialize_assigned_object(assigned, obj) -> dict:
+def _intersection_allowances(group, assigned) -> dict:
+    """Which intersection allowances reach THIS object, and by which route.
+
+    A group's allowance checkbox is one of two halves: the allowance covers
+    every object of the group, or only the objects named in its subset. So a
+    per-object answer cannot be read off the group's booleans alone, and
+    "allowed" here is what the scene build will actually give this object,
+    with "scope" saying whether that came from the group-wide switch or from
+    the object being named. set_intersection_allowance_objects writes the
+    subset; set_group_material_properties writes the two switches.
+    """
+    report = {}
+    for spec in INTERSECTION_ALLOWANCES:
+        allowed = allowed_object_uuids(group, spec)
+        report[spec.key] = {
+            "allowed": assigned.uuid in allowed,
+            "scope": (
+                "all_objects"
+                if getattr(group, spec.all_objects_prop)
+                else "listed_objects"
+            ),
+        }
+    return report
+
+
+def _serialize_assigned_object(group, assigned, obj) -> dict:
     """One assigned object, with the per-object state the object tools write.
 
     The lock field names are the ones set_object_locks takes, and pca_axis is
@@ -692,6 +730,7 @@ def _serialize_assigned_object(assigned, obj) -> dict:
             "pca_axis": int(assigned.pdrd_hinge_axis),
         },
         "bend_reference": _bend_reference(assigned),
+        "intersection_allowances": _intersection_allowances(group, assigned),
         "tet": _tet_settings(assigned),
         "static_op_count": len(assigned.static_ops),
         "velocity_keyframe_count": len(assigned.velocity_keyframes),
@@ -739,13 +778,112 @@ def get_group_objects(group_uuid: str):
                 f"in group {group_uuid}; the object may have been deleted "
                 "or the .blend needs re-migration"
             )
-        objects.append(_serialize_assigned_object(assigned_obj, obj))
+        objects.append(_serialize_assigned_object(group, assigned_obj, obj))
 
     return {
         "group_uuid": group_uuid,
         "group_type": group.object_type,
         "objects": objects,
         "object_count": len(objects),
+    }
+
+
+@group_handler
+def set_intersection_allowance_objects(
+    group_uuid: str,
+    allowance: str,
+    object_names: list[str],
+):
+    """Narrow one intersection allowance to named objects of a group.
+
+    An allowance ("allow_self_intersection" or
+    "allow_inter_object_intersection", both set by
+    set_group_material_properties) reaches every object of its group while
+    the matching "..._all_objects" switch is on. This tool writes the subset
+    the allowance reaches instead, and turns that switch OFF, so the
+    allowance covers exactly the objects named here and no others. Pass an
+    empty list to clear the subset, which leaves the allowance reaching
+    nothing; turn "..._all_objects" back on with
+    set_group_material_properties to go back to covering the whole group.
+
+    The subset is stored whether or not the allowance itself is enabled, and
+    the allowance is not enabled as a side effect: an allowance that is off
+    reports every intersection whatever this list holds.
+    get_group_objects reports, per object, whether an allowance reaches it
+    and by which of the two routes.
+
+    Every name must be an object currently assigned to this group. A name
+    that is not is refused and nothing is written, because an allowance
+    stored for a non-member would reach no vertex at build time while this
+    call reported success.
+
+    Args:
+        group_uuid: UUID of group
+        allowance: "self" or "inter_object"
+        object_names: Objects of this group the allowance is narrowed to
+    """
+    group = get_active_group_by_uuid_helper(group_uuid)
+    try:
+        spec = allowance_by_key(allowance)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    if not isinstance(object_names, list):
+        raise ValidationError(
+            "object_names must be a list of object names, "
+            f"not {type(object_names).__name__}"
+        )
+
+    from ...core.uuid_registry import resolve_assigned
+
+    # Resolve names through the group's own membership, not through
+    # bpy.data, so the one refusal below covers an object that is missing
+    # and one that is present but belongs to another group.
+    member_uuid_by_name = {}
+    for assigned in group.assigned_objects:
+        member = resolve_assigned(assigned)
+        if member is not None:
+            member_uuid_by_name[member.name] = assigned.uuid
+
+    resolved: list[tuple[str, str]] = []
+    outsiders: list[str] = []
+    seen: set[str] = set()
+    for name in object_names:
+        obj_uuid = member_uuid_by_name.get(name)
+        if obj_uuid is None:
+            outsiders.append(name)
+            continue
+        if obj_uuid in seen:
+            continue
+        seen.add(obj_uuid)
+        resolved.append((name, obj_uuid))
+
+    if outsiders:
+        raise ValidationError(
+            f"Not assigned to group {group_uuid}: {sorted(outsiders)}. "
+            f"Its members are {sorted(member_uuid_by_name)}"
+        )
+
+    collection = allowance_objects(group, spec)
+    collection.clear()
+    for name, obj_uuid in resolved:
+        item = collection.add()
+        item.name = name
+        item.uuid = obj_uuid
+    setattr(group, spec.index_prop, len(collection) - 1)
+    setattr(group, spec.all_objects_prop, False)
+
+    return {
+        "message": (
+            f"Narrowed {spec.enable_prop} on group {group_uuid} to "
+            f"{len(resolved)} object(s)"
+        ),
+        "group_uuid": group_uuid,
+        "allowance": spec.key,
+        "enabled": bool(getattr(group, spec.enable_prop)),
+        "applies_to_all_objects": False,
+        "object_names": [name for name, _uuid in resolved],
+        "object_uuids": [obj_uuid for _name, obj_uuid in resolved],
     }
 
 
@@ -1475,7 +1613,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "bend_rest_angle_source",
         "bend_rest_from_reference",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1496,7 +1636,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "plasticity",
         "plasticity_threshold",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1522,7 +1664,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "bend_rest_angle_source",
         "bend_rest_from_reference",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1534,7 +1678,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "enable_soft_constraint",
         "soft_constraint_stiffness",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1546,7 +1692,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "friction",
         "stitch_stiffness",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1558,7 +1706,9 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "sand_particle_mass",
         "sand_friction",
         "allow_self_intersection",
+        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
+        "allow_inter_object_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1825,9 +1975,12 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     bending.
 
     Intersection allowances (accepted on every group type: SOLID, SHELL, ROD,
-    PDRD, SAND, STATIC). The value is applied to every object assigned to the
-    group, and self versus inter-object is decided per Blender object, not per
-    group:
+    PDRD, SAND, STATIC). Each reaches every object assigned to the group while
+    its allow_self_intersection_all_objects /
+    allow_inter_object_intersection_all_objects switch is on, and both switches
+    default on; set_intersection_allowance_objects narrows one to named objects
+    and turns its switch off. Self versus inter-object is decided per Blender
+    object, not per group, whichever way the allowance is narrowed:
 
     - allow_self_intersection: an overlap of one object with itself is
       simulated instead of reported, so a run starts and keeps going through a

@@ -20,7 +20,12 @@ from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_ 
 from ..models.enum_props import EnumProperty, dynamic_enum_items
 from ..models.groups import OBJECT_GROUP_DEFAULTS, get_object_type, get_vertex_group_items
 from ..models.material_locks import LOCKABLE_MATERIAL_PROPS, lock_name
-from .state_types import AssignedObject, MaterialMapItem, PinVertexGroupItem
+from .state_types import (
+    AssignedObject,
+    IntersectionAllowanceObject,
+    MaterialMapItem,
+    PinVertexGroupItem,
+)
 
 
 # Blender makes every property keyframable unless `options` says otherwise, and
@@ -312,6 +317,13 @@ class ObjectGroup(PropertyGroup):
         self.pin_vertex_groups.clear()
         self.material_maps.clear()
         self.material_maps_index = 0
+        # Both allowance subsets name objects by uuid, so a slot recycled by
+        # `create_group` would otherwise start life narrowing a brand new
+        # allowance to objects of whichever group last held this slot.
+        self.allow_self_intersection_objects.clear()
+        self.allow_self_intersection_objects_index = -1
+        self.allow_inter_object_intersection_objects.clear()
+        self.allow_inter_object_intersection_objects_index = -1
         self.uuid = ""
         from ..models.material_locks import LOCKABLE_MATERIAL_PROPS, lock_name
         for locked_prop in LOCKABLE_MATERIAL_PROPS:
@@ -803,6 +815,33 @@ class ObjectGroup(PropertyGroup):
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
+    # Which of the group's objects the allowance above reaches. The allowance
+    # is per OBJECT all the way down (the frontend resolves it into one policy
+    # byte per vertex from the object's own material), so narrowing it to a
+    # subset costs nothing downstream and is the honest granularity: a scene
+    # usually arrives with ONE garment tangled, and flagging the whole group
+    # buys silence about the others as well.
+    #
+    # The default is True so a group that never opens this list behaves
+    # exactly as it did before the list existed, which is also what a `.blend`
+    # saved before it reads back.
+    allow_self_intersection_all_objects: BoolProperty(
+        name="Apply to All Objects",
+        default=OBJECT_GROUP_DEFAULTS["allow_self_intersection_all_objects"],
+        description=(
+            "Give every object assigned to this group the self-intersection "
+            "allowance. Turn it off to name the objects individually, and "
+            "only the objects in the list below are allowed to overlap "
+            "themselves"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_self_intersection_objects: CollectionProperty(
+        type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    allow_self_intersection_objects_index: IntProperty(
+        default=-1, options=NOT_ANIMATABLE
+    )  # pyright: ignore
     allow_inter_object_intersection: BoolProperty(
         name="Allow Inter-Object Intersections",
         default=OBJECT_GROUP_DEFAULTS["allow_inter_object_intersection"],
@@ -815,6 +854,25 @@ class ObjectGroup(PropertyGroup):
             "the collision"
         ),
         options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_inter_object_intersection_all_objects: BoolProperty(
+        name="Apply to All Objects",
+        default=OBJECT_GROUP_DEFAULTS[
+            "allow_inter_object_intersection_all_objects"
+        ],
+        description=(
+            "Give every object assigned to this group the inter-object "
+            "allowance. Turn it off to name the objects individually, and "
+            "only the objects in the list below stop reporting an overlap "
+            "with another object"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_inter_object_intersection_objects: CollectionProperty(
+        type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    allow_inter_object_intersection_objects_index: IntProperty(
+        default=-1, options=NOT_ANIMATABLE
     )  # pyright: ignore
     bend_warp: FloatProperty(
         name="Bending Stiffness (Warp)",

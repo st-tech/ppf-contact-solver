@@ -261,6 +261,9 @@ from . import bl_ftetwild_overrides
 from . import bl_project_rename_resync
 from . import bl_violation_overlay_classification
 from . import bl_intersection_allowances
+from . import bl_intersection_allowance_objects
+from . import bl_intersection_allowance_objects_run
+from . import bl_intersection_allowance_panel_draws
 from . import bl_self_intersection_build_reject
 from . import bl_solid_zero_volume_reject
 from . import bl_solid_fix_weight_threshold
@@ -632,6 +635,9 @@ REGISTRY = {
     # because it drives an ordinary build and reads the session directory:
     # it sets neither of those knobs and injects no ServerPolled.
     "bl_intersection_allowances": bl_intersection_allowances,
+    "bl_intersection_allowance_objects": bl_intersection_allowance_objects,
+    "bl_intersection_allowance_objects_run": bl_intersection_allowance_objects_run,
+    "bl_intersection_allowance_panel_draws": bl_intersection_allowance_panel_draws,
 
     "bl_self_intersection_build_reject": bl_self_intersection_build_reject,
     "bl_solid_zero_volume_reject": bl_solid_zero_volume_reject,

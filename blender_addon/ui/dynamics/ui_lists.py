@@ -41,6 +41,46 @@ class OBJECT_UL_AssignedObjectsList(UIList):
             layout.label(text="", icon=object_icon)
 
 
+class OBJECT_UL_IntersectionAllowanceObjectsList(UIList):
+    """UI List for the objects one intersection allowance is narrowed to.
+
+    An entry is an object reference stored by uuid, so three states are
+    drawn apart: the object is in the scene and still assigned to this
+    group, it is in the scene but no longer in the group, or it is gone.
+    Only the first reaches the solver. The other two are shown rather than
+    dropped, because they are what a user sees after removing an object from
+    the group by accident, and a silently shortened list would hide it.
+    """
+
+    def draw_item(
+        self, context, layout, data, item, icon, active_data, active_property, index
+    ):
+        if self.layout_type in {"DEFAULT", "COMPACT"}:
+            from ...core.uuid_registry import get_object_by_uuid
+
+            obj = get_object_by_uuid(item.uuid) if item.uuid else None
+            row = layout.row(align=True)
+            if obj is None:
+                row.label(
+                    text=iface_("{name} (Missing)").format(name=item.name),
+                    icon="ERROR",
+                )
+                return
+            in_group = any(
+                assigned.uuid == item.uuid for assigned in data.assigned_objects
+            )
+            if in_group:
+                row.label(text=obj.name, icon="OBJECT_DATA")
+            else:
+                row.label(
+                    text=iface_("{name} (Not in Group)").format(name=obj.name),
+                    icon="ERROR",
+                )
+        elif self.layout_type == "GRID":
+            layout.alignment = "CENTER"
+            layout.label(text="", icon="OBJECT_DATA")
+
+
 class OBJECT_UL_PinVertexGroupsList(UIList):
     """UI List for pin vertex groups"""
 
@@ -360,6 +400,7 @@ class OBJECT_UL_CollisionWindowsList(bpy.types.UIList):
 
 classes = (
     OBJECT_UL_AssignedObjectsList,
+    OBJECT_UL_IntersectionAllowanceObjectsList,
     OBJECT_UL_PinVertexGroupsList,
     OBJECT_UL_PinOperationsList,
     OBJECT_UL_StaticOpsList,

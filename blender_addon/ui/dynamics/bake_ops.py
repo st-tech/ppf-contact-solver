@@ -30,7 +30,7 @@ from ...core.pc2 import (
 from ...core.utils import _get_fcurves, redraw_all_areas, set_linear_interpolation
 from ...models.collection_utils import safe_update_index
 from ..state import iterate_active_object_groups
-from .utils import cleanup_pin_vertex_groups_for_object, get_group_from_index, reset_object_display
+from .utils import cleanup_group_references_for_object, get_group_from_index, reset_object_display
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +572,7 @@ def _finalize_job(context) -> tuple[int, int]:
         i = len(group.assigned_objects) - 1
         while i >= 0:
             if group.assigned_objects[i].uuid in uuids:
-                cleanup_pin_vertex_groups_for_object(group, group.assigned_objects[i].uuid)
+                cleanup_group_references_for_object(group, group.assigned_objects[i].uuid)
                 group.assigned_objects.remove(i)
             i -= 1
         group.assigned_objects_index = safe_update_index(
@@ -910,7 +910,7 @@ class OBJECT_OT_BakeSingleFrame(Operator):
 
         reset_object_display(obj)
         group.assigned_objects.remove(index)
-        cleanup_pin_vertex_groups_for_object(group, assigned.uuid)
+        cleanup_group_references_for_object(group, assigned.uuid)
         group.assigned_objects_index = safe_update_index(index, len(group.assigned_objects))
 
         apply_object_overlays()
@@ -1064,7 +1064,7 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
                         _apply_curve_pose(data, cap_data)
                     reset_object_display(obj)
                     group.assigned_objects.remove(i)
-                    cleanup_pin_vertex_groups_for_object(group, assigned_item.uuid)
+                    cleanup_group_references_for_object(group, assigned_item.uuid)
                     count += 1
                 i -= 1
             group.assigned_objects_index = safe_update_index(

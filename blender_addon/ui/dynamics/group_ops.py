@@ -17,7 +17,7 @@ from ..state import (
     find_available_group_slot,
     iterate_active_object_groups,
 )
-from .utils import cleanup_pin_vertex_groups_for_object, get_group_from_index, reset_object_display
+from .utils import cleanup_group_references_for_object, get_group_from_index, reset_object_display
 
 
 class OBJECT_OT_CreateGroup(Operator):
@@ -368,7 +368,7 @@ class OBJECT_OT_RemoveObjectFromGroup(Operator):
                     cleanup_mesh_cache(obj)
 
                 group.assigned_objects.remove(index)
-                cleanup_pin_vertex_groups_for_object(group, obj_uuid)
+                cleanup_group_references_for_object(group, obj_uuid)
                 group.assigned_objects_index = safe_update_index(
                     index, len(group.assigned_objects)
                 )
@@ -421,7 +421,7 @@ def _apply_cleanup():
         for i in reversed(indices_to_remove):
             obj_uuid = group.assigned_objects[i].uuid
             group.assigned_objects.remove(i)
-            cleanup_pin_vertex_groups_for_object(group, obj_uuid)
+            cleanup_group_references_for_object(group, obj_uuid)
             changed = True
         if indices_to_remove:
             group.assigned_objects_index = safe_update_index(

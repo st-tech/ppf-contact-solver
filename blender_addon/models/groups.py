@@ -148,6 +148,12 @@ OBJECT_GROUP_DEFAULTS = {
     # never touches them reaches the solver exactly as it did before.
     "allow_self_intersection": False,
     "allow_inter_object_intersection": False,
+    # Each allowance reaches every object of the group until the user narrows
+    # it to a named subset. True keeps a group that ignores the subset list
+    # behaving as the checkbox alone always has, which is also what a `.blend`
+    # written before the list reads back.
+    "allow_self_intersection_all_objects": True,
+    "allow_inter_object_intersection_all_objects": True,
     "shrink_x": 1.0,
     "shrink_y": 1.0,
     "enable_inflate": False,

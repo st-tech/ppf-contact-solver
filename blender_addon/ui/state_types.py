@@ -467,6 +467,29 @@ class StaticOpItem(PropertyGroup):
     )  # pyright: ignore
 
 
+class IntersectionAllowanceObject(PropertyGroup):
+    """One object an intersection allowance is narrowed to.
+
+    Each of the two group-level allowances carries its own collection of
+    these, naming the subset of the group's assigned objects the allowance
+    reaches while its "Apply to All Objects" box is off. The two collections
+    are separate because the two allowances are: an object can be shipped
+    tangled in itself without any of its neighbours being tangled in it.
+
+    An entry is an object REFERENCE, so it stores the uuid and keeps the name
+    only for display, exactly as AssignedObject and PinVertexGroupItem do.
+    Every path that ends an object's membership drops its entry here too
+    (`cleanup_group_references_for_object`), so an entry naming a
+    non-member is not a state the add-on produces. The list is still drawn
+    and encoded defensively against one: it is marked in the panel and
+    reaches no object at encode time, which is also how an entry for an
+    object the user has excluded from the simulation behaves.
+    """
+
+    name: StringProperty()  # pyright: ignore
+    uuid: StringProperty()  # pyright: ignore
+
+
 class AssignedObject(PropertyGroup):
     name: StringProperty()  # pyright: ignore
     uuid: StringProperty()  # pyright: ignore

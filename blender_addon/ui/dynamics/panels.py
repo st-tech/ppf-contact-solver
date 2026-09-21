@@ -197,7 +197,81 @@ def _draw_lock_translation(param_box, group, actual_index):
             )
 
 
-def _draw_intersection_allowances(param_box, group):
+def _draw_intersection_allowance(box, group, spec, actual_index):
+    """One allowance: the checkbox, and the objects it reaches.
+
+    While "Apply to All Objects" is on, the allowance covers every object
+    assigned to the group, which is what the checkbox alone has always
+    meant. Off, it covers only the objects in the list, and the list plus
+    its buttons are drawn grayed out rather than hidden while the switch is
+    on, so the narrowing is visibly available instead of appearing only once
+    somebody thinks to turn a switch off.
+
+    The list itself is drawn only while the allowance is enabled: with the
+    allowance off there is nothing for a subset to narrow, and the panel
+    already draws the enable / disable of a feature's own sub-settings that
+    way (strain limiting, inflation, plasticity, soft constraints).
+    """
+    from ...models.intersection_allowances import allowed_object_uuids
+
+    box.prop(group, spec.enable_prop)
+    if not getattr(group, spec.enable_prop):
+        return
+
+    sub = box.box()
+    sub.prop(group, spec.all_objects_prop)
+    applies_to_all = getattr(group, spec.all_objects_prop)
+
+    collection = getattr(group, spec.objects_prop)
+    list_col = sub.column()
+    list_col.enabled = not applies_to_all
+    row = list_col.row()
+    row.template_list(
+        "OBJECT_UL_IntersectionAllowanceObjectsList", spec.key,
+        group, spec.objects_prop,
+        group, spec.index_prop,
+        rows=2,
+    )
+    buttons = row.column(align=True)
+    add_op = buttons.operator(
+        "object.add_intersection_allowance_objects", icon="ADD", text="")
+    add_op.group_index = actual_index
+    add_op.allowance = spec.key
+    remove = buttons.column(align=True)
+    remove.enabled = 0 <= getattr(group, spec.index_prop) < len(collection)
+    rm_op = remove.operator(
+        "object.remove_intersection_allowance_object", icon="REMOVE", text="")
+    rm_op.group_index = actual_index
+    rm_op.allowance = spec.key
+    clear = buttons.column(align=True)
+    clear.enabled = len(collection) > 0
+    clear_op = clear.operator(
+        "object.clear_intersection_allowance_objects", icon="TRASH", text="")
+    clear_op.group_index = actual_index
+    clear_op.allowance = spec.key
+
+    if applies_to_all:
+        return
+
+    # What the group will actually ship, rather than what the list holds. An
+    # entry naming an object the group no longer holds, or one excluded from
+    # the simulation, reaches nothing, and the count is the only place that
+    # difference is visible before a build.
+    reached = len(allowed_object_uuids(group, spec))
+    if reached == 0:
+        list_col.label(
+            text="No objects listed; this allowance covers none",
+            icon="ERROR",
+        )
+    elif reached != len(collection):
+        list_col.label(
+            text=iface_("{count} of {total} entries reach the solver").format(
+                count=reached, total=len(collection)),
+            icon="INFO",
+        )
+
+
+def _draw_intersection_allowances(param_box, group, actual_index):
     """Allowances that let a run start, and keep going, through an overlap
     the scene arrives with (issue #138).
 
@@ -215,16 +289,19 @@ def _draw_intersection_allowances(param_box, group):
     stays visible; deciding which of the three conditions holds would mean
     inspecting the group's ops and stitches on every redraw.
 
-    Both settings live on the group and are applied to every Blender object
-    assigned to it, while self versus inter-object is decided per OBJECT. Two
-    objects of one group therefore make an inter-object pair, which the second
-    label states in the one case where the difference decides the outcome: the
-    group holds more than one object and covers only the self case.
+    Both settings reach every object the group holds until the user narrows
+    them, and self versus inter-object is decided per OBJECT whichever way
+    they are narrowed. Two objects of one group therefore make an
+    inter-object pair, which the second label states in the one case where
+    the difference decides the outcome: the group holds more than one object
+    and covers only the self case.
     """
+    from ...models.intersection_allowances import INTERSECTION_ALLOWANCES
+
     box = param_box.box()
     box.label(text="Allow Intersections")
-    box.prop(group, "allow_self_intersection")
-    box.prop(group, "allow_inter_object_intersection")
+    for spec in INTERSECTION_ALLOWANCES:
+        _draw_intersection_allowance(box, group, spec, actual_index)
     if group.allow_self_intersection or group.allow_inter_object_intersection:
         box.label(
             text="Overlaps are simulated, not reported",
@@ -2085,7 +2162,7 @@ class DYNAMICS_PT_Groups(Panel):
 
                     # Outside the type chain on purpose: both tolerances apply
                     # to every group type.
-                    _draw_intersection_allowances(param_box, group)
+                    _draw_intersection_allowances(param_box, group, actual_index)
 
                     # The map list is drawn by the SOLID and SHELL branches
                     # above. A group whose type was changed afterwards keeps

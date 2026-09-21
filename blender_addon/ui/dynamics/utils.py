@@ -39,6 +39,42 @@ def reset_object_display(obj):
     obj.show_all_edges = False
 
 
+def cleanup_group_references_for_object(group: ObjectGroup, object_uuid: str):
+    """Drop everything on *group* that names *object_uuid*.
+
+    Called at the moment an object's membership ends, by every path that
+    disowns one, so no list on the group outlives the assignment it was
+    written against. A reference left behind would be shown in a panel and
+    would silently start meaning a different object once the group's slot
+    was reused.
+    """
+    cleanup_pin_vertex_groups_for_object(group, object_uuid)
+    cleanup_intersection_allowances_for_object(group, object_uuid)
+
+
+def cleanup_intersection_allowances_for_object(group: ObjectGroup, object_uuid: str):
+    """Remove *object_uuid* from both intersection-allowance subsets."""
+    from ...models.intersection_allowances import (
+        INTERSECTION_ALLOWANCES,
+        allowance_objects,
+    )
+    from ...models.collection_utils import safe_update_index
+
+    for spec in INTERSECTION_ALLOWANCES:
+        collection = allowance_objects(group, spec)
+        removed = False
+        for index in range(len(collection) - 1, -1, -1):
+            if collection[index].uuid == object_uuid:
+                collection.remove(index)
+                removed = True
+        if removed:
+            setattr(
+                group,
+                spec.index_prop,
+                safe_update_index(getattr(group, spec.index_prop), len(collection)),
+            )
+
+
 def cleanup_pin_vertex_groups_for_object(group: ObjectGroup, object_uuid: str):
     """Remove pin vertex groups that reference the specified object (by UUID)."""
     pin_indices_to_remove = []
