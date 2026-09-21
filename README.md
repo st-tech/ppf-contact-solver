@@ -58,7 +58,7 @@ We employ Continuous Collision Detection (CCD), **not Discrete Collision Detecti
 
 - The target contact thickness is atom-level thin, with the object size being on the order of meters.
 - An object collides at the speed of light, with the step size being 0.01 seconds.
-- Objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
+- Self-intersectable dynamic objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
 
 In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.**
 
