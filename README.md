@@ -58,6 +58,17 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
 - **✨ Stay Clean**: You can remove all traces after use.
 - **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
 
+### 🚧 Gentle Disclaimer and Limitations
+
+- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
+- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
+- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
+- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
+- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
+- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
+- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
+- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
+
 ## 🔖 Table of Contents
 
 - [📝 Change History](#-change-history)
@@ -100,7 +111,6 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
 - [🔒 Our Penetration-free Guarantee](#-our-penetration-free-guarantee)
   - [✅ How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections)
   - [🚨 Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup)
-- [🚧 Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations)
 - [❓ Frequently Asked Questions](#-frequently-asked-questions)
 - [🙏 Acknowledgements](#-acknowledgements)
 
@@ -974,17 +984,6 @@ An intersection checker confirms **zero penetration** after every successful run
 ### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
 
 Examples include pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) and cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
-
-## 🚧 Gentle Disclaimer and Limitations
-
-- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
-- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
-- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
-- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
-- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
-- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
-- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
-- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
 
 ## ❓ Frequently Asked Questions
 
