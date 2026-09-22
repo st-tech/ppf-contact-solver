@@ -14,6 +14,12 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 > 🤖 **LLM Transparency:** We **highly** respect that readers expect to hear the author's original voice and tone, which we work to retain throughout. Our use of LLMs is clarified in [(Markdown)](./articles/llm_transparency.md).
 
+## 📌 TL;DR
+
+If you simply want to use this through Blender, watch this [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg).
+The release page is [here](https://github.com/st-tech/ppf-contact-solver/releases).
+Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html).
+
 ## 👀 Quick Look
 
 🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally on a modern NVIDIA GPU on Windows or Linux, or on an Apple silicon Mac)
