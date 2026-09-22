@@ -994,9 +994,10 @@ If you used this project in a public piece of work, whether a paper, a productio
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
 | I got an intersection error. Why is that? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
-| Did you write everything using AI? | These days, we do try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. |
+| Did you write everything using AI? | We try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
-| How much should I trust your expertise? | The author spent more than a decade on fluid simulation research for graphics and published three first-authored SIGGRAPH (TOG) papers by 2020, before AI became prevalent. |
+| How much should I trust your expertise? | The author had published three first-authored SIGGRAPH (TOG) papers on fluid simulation by 2020, before AI became prevalent. See [Google Scholar](https://scholar.google.com/citations?user=Ag3RwxUAAAAJ&hl=en). |
+| Do you speak English? I wonder if I can talk to you. | See the [video tutorial](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html) to hear me speak. This is how I talk. |
 
 ## 🙏 Acknowledgements
 
