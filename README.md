@@ -1005,6 +1005,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Overhyped? | Many people seem to think it runs in real time and are disappointed to learn that it does not. We have laid out clear limitations in [Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations). |
 | I got an intersection error. Why is that? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
+| But LLMs can make mistakes. | The author makes more mistakes. |
 | Did you write everything using AI? | We try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
