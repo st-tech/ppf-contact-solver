@@ -985,7 +985,7 @@ If you used this project in a public piece of work, whether a paper, a productio
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
-| Is this better than &lt;Your Favorite Product&gt;? | Probably not. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
+| Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
 | Why did you make the setup this complicated? | For internal use reasons. For now, see the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg) and our [video tutorials](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). They are much cleaner. |
