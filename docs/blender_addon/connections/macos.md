@@ -22,13 +22,6 @@ talking to it over a loopback socket (purple dashed arrow). Linux
 Native has the same shape; see [Linux Native](linux.md).
 ```
 
-:::{note}
-This type replaces the retired **Local** connection on macOS. A
-`.blend` or a connection profile that still names `Local` is moved onto
-it automatically, carrying its path across; see
-{ref}`The retired Local type <retired-local>`.
-:::
-
 ## When to Use It
 
 - An Apple-silicon Mac running Blender, where the Metal build can run

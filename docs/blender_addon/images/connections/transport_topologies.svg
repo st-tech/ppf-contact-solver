@@ -3,7 +3,7 @@
   <desc>
     Five stacked block diagrams, one per connection type, showing which
     machine the Blender add-on and ppf-cts-server each live on. Top row,
-    Local keeps both on the Blender workstation and talks
+    Linux Native / macOS Native keeps both on the Blender workstation and talks
     over a loopback TCP socket with no transport boundary. Second row,
     SSH and SSH Command, keeps the add-on on the workstation and
     reaches ppf-cts-server on a remote Linux host through a paramiko SSH
@@ -58,7 +58,7 @@
   <text x="732" y="34" class="lbl-data">server traffic</text>
   <text x="732" y="48" class="note">TCP to ppf-cts-server</text>
 
-  <!-- ============ Row 1: Local ============ -->
+  <!-- ============ Row 1: Linux Native / macOS Native ============ -->
   <text x="20" y="90" class="mode-title">Linux Native  /  macOS Native</text>
   <text x="20" y="108" class="mode-sub">Add-on and <tspan class="lbl-mono">ppf-cts-server</tspan> share one workstation. Loopback TCP, no transport boundary.</text>
 

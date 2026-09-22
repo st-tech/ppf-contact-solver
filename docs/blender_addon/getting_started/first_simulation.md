@@ -94,9 +94,8 @@ a static collider for it to drape over.
 
    Step 1: pick the connection type from the **Type** dropdown, fill the
    path and **Project Name** fields, then click the highlighted
-   **Connect** button. This screenshot was taken before `Local` was
-   replaced by the three native types, and before the **Compute
-   Device** row was added.
+   **Connect** button. This screenshot predates the current **Type**
+   list and the **Compute Device** row.
    ```
 
 2. **Connect, then start the server.** Click **Connect**. The status

@@ -311,12 +311,6 @@ documentation, grouped by subject and alphabetized within each group.
   this Linux machine, on CUDA, ROCm, or the CPU build, with no SSH or
   Docker. See [Linux Native](connections/linux.md).
 
-**Local connection**
-: Retired. The connection type that reached a server started by hand on
-  the same machine as Blender. The three native types replaced it, and a
-  saved `.blend` or profile naming it is migrated automatically. See
-  {ref}`The retired Local type <retired-local>`.
-
 **macOS Native connection**
 : A connection type where the solver runs directly as a child process on
   an Apple-silicon Mac, on Metal or the CPU build, with no SSH or

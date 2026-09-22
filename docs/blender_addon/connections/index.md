@@ -220,35 +220,6 @@ not a backend name: that directory is what decides which solver a run
 actually executes, and a name would also accept a server from an
 unrelated tree built for the same device.
 
-(retired-local)=
-
-## The Retired `Local` Type
-
-Earlier versions offered a **Local** type: a connection to a server you
-had started by hand on this machine. The three native types replaced it.
-They reach the same server and additionally know how to start it, which
-build directory it came out of, and which device it runs on.
-
-Nothing needs to be migrated by hand:
-
-- A `.blend` saved with `Local` is moved onto this platform's native
-  type when it is opened, and its path is carried across into the
-  native **Solver Path** field, unless that field already holds one --
-  a scene carrying both was connected some other way since, and that
-  later answer is the one kept. The move is recorded in the add-on
-  console as `[auto-migrate] server_type=Local -> LINUX_NATIVE;
-  local_path -> linux_native_path`, so a scene that changes type is not
-  silent about it. Saving the file makes the move permanent.
-- A [connection profile](profiles.md) whose `type` is still `"Local"`
-  is applied as `Windows Native`, `macOS Native`, or `Linux Native`
-  depending on the platform reading it, and a `local_path` key lands on
-  that platform's path field. A profile is a file you wrote and keep, so
-  a name that was once documented keeps working.
-
-`Local` no longer appears in the **Type** dropdown, and the slot it
-occupied is retired permanently rather than reused, so no saved file can
-be repointed at a different type by accident.
-
 (gpu-picker)=
 
 ## Picking a GPU

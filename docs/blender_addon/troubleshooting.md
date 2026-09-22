@@ -208,8 +208,7 @@ are unclosed quotes or unescaped backslashes in Windows paths (use
 
 The `type` value does not match one of `SSH`, `SSH Command`,
 `Docker`, `Docker over SSH`, `Docker over SSH Command`, `Windows
-Native`, `macOS Native`, `Linux Native`, or the retired `Local`. Case
-matters.
+Native`, `macOS Native`, or `Linux Native`. Case matters.
 
 :::{note}
 **Save** rewrites the whole TOML; comments and original formatting are

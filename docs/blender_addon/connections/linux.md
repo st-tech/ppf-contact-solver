@@ -24,13 +24,6 @@ talking to it over a loopback socket (purple dashed arrow). macOS
 Native has the same shape; see {ref}`macOS Native <macos-native>`.
 ```
 
-:::{note}
-This type replaces the retired **Local** connection. A `.blend` or a
-connection profile that still names `Local` is moved onto this type
-automatically on Linux, carrying its path across; see
-{ref}`The retired Local type <retired-local>`.
-:::
-
 ## When to Use It
 
 - A Linux workstation that has the GPU, so there is no remote host to
