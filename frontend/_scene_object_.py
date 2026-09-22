@@ -483,6 +483,9 @@ class Object:
         self._default_color = [1.0, 0.85, 0.0]
         self._velocity = [0.0, 0.0, 0.0]
         self._angular_velocity = [0.0, 0.0, 0.0]
+        # The group this object belongs to, as set by :meth:`group`. None is
+        # the default group every object told nothing shares.
+        self._group_label: Optional[str] = None
         # PDRD hinge spec: None = free body, or ("hinge", pca_axis_index)
         # where pca_axis_index in {0, 1, 2} selects a principal axis of the
         # rest shape as the world rotation axle. See :meth:`hinge`.
@@ -1244,6 +1247,40 @@ class Object:
         self._visible = not hidden
         return self
 
+    def group(self, label: str) -> "Object":
+        """Put the object in a named group.
+
+        A group matters only to the ``allow-inter-group-intersection``
+        parameter: an object that sets it passes through every object in a
+        DIFFERENT group (no contact force, no line-search stop, no intersection
+        report), while objects of one group still collide with each other.
+        Objects never given a group share one default group. A static collider
+        that becomes a collision mesh counts as another group from every
+        object, whatever label it was given. The Blender add-on puts each
+        object in its add-on group.
+
+        Args:
+            label (str): The group's name. Objects given the same label are in
+                the same group.
+
+        Returns:
+            Object: The object, for chaining.
+
+        Example:
+            Let a garment pass through the body while its own layers collide::
+
+                scene.add("shirt").group("garments").param.set(
+                    "allow-inter-group-intersection", 1.0)
+                scene.add("jacket").group("garments")
+                scene.add("body").group("character").pin()
+        """
+        if not isinstance(label, str):
+            raise TypeError(
+                f"group label must be a str, got {type(label).__name__}"
+            )
+        self._group_label = label
+        return self
+
     def velocity(self, u: float, v: float, w: float, t: float = 0.0) -> "Object":
         """Set the velocity of the object.
 
@@ -1754,14 +1791,15 @@ class Object:
         Args:
             ind (Optional[list[int]], optional): The indices of the vertices to pin.
             If None, all vertices are pinned. Defaults to None.
-            allow_intersection (bool, optional): Tolerate intersections of the
-            elements this pin FULLY covers instead of reporting them. An
-            element qualifies only when every one of its vertices is pinned
-            and every pin covering those vertices set this, so a partially
-            pinned band is unaffected. Use it for a pinned region whose
-            prescribed placement the solver was never going to resolve, such
-            as a garment band captured from a rig-deformed pose. Defaults to
-            False.
+            allow_intersection (bool, optional): Let the elements this pin
+            FULLY covers pass through whatever they meet: such a pair gets no
+            contact force, is not held apart by the line search, and is not
+            reported as an intersection. An element qualifies only when every
+            one of its vertices is pinned and every pin covering those
+            vertices set this, so a partially pinned band still collides. Use
+            it for a pinned region whose prescribed placement overlaps other
+            geometry, such as a garment band captured from a rig-deformed
+            pose. Defaults to False.
 
         Returns:
             PinHolder: The pin holder.

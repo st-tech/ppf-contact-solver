@@ -31,13 +31,15 @@ documentation, grouped by subject and alphabetized within each group.
   again.
 
 **Intersection allowance**
-: An opt-in that accepts already-overlapping geometry instead of refusing
-  to simulate it. Two are set on a group and apply to every object assigned
-  to it (**Allow Self-Intersections**, **Allow Inter-Object
-  Intersections**), and one is set on a pin (**Allow Intersections Here**).
-  "Self" means one object's overlap with itself, so two objects in one group
-  make an inter-object pair. Each suppresses the report only; contact still
-  acts on the overlap. See
+: An opt-in that lets chosen geometry pass through other geometry: an
+  allowed pair has no contact, and its overlap is never reported as an
+  error. Three are set on a group (**Allow Self-Intersections**, **Allow
+  Inter-Object Intersections**, **Allow Inter-Group Intersections**), each
+  reaching every object assigned to it or only the objects its list names,
+  and one is set on a pin (**Allow Intersections Here**). "Self" means one
+  object passing through itself, so two objects in one group make an
+  inter-object pair; "inter-group" covers only objects of different groups.
+  None of them affects the invisible walls and spheres. See
   [Allow Intersections](workflow/params/material.md#allow-intersections).
 
 **Invisible collider**

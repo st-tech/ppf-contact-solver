@@ -26,6 +26,9 @@ from . import rig_lock_axes
 from . import rig_lock_axes_projector
 from . import rig_intersection_allowances
 from . import rig_intersection_allowance_isolation
+from . import rig_intersection_allowance_contact
+from . import rig_intersection_allowance_contact_pins_groups
+from . import rig_intersection_allowance_contact_drape
 from . import bl_server_stop_is_real
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
@@ -264,6 +267,12 @@ from . import bl_intersection_allowances
 from . import bl_intersection_allowance_objects
 from . import bl_intersection_allowance_objects_run
 from . import bl_intersection_allowance_panel_draws
+from . import bl_intersection_allowance_matrix_shell_held
+from . import bl_intersection_allowance_matrix_solid_held
+from . import bl_intersection_allowance_matrix_static_rest
+from . import bl_intersection_allowance_matrix_static_anim
+from . import bl_intersection_allowance_matrix_same_group
+from . import bl_intersection_allowance_matrix_self
 from . import bl_self_intersection_build_reject
 from . import bl_solid_zero_volume_reject
 from . import bl_solid_fix_weight_threshold
@@ -334,11 +343,17 @@ REGISTRY = {
     "rig_lock_axes": rig_lock_axes,
     "rig_lock_axes_projector": rig_lock_axes_projector,
 
-    # The issue-#138 intersection allowances, at their three gates: the
-    # solver's live scan, the scene-build check, and whether an allowance
-    # stays inside the pairs that asked for it. None needs Blender.
+    # The issue-#138 intersection allowances, at their gates: the solver's
+    # live scan, the scene-build check, whether an allowance stays inside the
+    # pairs that asked for it, and that an allowed pair gets no contact at
+    # all. None needs Blender.
     "rig_intersection_allowances": rig_intersection_allowances,
     "rig_intersection_allowance_isolation": rig_intersection_allowance_isolation,
+    "rig_intersection_allowance_contact": rig_intersection_allowance_contact,
+    "rig_intersection_allowance_contact_pins_groups":
+        rig_intersection_allowance_contact_pins_groups,
+    "rig_intersection_allowance_contact_drape":
+        rig_intersection_allowance_contact_drape,
 
     # The solver's build-time rest-shape gate: a near-collinear shell face is
     # finite and invertible, so only its conditioning gives it away (issue
@@ -639,6 +654,23 @@ REGISTRY = {
     "bl_intersection_allowance_objects_run": bl_intersection_allowance_objects_run,
     "bl_intersection_allowance_panel_draws": bl_intersection_allowance_panel_draws,
 
+    # The allowances simulated end to end from Blender across every
+    # combination of group types: a held object, a falling one, a floor, and
+    # whether the falling one ends on the floor. Split by held type (and the
+    # same-group, self and narrowed layouts) so the cells spread over shards.
+    "bl_intersection_allowance_matrix_shell_held":
+        bl_intersection_allowance_matrix_shell_held,
+    "bl_intersection_allowance_matrix_solid_held":
+        bl_intersection_allowance_matrix_solid_held,
+    "bl_intersection_allowance_matrix_static_rest":
+        bl_intersection_allowance_matrix_static_rest,
+    "bl_intersection_allowance_matrix_static_anim":
+        bl_intersection_allowance_matrix_static_anim,
+    "bl_intersection_allowance_matrix_same_group":
+        bl_intersection_allowance_matrix_same_group,
+    "bl_intersection_allowance_matrix_self":
+        bl_intersection_allowance_matrix_self,
+
     "bl_self_intersection_build_reject": bl_self_intersection_build_reject,
     "bl_solid_zero_volume_reject": bl_solid_zero_volume_reject,
     "bl_solid_fix_weight_threshold": bl_solid_fix_weight_threshold,
@@ -805,14 +837,36 @@ def get(name: str):
     return REGISTRY.get(name)
 
 
+def _on_demand(mod) -> bool:
+    """True for a scenario that runs only when it is named.
+
+    ``ON_DEMAND = True`` is for a sweep too long to pay on every run whose
+    coverage the default set already samples, such as the full intersection
+    allowance matrix. It is left out of the default selection and runs like
+    any other scenario when named on the command line or in CI's
+    ``scenarios`` input; ``on_demand_names`` lists what was left out, so a
+    reader of the log sees it rather than finding it missing."""
+    return bool(getattr(mod, "ON_DEMAND", False))
+
+
 def all_names(backend: str) -> list[str]:
     """Scenario names runnable on this platform against *backend*.
 
     ``backend`` is REQUIRED and has no default: a default would select
     whatever it happened to name and report that as if it were the suite.
     Callers say what they target, and ``unrunnable_names`` says what that
-    costs."""
+    costs. On-demand scenarios are not in it; see ``on_demand_names``."""
     return [
         n for n, m in REGISTRY.items()
         if _platform_supported(m) and _backend_supported(m, backend)
+        and not _on_demand(m)
+    ]
+
+
+def on_demand_names(backend: str) -> list[str]:
+    """Runnable scenarios the default selection leaves out (``ON_DEMAND``)."""
+    return [
+        n for n, m in REGISTRY.items()
+        if _platform_supported(m) and _backend_supported(m, backend)
+        and _on_demand(m)
     ]

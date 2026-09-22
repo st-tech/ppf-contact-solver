@@ -1279,10 +1279,9 @@ pub unsafe fn advance<D: Device>(
                         );
                     }
                     log::message!(
-                        "### an intersection allowance suppresses the BUILD-TIME report \
-                         of an overlap; it does not make one solvable, and contact never \
-                         consults it. A scene admitted that way still has to start with \
-                         its surfaces apart."
+                        "### no intersection allowance covers this pair, so contact has to \
+                         keep it apart. An allowance that names it (self, inter-object, or \
+                         a pin's) takes the pair out of contact altogether."
                     );
                     log::message!(
                         "### give the initial geometry a small clearance so nothing starts \
@@ -2634,7 +2633,8 @@ pub unsafe fn advance<D: Device>(
         // between two fully prescribed elements cannot be resolved by either
         // side yielding, so reporting it would only abort a run over geometry
         // the solver was never going to fix. The three intersection allowances
-        // reach `intersection.rs`'s one predicate and suppress REPORTING only.
+        // reach `intersection.rs`'s one predicate, the same one that takes
+        // their pairs out of contact and the line search.
         if !prm.disable_contact {
             let SolverState {
                 contact: contact_state,

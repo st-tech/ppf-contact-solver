@@ -470,11 +470,11 @@ class StaticOpItem(PropertyGroup):
 class IntersectionAllowanceObject(PropertyGroup):
     """One object an intersection allowance is narrowed to.
 
-    Each of the two group-level allowances carries its own collection of
+    Each of the three group-level allowances carries its own collection of
     these, naming the subset of the group's assigned objects the allowance
-    reaches while its "Apply to All Objects" box is off. The two collections
-    are separate because the two allowances are: an object can be shipped
-    tangled in itself without any of its neighbours being tangled in it.
+    reaches while its "Apply to All Objects" box is off. The collections are
+    separate because the allowances are: an object can be shipped tangled in
+    itself without any of its neighbors being tangled in it.
 
     An entry is an object REFERENCE, so it stores the uuid and keeps the name
     only for display, exactly as AssignedObject and PinVertexGroupItem do.
@@ -1120,13 +1120,11 @@ class PinVertexGroupItem(PropertyGroup):
         name="Allow Intersections Here",
         default=False,
         description=(
-            "Accept an overlap of the geometry this pin holds instead of "
-            "stopping the simulation, such as a cuff that starts inside the "
-            "wrist it is pulled onto. A face counts only where the pin holds "
-            "every corner of it, a rod segment only where it holds both ends. "
-            "One side of an overlap is enough, so a partly pinned face is "
-            "still accepted when the geometry it meets is fully held. Contact "
-            "still acts on the overlap: the error is suppressed, not the "
-            "collision"
+            "Let the geometry this pin holds pass through whatever it meets, "
+            "such as a cuff that starts inside the wrist it is pulled onto. "
+            "Such pairs get no contact and are never reported. A face counts "
+            "only where the pin holds every corner of it, a rod segment only "
+            "where it holds both ends. One side is enough, so a partly pinned "
+            "face also passes through geometry that is fully held"
         ),
     )  # pyright: ignore

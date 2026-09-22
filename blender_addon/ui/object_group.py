@@ -317,13 +317,15 @@ class ObjectGroup(PropertyGroup):
         self.pin_vertex_groups.clear()
         self.material_maps.clear()
         self.material_maps_index = 0
-        # Both allowance subsets name objects by uuid, so a slot recycled by
+        # Every allowance subset names objects by uuid, so a slot recycled by
         # `create_group` would otherwise start life narrowing a brand new
         # allowance to objects of whichever group last held this slot.
         self.allow_self_intersection_objects.clear()
         self.allow_self_intersection_objects_index = -1
         self.allow_inter_object_intersection_objects.clear()
         self.allow_inter_object_intersection_objects_index = -1
+        self.allow_inter_group_intersection_objects.clear()
+        self.allow_inter_group_intersection_objects_index = -1
         self.uuid = ""
         from ..models.material_locks import LOCKABLE_MATERIAL_PROPS, lock_name
         for locked_prop in LOCKABLE_MATERIAL_PROPS:
@@ -806,12 +808,11 @@ class ObjectGroup(PropertyGroup):
         name="Allow Self-Intersections",
         default=OBJECT_GROUP_DEFAULTS["allow_self_intersection"],
         description=(
-            "Accept an object that overlaps itself instead of stopping the "
-            "simulation, for a mesh that arrives tangled in its pose. It "
-            "covers each object assigned to this group on its own, so an "
-            "overlap between two of them is an inter-object one. Contact "
-            "still acts on the overlap: the error is suppressed, not the "
-            "collision"
+            "Let an object pass through itself. Its parts get no contact "
+            "with each other and an overlap is never reported, so a folding "
+            "cloth crosses its own layers. It covers each object assigned to "
+            "this group on its own, so two of them meeting is an inter-object "
+            "overlap, which this does not allow"
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
@@ -846,12 +847,12 @@ class ObjectGroup(PropertyGroup):
         name="Allow Inter-Object Intersections",
         default=OBJECT_GROUP_DEFAULTS["allow_inter_object_intersection"],
         description=(
-            "Accept an overlap between two different objects instead of "
-            "stopping the simulation, including two objects assigned to this "
-            "same group. Only one of the two sides has to enable it, so "
-            "setting it on a garment also covers the body it is fitted to. "
-            "Contact still acts on the overlap: the error is suppressed, not "
-            "the collision"
+            "Let an object pass through every other object, including other "
+            "objects in this group and static colliders, but not the "
+            "invisible walls and spheres. Such pairs get no contact and are "
+            "never reported. Only one of the two sides has to enable it, so "
+            "setting it on a garment also lets it pass through the body it is "
+            "fitted to"
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
@@ -863,8 +864,7 @@ class ObjectGroup(PropertyGroup):
         description=(
             "Give every object assigned to this group the inter-object "
             "allowance. Turn it off to name the objects individually, and "
-            "only the objects in the list below stop reporting an overlap "
-            "with another object"
+            "only the objects in the list below pass through other objects"
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
@@ -872,6 +872,43 @@ class ObjectGroup(PropertyGroup):
         type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
     )  # pyright: ignore
     allow_inter_object_intersection_objects_index: IntProperty(
+        default=-1, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    # The narrower sibling of the allowance above: it covers only a pair whose
+    # two objects are assigned to DIFFERENT groups, so the objects of one
+    # group keep colliding with each other while they pass through the rest
+    # of the scene. A group holds one type, so a STATIC collider never shares
+    # a group with a dynamic object and is always part of that rest. Which of
+    # this group's objects carry it is per object, exactly like the other two.
+    allow_inter_group_intersection: BoolProperty(
+        name="Allow Inter-Group Intersections",
+        default=OBJECT_GROUP_DEFAULTS["allow_inter_group_intersection"],
+        description=(
+            "Let an object pass through every object assigned to a different "
+            "group, including static colliders, but not the invisible walls "
+            "and spheres. Objects in this same group still collide with each "
+            "other. Such pairs get no contact and are never reported. Only "
+            "one of the two sides has to enable it"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_inter_group_intersection_all_objects: BoolProperty(
+        name="Apply to All Objects",
+        default=OBJECT_GROUP_DEFAULTS[
+            "allow_inter_group_intersection_all_objects"
+        ],
+        description=(
+            "Give every object assigned to this group the inter-group "
+            "allowance. Turn it off to name the objects individually, and "
+            "only the objects in the list below pass through objects of "
+            "other groups"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_inter_group_intersection_objects: CollectionProperty(
+        type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    allow_inter_group_intersection_objects_index: IntProperty(
         default=-1, options=NOT_ANIMATABLE
     )  # pyright: ignore
     bend_warp: FloatProperty(

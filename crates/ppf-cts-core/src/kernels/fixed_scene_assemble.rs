@@ -79,6 +79,10 @@ pub struct AssembleInput<'a> {
     /// pin: a static is always the OTHER object, so it is the dynamic side
     /// that decides, and "either side opts in" makes that the whole rule.
     pub vert_object_id: Option<&'a [i32]>,
+    /// Per DYNAMIC vertex source-group identity, read only by the inter-group
+    /// allowance. The appended STATIC collision vertices get `NO_GROUP_ID`,
+    /// which makes a collider another group from every object.
+    pub vert_group_id: Option<&'a [i32]>,
     pub vert_policy: Option<&'a [u8]>,
     pub vert_pin_allow: Option<&'a [bool]>,
     /// Static walls only. Kinematic walls are filtered upstream.
@@ -217,8 +221,23 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             .collect();
         let tri_off: Vec<f64> = input.tri_offset.to_vec();
         let rod_off: Vec<f64> = input.rod_offset.to_vec();
-        sb::rod_tri_contact_offset_check(&dyn_verts, &rods_u32, &tris_u32, &tri_off, &rod_off)
-            .map_err(AssembleError::RodTriOffset)?;
+        let policy = isect::VertexIntersectPolicy::new(
+            input.vert_object_id,
+            input.vert_group_id,
+            input.vert_policy,
+            input.vert_pin_allow,
+        );
+        let allowed = |ri: usize, ti: usize| {
+            !policy.is_inert()
+                && policy.tolerated(
+                    &policy.side_of(&input.rod[2 * ri..2 * ri + 2]),
+                    &policy.side_of(&input.tri[3 * ti..3 * ti + 3]),
+                )
+        };
+        sb::rod_tri_contact_offset_check(
+            &dyn_verts, &rods_u32, &tris_u32, &tri_off, &rod_off, allowed,
+        )
+        .map_err(AssembleError::RodTriOffset)?;
     }
 
     // Step 3. Self-intersection (dynamic + static combined). The body-id
@@ -287,6 +306,11 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             v.resize(n_combined_verts, isect::NO_OBJECT_ID);
             v
         });
+        let extend_group_id = input.vert_group_id.map(|a| {
+            let mut v = a.to_vec();
+            v.resize(n_combined_verts, isect::NO_GROUP_ID);
+            v
+        });
         let extend_policy = input.vert_policy.map(|a| {
             let mut v = a.to_vec();
             v.resize(n_combined_verts, 0);
@@ -304,6 +328,7 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             rod_edges: rod_for_check.as_deref(),
             tri_body_id: Some(&combined_body_id),
             vert_object_id: extend_object_id.as_deref(),
+            vert_group_id: extend_group_id.as_deref(),
             vert_policy: extend_policy.as_deref(),
             vert_pin_allow: extend_pin_allow.as_deref(),
         });
@@ -382,6 +407,10 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             edges: edges_for_prox,
             is_collider: Some(&combined_is_collider),
             contact_offset: Some(&combined_offset),
+            vert_object_id: input.vert_object_id,
+            vert_group_id: input.vert_group_id,
+            vert_policy: input.vert_policy,
+            vert_pin_allow: input.vert_pin_allow,
         });
         if !pairs.is_empty() {
             out.has_contact_offset_violation = true;
@@ -608,6 +637,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         }
@@ -651,6 +681,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -688,6 +719,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: true,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -731,6 +763,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -774,6 +807,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -812,6 +846,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -853,6 +888,7 @@ mod tests {
             spheres: &spheres,
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -900,6 +936,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -942,6 +979,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -987,6 +1025,7 @@ mod tests {
             spheres: &spheres,
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -1025,6 +1064,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };
@@ -1070,6 +1110,7 @@ mod tests {
             spheres: &[],
             has_dyn_color: false,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         };

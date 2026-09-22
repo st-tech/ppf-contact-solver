@@ -58,6 +58,42 @@ launches a server, counts as an explicit choice for the same reason.
 See :doc:`module_reference` for the full signatures, and
 :ref:`choosing-the-build` for the add-on's side of it.
 
+Letting objects pass through each other
+---------------------------------------
+
+By default the solver keeps every pair of surfaces apart and refuses a
+scene whose geometry already overlaps. Three per-object parameters,
+float-encoded booleans set with ``object.param.set(key, 1.0)``, let
+chosen pairs pass through each other instead: an allowed pair gets no
+contact force, is not held apart during a step, and is never reported
+as an intersection.
+
+- ``allow-self-intersection``: the object passes through itself.
+- ``allow-inter-object-intersection``: the object passes through every
+  other object, static colliders included.
+- ``allow-inter-group-intersection``: the object passes through every
+  object in a different group, while objects of its own group still
+  collide with it. :meth:`frontend.Object.group` names the group an
+  object belongs to; objects never given one share a default group, and
+  a static collider counts as another group from every object.
+
+For the two cross-object parameters one side of a pair is enough. A pin
+does the same for the elements it holds completely when it is created
+with ``obj.pin(ind, allow_intersection=True)``. None of these affects the
+invisible walls and spheres.
+
+.. code-block:: python
+
+   # The shirt and jacket collide with each other and pass through the body.
+   scene.add("shirt").group("garments").param.set(
+       "allow-inter-group-intersection", 1.0)
+   scene.add("jacket").group("garments")
+   scene.add("body").group("character").pin()
+
+See :doc:`material_parameters` for each parameter's full description,
+and :ref:`allow-intersections-settings` for the same settings in the
+Blender add-on.
+
 .. toctree::
    :maxdepth: 1
    :caption: Reference

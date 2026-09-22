@@ -202,10 +202,8 @@ struct CcdPointFaceVisitor {
         const VertexProp vprop = vertex_prop[vertex_index];
         const FaceProp fprop = face_prop[index];
         const VertexProp anchor = vertex_prop[f[0]];
-        const bool either_dyn = vprop.fix_index == 0u || fprop.fixed == false;
-        if (!contact_pair_admitted(either_dyn, vprop.pdrd_body_index,
-                                   anchor.pdrd_body_index, vprop.collider,
-                                   anchor.collider)) {
+        if (!contact_pair_admitted(pair_side_of_vertex(vprop),
+                                   pair_side_of_face(anchor, fprop))) {
             return false;
         }
         const VertexParam vparam = vertex_param[vprop.param_index];
@@ -301,9 +299,8 @@ struct CcdPointPointVisitor {
         }
         const VertexProp a = vertex_prop[vertex_index];
         const VertexProp b = vertex_prop[index];
-        const bool either_dyn = a.fix_index == 0u || b.fix_index == 0u;
-        if (!contact_pair_admitted(either_dyn, a.pdrd_body_index,
-                                   b.pdrd_body_index, a.collider, b.collider)) {
+        if (!contact_pair_admitted(pair_side_of_vertex(a),
+                                   pair_side_of_vertex(b))) {
             return false;
         }
         const VertexParam pa = vertex_param[a.param_index];
@@ -367,10 +364,8 @@ struct CcdEdgeEdgeVisitor {
         const EdgeProp pb = edge_prop[index];
         const VertexProp anchor_a = vertex_prop[e0[0]];
         const VertexProp anchor_b = vertex_prop[e1[0]];
-        const bool either_dyn = pa.fixed == false || pb.fixed == false;
-        if (!contact_pair_admitted(either_dyn, anchor_a.pdrd_body_index,
-                                   anchor_b.pdrd_body_index, anchor_a.collider,
-                                   anchor_b.collider)) {
+        if (!contact_pair_admitted(pair_side_of_edge(anchor_a, pa),
+                                   pair_side_of_edge(anchor_b, pb))) {
             return false;
         }
         const EdgeParam ea = edge_param[pa.param_index];
@@ -509,6 +504,7 @@ struct CcdCollisionPointFaceC2mVisitor {
     const Vec3f *x1;
     const Vec3f *collider_vertex;
     const Vec3u *face;
+    const VertexProp *vertex_prop;
     const FaceProp *face_prop;
     const VertexProp *collider_vertex_prop;
     const FaceParam *face_param;
@@ -538,6 +534,10 @@ struct CcdCollisionPointFaceC2mVisitor {
             return false;
         }
         const Vec3u f = face[index];
+        const VertexProp anchor = vertex_prop[f[0]];
+        if (collider_intersection_allowed(pair_side_of_face(anchor, fprop))) {
+            return false;
+        }
         const Vec3f t00 = x0[f[0]];
         const Vec3f t01 = x0[f[1]];
         const Vec3f t02 = x0[f[2]];
@@ -843,6 +843,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     if (vprop.fix_index != 0u) {
         return;
     }
+    if (collider_intersection_allowed(pair_side_of_vertex(vprop))) {
+        return;
+    }
     const VertexParam vparam = vertex_param[vprop.param_index];
     CcdCollisionPointFaceM2cVisitor op;
     op.x0 = x0;
@@ -877,6 +880,7 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *x0, const Vec3f *x1,
     const Vec3f *collider_vertex,
     const Vec3u *face, unsigned face_count,
+    const VertexProp *vertex_prop,
     const FaceProp *face_prop,
     const VertexProp *collider_vertex_prop,
     const FaceParam *face_param,
@@ -891,6 +895,7 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.x1 = x1;
     op.collider_vertex = collider_vertex;
     op.face = face;
+    op.vertex_prop = vertex_prop;
     op.face_prop = face_prop;
     op.collider_vertex_prop = collider_vertex_prop;
     op.face_param = face_param;
@@ -919,6 +924,7 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec2u *edge,
     const Vec3f *collider_vertex,
     const Vec2u *collider_edge, unsigned collider_edge_count,
+    const VertexProp *vertex_prop,
     const EdgeProp *edge_prop,
     const EdgeProp *collider_edge_prop,
     const EdgeParam *edge_param,
@@ -931,7 +937,12 @@ struct CcdCollisionEdgeEdgeVisitor {
     CcdOverlapRecord *out_overlap_ee, DiagHandle diag,
     unsigned element) {
     const Vec2u e = edge[element];
-    const EdgeParam eparam = edge_param[edge_prop[element].param_index];
+    const EdgeProp eprop = edge_prop[element];
+    const VertexProp anchor = vertex_prop[e[0]];
+    if (collider_intersection_allowed(pair_side_of_edge(anchor, eprop))) {
+        return;
+    }
+    const EdgeParam eparam = edge_param[eprop.param_index];
     CcdCollisionEdgeEdgeVisitor op;
     op.x0 = x0;
     op.x1 = x1;

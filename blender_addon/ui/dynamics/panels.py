@@ -284,17 +284,18 @@ def _draw_intersection_allowances(param_box, group, actual_index):
     part of the solved scene, which means animated, soft-constrained, or named
     as one end of a cross-stitch; each of those decodes to a pin shell whose
     vertices carry the policy. A collider that is none of them stays a
-    contact-only collision mesh and neither box changes any pair. It is drawn
-    anyway rather than hidden, per the panel rule that a conditional control
-    stays visible; deciding which of the three conditions holds would mean
-    inspecting the group's ops and stitches on every redraw.
+    contact-only collision mesh and no box on its group changes any pair. It
+    is drawn anyway rather than hidden, per the panel rule that a conditional
+    control stays visible; deciding which of the three conditions holds would
+    mean inspecting the group's ops and stitches on every redraw.
 
-    Both settings reach every object the group holds until the user narrows
-    them, and self versus inter-object is decided per OBJECT whichever way
-    they are narrowed. Two objects of one group therefore make an
-    inter-object pair, which the second label states in the one case where
-    the difference decides the outcome: the group holds more than one object
-    and covers only the self case.
+    Every setting reaches every object the group holds until the user
+    narrows it, and self versus inter-object is decided per OBJECT whichever
+    way it is narrowed. Two objects of one group therefore make an
+    inter-object pair, which neither the self nor the inter-group allowance
+    covers. The second label states that in the one case where the
+    difference decides the outcome: the group holds more than one object and
+    enables one of those two without the inter-object allowance.
     """
     from ...models.intersection_allowances import INTERSECTION_ALLOWANCES
 
@@ -302,12 +303,14 @@ def _draw_intersection_allowances(param_box, group, actual_index):
     box.label(text="Allow Intersections")
     for spec in INTERSECTION_ALLOWANCES:
         _draw_intersection_allowance(box, group, spec, actual_index)
-    if group.allow_self_intersection or group.allow_inter_object_intersection:
+    if any(getattr(group, spec.enable_prop)
+           for spec in INTERSECTION_ALLOWANCES):
         box.label(
-            text="Overlaps are simulated, not reported",
+            text="Allowed pairs pass through, with no contact",
             icon="INFO",
         )
-    if (group.allow_self_intersection
+    if ((group.allow_self_intersection
+            or group.allow_inter_group_intersection)
             and not group.allow_inter_object_intersection
             and len(group.assigned_objects) > 1):
         box.label(
@@ -617,8 +620,8 @@ def _draw_pdrd_pins(pin_box, group, actual_index, context):
     row.prop(pin_item, "allow_intersection")
     if pin_item.allow_intersection:
         col.label(
-            text="Fully pinned faces may overlap; "
-                 "partly pinned ones still report",
+            text="Fully pinned faces pass through; "
+                 "partly pinned ones still collide",
             icon="INFO",
         )
 
@@ -1678,8 +1681,8 @@ class DYNAMICS_PT_Groups(Panel):
                         row.prop(pin_item, "allow_intersection")
                         if pin_item.allow_intersection:
                             col.label(
-                                text="Fully pinned faces may overlap; "
-                                     "partly pinned ones still report",
+                                text="Fully pinned faces pass through; "
+                                     "partly pinned ones still collide",
                                 icon="INFO",
                             )
 

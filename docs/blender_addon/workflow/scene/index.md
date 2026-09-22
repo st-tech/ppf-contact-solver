@@ -15,14 +15,16 @@ cleanly separated from every other mesh and that no mesh folds
 through itself. This rule applies to every object type: Solid, Shell,
 Rod, PDRD, and Static.
 
-Where a mesh cannot be separated up front and the simulation is
-expected to resolve the overlap instead, a garment fitted onto a posed
-character being the usual case, the group settings under
-[Allow Intersections](../params/material.md#allow-intersections) accept
-the overlap rather than refusing it. Set them on the group that is
-simulated: a **Static** collider left in its rest pose carries
-neither. They suppress the report only: the surfaces are still in
-contact and the solver still pushes them apart.
+Where geometry should pass through other geometry instead of colliding
+with it (a mesh tangled in its pose that should stay tangled, a cloth
+whose self-collision is not wanted, or layers that should pass through a
+body), the group settings under
+[Allow Intersections](../params/material.md#allow-intersections) let the
+objects you choose pass through each other, and the start pose is
+accepted for those pairs. An allowed pair has no contact at all, so the
+solver does not push it apart. Set them on the moving object's group: a
+**Static** collider left in its rest pose ignores the boxes on its own
+group.
 :::
 
 :::{note}

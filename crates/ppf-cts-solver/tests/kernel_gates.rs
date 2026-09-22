@@ -180,8 +180,9 @@ fn friction_is_a_majorizer_whose_anchor_releases_a_saturated_contact() {
     assert!(out.contains("friction surrogate and anchor passed"), "{out}");
 }
 
-/// The three intersection allowances suppress REPORTING and nothing else, and
-/// which pairs they cover is a truth table rather than a rule of thumb: "either
+/// The three intersection allowances take the pairs they cover out of contact,
+/// the line search and the intersection report, and which pairs they cover is
+/// a truth table rather than a rule of thumb: "either
 /// side opts in" for the pin and inter-object cases, one side asked for
 /// self-intersection, and an unknown object identity tolerates nothing. A
 /// policy that read only the first side would answer a one-sided table

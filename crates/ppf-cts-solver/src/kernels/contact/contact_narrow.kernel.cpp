@@ -376,13 +376,13 @@ template <unsigned N>
     const unsigned vertex_index = first_index;
     const unsigned face_index = second_index;
     const Vec3u f = face[face_index];
-    const bool either_dyn = vertex_prop[vertex_index].fix_index == 0u ||
-                            face_prop[face_index].fixed == false;
-    if (!contact_pair_admitted(either_dyn,
-                                   vertex_prop[vertex_index].pdrd_body_index,
-                                   vertex_prop[f[0]].pdrd_body_index,
-                                   vertex_prop[vertex_index].collider,
-                                   vertex_prop[f[0]].collider)) {
+    // Thread-space copies, which the MSL rendering needs before it can bind
+    // them to the side constructors' references.
+    const VertexProp vprop = vertex_prop[vertex_index];
+    const VertexProp fanchor = vertex_prop[f[0]];
+    const FaceProp fprop = face_prop[face_index];
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop),
+                               pair_side_of_face(fanchor, fprop))) {
         return false;
     }
     if (f[0] == vertex_index || f[1] == vertex_index || f[2] == vertex_index) {
@@ -504,13 +504,11 @@ template <unsigned N>
     const unsigned vertex_index = first_index;
     const unsigned edge_index = second_index;
     const Vec2u f = edge[edge_index];
-    const bool either_dyn = vertex_prop[vertex_index].fix_index == 0u ||
-                            edge_prop[edge_index].fixed == false;
-    if (!contact_pair_admitted(either_dyn,
-                                   vertex_prop[vertex_index].pdrd_body_index,
-                                   vertex_prop[f[0]].pdrd_body_index,
-                                   vertex_prop[vertex_index].collider,
-                                   vertex_prop[f[0]].collider)) {
+    const VertexProp vprop = vertex_prop[vertex_index];
+    const VertexProp eanchor = vertex_prop[f[0]];
+    const EdgeProp eprop = edge_prop[edge_index];
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop),
+                               pair_side_of_edge(eanchor, eprop))) {
         return false;
     }
     if (f[0] == vertex_index || f[1] == vertex_index) {
@@ -675,13 +673,10 @@ template <unsigned N>
     if (!(other < vertex_index)) {
         return false;
     }
-    const bool either_dyn = vertex_prop[vertex_index].fix_index == 0u ||
-                            vertex_prop[other].fix_index == 0u;
-    if (!contact_pair_admitted(either_dyn,
-                                   vertex_prop[vertex_index].pdrd_body_index,
-                                   vertex_prop[other].pdrd_body_index,
-                                   vertex_prop[vertex_index].collider,
-                                   vertex_prop[other].collider)) {
+    const VertexProp vprop_a = vertex_prop[vertex_index];
+    const VertexProp vprop_b = vertex_prop[other];
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop_a),
+                               pair_side_of_vertex(vprop_b))) {
         return false;
     }
     const Vec3f p = x[vertex_index];
@@ -913,13 +908,12 @@ template <unsigned N>
     if (edges_share_a_vertex(e0, e1)) {
         return false;
     }
-    const bool either_dyn = edge_prop[edge_index].fixed == false ||
-                            edge_prop[other].fixed == false;
-    if (!contact_pair_admitted(either_dyn,
-                                   vertex_prop[e0[0]].pdrd_body_index,
-                                   vertex_prop[e1[0]].pdrd_body_index,
-                                   vertex_prop[e0[0]].collider,
-                                   vertex_prop[e1[0]].collider)) {
+    const VertexProp anchor_a = vertex_prop[e0[0]];
+    const VertexProp anchor_b = vertex_prop[e1[0]];
+    const EdgeProp eprop_a = edge_prop[edge_index];
+    const EdgeProp eprop_b = edge_prop[other];
+    if (!contact_pair_admitted(pair_side_of_edge(anchor_a, eprop_a),
+                               pair_side_of_edge(anchor_b, eprop_b))) {
         return false;
     }
     const Vec3f p0 = x[e0[0]];

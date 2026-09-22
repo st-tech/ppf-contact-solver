@@ -377,6 +377,7 @@ pub fn check_self_intersection(
             // geometric question.
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         })
@@ -486,6 +487,10 @@ pub fn check_contact_offset_violation(
             edges: edges_owned,
             is_collider: coll,
             contact_offset: off,
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         })
     });
     Ok(pairs)

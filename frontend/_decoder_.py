@@ -629,7 +629,7 @@ class ParamDecoder:
         anim_times = self._data.get("param_anim_times")
         if anim_times:
             scene.set_param_anim_times(list(anim_times))
-        for group_entry in self._data["group"]:
+        for group_position, group_entry in enumerate(self._data["group"]):
             params, objects = group_entry[0], group_entry[1]
             # Third tuple slot holds UUIDs aligned with ``objects``.
             # Per-object dicts (velocity / velocity-schedule / collision-
@@ -642,6 +642,10 @@ class ParamDecoder:
                     print(f"*** name: {obj_name} (uuid={obj_uuid}) ***")
                 obj = scene.select(obj_uuid)
                 obj.param.clear_all()
+                # The add-on group this object is assigned to, which is what
+                # the inter-group intersection allowance compares. Each entry
+                # of the payload is one group, so its position names it.
+                obj.group(f"addon-group-{group_position}")
                 for key, val in params.items():
                     if verbose:
                         print(f"  {key}: {val}")
@@ -800,7 +804,8 @@ class ParamDecoder:
                                 )
                             obj.lock_all_rotations()
                     elif key in ("allow-self-intersection",
-                                 "allow-inter-object-intersection"):
+                                 "allow-inter-object-intersection",
+                                 "allow-inter-group-intersection"):
                         # Intersection allowances (issue #138). Both are per
                         # OBJECT here and per VERTEX below (`_scene_.py`
                         # resolves each object's pair of values into one

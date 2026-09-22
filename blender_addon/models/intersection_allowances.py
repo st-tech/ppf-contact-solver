@@ -3,23 +3,28 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The two intersection allowances of issue #138, and which of a group's
-# objects each one reaches.
+# The three group-level intersection allowances of issue #138, and which of a
+# group's objects each one reaches.
 #
 # An allowance is a per-OBJECT fact all the way down: the frontend resolves
-# each object's two material params into one policy byte per vertex
-# (`bin/intersect_policy.bin`), so the solver never sees a group at all. A
-# checkbox that covered the whole group would therefore be the WIDER of the
-# two settings the data model supports, and the wrong one for the case the
-# feature exists for: a scene usually arrives with ONE garment tangled, and
-# covering the whole group buys silence about every other object in it as
-# well.
+# each object's three material params into one policy byte per vertex
+# (`bin/intersect_policy.bin`). A checkbox that covered the whole group would
+# therefore be the WIDER of the two settings the data model supports, and the
+# wrong one for the case the feature exists for: a scene usually arrives with
+# ONE garment tangled, and covering the whole group buys silence about every
+# other object in it as well.
+#
+# The inter-group allowance is the one that needs the group at all, and only
+# to answer which pairs it covers: two objects in DIFFERENT groups. The
+# frontend writes that membership next to the policy (`bin/group_vert.bin`),
+# while WHICH objects of a group carry the allowance is still per object like
+# the other two.
 #
 # So each allowance carries a subset: an "Apply to All Objects" switch and,
 # while it is off, a list naming the objects the allowance reaches. This
-# module is the one place the two allowances' property names are spelled, so
-# the panel, the operators, the encoder and the MCP surface cannot drift into
-# disagreeing about which list belongs to which checkbox.
+# module is the one place the three allowances' property names are spelled,
+# so the panel, the operators, the encoder and the MCP surface cannot drift
+# into disagreeing about which list belongs to which checkbox.
 
 from __future__ import annotations
 
@@ -65,7 +70,18 @@ INTER_OBJECT_ALLOWANCE = AllowanceSpec(
     "allow-inter-object-intersection",
 )
 
-INTERSECTION_ALLOWANCES = (SELF_ALLOWANCE, INTER_OBJECT_ALLOWANCE)
+INTER_GROUP_ALLOWANCE = AllowanceSpec(
+    "inter_group",
+    "Allow Inter-Group Intersections",
+    "allow_inter_group_intersection",
+    "allow-inter-group-intersection",
+)
+
+INTERSECTION_ALLOWANCES = (
+    SELF_ALLOWANCE,
+    INTER_OBJECT_ALLOWANCE,
+    INTER_GROUP_ALLOWANCE,
+)
 
 # Operator / MCP enum items, in panel order.
 INTERSECTION_ALLOWANCE_ITEMS = [
@@ -78,6 +94,11 @@ INTERSECTION_ALLOWANCE_ITEMS = [
         INTER_OBJECT_ALLOWANCE.key,
         "Inter-Object Intersections",
         "An overlap between two different objects",
+    ),
+    (
+        INTER_GROUP_ALLOWANCE.key,
+        "Inter-Group Intersections",
+        "An overlap between two objects assigned to different groups",
     ),
 ]
 

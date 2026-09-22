@@ -202,6 +202,8 @@ def cmd_runtests(args):
     else:
         names = scenarios.all_names(backend)
         _report_unrunnable(backend, unrunnable, stream=sys.stdout)
+        _report_on_demand(scenarios.on_demand_names(backend),
+                          stream=sys.stderr if args.list else sys.stdout)
 
     if args.shard:
         try:
@@ -247,6 +249,17 @@ def cmd_runtests(args):
     }, indent=2))
     if summary["failed"]:
         sys.exit(1)
+
+
+def _report_on_demand(names: list, *, stream) -> None:
+    """Name the on-demand scenarios the default selection left out."""
+    if not names:
+        return
+    print(f"\n[rig] {len(names)} on-demand scenario(s) left out of the default "
+          f"selection; name them to run them:", file=stream)
+    for name in names:
+        print(f"    {name}", file=stream)
+    print("", file=stream)
 
 
 def _report_unrunnable(backend: str, unrunnable: dict, *, stream) -> None:

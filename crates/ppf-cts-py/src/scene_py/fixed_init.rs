@@ -108,6 +108,7 @@ fn fsa_read_f64_2d_flat(
     vert_object_id=None,
     vert_policy=None,
     vert_pin_allow=None,
+    vert_group_id=None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn scene_fixed_scene_assemble<'py>(
@@ -136,6 +137,9 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
     vert_object_id: Option<&Bound<'py, PyAny>>,
     vert_policy: Option<&Bound<'py, PyAny>>,
     vert_pin_allow: Option<&Bound<'py, PyAny>>,
+    // Per DYNAMIC vertex source-group identity, read only by the inter-group
+    // allowance; last so every existing caller is unchanged.
+    vert_group_id: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let vl_shape = vert_local.shape();
     if vl_shape.len() != 2 || vl_shape[1] != 3 {
@@ -188,6 +192,10 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
         Some(arr) => Some(fsa_read_bool_1d(arr, "vert_pin_allow")?),
         None => None,
     };
+    let vert_group_id_vec: Option<Vec<i32>> = match vert_group_id {
+        Some(arr) => Some(fsa_read_i32_1d(arr, "vert_group_id")?),
+        None => None,
+    };
 
     let walls_rs: Vec<fsa::WallEntry> = walls
         .into_iter()
@@ -222,6 +230,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
             spheres: &spheres_rs,
             has_dyn_color,
             vert_object_id: vert_object_id_vec.as_deref(),
+            vert_group_id: vert_group_id_vec.as_deref(),
             vert_policy: vert_policy_vec.as_deref(),
             vert_pin_allow: vert_pin_allow_vec.as_deref(),
         })

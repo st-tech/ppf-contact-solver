@@ -167,8 +167,16 @@ struct VertexProp {
     // one object and therefore so does every element built on it.
     // NO_OBJECT_INDEX when the session directory carries no object_vert.bin.
     unsigned object_index;
-    // This vertex's object's intersection tolerances, as
-    // INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT. Resolved per OBJECT
+    // Source-GROUP identity, which separates an INTER-GROUP pair from two
+    // objects of one group. A group is whatever the frontend was told
+    // (`Object.group`; the add-on's decoder names each object's group), and
+    // every object told nothing shares one default group. NO_GROUP_INDEX for
+    // the static collision mesh, which therefore counts as another group from
+    // every object.
+    unsigned group_index;
+    // This vertex's object's intersection allowances, as
+    // INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT |
+    // INTERSECT_ALLOW_INTER_GROUP. Resolved per OBJECT
     // by the frontend rather than per element, which is both the granularity
     // the material param has and the only one defined for a faceless SAND
     // grain (no incident element to read a material from).

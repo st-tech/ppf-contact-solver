@@ -5,6 +5,11 @@ Each group carries a *type*, a *material model*, a set of *material
 parameters*, and a list of *assigned Blender mesh objects*. Only active
 groups (ones you've created) are sent to the solver.
 
+Which group an object is assigned to also matters to one contact setting:
+**Allow Inter-Group Intersections** lets an object pass through the objects of
+other groups while the objects of its own group still collide with it. See
+[Allow Intersections](../params/material.md#allow-intersections).
+
 ## The Dynamics Groups Panel
 
 Everything you do with groups happens on the **Dynamics Groups** panel in

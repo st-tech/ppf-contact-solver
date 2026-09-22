@@ -589,7 +589,7 @@ fn rod_tri_offset_clean_geometry_passes() {
     let rods = vec![[3u32, 4]];
     let tri_off = vec![0.1];
     let rod_off = vec![0.1];
-    rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off).unwrap();
+    rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false).unwrap();
 }
 
 #[test]
@@ -606,7 +606,7 @@ fn rod_tri_offset_close_rod_violates() {
     let rods = vec![[3u32, 4]];
     let tri_off = vec![0.05];
     let rod_off = vec![0.05];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::VertexInsideOffset { .. })));
 }
 
@@ -622,7 +622,7 @@ fn rod_tri_offset_short_rod_flagged() {
     ];
     let tris = vec![[0u32, 1, 2]];
     let rods = vec![[3u32, 4]];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1]);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::EdgeShorterThanOffset { .. })));
 }
 
@@ -637,7 +637,7 @@ fn rod_tri_offset_short_rod_flagged_no_tris() {
     ];
     let rods = vec![[0u32, 1]];
     let tris: Vec<[u32; 3]> = vec![];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1]);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::EdgeShorterThanOffset { .. })));
 }
 

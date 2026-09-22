@@ -151,10 +151,10 @@ def set_pin_settings(
       vertex of its mesh, and a captured deformation on that pin. Turning it on
       without all three is refused, naming the one that is missing. Turning it
       off is always accepted.
-    - ``allow_intersection`` suppresses the overlap REPORT for geometry this
-      pin holds entirely (every corner of a face, both ends of a rod segment).
-      Contact, CCD and the line search are unchanged, so an overlap is
-      tolerated, not resolved.
+    - ``allow_intersection`` lets geometry this pin holds entirely (every
+      corner of a face, both ends of a rod segment) pass through whatever it
+      meets: such a pair gets no contact force, no CCD filter in the line
+      search, and no intersection report.
 
     Args:
         group_uuid: UUID of group

@@ -79,12 +79,16 @@ pub enum RodTriOffsetViolation {
     },
 }
 
+/// `allowed(rod, tri)` answers whether an intersection allowance covers that
+/// rod segment and triangle. Such a pair is not a contact pair, so its
+/// clearance is nothing the solver has to keep and it is skipped.
 pub fn rod_tri_contact_offset_check(
     verts: &[f64],
     rods: &[[u32; 2]],
     tris: &[[u32; 3]],
     tri_offset: &[f64],
     rod_offset: &[f64],
+    allowed: impl Fn(usize, usize) -> bool,
 ) -> Result<(), RodTriOffsetViolation> {
     let n_rods = rods.len();
     if rod_offset.is_empty() || n_rods == 0 {
@@ -112,6 +116,9 @@ pub fn rod_tri_contact_offset_check(
         for &endpoint in &[rod[0], rod[1]] {
             let p = v(endpoint);
             for (ti, tri) in tris.iter().enumerate() {
+                if allowed(ri, ti) {
+                    continue;
+                }
                 let t_off = if ti < tri_offset.len() { tri_offset[ti] } else { 0.0 };
                 let required = offset + t_off;
                 let v0 = v(tri[0]);

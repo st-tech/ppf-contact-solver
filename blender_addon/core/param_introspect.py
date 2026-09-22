@@ -33,8 +33,8 @@ MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "color",
     "assigned_objects_index",
     "pin_vertex_groups_index",
-    # The two intersection-allowance subsets and the switch that selects
-    # them. The subset itself is a COLLECTION and is skipped anyway, and it
+    # The three intersection-allowance subsets and the switch that selects
+    # each. The subset itself is a COLLECTION and is skipped anyway, and it
     # could not cross a paste even in principle: it names objects of the
     # SOURCE group, which the destination does not hold. So the switch must
     # not cross either. Carrying "Apply to All Objects" off into a group
@@ -46,6 +46,8 @@ MATERIAL_CLIPBOARD_EXCLUDE = frozenset({
     "allow_self_intersection_objects_index",
     "allow_inter_object_intersection_all_objects",
     "allow_inter_object_intersection_objects_index",
+    "allow_inter_group_intersection_all_objects",
+    "allow_inter_group_intersection_objects_index",
     "active",
     "material_profile_path",
     "material_profile_selection",

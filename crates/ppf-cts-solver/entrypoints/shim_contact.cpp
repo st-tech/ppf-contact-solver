@@ -44,8 +44,7 @@
 
 // The shared narrow-phase headers. These are NOT kernel bodies: they carry
 // their own `SM_*` seam and compile unchanged as host C++, which is how
-// `metal/face_math.mm` uses them and how the host arm of
-// `kernels/tests/test_intersect_allow.cu` uses them. They are included from
+// `metal/face_math.mm` uses them. They are included from
 // `src/kernels` directly, not from the rendered root, because the renderer has
 // nothing to do to them.
 // `accd.hpp` loops its fixed-size matrices with `int k` against an `unsigned`
@@ -244,13 +243,16 @@ extern "C" {
 // its own entry point so a Rust test can compare against the shared body rather
 // than against a second statement of the rule.
 int intersection_tolerated_abi(uint32_t a_object_index,
+                                   uint32_t a_group_index,
                                    unsigned char a_intersect_policy,
                                    uint32_t b_object_index,
+                                   uint32_t b_group_index,
                                    unsigned char b_intersect_policy,
                                    int a_pin_allows, int b_pin_allows) {
     return isect::intersection_tolerated(
-               a_object_index, a_intersect_policy, b_object_index,
-               b_intersect_policy, a_pin_allows != 0, b_pin_allows != 0)
+               a_object_index, a_group_index, a_intersect_policy,
+               b_object_index, b_group_index, b_intersect_policy,
+               a_pin_allows != 0, b_pin_allows != 0)
                ? 1
                : 0;
 }

@@ -207,8 +207,9 @@ These apply regardless of type.
 | **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal.    |
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.          |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.       |
-| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Accept a mesh that overlaps itself instead of stopping the run.          |
-| **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Accept an overlap against a different mesh instead of stopping the run.  |
+| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Let an object pass through itself, with no contact between its parts.    |
+| **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Let an object pass through every other object, with no contact.          |
+| **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | Let an object pass through objects of other groups, with no contact.     |
 
 **Friction at a contact** is asymmetric in the material parameters
 but symmetric in the solve: each object carries its own **Friction**
@@ -234,7 +235,7 @@ deliberately.
 
 See [Contact gap: absolute vs ratio](#contact-gap-absolute-vs-ratio) below
 for which pair you should be editing, and
-[Allow Intersections](#allow-intersections) for the last two rows.
+[Allow Intersections](#allow-intersections) for the last three rows.
 
 ## Spatial Material Maps
 
@@ -1263,105 +1264,155 @@ A **Rod** group is not offered the toggle: setting a group's type to
 absolute pair only. A **Sand** group draws **Contact Gap** alone,
 because its grain radius already is the contact offset.
 
+(allow-intersections-settings)=
+
 ## Allow Intersections
 
-A simulation does not start on geometry that is already overlapping. The
-scene build counts the overlapping pairs and reports them instead of
-finishing, and the solver runs its own intersection test as it goes, so an
-overlap that appears part way through a bake ends the run there.
+By default the solver keeps every pair of surfaces apart: nothing passes
+through anything, and a scene whose geometry already overlaps is refused
+before the first frame is solved. Every group carries three settings that let
+chosen objects pass through each other instead. They sit in an **Allow
+Intersections** box at the bottom of the group's **Material Params**, and all
+three are off by default.
 
-Every group carries two settings that accept an overlap instead of refusing
-it. They sit in an **Allow Intersections** box at the bottom of the group's
-**Material Params**, and both are off by default. Each one applies to every
-object assigned to the group.
+- **Allow Self-Intersections**: an object in this group may pass through
+  itself. A falling cloth crosses its own folds instead of piling up on them.
+- **Allow Inter-Object Intersections**: an object in this group may pass
+  through every other object, including the other objects of this same group
+  and **Static** colliders.
+- **Allow Inter-Group Intersections**: an object in this group may pass
+  through every object assigned to a different group, including **Static**
+  colliders, which are always in a group of their own because a group holds
+  one type. Objects of this same group still collide with each other.
 
-- **Allow Self-Intersections**: a mesh in this group may overlap itself. Use
-  it for a sleeve folded through its own cuff, or a collar that passes into
-  the shoulder in the pose the mesh arrives in.
-- **Allow Inter-Object Intersections**: a mesh in this group may overlap a
-  different mesh, including another mesh assigned to this same group.
-
-Both are drawn for every group type, **Static** included, though on a
-**Static** group whether they take effect depends on how the collider is
-driven (see below).
-With either one on, the panel adds the line "Overlaps are simulated, not
-reported" beneath the checkboxes.
+Each is drawn for every group type, **Static** included, though on a
+**Static** group whether its own boxes take effect depends on how the
+collider is driven (see below). With any of them on, the panel adds the line
+"Allowed pairs pass through, with no contact" beneath the checkboxes.
 
 :::{important}
-These settings suppress the error, not the collision. The two surfaces are
-still in contact, the solver still pushes them apart, and any overlap you
-did not allow is still reported. What changes is that the run starts, and
-keeps going, through the overlaps you allowed.
+An allowed pair has no contact at all. The solver applies no contact force
+between the two, does not stop them from crossing, and never reports their
+overlap as an error. Every pair you did not allow keeps full contact, and the
+solver never lets it intersect.
+
+None of these settings affects the
+[invisible walls and spheres](../constraints/colliders.md): those always
+collide, so a cloth that passes through itself still lands on an invisible
+floor.
 :::
+
+### Apply to All Objects
+
+Turning a checkbox on opens a box under it with an **Apply to All Objects**
+switch and a list of objects. The switch is on by default, and the setting
+then reaches every object assigned to the group; the list is grayed out.
+
+Turn the switch off to name the objects yourself. Select them in the
+viewport and click the **+** button beside the list (**Add Selected
+Objects**); only objects assigned to this group are accepted. The **-**
+button (**Remove**) takes out the highlighted entry, and the trash button
+(**Remove All**) empties the list. While the switch is off, only the listed
+objects get the setting. An empty list reaches no object, and the panel says
+"No objects listed; this allowance covers none". When some entries do not
+reach the solver, for example an object whose **Include** checkbox is off,
+the panel shows how many do, as "2 of 3 entries reach the solver".
+
+The three lists are independent, so one garment can pass through itself
+while another only passes through the body.
 
 ### Only One Side Has to Allow It
 
-An overlap between two meshes is accepted when **either** of them has
-**Allow Inter-Object Intersections** on. Turn it on for a garment and every
-pair the garment forms with a different mesh is accepted, including the pair
-with the character body it is fitted to, so you do not have to find each mesh
-the garment might reach and set it there too. The garment's overlaps with
-itself are a separate question, answered by **Allow Self-Intersections**.
+For **Allow Inter-Object Intersections** and **Allow Inter-Group
+Intersections**, a pair of objects passes through when **either** of them
+has the setting. Turn **Allow Inter-Object Intersections** on for a garment
+and it passes through every other object, including the character body it is
+fitted to, even though the body's group has the box off. If the garment should
+rest on the body, leave that box off on the garment.
 
-Set it on the group that is simulated. A **Static** collider counts as
-simulated, and carries both settings, when it is animated, when it uses
-**Apply Soft Constraints**, or when it is one end of a cross-stitch. A
-collider that is none of those never moves and is a collision surface only:
-neither box on its group has any effect, so a garment overlapping it needs
-**Allow Inter-Object Intersections** on the garment's own group. That is the
-safe habit in every case, since it does not depend on how the collider is
+**Allow Self-Intersections** is asked of one object only: the object that
+passes through itself is the one that needs it.
+
+A **Static** collider's own boxes reach the solver only when the collider is
+part of the solved scene: when it is animated, when it uses **Apply Soft
+Constraints**, or when it is one end of a cross-stitch. A collider that is
+none of those never moves and is a collision surface only, so the boxes on
+its group have no effect. A moving object still passes through it when the
+moving object's group has **Allow Inter-Object Intersections** or **Allow
+Inter-Group Intersections** on. Setting one of those on the moving object's
+group works in every case, since it does not depend on how the collider is
 driven.
 
-### The Two Settings Do Not Substitute for Each Other
+### Which Pairs Each Setting Covers
 
-**Allow Self-Intersections** says nothing about other meshes, and **Allow
-Inter-Object Intersections** says nothing about a mesh folding through
-itself. A group with only the first still stops on an overlap against
-another mesh; a group with only the second still stops on a fold through
-itself. Turn both on where both can happen.
+| Pair                                                           | Self-Intersections | Inter-Object Intersections | Inter-Group Intersections |
+| -------------------------------------------------------------- | ------------------ | -------------------------- | ------------------------- |
+| One object with itself                                         | Yes                | No                         | No                        |
+| Two objects in the same group                                  | No                 | Yes                        | No                        |
+| Two objects in different groups, **Static** colliders included | No                 | Yes                        | Yes                       |
+| An object and an invisible wall or sphere                      | No                 | No                         | No                        |
+
+**Allow Self-Intersections** says nothing about other objects, and the other
+two say nothing about an object folding through itself. A group with only the
+first still collides with every other object; a group with only one of the
+other two still collides with itself. Turn on each one you need.
 
 "Self" here means one mesh object, not one group. A group holding two meshes
-holds two objects, so an overlap between those two is an inter-object
-overlap even though a single group covers both.
+holds two objects, so the pair those two form is an inter-object pair, which
+only **Allow Inter-Object Intersections** covers. When a group holds more
+than one object and has **Allow Self-Intersections** or **Allow Inter-Group
+Intersections** on without **Allow Inter-Object Intersections**, the panel
+adds the line "Two objects in one group are an inter-object pair".
+
+That difference is what **Allow Inter-Group Intersections** is for. Put
+several garments layered on one another in one group and turn it on there:
+the layers keep colliding with each other, while all of them pass through a
+body or prop assigned to another group.
 
 ### When to Use Them
 
-The case these exist for is a garment fitted onto a rig-deformed character.
-The fitted pose is whatever the rig produced, tangles included: a cuff that
-starts inside a wrist, an armpit that folds a sleeve into the torso. The
-simulation is expected to resolve that over the first frames, and without an
-allowance it never runs at all, because the start pose is refused before the
-first frame is solved.
+Use them for geometry that should not collide:
 
-They are not a general repair for messy geometry. An overlap the solver
-cannot resolve stays in place for the whole bake, and geometry that starts
-deeply inside another mesh keeps showing through it until it separates, if it
-separates at all. Fix the geometry wherever you can instead: see
-[Mesh Cleaning](../scene/mesh_cleaning.md).
+- A mesh that arrives tangled in its pose and should stay that way, such as a
+  sleeve folded through its own cuff, or a collar that passes into the
+  shoulder. Without an allowance the start pose is refused.
+- A cloth whose self-collision is not wanted, where folds may cross each
+  other.
+- Layers that should pass through a body or a prop rather than rest on it.
 
-Where the problem is confined to a region you have pinned, the per-pin
+An allowance does not separate an overlap. The allowed pair has no contact,
+so nothing pushes the two surfaces apart: they stay crossed until the
+object's own motion carries them out, if it does. Where the geometry should
+end up apart, separate it before the run instead: see
+[Mesh Cleaning](../scene/mesh_cleaning.md). With all three settings off, the
+solver keeps every pair apart and never lets anything intersect.
+
+Where only a region you have pinned should pass through, the per-pin
 [Allow Intersections Here](../constraints/pins.md#allow-intersections-here)
-option is narrower than either group setting.
+option is narrower than any group setting.
 
 :::{admonition} Under the hood
 :class: toggle
 
-The check at scene build and the check the solver runs while it steps are
-separate pieces of code, and both consult the allowance, so a scene that
-builds is not then stopped by the first step. It is evaluated per overlapping
-pair of elements, whether that is two triangles, a rod segment against a
-triangle or against another rod segment, or two grains of a Sand cloud, and
-it decides one thing: whether that pair is reported.
+The check at scene build and the checks the solver runs while it steps all
+consult the allowance, so a scene that builds is not then stopped by the
+first step. It is evaluated per pair of elements, whether that is two
+triangles, a rod segment against a triangle or against another rod segment,
+or two grains of a Sand cloud, and it decides whether that pair takes part in
+contact at all. An allowed pair is left out of the contact force, out of the
+continuous-collision test that limits how far each step may move, and out of
+both intersection checks. Every other pair keeps all of them, so the guarantee
+that nothing intersects holds for every pair you did not allow.
 
-The other geometry checks are unrelated and are not lifted by these
-settings. In particular, a start pose whose elements are closer than their
-contact offset is still rejected as too close, which is a different report
-from an intersection.
+**Allow Inter-Group Intersections** compares the groups the two objects are
+assigned to. A **Static** collider that is not part of the solved scene counts
+as a different group from every object.
 
-Contact forces, the continuous-collision test, and the line search that
-enforces separation are all untouched. Two surfaces that are apart at the
-start of a step still cannot pass through each other during it, whatever
-these settings say.
+The start-pose check that rejects elements closer than their contact offset
+skips allowed pairs as well, since an allowed pair has no contact offset to
+keep. Every other pair is still checked. The other geometry checks, such as a
+rod segment shorter than its own contact offset, are unrelated to these
+settings and still apply.
 :::
 
 ## Material Profiles

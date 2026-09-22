@@ -805,6 +805,19 @@ pub fn build(
             vertex_prop[i].object_index = oi;
         }
     }
+    // Stamp the source-group identity. Absent, every vertex keeps the default
+    // group 0, which is exactly right for a scene no allowance asks about
+    // groups; one that does is required to carry the file below.
+    if !mesh.group_vertex_index.is_empty() {
+        assert_eq!(
+            mesh.group_vertex_index.len(),
+            n_vert,
+            "group_vertex_index size mismatch"
+        );
+        for (i, &gi) in mesh.group_vertex_index.iter().enumerate() {
+            vertex_prop[i].group_index = gi;
+        }
+    }
     if !mesh.intersect_policy.is_empty() {
         assert_eq!(
             mesh.intersect_policy.len(),
@@ -827,7 +840,8 @@ pub fn build(
         // do nothing. Trap it here instead, where the offending vertex can be
         // named.
         let known = crate::data::INTERSECT_ALLOW_SELF
-            | crate::data::INTERSECT_ALLOW_INTER_OBJECT;
+            | crate::data::INTERSECT_ALLOW_INTER_OBJECT
+            | crate::data::INTERSECT_ALLOW_INTER_GROUP;
         for (i, &policy) in mesh.intersect_policy.iter().enumerate() {
             assert_eq!(
                 policy & !known,
@@ -838,6 +852,19 @@ pub fn build(
             );
             vertex_prop[i].intersect_policy = policy;
         }
+        // The inter-group allowance compares groups, so a scene that asks for
+        // it without saying which group each vertex is in would compare every
+        // vertex's default group with every other's and allow nothing.
+        let asks_for_groups = mesh
+            .intersect_policy
+            .iter()
+            .any(|&p| p & crate::data::INTERSECT_ALLOW_INTER_GROUP != 0);
+        assert!(
+            !asks_for_groups || !mesh.group_vertex_index.is_empty(),
+            "a scene requests the inter-group intersection allowance but \
+             carries no group_vert.bin, so two groups cannot be told apart; \
+             rebuild the scene"
+        );
     }
 
     // Stamp the STATIC-collider flag on each vertex. Contact and intersection
@@ -2481,6 +2508,10 @@ pub fn make_collision_mesh(
             // (either side opting in is enough). Leaving these at "unknown"
             // and "nothing allowed" keeps that asymmetry explicit.
             object_index: crate::data::NO_OBJECT_INDEX,
+            // Nor does it belong to any group, so it is another group from
+            // every object, as the add-on builds it: a collider always sits
+            // in a STATIC group of its own.
+            group_index: crate::data::NO_GROUP_INDEX,
             intersect_policy: 0,
             pin_allow_intersection: false,
         });

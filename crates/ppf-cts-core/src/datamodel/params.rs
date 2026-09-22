@@ -358,19 +358,20 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Multiplier applied to each rod edge's rest length (dimensionless). Values below 1.0 pre-tension the rod, above 1.0 pre-compress it. Must be positive. Used by 'rod' elements only."));
     m.insert("pressure".into(), entry(0.0f64, "Inflation Pressure",
         "Per-face inflation pressure pushing 'tri' shells outward along the face normal. Must be non-negative; 0.0 disables inflation. Ignored by 'tet' and 'rod' elements."));
-    // Intersection tolerances. These suppress REPORTING for the pairs they
-    // name, at the scene-build check and at every solver intersection scan
-    // alike; they change no contact force and no CCD filter, so the solver
-    // still resolves what it can and simply stops aborting over what it
-    // cannot. Both are float-encoded booleans, following
+    // Intersection allowances. The pairs they name are out of every pass: no
+    // contact force, no CCD filter in the line search, and no report at the
+    // scene-build check or at any solver intersection scan, so those elements
+    // pass through each other freely. Both are float-encoded booleans, following
     // `bend-rest-from-geometry`. Registered for every object kind so a solid's
     // surface triangles can join concat_tri_param without a key-set mismatch;
     // the frontend drops them for 'tet', where an intersection is only ever
     // tested through those surface triangles.
     m.insert("allow-self-intersection".into(), entry(0.0f64, "Allow Self-Intersections",
-        "If non-zero, intersections between two elements of THIS SAME object are tolerated instead of stopping the run. Treated as a boolean flag. Use it for geometry that is authored tangled in some poses and is expected to be resolved by the simulation. The pair is still simulated with full contact; only the report is suppressed."));
+        "If non-zero, two elements of THIS SAME object may pass through each other: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection. Treated as a boolean flag. Intersections with other objects are unaffected; use 'allow-inter-object-intersection' for those."));
     m.insert("allow-inter-object-intersection".into(), entry(0.0f64, "Allow Inter-Object Intersections",
-        "If non-zero, intersections between this object and any DIFFERENT object are tolerated instead of stopping the run. Treated as a boolean flag. Only one of the two objects has to set it, so flagging a garment also covers the character it is fitted to. Intersections within this object are unaffected; use 'allow-self-intersection' for those."));
+        "If non-zero, this object and any DIFFERENT object may pass through each other: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection. That includes static collider meshes, but not the invisible walls and spheres. Treated as a boolean flag. Only one of the two objects has to set it, so flagging a garment also lets it pass through the character it is fitted to. Intersections within this object are unaffected; use 'allow-self-intersection' for those."));
+    m.insert("allow-inter-group-intersection".into(), entry(0.0f64, "Allow Inter-Group Intersections",
+        "If non-zero, this object and any object in a DIFFERENT group may pass through each other: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection. Objects of the same group still collide; use 'allow-inter-object-intersection' for those. A static collider mesh counts as another group; the invisible walls and spheres are not affected. Treated as a boolean flag. Only one of the two objects has to set it. A group is what the Blender add-on assigns, or what Object.group names in a Python scene; objects given none share one default group."));
 
     if matches!(kind, ObjectKind::Tri | ObjectKind::Tet | ObjectKind::Pdrd) {
         m.insert("plasticity".into(), entry(0.0f64, "Plasticity Rate",

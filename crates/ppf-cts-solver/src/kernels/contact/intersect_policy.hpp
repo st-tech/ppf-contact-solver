@@ -4,13 +4,12 @@
 // License: Apache v2.0
 //
 // Single source of truth for the intersection ALLOWANCE rule of issue #138:
-// given the two sides of an intersecting pair, is this a pair the user asked
-// the solver to tolerate rather than report?
+// given the two sides of a pair, is this a pair the user allowed to intersect?
 //
 // One definition serves every backend. `contact/pair_filter.kernel.cpp`
-// composes it into `intersect_pair_reported`, and the intersection scan's
-// visitors in `contact/intersect_geometry.kernel.cpp` call that from the
-// neutral bodies every target renders; `entrypoints/shim_contact.cpp` exposes
+// composes it into `contact_pair_admitted` and `intersect_pair_reported`, and
+// the contact, CCD and intersection-scan visitors call those from the neutral
+// bodies every target renders; `entrypoints/shim_contact.cpp` exposes
 // the same body to the Rust host as `intersection_tolerated_abi`. A second copy
 // would be a correctness hazard rather than a duplication nuisance: the gates
 // must grant exactly the same set, and a scene that one backend reports and
@@ -26,9 +25,12 @@
 // the two sides exchanged, and both evaluations must match the expected
 // verdict, so a policy that read only the first side fails it.
 //
-// It suppresses REPORTING only: contact, CCD and the line search never consult
-// it, so the solver still resolves whatever it can and simply stops aborting
-// over what it cannot.
+// AN ALLOWED PAIR IS OUT OF EVERY PASS, not only out of the report: contact
+// assembles no barrier for it, the CCD line search does not filter the step
+// against it, and the intersection scan does not report it, so the two elements
+// pass through each other freely. `contact/pair_filter.kernel.cpp` states that
+// composition once, as `contact_pair_admitted` and `intersect_pair_reported`,
+// and `collider_intersection_allowed` for the static collision mesh.
 //
 // This routine is FLOAT-FREE and deliberately NOT a template. It reads only
 // unsigned and bool values, so no floating-point type appears in it at all, and
@@ -86,34 +88,47 @@
 // such pair would read as a self-intersection and take that allowance.
 enum : unsigned { NO_OBJECT_INDEX = 0xFFFFFFFFu };
 
-// VertexProp::intersect_policy bits. Mirrored in data.rs.
+// VertexProp::group_index for a vertex that belongs to no group: the static
+// collision mesh, which the add-on only ever builds from a STATIC group of its
+// own. It matches no group, itself included, so a collision mesh counts as
+// ANOTHER group from every object, just as NO_OBJECT_INDEX makes it another
+// object.
+enum : unsigned { NO_GROUP_INDEX = 0xFFFFFFFFu };
+
+// VertexProp::intersect_policy bits. Mirrored in data.rs and in
+// frontend/_scene_.py.
 enum : unsigned char {
     INTERSECT_ALLOW_SELF = 1u << 0,
     INTERSECT_ALLOW_INTER_OBJECT = 1u << 1,
+    INTERSECT_ALLOW_INTER_GROUP = 1u << 2,
 };
 
 namespace isect {
 
-// Three allowances, and each side is described by its element's FIRST vertex
-// (object identity and the material policy are per object, the convention
-// `pdrd_body_index` and `collider` already use) plus the element's own
-// precomputed "all N of my vertices are pinned by an allowing pin" bit.
+// Four allowances, and each side is described by its element's FIRST vertex
+// (object and group identity and the material policy are per object, the
+// convention `pdrd_body_index` and `collider` already use) plus the element's
+// own precomputed "all N of my vertices are pinned by an allowing pin" bit.
 //
-// EITHER side is enough for the pin and inter-object allowances, so flagging a
-// garment covers it against the character it is fitted to without the
-// character having to be flagged too. Self-intersection is asked of one object
-// only, so there is one flag to read.
+// EITHER side is enough for the pin, inter-object and inter-group allowances,
+// so flagging a garment covers it against the character it is fitted to
+// without the character having to be flagged too. Self-intersection is asked
+// of one object only, so there is one flag to read. Inter-group is the
+// narrower of the two cross-object allowances: it covers a pair of objects
+// only when they sit in different groups, so objects of one group still
+// collide with each other.
 SM_INLINE bool intersection_tolerated(unsigned a_object_index,
+                                      unsigned a_group_index,
                                       unsigned char a_intersect_policy,
                                       unsigned b_object_index,
+                                      unsigned b_group_index,
                                       unsigned char b_intersect_policy,
                                       bool a_pin_allows, bool b_pin_allows) {
-    // A fully pinned element's shape is prescribed. The solver was never going
-    // to resolve an intersection it is part of, so reporting one only aborts a
-    // run over geometry the user authored. This is the same reasoning that
-    // makes `either_dyn` skip a pair whose BOTH sides are fully fix-pinned;
-    // the allowance is what lets ONE pinned side be enough, and what extends
-    // it to pull pins, whose hold is only as strong as their own force.
+    // A pin that allows intersections covers the geometry it holds, such as a
+    // cuff pulled onto a wrist it starts inside. `either_dyn` already leaves a
+    // pair whose BOTH sides are fully fix-pinned alone; the allowance is what
+    // lets ONE pinned side be enough, and what extends it to pull pins, whose
+    // hold is only as strong as their own force.
     if (a_pin_allows || b_pin_allows) {
         return true;
     }
@@ -124,8 +139,14 @@ SM_INLINE bool intersection_tolerated(unsigned a_object_index,
     if (same_object) {
         return (a_intersect_policy & INTERSECT_ALLOW_SELF) != 0;
     }
-    return ((a_intersect_policy | b_intersect_policy) &
-            INTERSECT_ALLOW_INTER_OBJECT) != 0;
+    const unsigned char either = a_intersect_policy | b_intersect_policy;
+    if ((either & INTERSECT_ALLOW_INTER_OBJECT) != 0) {
+        return true;
+    }
+    // NO_GROUP_INDEX must not match itself either, for the same reason.
+    bool same_group =
+        a_group_index != NO_GROUP_INDEX && a_group_index == b_group_index;
+    return !same_group && (either & INTERSECT_ALLOW_INTER_GROUP) != 0;
 }
 
 } // namespace isect

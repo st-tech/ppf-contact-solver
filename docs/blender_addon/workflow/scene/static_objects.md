@@ -280,17 +280,20 @@ velocity overwrite) is hidden.
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
 | **Apply Soft Constraints**           | `enable_soft_constraint`          | `False` | Hold the collider with springs instead of locking it to its animation. |
 | **Stiffness**                        | `soft_constraint_stiffness`       | 10.0    | How firmly those springs hold. Shown only when the box above is ticked. |
-| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Accept a mesh that overlaps itself instead of stopping the run.       |
-| **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Accept an overlap against a different mesh instead of stopping the run. |
+| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Let an object pass through itself, with no contact between its parts. |
+| **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Let an object pass through every other object, with no contact.       |
+| **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | Let an object pass through objects of other groups, with no contact.  |
 
-The last two rows sit in an **Allow Intersections** box drawn below the
+The last three rows sit in an **Allow Intersections** box drawn below the
 type-specific block, and that box is the same on every group type; a
 Static group is not an exception. What is specific to Static is when the
-setting bites: a collider reaches the solver as a pin shell carrying the
-policy only while it is animated, soft-constrained, or named as one end
-of a cross-stitch. A collider that is none of those stays a contact-only
-collision mesh and neither box changes any pair, but both are still
-drawn. See [Allow Intersections](../params/material.md#allow-intersections).
+boxes take effect: a collider's own boxes reach the solver only while it is
+animated, soft-constrained, or named as one end of a cross-stitch. A
+collider that is none of those stays a collision surface only and ignores
+the boxes on its group, though they are still drawn. A moving object still
+passes through such a collider when the moving object's own group has
+**Allow Inter-Object Intersections** or **Allow Inter-Group Intersections**
+on. See [Allow Intersections](../params/material.md#allow-intersections).
 
 **Apply Soft Constraints** matters most for the armature-driven colliders
 above. A body rig folds against itself as it moves, and where it closes onto

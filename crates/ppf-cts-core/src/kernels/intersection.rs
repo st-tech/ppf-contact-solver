@@ -234,15 +234,22 @@ fn triangles_coplanar_overlap(
 /// which writes them.
 pub const INTERSECT_ALLOW_SELF: u8 = 1 << 0;
 pub const INTERSECT_ALLOW_INTER_OBJECT: u8 = 1 << 1;
+pub const INTERSECT_ALLOW_INTER_GROUP: u8 = 1 << 2;
 
 /// `vert_object_id` for a vertex whose source object is unknown, which is what
 /// an appended STATIC collision triangle gets. Never equal to itself, so two
 /// unknowns are not mistaken for one object.
 pub const NO_OBJECT_ID: i32 = -1;
 
+/// `vert_group_id` for a vertex that belongs to no group, which is what an
+/// appended STATIC collision vertex gets. Never equal to itself, so a
+/// collider is another group from every object.
+pub const NO_GROUP_ID: i32 = -1;
+
 /// One element's side of the allowance question.
-struct ElementSide {
+pub(crate) struct ElementSide {
     object_id: i32,
+    group_id: i32,
     policy: u8,
     pin_allows: bool,
 }
@@ -251,19 +258,38 @@ struct ElementSide {
 /// that passes none tolerates nothing, so every intersecting pair is reported.
 pub(crate) struct VertexIntersectPolicy<'a> {
     object_id: Option<&'a [i32]>,
+    /// Absent puts every vertex in one group, which is exact for a scene no
+    /// allowance asks about groups.
+    group_id: Option<&'a [i32]>,
     policy: Option<&'a [u8]>,
     pin_allows: Option<&'a [bool]>,
 }
 
 impl<'a> VertexIntersectPolicy<'a> {
-    fn is_inert(&self) -> bool {
+    /// The four per-vertex facts, each optional, in one namespace of vertices.
+    pub(crate) fn new(
+        object_id: Option<&'a [i32]>,
+        group_id: Option<&'a [i32]>,
+        policy: Option<&'a [u8]>,
+        pin_allows: Option<&'a [bool]>,
+    ) -> Self {
+        VertexIntersectPolicy {
+            object_id,
+            group_id,
+            policy,
+            pin_allows,
+        }
+    }
+
+    pub(crate) fn is_inert(&self) -> bool {
         self.policy.is_none() && self.pin_allows.is_none()
     }
 
-    fn side_of(&self, element: &[i32]) -> ElementSide {
+    pub(crate) fn side_of(&self, element: &[i32]) -> ElementSide {
         let first = element[0] as usize;
         ElementSide {
             object_id: self.object_id.map(|a| a[first]).unwrap_or(NO_OBJECT_ID),
+            group_id: self.group_id.map(|a| a[first]).unwrap_or(0),
             policy: self.policy.map(|a| a[first]).unwrap_or(0),
             // An element with no vertices could not be intersecting anything;
             // `all` over an empty slice would answer true, so require one.
@@ -278,13 +304,12 @@ impl<'a> VertexIntersectPolicy<'a> {
     /// `crates/ppf-cts-solver/src/kernels/contact/intersect_policy.hpp` and which
     /// the device visitors and the host ABI shim both call. Keep the two in
     /// step; a divergence is a build that passes one gate and fails the other.
-    fn tolerated(&self, a: &ElementSide, b: &ElementSide) -> bool {
+    pub(crate) fn tolerated(&self, a: &ElementSide, b: &ElementSide) -> bool {
         if self.is_inert() {
             return false;
         }
-        // Either side is enough: a fully pinned element's shape is prescribed,
-        // so the solver was never going to resolve an intersection it is part
-        // of.
+        // Either side is enough: a pin that allows intersections covers the
+        // geometry it holds against whatever it meets.
         if a.pin_allows || b.pin_allows {
             return true;
         }
@@ -292,7 +317,12 @@ impl<'a> VertexIntersectPolicy<'a> {
         if same_object {
             return a.policy & INTERSECT_ALLOW_SELF != 0;
         }
-        (a.policy | b.policy) & INTERSECT_ALLOW_INTER_OBJECT != 0
+        let either = a.policy | b.policy;
+        if either & INTERSECT_ALLOW_INTER_OBJECT != 0 {
+            return true;
+        }
+        let same_group = a.group_id != NO_GROUP_ID && a.group_id == b.group_id;
+        !same_group && either & INTERSECT_ALLOW_INTER_GROUP != 0
     }
 }
 
@@ -445,6 +475,10 @@ pub struct IntersectionInput<'a> {
     /// appended STATIC collision vertex gets). Together with `vert_policy` it
     /// drives the self- and inter-object allowances; `None` disables both.
     pub vert_object_id: Option<&'a [i32]>,
+    /// Per-VERTEX source-group identity (`NO_GROUP_ID` for an appended STATIC
+    /// collision vertex). Read only by the inter-group allowance; `None` puts
+    /// every vertex in one group.
+    pub vert_group_id: Option<&'a [i32]>,
     /// Per-VERTEX `INTERSECT_ALLOW_*` bits, resolved from each vertex's
     /// object's material. `None` means no object allows anything.
     pub vert_policy: Option<&'a [u8]>,
@@ -510,6 +544,7 @@ pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> 
 
     let policy = VertexIntersectPolicy {
         object_id: input.vert_object_id,
+        group_id: input.vert_group_id,
         policy: input.vert_policy,
         pin_allows: input.vert_pin_allow,
     };
@@ -588,6 +623,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -608,6 +644,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -628,6 +665,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -648,6 +686,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -668,6 +707,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -689,6 +729,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -702,6 +743,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -729,6 +771,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: Some(&same_body),
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -743,6 +786,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: Some(&diff_body),
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -757,6 +801,7 @@ mod tests {
             rod_edges: None,
             tri_body_id: Some(&one_body),
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -779,6 +824,7 @@ mod tests {
             rod_edges: Some(&rod),
             tri_body_id: None,
             vert_object_id: None,
+            vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
         });
@@ -798,6 +844,15 @@ mod tests {
         vert_policy: Option<&[u8]>,
         vert_pin_allow: Option<&[bool]>,
     ) -> Vec<(i32, i32)> {
+        check_crossing_pair_grouped(vert_object_id, None, vert_policy, vert_pin_allow)
+    }
+
+    fn check_crossing_pair_grouped(
+        vert_object_id: Option<&[i32]>,
+        vert_group_id: Option<&[i32]>,
+        vert_policy: Option<&[u8]>,
+        vert_pin_allow: Option<&[bool]>,
+    ) -> Vec<(i32, i32)> {
         let verts = flat3(&[
             [-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0],
             [0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [0.0, 2.0, 0.0],
@@ -810,9 +865,69 @@ mod tests {
             rod_edges: None,
             tri_body_id: None,
             vert_object_id,
+            vert_group_id,
             vert_policy,
             vert_pin_allow,
         })
+    }
+
+    #[test]
+    fn allow_inter_group_intersection_needs_two_groups() {
+        // Two objects, the crossing pair's vertices split 3 and 3.
+        let two_objects = [0, 0, 0, 1, 1, 1];
+        let two_groups = [4, 4, 4, 9, 9, 9];
+        let one_group = [4i32; 6];
+        let on_first = [
+            INTERSECT_ALLOW_INTER_GROUP,
+            INTERSECT_ALLOW_INTER_GROUP,
+            INTERSECT_ALLOW_INTER_GROUP,
+            0,
+            0,
+            0,
+        ];
+        // Different groups, one side flagged: covered, either side.
+        assert!(check_crossing_pair_grouped(
+            Some(&two_objects),
+            Some(&two_groups),
+            Some(&on_first),
+            None
+        )
+        .is_empty());
+        let on_second: Vec<u8> = on_first.iter().rev().copied().collect();
+        assert!(check_crossing_pair_grouped(
+            Some(&two_objects),
+            Some(&two_groups),
+            Some(&on_second),
+            None
+        )
+        .is_empty());
+        // One group: two of its objects still collide, so the pair reports.
+        let both = [INTERSECT_ALLOW_INTER_GROUP; 6];
+        assert_eq!(
+            check_crossing_pair_grouped(
+                Some(&two_objects),
+                Some(&one_group),
+                Some(&both),
+                None
+            ),
+            vec![(0, 1)]
+        );
+        // No group array puts every vertex in one group.
+        assert_eq!(
+            check_crossing_pair_grouped(Some(&two_objects), None, Some(&both), None),
+            vec![(0, 1)]
+        );
+        // Inter-group is not self: one object reports whatever its group.
+        let one_object = [0i32; 6];
+        assert_eq!(
+            check_crossing_pair_grouped(
+                Some(&one_object),
+                Some(&two_groups),
+                Some(&both),
+                None
+            ),
+            vec![(0, 1)]
+        );
     }
 
     #[test]

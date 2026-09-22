@@ -3,9 +3,10 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The ADDON half of the three intersection allowances of issue #138: two
+# The ADDON half of the four intersection allowances of issue #138: three
 # per-group checkboxes ("Allow Self-Intersections", "Allow Inter-Object
-# Intersections") and a per-pin one ("Allow Intersections Here").
+# Intersections", "Allow Inter-Group Intersections") and a per-pin one
+# ("Allow Intersections Here").
 #
 # `rig_intersection_allowances` covers what the
 # allowances MEAN, at the scene-build gate and at the solver's own scan. Both
@@ -20,7 +21,7 @@
 # booleans, and it does not even prove that much: a PropertyGroup accepts an
 # assignment to an UNREGISTERED name as a stray ID-property, so a scenario
 # built on read-back would pass against an addon tree that never declared the
-# property at all. The witnesses here are three files the build worker writes
+# property at all. The witnesses here are four files the build worker writes
 # into the session directory:
 #
 #   bin/object_vert.bin      u32 per dynamic vertex, source-object identity.
@@ -30,24 +31,38 @@
 #                            per Blender object, not per group: two meshes in
 #                            one group form an inter-object pair.
 #   bin/intersect_policy.bin u8 per dynamic vertex, bit 0 = allow self,
-#                            bit 1 = allow inter-object. Written only when
-#                            some object asks for an allowance.
+#                            bit 1 = allow inter-object, bit 2 = allow
+#                            inter-group. Written only when some object asks
+#                            for an allowance.
+#   bin/group_vert.bin       u32 per dynamic vertex, add-on GROUP identity, in
+#                            the same vertex order. This is what separates an
+#                            INTER-GROUP pair from an inter-object pair inside
+#                            one group, so objects of one group share an id
+#                            and objects of different groups do not. Written
+#                            only when some vertex carries bit 2.
 #   info.toml                the pin sections, where the per-pin flag lands as
 #                            `allow_intersection = true`.
 #
-# The scene holds five objects, one per group, differing in which allowances
+# The scene holds seven objects in six groups, differing in which allowances
 # their group carries and in the group's TYPE:
 #
-#   SelfSheet   SHELL  allow self only          -> policy 0b01
-#   InterSheet  SHELL  allow inter-object only  -> policy 0b10
-#   BothSheet   SHELL  both                     -> policy 0b11
-#   PlainSheet  SHELL  neither, and its PIN carries the per-pin flag
-#   RigidBody   PDRD   both                     -> policy 0b11
+#   SelfSheet   SHELL  allow self only          -> policy 0b001
+#   InterSheet  SHELL  allow inter-object only  -> policy 0b010
+#   BothSheet   SHELL  self and inter-object    -> policy 0b011
+#   PlainSheet  SHELL  none, and its PIN carries the per-pin flag
+#   RigidBody   PDRD   all three                -> policy 0b111
+#   LayerSheetA SHELL  allow inter-group only   -> policy 0b100
+#   LayerSheetB SHELL  (same group as LayerSheetA)
+#
+# LayerGroup is the only group holding two objects, which is what makes
+# "same group, same group id" a claim the group file can fail: with one
+# object per group, a file carrying the OBJECT id under the group file's name
+# would pass every other check on it.
 #
 # The PDRD body is what covers the SHAPE of the encoder's per-type key
 # whitelist (`blender_addon/core/encoder/params.py`), which is six
-# independent lists, one per group type, each of which has to name both
-# allowance keys. The value dict the encoder builds computes both keys for
+# independent lists, one per group type, each of which has to name every
+# allowance key. The value dict the encoder builds computes every key for
 # every group, so a type whose list omits one ships a checkbox that sets
 # nothing, and an all-SHELL scene reports that as a pass. One non-SHELL group
 # turns the claim from "the SHELL row is right" into "the rows are not
@@ -62,21 +77,22 @@
 # none of those, and it stays a disjoint contact-only collision mesh that no
 # byte of `intersect_policy.bin` answers for.
 #
-# Every object has a pin, so the pin subtest has four controls: a run where
-# exactly one of the five pin sections may carry the flag is a much narrower
+# Every object has a pin, so the pin subtest has six controls: a run where
+# exactly one of the seven pin sections may carry the flag is a much narrower
 # claim than one where the only pin present carries it.
 #
 # It builds TWICE in the same project. The first build leaves every checkbox
 # at its default and is the regression half: the session must carry NO
-# `bin/intersect_policy.bin` and no `allow_intersection` anywhere in
-# `info.toml`, so a scene that leaves the three allowances alone carries no
-# trace of them into the session. The second build sets the flags and reads
-# the same three files again. Checking the default case against a real build
-# rather than against the encoder alone is what makes it cover the frontend's
-# "write the file only when some object asks" rule as well as the addon's.
+# `bin/intersect_policy.bin`, no `bin/group_vert.bin` and no
+# `allow_intersection` anywhere in `info.toml`, so a scene that leaves the
+# four allowances alone carries no trace of them into the session. The second
+# build sets the flags and reads the same files again. Checking the default
+# case against a real build rather than against the encoder alone is what
+# makes it cover the frontend's "write the file only when some object asks"
+# rule as well as the addon's.
 #
 # Subtests:
-#   A. rna_registered_with_defaults       - all three properties exist and
+#   A. rna_registered_with_defaults       - all four properties exist and
 #                                           default to off. A missing one
 #                                           means Blender loaded an addon
 #                                           tree that predates them, or was
@@ -91,15 +107,23 @@
 #   G. inter_allowance_sets_bit1_only
 #   H. both_allowances_set_both_bits
 #   I. untouched_group_stays_zero
-#   J. non_shell_group_sets_both_bits
+#   J. non_shell_group_sets_every_bit
 #   K. pin_flag_reaches_pin_toml
+#   L. default_build_writes_no_group_file
+#   M. inter_group_allowance_sets_bit2_only
+#   N. group_file_written_when_asked
+#   O. group_ids_shared_within_a_group
+#   P. group_ids_distinct_across_groups
 #
-# F through I are the ones that separate the two checkboxes from each other.
-# A wiring that sent both group booleans to the same bit, or that swapped
-# them, still produces a policy file of the right length with non-zero bytes
-# in it, and passes D and E. J asks the same question of a second group type,
-# and it asks it of BOTH keys at once, so dropping either one from the PDRD
-# whitelist row leaves a policy byte that is non-zero and still wrong.
+# F through I and M are the ones that separate the three checkboxes from each
+# other. A wiring that sent two group booleans to the same bit, or that
+# swapped them, still produces a policy file of the right length with
+# non-zero bytes in it, and passes D and E. J asks the same question of a
+# second group type, and it asks it of EVERY key at once, so dropping any one
+# from the PDRD whitelist row leaves a policy byte that is non-zero and still
+# wrong. O and P are the two halves of the group file's meaning, and each
+# fails a file the other passes: one id for the whole scene passes O, and one
+# id per object passes P.
 
 from __future__ import annotations
 
@@ -137,23 +161,29 @@ PROJECT_ROOT = "<<PROJECT_ROOT>>"
 # reads the exported byte, so it has to name the bits the solver reads.
 BIT_SELF = 1 << 0
 BIT_INTER = 1 << 1
+BIT_GROUP = 1 << 2
 
 # name, x offset, group type, grid subdivisions, group name,
-# (allow self, allow inter). The subdivision counts differ so the objects
-# have five different vertex counts, which makes each one legible in a
-# failure report before the vertex map is consulted. The offsets keep them
-# well apart: an actual overlap would put the build-time intersection check
-# in the middle of a measurement about file contents.
+# (allow self, allow inter-object, allow inter-group). The subdivision counts
+# differ so the objects have seven different vertex counts, which makes each
+# one legible in a failure report before the vertex map is consulted. The
+# offsets keep them well apart: an actual overlap would put the build-time
+# intersection check in the middle of a measurement about file contents.
 #
 # The PDRD entry takes a CUBE rather than a grid. A rigid body's mass and
 # inertia come from the volume its surface encloses, so an open sheet is not
 # a body it can be built from.
+#
+# The two Layer sheets share ONE group, and the flags are a property of the
+# group, so both entries carry the same tuple.
 SPECS = [
-    ("SelfSheet", -6.0, "SHELL", 3, "SelfGroup", (True, False)),
-    ("InterSheet", -2.0, "SHELL", 4, "InterGroup", (False, True)),
-    ("BothSheet", 2.0, "SHELL", 5, "BothGroup", (True, True)),
-    ("PlainSheet", 6.0, "SHELL", 6, "PlainGroup", (False, False)),
-    ("RigidBody", 10.0, "PDRD", 0, "RigidGroup", (True, True)),
+    ("SelfSheet", -6.0, "SHELL", 3, "SelfGroup", (True, False, False)),
+    ("InterSheet", -2.0, "SHELL", 4, "InterGroup", (False, True, False)),
+    ("BothSheet", 2.0, "SHELL", 5, "BothGroup", (True, True, False)),
+    ("PlainSheet", 6.0, "SHELL", 6, "PlainGroup", (False, False, False)),
+    ("RigidBody", 10.0, "PDRD", 0, "RigidGroup", (True, True, True)),
+    ("LayerSheetA", 14.0, "SHELL", 7, "LayerGroup", (False, False, True)),
+    ("LayerSheetB", 18.0, "SHELL", 8, "LayerGroup", (False, False, True)),
 ]
 PIN_GROUP = "Edge"
 EXPECTED_POLICY = {
@@ -161,8 +191,16 @@ EXPECTED_POLICY = {
     "InterSheet": BIT_INTER,
     "BothSheet": BIT_SELF | BIT_INTER,
     "PlainSheet": 0,
-    "RigidBody": BIT_SELF | BIT_INTER,
+    "RigidBody": BIT_SELF | BIT_INTER | BIT_GROUP,
+    "LayerSheetA": BIT_GROUP,
+    "LayerSheetB": BIT_GROUP,
 }
+# Group names in first-appearance order, and the group each object is in.
+GROUP_NAMES = []
+for _spec in SPECS:
+    if _spec[4] not in GROUP_NAMES:
+        GROUP_NAMES.append(_spec[4])
+GROUP_OF = {_spec[0]: _spec[4] for _spec in SPECS}
 
 
 def session_dir():
@@ -264,13 +302,16 @@ try:
     # Address a group by its SLOT. ObjectGroup.index is a display number that
     # agrees with the slot only while every slot below the group is active.
     rna_group = {}
-    for name, _x, kind, _subdiv, group_name, _flags in SPECS:
-        facade_group = dh.api.solver.create_group(group_name, kind)
-        facade_group.add(name)
-        facade_group.create_pin(name, PIN_GROUP)
+    for group_name in GROUP_NAMES:
+        members = [spec for spec in SPECS if spec[4] == group_name]
+        facade_group = dh.api.solver.create_group(group_name, members[0][2])
+        for name, _x, _kind, _subdiv, _grp, _flags in members:
+            facade_group.add(name)
+            facade_group.create_pin(name, PIN_GROUP)
         slot = groups_mod.get_group_slot_index(scene, facade_group.uuid)
         rna_group[group_name] = getattr(addon_root, "object_group_%d" % slot)
-    dh.log("groups_created")
+    dh.log("groups_created %r"
+           % ({g: len(rna_group[g].assigned_objects) for g in GROUP_NAMES},))
 
     uuid_of = {name: uuid_mod.get_or_create_object_uuid(bpy.data.objects[name])
                for name, _x, _k, _s, _g, _f in SPECS}
@@ -284,7 +325,8 @@ try:
     plain_pin = rna_group["PlainGroup"].pin_vertex_groups[0]
     pin_props = set(plain_pin.bl_rna.properties.keys())
     missing = [p for p in ("allow_self_intersection",
-                           "allow_inter_object_intersection")
+                           "allow_inter_object_intersection",
+                           "allow_inter_group_intersection")
                if p not in group_props]
     if "allow_intersection" not in pin_props:
         missing.append("PinVertexGroupItem.allow_intersection")
@@ -292,6 +334,7 @@ try:
         not missing
         and rna_group["SelfGroup"].allow_self_intersection is False
         and rna_group["SelfGroup"].allow_inter_object_intersection is False
+        and rna_group["SelfGroup"].allow_inter_group_intersection is False
         and plain_pin.allow_intersection is False
     )
     dh.record(
@@ -301,6 +344,8 @@ try:
              rna_group["SelfGroup"], "allow_self_intersection", None),
          "group_inter_default": getattr(
              rna_group["SelfGroup"], "allow_inter_object_intersection", None),
+         "group_inter_group_default": getattr(
+             rna_group["SelfGroup"], "allow_inter_group_intersection", None),
          "pin_default": getattr(plain_pin, "allow_intersection", None),
          "note": "a missing property means Blender loaded an addon tree "
                  "without it, or the addon was soft-reloaded; new RNA needs "
@@ -343,10 +388,25 @@ try:
          "key_anywhere_in_file": "allow_intersection" in default_txt},
     )
 
+    # L: the group file is the inter-group allowance's own trace, so a scene
+    # that asks for no allowance carries none of it either. object_vert.bin
+    # is the control, as in B.
+    default_group = read_bin(session, "group_vert.bin", np.uint32)
+    dh.record(
+        "L_default_build_writes_no_group_file",
+        default_group is None and default_object is not None,
+        {"group_vert_bin": None if default_group is None
+         else int(default_group.size),
+         "object_vert_bin": None if default_object is None
+         else int(default_object.size)},
+    )
+
     # ---- build 2: the allowances the scene actually asks for ----
-    for name, _x, _kind, _subdiv, group_name, (a_self, a_inter) in SPECS:
+    for (name, _x, _kind, _subdiv, group_name,
+         (a_self, a_inter, a_group)) in SPECS:
         rna_group[group_name].allow_self_intersection = a_self
         rna_group[group_name].allow_inter_object_intersection = a_inter
+        rna_group[group_name].allow_inter_group_intersection = a_group
     plain_pin.allow_intersection = True
     dh.log("allowances set")
 
@@ -378,9 +438,9 @@ try:
     )
 
     # E: object identity. Every object's vertices must carry ONE object id,
-    # the five ids must differ, and between them the five objects must account
-    # for every dynamic vertex. Without that last part a policy check could
-    # pass while some vertices carried no object id. Such a vertex never
+    # the seven ids must differ, and between them the seven objects must
+    # account for every dynamic vertex. Without that last part a policy check
+    # could pass while some vertices carried no object id. Such a vertex never
     # compares same-object, not even against another unmapped one, so its
     # pairs all fall to the INTER-OBJECT branch: it would lose the self
     # allowance and take the inter-object one, in both directions silently.
@@ -412,10 +472,10 @@ try:
          "vertices_covered_by_every_object": all_covered},
     )
 
-    # F through J: the per-group bits, one check per case so a report names
-    # which allowance went astray instead of one combined verdict. J is the
-    # PDRD group, so F through I answer for one row of the encoder's per-type
-    # key whitelist and J answers for a second.
+    # F through J and M: the per-group bits, one check per case so a report
+    # names which allowance went astray instead of one combined verdict. J is
+    # the PDRD group, so F through I and M answer for one row of the encoder's
+    # per-type key whitelist and J answers for a second.
     policy_seen = {}
     for name, _x, _k, _s, _g, _f in SPECS:
         idx = solver_index[name]
@@ -430,12 +490,14 @@ try:
     # PDRD group a SHELL, and J would then pass on the row F through I
     # already cover.
     spec_by_name = {s[0]: s for s in SPECS}
+    bits_legend = ("bit0=allow self, bit1=allow inter-object, "
+                   "bit2=allow inter-group")
     for check, name in (
         ("F_self_allowance_sets_bit0_only", "SelfSheet"),
         ("G_inter_allowance_sets_bit1_only", "InterSheet"),
         ("H_both_allowances_set_both_bits", "BothSheet"),
         ("I_untouched_group_stays_zero", "PlainSheet"),
-        ("J_non_shell_group_sets_both_bits", "RigidBody"),
+        ("J_non_shell_group_sets_every_bit", "RigidBody"),
     ):
         want = EXPECTED_POLICY[name]
         wanted_type = spec_by_name[name][2]
@@ -446,14 +508,96 @@ try:
             {"object": name, "group_type": seen_type,
              "group_type_expected": wanted_type, "expected": want,
              "seen": policy_seen[name], "all_objects": policy_seen,
-             "bits": "bit0=allow self, bit1=allow inter-object",
-             "note": "a zero here on a group whose checkboxes are both on "
+             "bits": bits_legend,
+             "note": "a missing bit here on a group whose checkbox is on "
                      "means the encoder's per-type key whitelist "
-                     "(core/encoder/params.py) does not name the two keys "
-                     "for this group type"},
+                     "(core/encoder/params.py) does not name that key for "
+                     "this group type"},
         )
 
-    # K: the per-pin flag. Five pins reach the solver and exactly one of them
+    # M: the inter-group bit reaches both objects of LayerGroup, which is the
+    # group that asked, and no vertex outside the objects expected to carry
+    # it. The per-object checks above already pin every other object's byte;
+    # this one also states the claim over the whole file, so a bit landing on
+    # a vertex no object accounts for is named here rather than inferred.
+    layer_names = [n for n in GROUP_OF if GROUP_OF[n] == "LayerGroup"]
+    bit2_expected = set()
+    for name in EXPECTED_POLICY:
+        idx = solver_index[name]
+        if EXPECTED_POLICY[name] & BIT_GROUP and idx is not None:
+            bit2_expected.update(int(v) for v in idx.tolist())
+    bit2_seen = (set() if policy is None
+                 else set(int(v) for v in np.nonzero(policy & BIT_GROUP)[0]))
+    dh.record(
+        "M_inter_group_allowance_sets_bit2_only",
+        all(policy_seen[n] == [BIT_GROUP] for n in layer_names)
+        and len(layer_names) == 2
+        and bit2_seen == bit2_expected,
+        {"objects": layer_names, "expected": BIT_GROUP,
+         "seen": {n: policy_seen[n] for n in layer_names},
+         "all_objects": policy_seen, "bits": bits_legend,
+         "bit2_vertices": len(bit2_seen),
+         "bit2_vertices_expected": len(bit2_expected),
+         "bit2_outside_expected": sorted(bit2_seen - bit2_expected)[:16],
+         "bit2_missing": sorted(bit2_expected - bit2_seen)[:16]},
+    )
+
+    # N through P: the group file. Two objects in one group must read ONE id,
+    # and objects in different groups must read different ids. The first is
+    # what keeps an inter-group allowance from covering a pair inside its own
+    # group; the second is what lets it cover a pair across groups.
+    group_id = read_bin(session, "group_vert.bin", np.uint32)
+    dh.record(
+        "N_group_file_written_when_asked",
+        group_id is not None and object_id is not None
+        and group_id.size == object_id.size,
+        {"group_vert_bin": None if group_id is None else int(group_id.size),
+         "object_vert_bin": n_vert,
+         "note": "written whenever some vertex's policy carries bit 2, "
+                 "which LayerGroup and RigidGroup both ask for here"},
+    )
+
+    group_ids_seen = {}
+    for name in GROUP_OF:
+        idx = solver_index[name]
+        if idx is None or group_id is None or group_id.size != n_vert:
+            group_ids_seen[name] = None
+            continue
+        group_ids_seen[name] = sorted(
+            int(v) for v in set(group_id[idx].tolist()))
+    one_per_object = all(v is not None and len(v) == 1
+                         for v in group_ids_seen.values())
+    # Every pair of objects, split by whether they share a group, and the
+    # pairs that break the rule for their side of the split. Each check reads
+    # only its own side, so O and P fail independently.
+    same_group_split = []
+    cross_group_clash = []
+    if one_per_object:
+        names = list(GROUP_OF)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                same_id = group_ids_seen[a] == group_ids_seen[b]
+                if GROUP_OF[a] == GROUP_OF[b] and not same_id:
+                    same_group_split.append([a, b])
+                elif GROUP_OF[a] != GROUP_OF[b] and same_id:
+                    cross_group_clash.append([a, b])
+    dh.record(
+        "O_group_ids_shared_within_a_group",
+        one_per_object and not same_group_split and len(layer_names) == 2,
+        {"ids_per_object": group_ids_seen, "group_of": GROUP_OF,
+         "same_group_pairs_with_different_ids": same_group_split,
+         "note": "LayerSheetA and LayerSheetB are in ONE group and must "
+                 "read one id; every object must read a single id over its "
+                 "own vertices"},
+    )
+    dh.record(
+        "P_group_ids_distinct_across_groups",
+        one_per_object and not cross_group_clash,
+        {"ids_per_object": group_ids_seen, "group_of": GROUP_OF,
+         "cross_group_pairs_with_one_id": cross_group_clash[:16]},
+    )
+
+    # K: the per-pin flag. Seven pins reach the solver and exactly one of them
     # asked, so this is a statement about which pin carries the flag, not
     # merely that some pin does.
     pins, _pin_txt = read_pin_sections(session)

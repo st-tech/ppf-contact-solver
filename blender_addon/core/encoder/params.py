@@ -10,6 +10,7 @@ import numpy as np
 
 from ...models.groups import get_addon_data, iterate_object_groups
 from ...models.intersection_allowances import (
+    INTER_GROUP_ALLOWANCE,
     INTER_OBJECT_ALLOWANCE,
     SELF_ALLOWANCE,
     allowance_applies_to_all,
@@ -352,6 +353,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "lock-all-rotations",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
             "SHELL": [
                 "density",
@@ -388,6 +390,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "lock-all-rotations",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
             "ROD": [
                 "density",
@@ -415,6 +418,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "lock-all-rotations",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
             "STATIC": [
                 "contact-gap",
@@ -423,6 +427,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "soft-constraint",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
             "SAND": [
                 "sand-particle-mass",
@@ -441,6 +446,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "lock-all-rotations",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
             "PDRD": [
                 "density",
@@ -461,6 +467,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "lock-all-rotations",
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
+                "allow-inter-group-intersection",
             ],
         }
         model_map = {
@@ -607,11 +614,10 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # alone reaches the solver exactly as it did before.
             "bend-warp": np.float32(group.bend_warp),
             "bend-weft": np.float32(group.bend_weft),
-            # Intersection tolerances (issue #138). Float-encoded booleans,
-            # like bend-rest-from-geometry. They suppress REPORTING of the
-            # pairs they name at the scene-build check and at every solver
-            # intersection scan; no contact force and no CCD filter changes,
-            # so the solver still resolves what it can.
+            # Intersection allowances (issue #138). Float-encoded booleans,
+            # like bend-rest-from-geometry. The pairs they name get no contact
+            # force, no CCD filter and no report at the scene-build check or
+            # at any solver intersection scan, so they pass through freely.
             #
             # A scalar when the allowance reaches every object of the group,
             # a per-uuid dict when it has been narrowed to a subset. See
@@ -620,6 +626,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 group, SELF_ALLOWANCE, object_uuids),
             "allow-inter-object-intersection": _encode_intersection_allowance(
                 group, INTER_OBJECT_ALLOWANCE, object_uuids),
+            "allow-inter-group-intersection": _encode_intersection_allowance(
+                group, INTER_GROUP_ALLOWANCE, object_uuids),
             "shrink": np.float32(group.shrink),
             "shrink-x": np.float32(group.shrink_x),
             "shrink-y": np.float32(group.shrink_y),

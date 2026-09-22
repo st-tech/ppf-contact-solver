@@ -27,6 +27,8 @@
 
 use rayon::prelude::*;
 
+use super::intersection::VertexIntersectPolicy;
+
 use super::bvh::{
     build_edge_bvh, build_tri_bvh, closest_point_on_triangle, traverse_overlap, Bvh,
 };
@@ -443,6 +445,15 @@ pub struct ProximityInput<'a> {
     pub edges: Option<&'a [i32]>,
     pub is_collider: Option<&'a [bool]>,
     pub contact_offset: Option<&'a [f64]>,
+    /// The intersection allowances, per vertex in the namespace of `verts`,
+    /// exactly as `intersection::IntersectionInput` takes them. A pair an
+    /// allowance covers is not a contact pair, so its clearance is nothing the
+    /// solver has to keep and it is never a violation. `None` throughout
+    /// allows nothing.
+    pub vert_object_id: Option<&'a [i32]>,
+    pub vert_group_id: Option<&'a [i32]>,
+    pub vert_policy: Option<&'a [u8]>,
+    pub vert_pin_allow: Option<&'a [bool]>,
 }
 
 /// Check for contact-offset violations between mesh elements. Output
@@ -572,6 +583,30 @@ pub fn check_contact_offset_violation(input: ProximityInput<'_>) -> Vec<(i32, i3
         all_pairs.append(&mut pairs);
     }
 
+    // Drop the pairs an intersection allowance covers, by the same rule the
+    // intersection check and the solver's contact filter apply, so this gate
+    // refuses exactly the clearances contact would have to keep.
+    let policy = VertexIntersectPolicy::new(
+        input.vert_object_id,
+        input.vert_group_id,
+        input.vert_policy,
+        input.vert_pin_allow,
+    );
+    if !policy.is_inert() {
+        let tris = input.tris.unwrap_or(&[]);
+        let edges = input.edges.unwrap_or(&[]);
+        let side = |element: i32| {
+            let e = element as usize;
+            if e < n_tris {
+                policy.side_of(&tris[3 * e..3 * e + 3])
+            } else {
+                let r = e - n_tris;
+                policy.side_of(&edges[2 * r..2 * r + 2])
+            }
+        };
+        all_pairs.retain(|&(a, b)| !policy.tolerated(&side(a), &side(b)));
+    }
+
     all_pairs
 }
 
@@ -605,6 +640,10 @@ mod tests {
             edges: None,
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert_eq!(r, vec![(0, 1)]);
 
@@ -616,8 +655,53 @@ mod tests {
             edges: None,
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn an_allowed_pair_is_never_too_close() {
+        // The same two triangles 0.05 apart with offsets summing to 0.1, one
+        // per object. An allowed pair has no contact, so its clearance is
+        // not a violation; the controls keep the check honest both ways.
+        use super::super::intersection::{
+            INTERSECT_ALLOW_INTER_GROUP, INTERSECT_ALLOW_INTER_OBJECT, INTERSECT_ALLOW_SELF,
+        };
+        let verts = flat3(&[
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0],
+            [0.0, 0.0, 0.05], [1.0, 0.0, 0.05], [0.5, 1.0, 0.05],
+        ]);
+        let tris = flat3i(&[[0, 1, 2], [3, 4, 5]]);
+        let off = vec![0.05, 0.05];
+        let objects = [0, 0, 0, 1, 1, 1];
+        let check = |groups: &[i32], policy: &[u8]| {
+            check_contact_offset_violation(ProximityInput {
+                verts: &verts,
+                tris: Some(&tris),
+                edges: None,
+                is_collider: None,
+                contact_offset: Some(&off),
+                vert_object_id: Some(&objects),
+                vert_group_id: Some(groups),
+                vert_policy: Some(policy),
+                vert_pin_allow: None,
+            })
+        };
+        let one_group = [0; 6];
+        let two_groups = [0, 0, 0, 1, 1, 1];
+        let none = [0u8; 6];
+        let inter_object = [INTERSECT_ALLOW_INTER_OBJECT; 6];
+        let inter_group = [INTERSECT_ALLOW_INTER_GROUP; 6];
+        let self_only = [INTERSECT_ALLOW_SELF; 6];
+        assert_eq!(check(&one_group, &none), vec![(0, 1)]);
+        assert!(check(&one_group, &inter_object).is_empty());
+        assert!(check(&two_groups, &inter_group).is_empty());
+        assert_eq!(check(&one_group, &inter_group), vec![(0, 1)]);
+        assert_eq!(check(&two_groups, &self_only), vec![(0, 1)]);
     }
 
     #[test]
@@ -644,6 +728,10 @@ mod tests {
             edges: Some(&edges),
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         // namespace: tri 0, rod edge at n_tris + 0 = 1.
         assert_eq!(r, vec![(0, 1)]);
@@ -659,6 +747,10 @@ mod tests {
             edges: Some(&edges),
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert!(r.is_empty());
     }
@@ -680,6 +772,10 @@ mod tests {
             edges: Some(&edges),
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert_eq!(r, vec![(0, 1)]);
     }
@@ -699,6 +795,10 @@ mod tests {
             edges: None,
             is_collider: Some(&coll_both),
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert!(r.is_empty(), "collider×collider must be skipped");
 
@@ -709,6 +809,10 @@ mod tests {
             edges: None,
             is_collider: Some(&coll_one),
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert_eq!(r.len(), 1);
     }
@@ -727,6 +831,10 @@ mod tests {
             edges: None,
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert!(r.is_empty(), "adjacent triangles must be skipped");
     }
@@ -745,6 +853,10 @@ mod tests {
             edges: Some(&edges),
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         assert_eq!(r, vec![(0, 1)]);
     }
@@ -765,6 +877,10 @@ mod tests {
             edges: Some(&edges),
             is_collider: None,
             contact_offset: Some(&off),
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
         });
         // Pair: (tri 0, edge 0 + n_tris=1 ⇒ 1)
         assert_eq!(r, vec![(0, 1)]);

@@ -409,8 +409,16 @@ pub struct VertexProp {
     /// `object_vert.bin`. Field order must mirror `VertexProp` in
     /// `data_records.hpp` (repr(C) ABI).
     pub object_index: u32,
-    /// This vertex's object's intersection tolerances, as
-    /// `INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT`. Resolved per
+    /// Source-GROUP identity, which separates an INTER-GROUP pair from two
+    /// objects of one group: what the frontend was told through
+    /// `Object.group`, with every object told nothing sharing one default
+    /// group. `NO_GROUP_INDEX` for the static collision mesh, which therefore
+    /// counts as another group from every object. Field order must mirror
+    /// `VertexProp` in `data_records.hpp` (repr(C) ABI).
+    pub group_index: u32,
+    /// This vertex's object's intersection allowances, as
+    /// `INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT |
+    /// INTERSECT_ALLOW_INTER_GROUP`. Resolved per
     /// OBJECT by the frontend rather than per element, which is both the
     /// granularity the material param actually has and the only one defined
     /// for a faceless SAND grain (no incident element to read a material
@@ -434,9 +442,15 @@ unsafe impl ppf_cts_compute::Pod for VertexProp {}
 /// such pair would read as a self-intersection and take that allowance.
 pub const NO_OBJECT_INDEX: u32 = u32::MAX;
 
-/// `VertexProp::intersect_policy` bits. Mirrored in `data_records.hpp`.
+/// `VertexProp::group_index` for the static collision mesh, which belongs to
+/// no group. It matches no group, itself included.
+pub const NO_GROUP_INDEX: u32 = u32::MAX;
+
+/// `VertexProp::intersect_policy` bits. Mirrored in
+/// `kernels/contact/intersect_policy.hpp`.
 pub const INTERSECT_ALLOW_SELF: u8 = 1 << 0;
 pub const INTERSECT_ALLOW_INTER_OBJECT: u8 = 1 << 1;
+pub const INTERSECT_ALLOW_INTER_GROUP: u8 = 1 << 2;
 
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]

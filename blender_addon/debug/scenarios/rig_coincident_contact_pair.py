@@ -3,50 +3,27 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# One contract, asserted end to end: a contact pair whose separation has
-# collapsed to the contact offset ends the advance as
-# `CrashKind::OverlappingStart`, and the cause it names is
-# `contact_separated = false`.
+# One contract, asserted end to end: two sheets at bit-identical coordinates,
+# one of them flagged `allow-inter-object-intersection`, build and run to the
+# last frame with a clean `finished` outcome.
 #
-# Two sheets at bit-identical coordinates are the shape that produces it. An
-# overlapping scene normally leaves a small but non-zero separation, which the
-# barrier can still take a direction from; coincident sheets drive a pair's two
-# closest points to the same point, so the contact normal is a 0/0 normalize
-# and the barrier is singular there. The assembly therefore contributes nothing
-# for that pair and reports it instead, and the host turns the report into a
-# terminal crash record naming the flag.
+# Coincident sheets are the hardest shape an allowed pair can take: every
+# closest point collapses to zero, so the contact normal would be a 0/0
+# normalize and the barrier singular. An allowed pair is not a contact pair,
+# so neither the barrier nor the CCD line search ever meets it, and the run
+# has nothing to jam on. A regression that let the allowed pair back into
+# contact ends this run with `overlapping_start` (or a device assert) instead,
+# which is what B names.
 #
-# WHY THE CONDITION MUST REPORT RATHER THAN ASSERT. NDEBUG is absent from the
-# cargo CUDA build and present in the Windows one (the flags are in
-# `crates/ppf-cts-solver/build.rs` and `build-win-native/`),
-# so an assert on this condition is a live device trap on one shipped build and
-# no code at all on the other, leaving that one to normalize a zero vector and
-# assemble a NaN into the system. Neither outcome names a cause. The
-# reachability is not hypothetical: contact never consults an intersection
-# allowance, so an allowance admits exactly the scenes that can put an authored
-# pair into this state, and a supported feature can reach it.
+# The control, A, is the same geometry with no allowance: the build gate must
+# refuse it, which is what establishes that the sheets really do overlap.
 #
-# WHY NOT A CHEAPER TEST.
-#   A device unit test sees one hop.
-#   `test_accd_degenerate.cu` drives `ccd_helper` against synthetic globals and
-#   checks the flag it sets, which is the first of five: the assembly branch,
-#   the host readback after the line search, `StepResult::contact_separated`,
-#   `crash_kind_from_step`, and the status record the addon panel reads. A
-#   regression at any later hop leaves that test green.
-#   A scene-build test cannot reach it either. `rig_intersection_allowances`
-#   settles which scenes the allowance ADMITS, and admitting this one is only
-#   the precondition here; what the solver then does with it is a separate
-#   question and needs the solver to run.
-#   So the check needs a solver that assembles contact and runs a line
-#   search, which is `BACKENDS = ("real",)`, and on CI that is the GPU jobs.
-#
-# WHY `status.cbor` AND NOT THE CRASH DUMP. Not every build of the solver
-# writes the dump, so a check written against it reports a missing file rather
-# than a wrong crash kind wherever the dump is absent, which is green where it
-# was written and vacuous everywhere else. `output/status.cbor`
-# carries the same verdict on every tree: `payload.outcome.sub_kind` is the
-# spelling `CrashKind::tag` emits, and `payload.outcome.detail` carries the
-# `StepResult` booleans the sub-kind was derived from.
+# The `overlapping_start` report itself stays covered end to end by
+# `rig_collider_coincident_pair`, which reaches it with no allowance at all (a
+# dynamic sheet inside a static floor's contact offset). The shared-embed
+# branch, a DYNAMIC pair collapsed to its offset, has no authored scene: a
+# coincident dynamic pair is refused at build unless it is allowed, and an
+# allowed one is out of contact.
 #
 # NO BLENDER. The scene is authored through `frontend` directly, in a
 # SUBPROCESS: importing `frontend` loads the per-tree cdylib and installs the
@@ -54,19 +31,11 @@
 # long-lived process that must not inherit either.
 #
 # Subtests:
-#   A. scene_is_admitted_by_the_allowance
-#         `allow-inter-object-intersection` on one sheet is what gets the scene
-#         past the build gate. Without it the run under test never happens, so
-#         a failure here means B and C prove nothing, and says so.
-#   B. advance_reports_overlapping_start
-#         `outcome.sub_kind == "overlapping_start"`. A `device_assert` here
-#         means the assembly is trapping on the degenerate pair instead of
-#         reporting it; an absent record means the process died before it could
-#         write one, and the details carry the solver's own log tails.
-#   C. cause_is_contact_separated
-#         `outcome.detail` carries `contact_separated=false`. The sub-kind
-#         alone does not establish which boolean produced it, and
-#         `crash_kind_from_step` has six inputs.
+#   A. unallowed_overlap_is_refused
+#         the same two sheets with no allowance fail `scene.build()`.
+#   B. allowed_overlap_runs_to_the_end
+#         with the allowance, the build succeeds, the run reaches its last
+#         frame, and `status.cbor` records `kind == "finished"`.
 
 from __future__ import annotations
 
@@ -79,9 +48,8 @@ from . import REPO_ROOT_POSIX
 from . import _runner as r
 
 
-# Real backend only: the reported condition is evaluated in device contact
-# assembly, which the solver does not compile. Selected by the AWS
-# GPU jobs via ``runtests --backend real``.
+# RUNS ON THE REAL BACKEND. What it asserts is the contact filter in the
+# neutral kernels, which every backend renders from the same body.
 BACKENDS = ("real",)
 
 
@@ -116,82 +84,69 @@ def tail(path, limit=700):
         return "<absent>"
 
 
-app = App.create("rig_coincident_contact_pair")
-# `mesh.square` returns 5 columns: xyz then uv, so only [:, :3] is a position.
-V, F = app.mesh.square(res=4, ex=[1, 0, 0], ey=[0, 1, 0])
-app.asset.add.tri("sheet", V, F)
+FRAMES = 4
 
-scene = app.scene.create()
-a = scene.add("sheet").at(0.0, 0.0, 0.0)
-b = scene.add("sheet").at(0.0, 0.0, 0.0)
-# The allowance is what admits the scene at all; the build gate would otherwise
-# refuse it and the run under test would never happen. Nothing downstream
-# consults the allowance, which is the point: contact meets this pair either
-# way, and what the solver reports for it is the subject of B and C.
-a.param.set("allow-inter-object-intersection", 1.0)
-# One edge each, so the sheets hold the overlap instead of free-falling out of
-# it before a contact pair is ever assembled.
-a.pin(a.grab([0, 1, 0]))
-b.pin(b.grab([0, 1, 0]))
 
-fixed = None
-build_error = ""
-try:
-    fixed = scene.build(quiet=True)
-except Exception as error:
-    build_error = "{}: {}".format(
-        type(error).__name__, str(error).splitlines()[0][:200])
+def author(allow):
+    app = App.create("rig_coincident_contact_pair_" + ("allowed" if allow else "control"))
+    # `mesh.square` returns 5 columns: xyz then uv, so only [:, :3] is a position.
+    V, F = app.mesh.square(res=4, ex=[1, 0, 0], ey=[0, 1, 0])
+    app.asset.add.tri("sheet", V, F)
+    scene = app.scene.create()
+    a = scene.add("sheet").at(0.0, 0.0, 0.0)
+    b = scene.add("sheet").at(0.0, 0.0, 0.0)
+    if allow:
+        a.param.set("allow-inter-object-intersection", 1.0)
+    # One edge each, so the sheets hold the overlap instead of free-falling
+    # out of it.
+    a.pin(a.grab([0, 1, 0]))
+    b.pin(b.grab([0, 1, 0]))
+    return app, scene
 
-record("A_scene_is_admitted_by_the_allowance", fixed is not None,
-       {"build_error": build_error})
 
-outcome = {}
-sub_kind = ""
-detail = ""
-notes = {}
+def build(scene):
+    try:
+        return scene.build(quiet=True), ""
+    except Exception as error:
+        return None, "{}: {}".format(
+            type(error).__name__, str(error).splitlines()[0][:200])
 
+
+_, control_scene = author(False)
+control_fixed, control_error = build(control_scene)
+record("A_unallowed_overlap_is_refused", control_fixed is None,
+       {"build_error": control_error})
+
+app, scene = author(True)
+fixed, build_error = build(scene)
+details = {"build_error": build_error}
+finished = False
+kind = ""
 if fixed is not None:
     session = app.session.create(fixed)
-    # Three frames is more than the run needs: the pair is coincident at t=0,
-    # so the very first advance is the one that has to report. The extra frames
-    # exist so a run that DOES advance is visibly different from one that
-    # reports on entry.
-    session.param.set("dt", 0.01).set("frames", 3)
+    session.param.set("dt", 0.01).set("frames", FRAMES)
     session = session.build()
     try:
         session.start(blocking=True)
     except Exception as error:
-        # The advance is EXPECTED to fail, so the exception carries no verdict.
-        # Which cause the run RECORDED is the assertion, and that is read from
-        # the status record below.
-        notes["start_raised"] = "{}: {}".format(
+        details["start_raised"] = "{}: {}".format(
             type(error).__name__, str(error))[:300]
-
+    finished = bool(session.finished())
     status_path = os.path.join(session.info.path, "output", "status.cbor")
     if os.path.isfile(status_path):
         with open(status_path, "rb") as handle:
             status_record = cbor2.load(handle)
         outcome = (status_record.get("payload") or {}).get("outcome") or {}
-        sub_kind = str(outcome.get("sub_kind", ""))
-        detail = str(outcome.get("detail", ""))
+        kind = str(outcome.get("kind", ""))
+        details["sub_kind"] = str(outcome.get("sub_kind", ""))
+        details["detail"] = str(outcome.get("detail", ""))[:300]
     else:
-        # No terminal record at all. A device assert kills the process on the
-        # trap, so the solver's logs are the only evidence left of what stopped
-        # it.
-        notes["status_record"] = "absent at " + status_path
-        notes["error_log"] = tail(os.path.join(session.info.path, "error.log"))
-        notes["stdout_log"] = tail(os.path.join(session.info.path, "stdout.log"))
-
-b_details = {"kind": str(outcome.get("kind", "")), "sub_kind": sub_kind}
-b_details.update(notes)
-record("B_advance_reports_overlapping_start",
-       sub_kind == "overlapping_start", b_details)
-
-# Spaces are stripped so the check reads the token itself and not the wrapping
-# of the host's format string.
-record("C_cause_is_contact_separated",
-       "contact_separated=false" in detail.replace(" ", ""),
-       {"detail": detail[:300]})
+        details["status_record"] = "absent at " + status_path
+        details["error_log"] = tail(os.path.join(session.info.path, "error.log"))
+        details["stdout_log"] = tail(os.path.join(session.info.path, "stdout.log"))
+details.update({"finished": finished, "kind": kind})
+record("B_allowed_overlap_runs_to_the_end",
+       fixed is not None and finished and kind == "finished", details)
 
 print("PPFRESULT" + json.dumps(cases))
 '''
@@ -206,9 +161,8 @@ def run(ctx: r.ScenarioContext) -> dict:
         capture_output=True,
         text=True,
         env=env,
-        # A real solve pays a CUDA context init and a solver startup before it
-        # can report anything, and this run is expected to end on its first
-        # advance, so the budget covers startup rather than simulation.
+        # A real solve pays a CUDA context init and a solver startup before
+        # its first frame, so the budget covers startup rather than simulation.
         timeout=max(ctx.timeout, 600.0),
     )
     marker = [

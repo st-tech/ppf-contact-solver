@@ -19,11 +19,12 @@
 // `isect::intersection_tolerated` in
 // `src/kernels/contact/intersect_policy.hpp`.
 //
-// The rule decides which intersecting pairs are REPORTED, so both of its
-// verdicts are expensive to get wrong in opposite directions: granting an
-// allowance that was not asked for hides a real tangle and lets a run finish
-// with geometry the solver never resolved, and withholding one that was asked
-// for aborts a run the user configured to continue.
+// The rule decides which pairs contact, the line search and the intersection
+// report all leave alone, so both of its verdicts are expensive to get wrong in
+// opposite directions: granting an allowance that was not asked for lets two
+// elements pass through each other unreported, and withholding one that was
+// asked for keeps them apart, or aborts a run the user configured to
+// continue.
 //
 // Every case is evaluated twice on the host, once as written and once with the
 // two sides exchanged.
@@ -35,7 +36,8 @@
 //     surface only as two backends disagreeing about a scene, with no local
 //     symptom in either. Three toolchains make that risk wider rather than
 //     narrower.
-//   * SIDES EXCHANGED. The pin and inter-object allowances are worded "either
+//   * SIDES EXCHANGED. The pin, inter-object and inter-group allowances are
+//     worded "either
 //     side opts in", and the four testers do not agree on an order: the
 //     face-edge tester passes the face first, the edge-edge tester the
 //     higher-indexed edge, the point-point tester the higher-indexed vertex,
@@ -50,11 +52,10 @@
 // The pin allowance the rule takes is the ELEMENT's precomputed "all N of my
 // vertices are pinned by an allowing pin" bit, which arrives as its own
 // argument rather than being read off a vertex: the two sides of a pair are
-// described here by exactly the four values the rule reads, so there is no
+// described here by exactly the values the rule reads, so there is no
 // vertex field for a mistaken implementation to reach for instead.
 //
-// Usage (from this directory):
-//   make test-intersect-allow
+// `tests/kernel_gates.rs` compiles and runs it under `cargo test`.
 
 #include "contact/intersect_policy.hpp"
 #include <cstdio>
@@ -71,6 +72,18 @@ static_assert(NO_OBJECT_INDEX != OBJ_ZERO,
               "must not be 0");
 static_assert((INTERSECT_ALLOW_SELF & INTERSECT_ALLOW_INTER_OBJECT) == 0,
               "the self and inter-object allowances must be independent bits");
+static_assert(((INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT) &
+               INTERSECT_ALLOW_INTER_GROUP) == 0,
+              "the inter-group allowance must be a bit of its own");
+
+// Two distinct group identities, plus the no-group marker the static collision
+// mesh carries. Group 0 is a REAL group, the one every object told nothing
+// shares.
+constexpr unsigned GRP_1 = 0u;
+constexpr unsigned GRP_2 = 5u;
+static_assert(NO_GROUP_INDEX != GRP_1,
+              "group 0 is the default group, so the no-group sentinel must "
+              "not be 0");
 
 // Shorthands that keep the table readable.
 constexpr unsigned char NONE = 0u;
@@ -78,12 +91,17 @@ constexpr unsigned char SELF = INTERSECT_ALLOW_SELF;
 constexpr unsigned char INTER = INTERSECT_ALLOW_INTER_OBJECT;
 constexpr unsigned char BOTH =
     INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT;
+constexpr unsigned char GROUP = INTERSECT_ALLOW_INTER_GROUP;
+constexpr unsigned char SELF_GROUP =
+    INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_GROUP;
 
 // Everything the rule reads, as plain data with no pointers, so one array
 // serves the host loop and the kernel.
 struct Inputs {
     unsigned a_object;
     unsigned b_object;
+    unsigned a_group;
+    unsigned b_group;
     unsigned char a_policy;
     unsigned char b_policy;
     bool a_pin;
@@ -100,6 +118,8 @@ inline Inputs exchanged(const Inputs &in) {
     Inputs out;
     out.a_object = in.b_object;
     out.b_object = in.a_object;
+    out.a_group = in.b_group;
+    out.b_group = in.a_group;
     out.a_policy = in.b_policy;
     out.b_policy = in.a_policy;
     out.a_pin = in.b_pin;
@@ -108,9 +128,9 @@ inline Inputs exchanged(const Inputs &in) {
 }
 
 inline bool evaluate(const Inputs &in) {
-    return isect::intersection_tolerated(in.a_object, in.a_policy,
-                                             in.b_object, in.b_policy,
-                                             in.a_pin, in.b_pin);
+    return isect::intersection_tolerated(in.a_object, in.a_group, in.a_policy,
+                                         in.b_object, in.b_group, in.b_policy,
+                                         in.a_pin, in.b_pin);
 }
 
 // The trailing bool is the expected verdict: true = tolerated, meaning the
@@ -118,45 +138,45 @@ inline bool evaluate(const Inputs &in) {
 static const Case CASES[] = {
     // ---------------------------------------------- nothing opted in
     {"same object, no allowance",
-     {OBJ_A, OBJ_A, NONE, NONE, false, false}, false},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, NONE, NONE, false, false}, false},
     {"different objects, no allowance",
-     {OBJ_A, OBJ_B, NONE, NONE, false, false}, false},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, NONE, NONE, false, false}, false},
 
     // ---------------------------------------------- the self allowance
     {"same object, allow-self",
-     {OBJ_A, OBJ_A, SELF, SELF, false, false}, true},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, SELF, SELF, false, false}, true},
     {"same object, allow-inter only",
-     {OBJ_A, OBJ_A, INTER, INTER, false, false}, false},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, INTER, INTER, false, false}, false},
     {"same object, both allowances",
-     {OBJ_A, OBJ_A, BOTH, BOTH, false, false}, true},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, BOTH, BOTH, false, false}, true},
     {"object id 0 against itself, allow-self",
-     {OBJ_ZERO, OBJ_ZERO, SELF, SELF, false, false}, true},
+     {OBJ_ZERO, OBJ_ZERO, GRP_1, GRP_1, SELF, SELF, false, false}, true},
 
     // ---------------------------------------------- the inter-object one
     {"different objects, allow-inter on A only",
-     {OBJ_A, OBJ_B, INTER, NONE, false, false}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, INTER, NONE, false, false}, true},
     {"different objects, allow-inter on B only",
-     {OBJ_A, OBJ_B, NONE, INTER, false, false}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, NONE, INTER, false, false}, true},
     {"different objects, allow-inter on both",
-     {OBJ_A, OBJ_B, INTER, INTER, false, false}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, INTER, INTER, false, false}, true},
     {"different objects, allow-self on A only",
-     {OBJ_A, OBJ_B, SELF, NONE, false, false}, false},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, SELF, NONE, false, false}, false},
     {"different objects, allow-self on both",
-     {OBJ_A, OBJ_B, SELF, SELF, false, false}, false},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, SELF, SELF, false, false}, false},
 
     // ---------------------------------------------- the pin allowance
     {"same object, pin bit on A",
-     {OBJ_A, OBJ_A, NONE, NONE, true, false}, true},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, NONE, NONE, true, false}, true},
     {"same object, pin bit on B",
-     {OBJ_A, OBJ_A, NONE, NONE, false, true}, true},
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, NONE, NONE, false, true}, true},
     {"different objects, pin bit on A",
-     {OBJ_A, OBJ_B, NONE, NONE, true, false}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, NONE, NONE, true, false}, true},
     {"different objects, pin bit on B",
-     {OBJ_A, OBJ_B, NONE, NONE, false, true}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, NONE, NONE, false, true}, true},
     {"different objects, both pin bits",
-     {OBJ_A, OBJ_B, NONE, NONE, true, true}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, NONE, NONE, true, true}, true},
     {"pin bit grants what the wrong allowance does not",
-     {OBJ_A, OBJ_B, SELF, SELF, false, true}, true},
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, SELF, SELF, false, true}, true},
 
     // ---------------------------------------------- both sides unknown
     //
@@ -165,13 +185,13 @@ static const Case CASES[] = {
     // directory written without bin/object_vert.bin, which is silent: the run
     // completes and reports nothing.
     {"both objects unknown, no allowance",
-     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NONE, NONE, false, false}, false},
+     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NO_GROUP_INDEX, NO_GROUP_INDEX, NONE, NONE, false, false}, false},
     {"both objects unknown, allow-self on both",
-     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, SELF, SELF, false, false}, false},
+     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NO_GROUP_INDEX, NO_GROUP_INDEX, SELF, SELF, false, false}, false},
     {"both objects unknown, allow-inter on A",
-     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, INTER, NONE, false, false}, true},
+     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NO_GROUP_INDEX, NO_GROUP_INDEX, INTER, NONE, false, false}, true},
     {"both objects unknown, pin bit on B",
-     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NONE, NONE, false, true}, true},
+     {NO_OBJECT_INDEX, NO_OBJECT_INDEX, NO_GROUP_INDEX, NO_GROUP_INDEX, NONE, NONE, false, true}, true},
 
     // ---------------------------------------------- one side unknown
     //
@@ -180,17 +200,48 @@ static const Case CASES[] = {
     // policy. The pair is inter-object by construction, so the inter-object
     // rule is the one that must apply.
     {"unknown A against real B, no allowance",
-     {NO_OBJECT_INDEX, OBJ_B, NONE, NONE, false, false}, false},
+     {NO_OBJECT_INDEX, OBJ_B, NO_GROUP_INDEX, GRP_1, NONE, NONE, false, false}, false},
     {"unknown A against real B, allow-inter on B",
-     {NO_OBJECT_INDEX, OBJ_B, NONE, INTER, false, false}, true},
+     {NO_OBJECT_INDEX, OBJ_B, NO_GROUP_INDEX, GRP_1, NONE, INTER, false, false}, true},
     {"real A against unknown B, allow-inter on A",
-     {OBJ_A, NO_OBJECT_INDEX, INTER, NONE, false, false}, true},
+     {OBJ_A, NO_OBJECT_INDEX, GRP_1, NO_GROUP_INDEX, INTER, NONE, false, false}, true},
     {"unknown A against real B, allow-self on both",
-     {NO_OBJECT_INDEX, OBJ_B, SELF, SELF, false, false}, false},
+     {NO_OBJECT_INDEX, OBJ_B, NO_GROUP_INDEX, GRP_1, SELF, SELF, false, false}, false},
     {"object id 0 against unknown, no allowance",
-     {OBJ_ZERO, NO_OBJECT_INDEX, NONE, NONE, false, false}, false},
+     {OBJ_ZERO, NO_OBJECT_INDEX, GRP_1, NO_GROUP_INDEX, NONE, NONE, false, false}, false},
     {"object id 0 against unknown, allow-inter on the real side",
-     {OBJ_ZERO, NO_OBJECT_INDEX, INTER, NONE, false, false}, true},
+     {OBJ_ZERO, NO_OBJECT_INDEX, GRP_1, NO_GROUP_INDEX, INTER, NONE, false, false}, true},
+
+    // ---------------------------------------------- the inter-group one
+    //
+    // Narrower than inter-object: two DIFFERENT objects qualify only when
+    // their groups differ too, so objects of one group still collide.
+    {"different groups, allow-group on A only",
+     {OBJ_A, OBJ_B, GRP_1, GRP_2, GROUP, NONE, false, false}, true},
+    {"different groups, allow-group on B only",
+     {OBJ_A, OBJ_B, GRP_1, GRP_2, NONE, GROUP, false, false}, true},
+    {"different groups, no allowance",
+     {OBJ_A, OBJ_B, GRP_1, GRP_2, NONE, NONE, false, false}, false},
+    {"different groups, allow-self on both",
+     {OBJ_A, OBJ_B, GRP_1, GRP_2, SELF, SELF, false, false}, false},
+    {"same group, allow-group on both",
+     {OBJ_A, OBJ_B, GRP_2, GRP_2, GROUP, GROUP, false, false}, false},
+    {"default group, allow-group on both",
+     {OBJ_A, OBJ_B, GRP_1, GRP_1, GROUP, GROUP, false, false}, false},
+    {"same group, allow-inter still covers it",
+     {OBJ_A, OBJ_B, GRP_2, GRP_2, INTER, NONE, false, false}, true},
+    {"same object, allow-group is not allow-self",
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, GROUP, GROUP, false, false}, false},
+    {"same object, allow-self with allow-group",
+     {OBJ_A, OBJ_A, GRP_1, GRP_1, SELF_GROUP, SELF_GROUP, false, false}, true},
+    // The collision mesh belongs to no group, so it is another group from
+    // every object, and the marker never matches itself.
+    {"real A against the collision mesh, allow-group on A",
+     {OBJ_A, NO_OBJECT_INDEX, GRP_1, NO_GROUP_INDEX, GROUP, NONE, false, false}, true},
+    {"real A against the collision mesh, no allowance",
+     {OBJ_A, NO_OBJECT_INDEX, GRP_1, NO_GROUP_INDEX, NONE, NONE, false, false}, false},
+    {"both groups unknown, allow-group on A",
+     {OBJ_A, OBJ_B, NO_GROUP_INDEX, NO_GROUP_INDEX, GROUP, NONE, false, false}, true},
 };
 
 static const char *verdict(bool tolerated) {

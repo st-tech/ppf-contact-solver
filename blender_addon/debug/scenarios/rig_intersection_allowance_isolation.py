@@ -38,21 +38,13 @@
 #
 # Then two things the build gate alone cannot answer.
 #
-# A RUN. A scene whose only tangle is tolerated must build and clear the
-# solver's own check at `initialize`, which is the DEVICE half of the allowance
-# gate and has to grant the same set the host scene-build gate did. Reaching a
-# Newton step is the evidence: an initialize that rejected the tangle would
-# never get there. What the run does AFTER initialize is a separate question and
-# is non-deterministic on a real GPU. The fixture is two crossed sheets with
-# EVERY vertex of both pinned by a pin that sets the flag, so it is authored
-# with coincident elements; the ACCD line search may find a pair whose start
-# separation is zero and refuse to advance into it (`### ccd failed` /
-# `contact starts overlapping`). That refusal is the penetration-free guarantee
-# working, not a defect (the intersection-allowance smoke scene states it), so
-# this case accepts a completed run and a clean post-initialize stop alike, and
-# it is the reason the run assertion cannot be a bare `finished()`. A device
-# assert is still caught: it takes the probe down and the scenario fails on a
-# missing result marker. Each pin carries a move op, which is what keeps its
+# A RUN. A scene whose only tangle is allowed must build, clear the solver's
+# own check at `initialize`, which is the DEVICE half of the allowance gate and
+# has to grant the same set the host scene-build gate did, and then run to its
+# last frame: an allowed pair is not a contact pair, so the line search has
+# nothing to refuse and the tangle cannot jam the run. A device assert takes
+# the probe down and the scenario fails on a missing result marker. Each pin
+# carries a move op, which is what keeps its
 # object DYNAMIC: a fully pinned object with no operations is promoted to a
 # rest-pose STATIC collider, which leaves the solved namespace and is then
 # skipped by `both_collider`, so the run would pass without the allowance
@@ -453,18 +445,11 @@ if run_session is not None:
             solver_log = _log.read()
     except OSError:
         solver_log = ""
-    # The tolerated tangle has to clear the solver's own initialize scan, which
+    # The allowed tangle has to clear the solver's own initialize scan, which
     # is the DEVICE half of the allowance gate and must grant the same set the
-    # host scene-build gate did. A run that reaches a Newton step proves
-    # initialize honored the allowance rather than rejecting the tangle. What
-    # happens after initialize is separate and non-deterministic on a real GPU:
-    # the tangle is authored with coincident elements, so the line search may
-    # find a pair whose start separation is zero and refuse to advance into it.
-    # That refusal is the penetration-free guarantee working, not a defect
-    # (the intersection-allowance smoke scene states it directly), so a clean
-    # `overlapping_start` or `ccd` stop AFTER initialize counts the same as a
-    # completed run. A device assert never reaches this line: it takes the whole
-    # probe down and the scenario fails on a missing result marker instead.
+    # host scene-build gate did, and then finish: the allowed pair has no
+    # contact, so neither `ccd failed` nor an overlapping start can stop it.
+    # The stop cause is recorded so a failure names which one it was.
     reached_advance = "newton step" in solver_log
     if not finished:
         if "contact starts overlapping" in solver_log:
@@ -473,9 +458,8 @@ if run_session is not None:
             stop_cause = "ccd"
         else:
             stop_cause = "other"
-run_ok = (run_session is not None) and (
-    finished or (reached_advance and stop_cause in ("overlapping_start", "ccd")))
-record("tolerated_tangle_runs_past_initialize", run_ok,
+run_ok = (run_session is not None) and finished
+record("tolerated_tangle_runs_to_the_last_frame", run_ok,
        {"built": run_session is not None, "build_error": run_error,
         "finished": finished, "reached_advance": reached_advance,
         "stop_cause": stop_cause})

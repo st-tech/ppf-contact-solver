@@ -226,52 +226,6 @@ point_point_intersect_proximity(const Vec3f &p,
 // one.
 // ---------------------------------------------------------------------------
 
-// One side of a candidate pair, read off an element's FIRST vert plus that
-// element's own two facts. The DERIVATION is per element arity and stays at the
-// call site; `intersect_pair_reported` owns the composition.
-[[seam::device_fn]] inline IntersectSide intersect_side_of_face(
-    const VertexProp &anchor,
-    const FaceProp &prop) {
-    IntersectSide side;
-    side.object_index = anchor.object_index;
-    side.intersect_policy = anchor.intersect_policy;
-    side.pdrd_body_index = anchor.pdrd_body_index;
-    side.mass = prop.mass;
-    side.fixed = prop.fixed;
-    side.collider = anchor.collider;
-    side.pin_allow_intersection = prop.pin_allow_intersection;
-    return side;
-}
-
-[[seam::device_fn]] inline IntersectSide intersect_side_of_edge(
-    const VertexProp &anchor,
-    const EdgeProp &prop) {
-    IntersectSide side;
-    side.object_index = anchor.object_index;
-    side.intersect_policy = anchor.intersect_policy;
-    side.pdrd_body_index = anchor.pdrd_body_index;
-    side.mass = prop.mass;
-    side.fixed = prop.fixed;
-    side.collider = anchor.collider;
-    side.pin_allow_intersection = prop.pin_allow_intersection;
-    return side;
-}
-
-// A GRAIN IS ITS OWN ELEMENT, so "prescribed" is `fix_index != 0` rather than a
-// `fixed` flag and the all-vertices-pinned bit is its own.
-[[seam::device_fn]] inline IntersectSide intersect_side_of_vertex(
-    const VertexProp &prop) {
-    IntersectSide side;
-    side.object_index = prop.object_index;
-    side.intersect_policy = prop.intersect_policy;
-    side.pdrd_body_index = prop.pdrd_body_index;
-    side.mass = prop.mass;
-    side.fixed = prop.fix_index != 0u;
-    side.collider = prop.collider;
-    side.pin_allow_intersection = prop.pin_allow_intersection;
-    return side;
-}
-
 // The edge-versus-face visitor: the query element is an edge, each leaf a face.
 struct IntersectFaceEdgeVisitor {
     const Vec3f *vert;
@@ -308,8 +262,8 @@ struct IntersectFaceEdgeVisitor {
         const EdgeProp eprop = edge_prop[edge_index];
         const VertexProp fanchor = vertex_prop[f[0]];
         const VertexProp eanchor = vertex_prop[e[0]];
-        const IntersectSide a = intersect_side_of_face(fanchor, fprop);
-        const IntersectSide b = intersect_side_of_edge(eanchor, eprop);
+        const PairSide a = pair_side_of_face(fanchor, fprop);
+        const PairSide b = pair_side_of_edge(eanchor, eprop);
         if (!intersect_pair_reported(a, b)) {
             return false;
         }
@@ -375,8 +329,8 @@ struct IntersectEdgeEdgeVisitor {
         const EdgeProp pb = edge_prop[index];
         const VertexProp anchor_a = vertex_prop[e0[0]];
         const VertexProp anchor_b = vertex_prop[e1[0]];
-        const IntersectSide a = intersect_side_of_edge(anchor_a, pa);
-        const IntersectSide b = intersect_side_of_edge(anchor_b, pb);
+        const PairSide a = pair_side_of_edge(anchor_a, pa);
+        const PairSide b = pair_side_of_edge(anchor_b, pb);
         if (!intersect_pair_reported(a, b)) {
             return false;
         }
@@ -430,8 +384,8 @@ struct IntersectPointPointVisitor {
         }
         const VertexProp pa = vertex_prop[vertex_index];
         const VertexProp pb = vertex_prop[index];
-        const IntersectSide a = intersect_side_of_vertex(pa);
-        const IntersectSide b = intersect_side_of_vertex(pb);
+        const PairSide a = pair_side_of_vertex(pa);
+        const PairSide b = pair_side_of_vertex(pb);
         if (!intersect_pair_reported(a, b)) {
             return false;
         }
@@ -653,10 +607,7 @@ struct IntersectCollisionMeshVisitor {
     }
     const Vec2u e = edge[element];
     const VertexProp anchor = vertex_prop[e[0]];
-    const bool tolerated = isect::intersection_tolerated(
-        anchor.object_index, anchor.intersect_policy, NO_OBJECT_INDEX, 0u,
-        eprop.pin_allow_intersection, false);
-    if (tolerated) {
+    if (collider_intersection_allowed(pair_side_of_edge(anchor, eprop))) {
         return;
     }
     IntersectCollisionMeshVisitor op;

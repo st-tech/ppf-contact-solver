@@ -95,9 +95,14 @@ def builds(setup):
     return True
 
 
-def pair(scene, a_flags=(), b_flags=(), pin_a=False, pin_a_allows=False):
+def pair(scene, a_flags=(), b_flags=(), pin_a=False, pin_a_allows=False,
+         groups=(None, None)):
     a = scene.add("sheet").at(0.0, 0.0, 0.0)
     b = scene.add("sheet").at(0.3, 0.0, 0.0).rotate(12.0, "y")
+    if groups[0] is not None:
+        a.group(groups[0])
+    if groups[1] is not None:
+        b.group(groups[1])
     for key in a_flags:
         a.param.set(key, 1.0)
     for key in b_flags:
@@ -129,6 +134,24 @@ def tangled(scene, flags=(), pin=False, pin_allows=False):
     return obj
 
 
+def near(scene, a_flags=(), b_flags=(), groups=(None, None)):
+    """Two parallel sheets closer than their summed contact offset.
+
+    They do not intersect, so the only gate they meet is the contact-offset
+    check, which must skip a pair an allowance covers: an allowed pair has no
+    contact, so its clearance is nothing the solver has to keep.
+    """
+    a = scene.add("sheet").at(0.0, 0.0, 0.0)
+    b = scene.add("sheet").at(0.0, 0.0, 0.002)
+    for obj, flags, label in ((a, a_flags, groups[0]), (b, b_flags, groups[1])):
+        obj.param.set("contact-offset", 0.005)
+        for key in flags:
+            obj.param.set(key, 1.0)
+        if label is not None:
+            obj.group(label)
+    return a, b
+
+
 cases = {}
 
 
@@ -149,6 +172,31 @@ check("inter_allowed_other_side", True,
       lambda s: pair(s, b_flags=("allow-inter-object-intersection",)))
 check("inter_not_covered_by_self_flag", False,
       lambda s: pair(s, a_flags=("allow-self-intersection",)))
+
+# --- inter-group ----------------------------------------------------------
+# Narrower than inter-object: two objects qualify only when their groups
+# differ, so the same pair in one group, or in the default group every
+# object told nothing shares, is still refused.
+GROUP = "allow-inter-group-intersection"
+check("group_allowed_across_groups", True,
+      lambda s: pair(s, a_flags=(GROUP,), groups=("a", "b")))
+check("group_allowed_other_side", True,
+      lambda s: pair(s, b_flags=(GROUP,), groups=("a", "b")))
+check("group_same_group_refused", False,
+      lambda s: pair(s, a_flags=(GROUP,), b_flags=(GROUP,),
+                     groups=("a", "a")))
+check("group_default_group_refused", False,
+      lambda s: pair(s, a_flags=(GROUP,), b_flags=(GROUP,)))
+check("group_not_covering_self", False, lambda s: tangled(s, (GROUP,)))
+
+# --- contact offset -------------------------------------------------------
+check("near_control_refused", False, lambda s: near(s))
+check("near_allowed_inter_object", True,
+      lambda s: near(s, a_flags=("allow-inter-object-intersection",)))
+check("near_allowed_inter_group", True,
+      lambda s: near(s, a_flags=(GROUP,), groups=("a", "b")))
+check("near_same_group_refused", False,
+      lambda s: near(s, a_flags=(GROUP,), groups=("a", "a")))
 
 # --- self ---------------------------------------------------------------
 check("self_control_refused", False, lambda s: tangled(s))

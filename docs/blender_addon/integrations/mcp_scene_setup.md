@@ -59,17 +59,22 @@ Running `get_object_bounding_box_diagonal(object_name)` on the target
 object is a cheap way to get a sense of scale before deciding what
 "small clearance" means in Blender units.
 
-Separating the geometry is the first answer and stays the default. For a
-scene that cannot be authored that way, a garment imported already fitted
-onto a posed character being the usual case,
-`set_group_material_properties` accepts `allow_self_intersection` and
-`allow_inter_object_intersection`, which let the run start through an
-overlap that is already there. Each is applied to every object assigned to
-the group, and which of the two covers a given pair is decided per Blender
-object: two objects in one group form an inter-object pair. Either side of a
-pair is enough for the inter-object one. They suppress the report only,
-contact is unchanged, and they buy nothing where clearance is achievable:
-see
+Separating the geometry is the first answer and stays the default. Where
+two pieces of geometry should pass through each other instead of colliding,
+`set_group_material_properties` accepts `allow_self_intersection`,
+`allow_inter_object_intersection` and `allow_inter_group_intersection`. An
+allowed pair has no contact at all: no contact force, nothing stopping the
+two from crossing, and no intersection error, so none of them is a way to
+start from an overlap the solver should then separate. Each reaches every
+object assigned to the group while its matching `..._all_objects` switch is
+on, which is the default; `set_intersection_allowance_objects` narrows one to
+named objects of the group. Which one covers a given pair is decided per
+Blender object: two objects in one group form an inter-object pair, which
+only `allow_inter_object_intersection` covers, while
+`allow_inter_group_intersection` covers two objects in different groups,
+static colliders included. Either side of a pair is enough for those two, so
+`allow_inter_object_intersection` on a garment also lets it pass through the
+body it is fitted to. The invisible walls and spheres always collide. See
 [Allow Intersections](../workflow/params/material.md#allow-intersections).
 
 ## Creating Sphere Primitives

@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The object-subset UI of the two intersection allowances, DRAWN.
+# The object-subset UI of the three intersection allowances, DRAWN.
 #
 # `bl_intersection_allowance_objects` proves the subset reaches the right
 # per-vertex policy byte, and `bl_intersection_allowance_objects_run` proves it
@@ -19,8 +19,8 @@
 #
 # Subtests:
 #   A. panel_reaches_the_allowance_box  - the real group panel draws and the
-#                                         allowance box is reached for BOTH
-#                                         allowances on each draw, so a panel
+#                                         allowance box is reached for EVERY
+#                                         allowance on each draw, so a panel
 #                                         that stopped calling it cannot pass.
 #   B. list_row_draws                   - the UIList's `draw_item` runs on a
 #                                         real layout for a real entry.
@@ -95,8 +95,10 @@ try:
     group = getattr(addon_root, "object_group_%d" % slot)
 
     # The state worth drawing: one allowance narrowed with an entry in its
-    # list, the other covering the whole group so its list and buttons are
-    # drawn disabled in the same panel.
+    # list, the other two covering the whole group so their lists and buttons
+    # are drawn disabled in the same panel. Every allowance is ON, because a
+    # list is drawn only while its allowance is, and `template_list` resolves
+    # its collection and index names only when it is drawn.
     group.show_group = True
     group.show_parameters = True
     group.allow_self_intersection = True
@@ -105,6 +107,7 @@ try:
     entry.name = "Listed"
     entry.uuid = uuid_mod.get_or_create_object_uuid(bpy.data.objects["Listed"])
     group.allow_inter_object_intersection = True
+    group.allow_inter_group_intersection = True
     dh.log("group ready slot=%d listed=%r"
            % (slot, [i.name for i in group.allow_self_intersection_objects]))
 
@@ -182,11 +185,14 @@ try:
             "hand-written scenario list skips that gate." % exc
         )
 
+    n_allowances = len(ia_mod.INTERSECTION_ALLOWANCES)
     dh.record(
         "A_panel_reaches_the_allowance_box",
-        DREW["panel"] > 0 and DREW["allowance_box"] >= 2 * DREW["panel"],
+        DREW["panel"] > 0
+        and DREW["allowance_box"] >= n_allowances * DREW["panel"],
         {"draws": {k: v for k, v in DREW.items() if k != "errors"},
-         "note": "allowance_box counts BOTH allowances reaching the box on "
+         "allowances": n_allowances,
+         "note": "allowance_box counts EVERY allowance reaching the box on "
                  "every panel draw"},
     )
     dh.record(

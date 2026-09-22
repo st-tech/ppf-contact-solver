@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The OBJECT SUBSET each of the two group-level intersection allowances is
+# The OBJECT SUBSET each of the three group-level intersection allowances is
 # narrowed to.
 #
 # `bl_intersection_allowances` covers the allowances themselves: a checkbox on
@@ -21,53 +21,62 @@
 # that ignored the subset entirely would still emit a value, the build would
 # still succeed, and every object would quietly get the group-wide answer.
 # The witness is therefore `bin/intersect_policy.bin` again, one u8 per
-# dynamic vertex with bit 0 = allow self and bit 1 = allow inter-object,
-# resolved onto each object's vertices through `map.pickle`.
+# dynamic vertex with bit 0 = allow self, bit 1 = allow inter-object and
+# bit 2 = allow inter-group, resolved onto each object's vertices through
+# `map.pickle`.
 #
 # The scene is FOUR objects in TWO groups, so the subset is proved to cut
 # WITHIN a group rather than merely between groups:
 #
-#   Narrowed  SHELL  in group NarrowGroup, listed for BOTH allowances
-#   Sibling   SHELL  in group NarrowGroup, listed for NEITHER
-#   Split     SHELL  in group SplitGroup, listed for SELF only
+#   Narrowed  SHELL  in group NarrowGroup, listed for SELF and INTER-OBJECT
+#   Sibling   SHELL  in group NarrowGroup, listed for NONE
+#   Split     SHELL  in group SplitGroup, listed for SELF and INTER-GROUP
 #   Whole     SHELL  in group SplitGroup, listed for INTER-OBJECT only
 #
-# Both groups have both checkboxes ON and "Apply to All Objects" OFF. So a
-# wiring that dropped the subset gives every one of the four objects
-# `0b11`, and a wiring that read one subset for both allowances gives Split
-# and Whole the same byte. Neither can pass C through F. SplitGroup is what
-# makes the two lists independent rather than one list read twice: its two
-# objects are in ONE group with ONE pair of checkboxes and come out with
-# DIFFERENT bytes, which is only possible if each allowance consulted its own
-# list.
+# NarrowGroup's inter-group list is EMPTY, which is a narrowing that reaches
+# no object at all.
+#
+# Both groups have all three checkboxes ON and "Apply to All Objects" OFF.
+# So a wiring that dropped the subset gives every one of the four objects
+# `0b111`, and a wiring that read one subset for two allowances gives some
+# object a bit its own list does not name. None of those can pass C through
+# F and J. SplitGroup is what makes the lists independent rather than one
+# list read several times: its two objects are in ONE group with ONE set of
+# checkboxes and come out with DIFFERENT bytes, which is only possible if
+# each allowance consulted its own list. The inter-group list names the
+# same object as the self list there, so NarrowGroup's empty inter-group
+# list is what tells those two apart: reading the self list for inter-group
+# would give Narrowed bit 2.
 #
 # It builds TWICE in one project, and the FIRST build is the regression half.
 # Both groups start at the shipped default, "Apply to All Objects" on, so the
-# first build must reproduce exactly what the checkbox alone always produced:
-# all four objects at `0b11`. That is what keeps the subset from becoming a
-# silent behavior change for every scene that never opens the list.
+# first build must reproduce exactly what the checkboxes alone always
+# produced: all four objects at `0b111`. That is what keeps the subset from
+# becoming a silent behavior change for every scene that never opens the
+# list.
 #
 # Subtests:
-#   A. rna_registered_with_defaults        - the switch and both collections
-#                                            exist, the switch defaults ON and
-#                                            the collections start empty. A
-#                                            missing one means Blender loaded
-#                                            an addon tree without them, or was
+#   A. rna_registered_with_defaults        - every switch and collection
+#                                            exists, each switch defaults
+#                                            ON and each collection starts
+#                                            empty. A missing one means
+#                                            Blender loaded an addon tree
+#                                            without them, or was
 #                                            soft-reloaded rather than
 #                                            restarted (new RNA needs a full
 #                                            restart).
 #   B. default_build_covers_every_object   - "Apply to All Objects" on gives
-#                                            all four objects 0b11.
+#                                            all four objects 0b111.
 #   C. narrowed_self_reaches_only_listed   - Narrowed has bit 0 and Sibling
 #                                            does not, both asserted here so
 #                                            the check alone separates a
 #                                            narrowed allowance from a
 #                                            group-wide one.
 #   D. narrowed_inter_reaches_only_listed  - the same for bit 1.
-#   E. two_lists_are_independent           - in ONE group, Split is 0b01 and
-#                                            Whole is 0b10.
-#   F. unlisted_sibling_stays_zero         - Sibling is 0b00 though its group
-#                                            has both checkboxes on.
+#   E. two_lists_are_independent           - in ONE group, Split is 0b101
+#                                            and Whole is 0b010.
+#   F. unlisted_sibling_stays_zero         - Sibling is 0b000 though its group
+#                                            has every checkbox on.
 #   G. add_refuses_an_outsider             - Add Selected Objects does not list
 #                                            an object this group does not
 #                                            hold, and reports why.
@@ -77,6 +86,9 @@
 #                                            takes its subset entry with it,
 #                                            so no entry outlives the
 #                                            assignment it was written for.
+#   J. narrowed_inter_group_reaches_only_listed
+#                                          - Split has bit 2, and Whole,
+#                                            Narrowed and Sibling do not.
 #
 # G, H and I run AFTER the measured builds and on a throwaway third group, so
 # the operator subtests cannot disturb the four objects C through F read.
@@ -123,6 +135,7 @@ PROJECT_ROOT = "<<PROJECT_ROOT>>"
 # `crates/ppf-cts-solver/src/data.rs` and `frontend/_scene_.py`.
 BIT_SELF = 1 << 0
 BIT_INTER = 1 << 1
+BIT_GROUP = 1 << 2
 
 # name, x offset, grid subdivisions, group name. The subdivision counts differ
 # so each object has its own vertex count and is legible in a failure report
@@ -136,21 +149,25 @@ SPECS = [
     ("Whole", 6.0, 6, "SplitGroup"),
 ]
 
-# Which objects each group lists, per allowance.
+# Which objects each group lists, per allowance. An empty list is a real
+# narrowing: the switch goes off and the allowance reaches no object.
 LISTED = {
     ("NarrowGroup", "self"): ["Narrowed"],
     ("NarrowGroup", "inter_object"): ["Narrowed"],
+    ("NarrowGroup", "inter_group"): [],
     ("SplitGroup", "self"): ["Split"],
     ("SplitGroup", "inter_object"): ["Whole"],
+    ("SplitGroup", "inter_group"): ["Split"],
 }
 
 EXPECTED_NARROWED = {
     "Narrowed": BIT_SELF | BIT_INTER,
     "Sibling": 0,
-    "Split": BIT_SELF,
+    "Split": BIT_SELF | BIT_GROUP,
     "Whole": BIT_INTER,
 }
-EXPECTED_DEFAULT = {name: BIT_SELF | BIT_INTER for name, _x, _s, _g in SPECS}
+EXPECTED_DEFAULT = {name: BIT_SELF | BIT_INTER | BIT_GROUP
+                    for name, _x, _s, _g in SPECS}
 
 
 def session_dir():
@@ -304,10 +321,10 @@ try:
                project_name=root.state.project_name)
     dh.log("connected")
 
-    # ---- build 1: both checkboxes on, both switches at their default ----
+    # ---- build 1: every checkbox on, every switch at its default ----
     for group_name in rna_group:
-        rna_group[group_name].allow_self_intersection = True
-        rna_group[group_name].allow_inter_object_intersection = True
+        for spec in ia_mod.INTERSECTION_ALLOWANCES:
+            setattr(rna_group[group_name], spec.enable_prop, True)
     data_bytes, param_bytes = dh.encode_payload()
     dh.build_and_wait(data_bytes, param_bytes,
                       message="isect-subset:all-objects", timeout=240.0)
@@ -326,7 +343,7 @@ try:
          "object_vert_bin": None if default_object is None
          else int(default_object.size),
          "note": "Apply to All Objects defaults ON, so this build must "
-                 "reproduce what the checkbox alone always produced"},
+                 "reproduce what the checkboxes alone always produced"},
     )
 
     # ---- build 2: each allowance narrowed to its own list ----
@@ -334,6 +351,8 @@ try:
         group = rna_group[group_name]
         spec = spec_by_key[key]
         setattr(group, spec.all_objects_prop, False)
+        if not listed:
+            continue
         select_only(listed)
         bpy.ops.object.add_intersection_allowance_objects(
             group_index=slot_of[group_name], allowance=key)
@@ -355,7 +374,8 @@ try:
 
     shared = {
         "seen": seen, "expected": EXPECTED_NARROWED, "listed": listed_now,
-        "bits": "bit0=allow self, bit1=allow inter-object",
+        "bits": "bit0=allow self, bit1=allow inter-object, "
+                "bit2=allow inter-group",
         "intersect_policy_bin": None if policy is None else int(policy.size),
         "object_vert_bin": None if object_id is None else int(object_id.size),
     }
@@ -383,19 +403,38 @@ try:
         "F_unlisted_sibling_stays_zero", seen["Sibling"] == [0],
         dict(shared, object="Sibling", expected=0,
              seen_object=seen["Sibling"],
-             note="its group has both checkboxes on and lists only Narrowed"),
+             note="its group has every checkbox on and lists only Narrowed"),
     )
 
     dh.record(
         "E_two_lists_are_independent",
-        seen["Split"] == [BIT_SELF] and seen["Whole"] == [BIT_INTER],
+        seen["Split"] == [BIT_SELF | BIT_GROUP]
+        and seen["Whole"] == [BIT_INTER],
         dict(shared, object="Split, Whole",
-             note="both are in SplitGroup, which has ONE pair of checkboxes; "
+             note="both are in SplitGroup, which has ONE set of checkboxes; "
                   "different bytes are only possible if each allowance read "
                   "its own list"),
     )
 
-    # ---- H, I, J: the operators, on a throwaway third group ----
+    # J: the inter-group list, on both of its sides. Split is listed, Whole
+    # is its unlisted sibling, and NarrowGroup's list is empty, so neither of
+    # its objects may carry the bit although the checkbox is on. Narrowed is
+    # listed for self in that group, so reading the self list for inter-group
+    # fails here even though SplitGroup's two lists agree.
+    carriers = [name for name in ("Narrowed", "Sibling", "Split", "Whole")
+                if seen[name] is not None
+                and any(v & BIT_GROUP for v in seen[name])]
+    dh.record(
+        "J_narrowed_inter_group_reaches_only_listed",
+        carriers == ["Split"] and seen["Split"] is not None
+        and all(v & BIT_GROUP for v in seen["Split"]),
+        dict(shared, bit=BIT_GROUP, listed_object="Split",
+             objects_with_bit=carriers,
+             note="NarrowGroup lists no object for inter-group, SplitGroup "
+                  "lists only Split"),
+    )
+
+    # ---- G, H, I: the operators, on a throwaway third group ----
     bpy.ops.mesh.primitive_grid_add(x_subdivisions=3, y_subdivisions=3,
                                     size=1.0, location=(12.0, 0.0, 0.0))
     bpy.context.object.name = "Spare"
@@ -410,7 +449,7 @@ try:
     spare.allow_self_intersection = True
     spare.allow_self_intersection_all_objects = False
 
-    # H: an object this group does not hold is refused, and the refusal is
+    # G: an object this group does not hold is refused, and the refusal is
     # reported rather than swallowed, so the user is told why nothing
     # happened.
     select_only(["Loner"])
@@ -427,7 +466,7 @@ try:
                  "vertex at build time"},
     )
 
-    # I: the two removal buttons.
+    # H: the two removal buttons.
     select_only(["Spare"])
     bpy.ops.object.add_intersection_allowance_objects(
         group_index=spare_slot, allowance="self")
@@ -448,7 +487,7 @@ try:
          "after_clear": after_clear},
     )
 
-    # J: membership and the subset end together. An entry that outlived the
+    # I: membership and the subset end together. An entry that outlived the
     # assignment would be drawn in the panel and would name a different
     # object once the group's slot was reused.
     select_only(["Spare"])

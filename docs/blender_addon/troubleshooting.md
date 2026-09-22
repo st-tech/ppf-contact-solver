@@ -428,18 +428,18 @@ detected`.
 The fix is to separate the geometry: move the collider or the character to a
 pose the garment sits outside of, or edit the mesh so the fold is gone.
 
-When the overlap is expected and the simulation is meant to resolve it, a
-garment fitted onto a rig-deformed character being the usual case, the
-group settings under
+When the overlapping pieces should pass through each other rather than
+collide (a mesh tangled in its pose that should stay tangled, or a cloth
+whose self-collision is not wanted), the group settings under
 [Allow Intersections](workflow/params/material.md#allow-intersections)
-accept the pairs you name instead of stopping. Set them on the group that is
-simulated: a **Static** collider left in its rest pose carries neither
-setting, so it is the garment's group that has to allow the pair. For an
-overlap confined to a pinned region, the narrower per-pin
+let the pairs you name pass through instead of stopping. An allowed pair
+has no contact at all, so the solver does not push it apart; where the
+geometry should end up separated, separate it before the run instead. Set
+the settings on the moving object's group: a **Static** collider left in its
+rest pose ignores the boxes on its own group. For geometry confined to a
+pinned region, the narrower per-pin
 [Allow Intersections Here](workflow/constraints/pins.md#allow-intersections-here)
-does the same for the elements that pin holds completely. Both suppress the
-report only: the surfaces are still in contact and the solver still pushes
-them apart.
+does the same for the elements that pin holds completely.
 
 ### Run button is disabled
 

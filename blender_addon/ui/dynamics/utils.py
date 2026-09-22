@@ -53,7 +53,7 @@ def cleanup_group_references_for_object(group: ObjectGroup, object_uuid: str):
 
 
 def cleanup_intersection_allowances_for_object(group: ObjectGroup, object_uuid: str):
-    """Remove *object_uuid* from both intersection-allowance subsets."""
+    """Remove *object_uuid* from every intersection-allowance subset."""
     from ...models.intersection_allowances import (
         INTERSECTION_ALLOWANCES,
         allowance_objects,

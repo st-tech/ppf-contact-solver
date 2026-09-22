@@ -274,7 +274,7 @@ Every object group carries its own copy of the full material-parameter set, but 
 - **Sand**: a granular body of loose grain-center vertices. Only grain radius (locked at conversion), particle mass, an inter-grain friction, and a contact gap. See Sand-specific below, including how a mesh becomes a Sand body.
 - **Static**: friction, contact settings, and **Apply Soft Constraints** (static objects have no deformation to tune). See Static Objects for the full treatment of Static groups, including how to animate them.
 
-Every group type additionally carries **Allow Self-Intersections** and **Allow Inter-Object Intersections**, each with its own **Apply to All Objects** switch and object list (see Allow Intersections below).
+Every group type additionally carries **Allow Self-Intersections**, **Allow Inter-Object Intersections** and **Allow Inter-Group Intersections**, each with its own **Apply to All Objects** switch and object list (see Allow Intersections below).
 
 Rows that don't apply to the current type are hidden in the UI.
 
@@ -465,13 +465,14 @@ Bending-CFL caveat: bending damping adds a stiffness term that tightens the expl
 
 #### Allow Intersections
 
-Two per-group checkboxes at the bottom of the Material Params stack, both
+Three per-group checkboxes at the bottom of the Material Params stack, all
 defaulting to off:
 
 | UI label                            | Python / TOML key                  | Default | Applies to      | Description                                                                 |
 | ----------------------------------- | ---------------------------------- | ------- | --------------- | --------------------------------------------------------------------------- |
-| **Allow Self-Intersections**        | `allow_self_intersection`          | off     | every group type | Accept an overlap of an object with ITSELF instead of stopping the run.      |
-| **Allow Inter-Object Intersections**| `allow_inter_object_intersection`  | off     | every group type | Accept an overlap between two DIFFERENT objects instead of stopping the run. |
+| **Allow Self-Intersections**        | `allow_self_intersection`          | off     | every group type | Let an object pass through ITSELF: no contact, no report.                    |
+| **Allow Inter-Object Intersections**| `allow_inter_object_intersection`  | off     | every group type | Let an object pass through DIFFERENT objects: no contact, no report.         |
+| **Allow Inter-Group Intersections** | `allow_inter_group_intersection`   | off     | every group type | Let an object pass through objects of DIFFERENT groups: no contact, no report. |
 
 Checking one opens a box under it holding **Apply to All Objects** and a list
 of objects:
@@ -480,6 +481,7 @@ of objects:
 | ------------------------ | ------------------------------------------------- | ------- | ------------------------------------------------------------------ |
 | **Apply to All Objects** | `allow_self_intersection_all_objects`             | on      | The allowance above covers every object assigned to the group.      |
 | **Apply to All Objects** | `allow_inter_object_intersection_all_objects`     | on      | The same, for the inter-object allowance.                           |
+| **Apply to All Objects** | `allow_inter_group_intersection_all_objects`      | on      | The same, for the inter-group allowance.                            |
 
 With **Apply to All Objects** on, the list and its **Add Selected Objects**,
 **Remove** and **Remove All** buttons are grayed out and the allowance covers
@@ -489,34 +491,47 @@ have selected in the viewport that is assigned to this group, and only the
 objects in the list are allowed to overlap. An empty list means the allowance
 covers nothing, which the panel says in place of the list's status line.
 
-The two lists are independent, because the two allowances are: one garment may
-arrive tangled in itself while another is only tangled against the body.
+The lists are independent, because the allowances are: one garment may arrive
+tangled in itself while another is only tangled against the body.
 
-What they do: they suppress the intersection REPORT for the pairs they name, at
-the scene-build check and at the solver's own check alike. Contact, CCD and the
-line search are unchanged, so the solver still pushes on the overlap; what the
-setting buys is that a run starts and keeps going instead of being refused.
+What they do: the pairs they name are left out of contact entirely. The solver
+applies no contact force between them, the line search does not stop them from
+crossing, and neither the scene-build check nor the solver's own check reports
+an intersection between them, so they pass through each other freely. A cloth
+with **Allow Self-Intersections** that falls and folds crosses its own layers.
+Contact with everything the allowance does not name is unchanged, and the
+invisible walls and spheres are never affected.
 
 Granularity: self versus inter-object is decided per Blender OBJECT, not per
 group, whichever objects the allowance was narrowed to. Two meshes assigned to
-the same group form an INTER-OBJECT pair, so **Allow Self-Intersections** does
-not cover an overlap between them.
+the same group form an INTER-OBJECT pair, so neither **Allow Self-Intersections**
+nor **Allow Inter-Group Intersections** covers an overlap between them.
 
 Either side is enough for the inter-object key, so setting it on a garment also
-covers the pair it forms with the character body it is fitted to.
+lets it pass through the character body it is fitted to, and through any static
+collider.
 
-On a **Static** group both keys reach the solver whenever the collider is part
-of the solved scene: animated, using **Apply Soft Constraints**, or named as one
-end of a cross-stitch. A collider that is none of those is a collision surface
-only and neither box on its group has any effect.
+**Allow Inter-Group Intersections** is a narrower form of the inter-object key:
+it covers a pair only when the two objects are assigned to DIFFERENT groups. An
+object in a group with it on passes through every object of every other group,
+static colliders included (a group holds one type, so a collider never shares a
+group with a dynamic object), while the objects of its own group still collide
+with each other. So garments layered on one another in one group stay apart,
+while all of them pass through a body in another group. Either side is enough
+for this key too.
 
-When to enable: geometry that arrives tangled in some poses and is expected to be
-sorted out by the simulation, most often a garment pinned to a rig-deformed
-character. Leave both off otherwise: an intersection you did not expect is worth
-being told about.
+On a **Static** group all three keys reach the solver whenever the collider is
+part of the solved scene: animated, using **Apply Soft Constraints**, or named
+as one end of a cross-stitch. A collider that is none of those is a collision
+surface only and no box on its group has any effect.
 
-A related per-pin checkbox, **Allow Intersections Here**, covers only the
-elements a single pin holds completely. See Constraints for it.
+When to enable: geometry that should not collide, such as a mesh that arrives
+tangled in its pose and is meant to stay that way, or a cloth whose self-collision
+is not wanted. Leave all three off otherwise: with them off, the solver keeps
+every pair apart and never lets one intersect.
+
+A related per-pin checkbox, **Allow Intersections Here**, does the same for only
+the elements a single pin holds completely. See Constraints for it.
 
 #### Velocity Overwrite
 

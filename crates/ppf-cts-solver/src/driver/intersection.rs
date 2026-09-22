@@ -27,13 +27,16 @@
 //! both-collider exclusion (a collider's shape is authored and driven, and
 //! rigged colliders ship self-tangled).
 //!
-//! The three intersection ALLOWANCES suppress REPORTING and nothing else. They
-//! reach exactly one predicate, `isect::intersection_tolerated` in
-//! `kernels/contact/intersect_policy.hpp`. That header is neutral C++ rendered
-//! into every backend, and the four visitors in
-//! `contact/intersect_geometry.kernel.cpp` reach it through
-//! `contact/pair_filter.kernel.cpp`'s `intersect_pair_reported`. Contact, CCD
-//! and the line search never consult it and MUST NOT.
+//! The intersection ALLOWANCES take the pairs they name out of every pass:
+//! contact assembles no barrier for them, the CCD line search does not filter
+//! the step against them, and this scan does not report them, so an allowed
+//! pair passes through itself freely. They reach exactly one predicate,
+//! `isect::intersection_tolerated` in `kernels/contact/intersect_policy.hpp`,
+//! which this tree renders into every backend through
+//! `contact/pair_filter.kernel.cpp`: `contact_pair_admitted` for the assembly
+//! and the sweep, and `intersect_pair_reported`, which is that narrowed by one
+//! condition, for the scan. The scan therefore reports only pairs contact acts
+//! on, by construction.
 //!
 //! # Where the work runs
 //!
@@ -118,8 +121,10 @@ extern "C" {
     #[allow(dead_code)]
     fn intersection_tolerated_abi(
         a_object_index: u32,
+        a_group_index: u32,
         a_intersect_policy: u8,
         b_object_index: u32,
+        b_group_index: u32,
         b_intersect_policy: u8,
         a_pin_allows: i32,
         b_pin_allows: i32,
@@ -186,8 +191,10 @@ pub fn max_records() -> usize {
 #[allow(clippy::too_many_arguments)]
 pub fn tolerated(
     a_object_index: u32,
+    a_group_index: u32,
     a_intersect_policy: u8,
     b_object_index: u32,
+    b_group_index: u32,
     b_intersect_policy: u8,
     a_pin_allows: bool,
     b_pin_allows: bool,
@@ -195,8 +202,10 @@ pub fn tolerated(
     unsafe {
         intersection_tolerated_abi(
             a_object_index,
+            a_group_index,
             a_intersect_policy,
             b_object_index,
+            b_group_index,
             b_intersect_policy,
             i32::from(a_pin_allows),
             i32::from(b_pin_allows),
@@ -758,8 +767,8 @@ mod tests {
     use super::super::lbvh::{self, Aabb};
     use super::*;
     use crate::data::{
-        EdgeParam, EdgeProp, FaceProp, VertexParam, VertexProp, INTERSECT_ALLOW_INTER_OBJECT,
-        INTERSECT_ALLOW_SELF, NO_OBJECT_INDEX,
+        EdgeParam, EdgeProp, FaceProp, VertexParam, VertexProp, INTERSECT_ALLOW_INTER_GROUP,
+        INTERSECT_ALLOW_INTER_OBJECT, INTERSECT_ALLOW_SELF, NO_GROUP_INDEX, NO_OBJECT_INDEX,
     };
     use ppf_cts_compute::{Buffer, Pod};
 
@@ -1305,29 +1314,58 @@ mod tests {
         // `intersect_pair_reported`. The NEGATIVE cases are the ones that
         // matter, because over-suppression is invisible in a happy-path test.
         //
+        // Arguments: (object, group, policy) for each side, then the two pin
+        // bits. Groups 0 and 1 are two ordinary groups.
+        //
         // Either pin is enough.
-        assert!(tolerated(0, 0, 1, 0, true, false));
-        assert!(tolerated(0, 0, 1, 0, false, true));
-        assert!(!tolerated(0, 0, 1, 0, false, false));
-        // Same object takes the SELF flag and not the inter-object one.
-        assert!(tolerated(7, INTERSECT_ALLOW_SELF, 7, 0, false, false));
+        assert!(tolerated(0, 0, 0, 1, 0, 0, true, false));
+        assert!(tolerated(0, 0, 0, 1, 0, 0, false, true));
+        assert!(!tolerated(0, 0, 0, 1, 0, 0, false, false));
+        // Same object takes the SELF flag and neither cross-object one.
+        assert!(tolerated(7, 0, INTERSECT_ALLOW_SELF, 7, 0, 0, false, false));
+        let cross = INTERSECT_ALLOW_INTER_OBJECT | INTERSECT_ALLOW_INTER_GROUP;
+        assert!(!tolerated(7, 0, cross, 7, 0, cross, false, false));
+        // Different objects take the inter-object flag from EITHER side, so a
+        // flagged garment covers an unflagged character, in its own group or
+        // another.
+        let inter_object = INTERSECT_ALLOW_INTER_OBJECT;
+        assert!(tolerated(1, 0, inter_object, 2, 0, 0, false, false));
+        assert!(tolerated(1, 0, 0, 2, 1, inter_object, false, false));
         assert!(!tolerated(
-            7,
-            INTERSECT_ALLOW_INTER_OBJECT,
-            7,
-            INTERSECT_ALLOW_INTER_OBJECT,
+            1,
+            0,
+            INTERSECT_ALLOW_SELF,
+            2,
+            1,
+            INTERSECT_ALLOW_SELF,
             false,
             false
         ));
-        // Different objects take the inter-object flag from EITHER side, so a
-        // flagged garment covers an unflagged character.
-        assert!(tolerated(1, INTERSECT_ALLOW_INTER_OBJECT, 2, 0, false, false));
-        assert!(tolerated(1, 0, 2, INTERSECT_ALLOW_INTER_OBJECT, false, false));
-        assert!(!tolerated(
+        // The inter-group flag, from EITHER side, covers two objects only when
+        // their groups differ: two objects of one group still collide.
+        let inter_group = INTERSECT_ALLOW_INTER_GROUP;
+        assert!(tolerated(1, 0, inter_group, 2, 1, 0, false, false));
+        assert!(tolerated(1, 0, 0, 2, 1, inter_group, false, false));
+        assert!(!tolerated(1, 0, inter_group, 2, 0, inter_group, false, false));
+        // The collision mesh belongs to no group, so it is another group from
+        // every object, and the no-group marker never matches itself.
+        assert!(tolerated(
             1,
-            INTERSECT_ALLOW_SELF,
+            0,
+            inter_group,
+            NO_OBJECT_INDEX,
+            NO_GROUP_INDEX,
+            0,
+            false,
+            false
+        ));
+        assert!(tolerated(
+            1,
+            NO_GROUP_INDEX,
+            inter_group,
             2,
-            INTERSECT_ALLOW_SELF,
+            NO_GROUP_INDEX,
+            0,
             false,
             false
         ));
@@ -1335,8 +1373,10 @@ mod tests {
         // unknowns would read as one object and take the self allowance.
         assert!(!tolerated(
             NO_OBJECT_INDEX,
+            0,
             INTERSECT_ALLOW_SELF,
             NO_OBJECT_INDEX,
+            0,
             INTERSECT_ALLOW_SELF,
             false,
             false

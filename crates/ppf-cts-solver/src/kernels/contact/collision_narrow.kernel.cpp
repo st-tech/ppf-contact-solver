@@ -43,6 +43,7 @@
 #include "analytic_contact.kernel.cpp"
 #include "contact_assembly.kernel.cpp"
 #include "contact_statistics.kernel.cpp"
+#include "pair_filter.kernel.cpp"
 
 // One collision-mesh contact's extended force and Hessian over the N DYNAMIC
 // vertices its weights name.
@@ -280,8 +281,11 @@ template <unsigned N>
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
     // A pinned or zero-mass vertex cannot yield, and the collider cannot
     // either, so the pair has no way to resolve.
-    if (vertex_prop[vertex_index].fix_index != 0u ||
-        !(vertex_prop[vertex_index].mass > 0.0f)) {
+    const VertexProp vprop = vertex_prop[vertex_index];
+    if (vprop.fix_index != 0u || !(vprop.mass > 0.0f)) {
+        return false;
+    }
+    if (collider_intersection_allowed(pair_side_of_vertex(vprop))) {
         return false;
     }
     const Vec3u fc = static_face[face_index];
@@ -431,10 +435,15 @@ template <unsigned N>
     const unsigned *statistics_static_object_index,
     unsigned statistics_static_object_index_size,
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
-    if (face_prop[face_index].fixed || !(face_prop[face_index].mass > 0.0f)) {
+    const FaceProp fprop = face_prop[face_index];
+    if (fprop.fixed || !(fprop.mass > 0.0f)) {
         return false;
     }
     const Vec3u fc = face[face_index];
+    const VertexProp fanchor = vertex_prop[fc[0]];
+    if (collider_intersection_allowed(pair_side_of_face(fanchor, fprop))) {
+        return false;
+    }
     const Vec3f y = static_x[vertex_index];
     const Vec3f t0 = x[fc[0]];
     const Vec3f t1 = x[fc[1]];
@@ -582,10 +591,15 @@ template <unsigned N>
     const unsigned *statistics_static_object_index,
     unsigned statistics_static_object_index_size,
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
-    if (edge_prop[edge_index].fixed || !(edge_prop[edge_index].mass > 0.0f)) {
+    const EdgeProp eprop = edge_prop[edge_index];
+    if (eprop.fixed || !(eprop.mass > 0.0f)) {
         return false;
     }
     const Vec2u me = edge[edge_index];
+    const VertexProp eanchor = vertex_prop[me[0]];
+    if (collider_intersection_allowed(pair_side_of_edge(eanchor, eprop))) {
+        return false;
+    }
     const Vec2u ce = static_edge[other_index];
     const Vec3f q0 = static_x[ce[0]];
     const Vec3f q1 = static_x[ce[1]];

@@ -147,8 +147,7 @@ the pin's own properties:
   the pin no longer hard-constrains the vertices; instead, it pulls them
   toward their target positions as a soft force of the given strength.
 - **Allow Intersections Here**: a checkbox. When on, the geometry this pin
-  holds completely may overlap other geometry without stopping the
-  simulation. See
+  holds completely passes through other geometry, with no contact. See
   [Allow Intersections Here](#allow-intersections-here) below.
 - **Operations UIList**: a list of the operations stacked on this pin,
   each row showing the operation type.
@@ -162,42 +161,45 @@ to hard pins.
 
 ### Allow Intersections Here
 
-A simulation is refused if the geometry it starts from is already
-overlapping, and it stops if an overlap shows up while it runs. **Allow
-Intersections Here** lifts that refusal for the geometry one pin holds. That
-is narrower than the group settings, which cover every object assigned to the
-group.
+By default the solver keeps every pair of surfaces apart, and it refuses a
+scene whose geometry already overlaps. **Allow Intersections Here** lets the
+geometry one pin holds pass through whatever it meets: the solver applies no
+contact force to it, does not stop it from crossing other surfaces, and never
+reports its overlaps as an error. That is narrower than the group settings,
+which cover whole objects.
 
 Turn it on when the pin drives its vertices somewhere that has to pass
 through something: a cuff pulled onto a wrist that starts inside it, or a
 band captured from a rig-deformed pose that arrives folded into the body
-underneath. A plain pin puts its vertices exactly where it says, so the
-solver cannot move them out of an overlap they land in; a **Pull** pin holds
-them only as hard as its **Strength**. The option is available on both.
+underneath. A plain pin puts its vertices exactly where it says, so contact
+cannot move them aside; with the option on, the held geometry passes through
+what it is driven into instead. A **Pull** pin holds its vertices only as
+hard as its **Strength**, and the option also removes the contact that would
+otherwise push back against the pull. The option is available on both.
 
 **It applies only where the pin holds a whole element.** A triangle counts
 when all three of its corners are pinned, a rod segment when both of its
 ends are, a **Sand** grain when that one grain is, and every pin holding
 those vertices has to have the option on, not just one of them. A face with
 one free corner is not covered, so a band pinned along a single edge leaves
-the cloth around it reporting overlaps as usual.
+the cloth around it colliding as usual.
 
-Coverage is asked of the pair, not of both of its sides. An overlap is
-accepted as soon as **one** of the two elements is fully held by allowing
-pins, so a face that is only partly pinned, or not pinned at all, is still
-accepted where the geometry it meets is fully covered. Flagging the pin on a
-cuff therefore covers the pairs it forms with the wrist inside it, without
-the wrist needing a pin of its own. Only a pair in which neither element is
-fully covered is reported. While the option is on, the add-on shows
-"Fully pinned faces may overlap; partly pinned ones still report" under
-the checkbox.
+Coverage is asked of the pair, not of both of its sides. A pair passes
+through as soon as **one** of the two elements is fully held by allowing
+pins, so a face that is only partly pinned, or not pinned at all, passes
+through geometry that is fully covered. Flagging the pin on a cuff therefore
+lets it pass through the wrist inside it, without the wrist needing a pin of
+its own. Only a pair in which neither element is fully covered keeps its
+contact. While the option is on, the add-on shows "Fully pinned faces pass
+through; partly pinned ones still collide" under the checkbox.
 
 :::{important}
-This suppresses the error, not the collision. Contact still acts across the
-overlap and the solver still pushes the surfaces apart. An overlap is
-exempted whenever one of its two sides is an element this pin covers, even
-if the other side is unpinned; an overlap in which neither side is covered
-is still reported.
+An element this pin covers has no contact with anything: it passes through
+other objects, through **Static** colliders, and through the rest of its own
+mesh alike. The option does not reach the
+[invisible walls and spheres](colliders.md), which act the same with it on or
+off. Every pair in which neither side is covered keeps full contact, and the
+solver never lets it intersect.
 :::
 
 The checkbox sits with every pin the add-on offers. On **Solid**, **Shell**,
@@ -209,11 +211,11 @@ and **Embedded Move** are not offered there, and a step of one of those
 types imported from a scene built elsewhere shows only as
 `<type>: edit in the generic panel`. A **Static** group is driven
 by **Transform** operations rather than pins, so it has no pin to put the
-checkbox on. For an overlap that is not confined to a pinned region, use the
-group-level
+checkbox on. For geometry that should pass through outside a pinned region,
+use the group-level
 [Allow Intersections](../params/material.md#allow-intersections) settings
-instead, on the group that is simulated: a **Static** collider left in its
-rest pose carries neither of those either.
+instead. A **Static** collider left in its rest pose ignores the boxes on its
+own group, so set them on the moving object's group.
 
 ### Edit-Mode Pin Buttons
 
@@ -544,7 +546,7 @@ into a new resting configuration before letting it fall freely.
 | **Show**                      | `show_overlay`                      | Draw this pin's vertices as overlay dots in the viewport (no effect on the solve). |
 | **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Number of frames the pin stays active, counted from the solve's **Starting Frame**; the pin is released after that many frames. `pin.unpin(frame=...)` sets this count despite the keyword's name. |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
-| **Allow Intersections Here**  | `allow_intersection`                | Accept overlaps of the elements this pin holds completely, instead of stopping the run. |
+| **Allow Intersections Here**  | `allow_intersection`                | Let the elements this pin holds completely pass through whatever they meet, with no contact. |
 | **Track Rest-Pose Deformation** | `track_rest_pose_deformation`     | **Solid** only, off by default. Drives a time-varying rest pose from the pin's captured deformation, so the body settles into the captured shape instead of straining against it. Editable only on a *full* pin (one covering every vertex of the mesh) that has a capture; the **Refresh** button beside it re-checks that coverage. It cannot coexist with plasticity, and the panel warns when both are on. |
 
 ## Operations Reference

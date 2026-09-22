@@ -796,11 +796,11 @@ def set_intersection_allowance_objects(
 ):
     """Narrow one intersection allowance to named objects of a group.
 
-    An allowance ("allow_self_intersection" or
-    "allow_inter_object_intersection", both set by
-    set_group_material_properties) reaches every object of its group while
-    the matching "..._all_objects" switch is on. This tool writes the subset
-    the allowance reaches instead, and turns that switch OFF, so the
+    An allowance ("allow_self_intersection",
+    "allow_inter_object_intersection" or "allow_inter_group_intersection",
+    all set by set_group_material_properties) reaches every object of its
+    group while the matching "..._all_objects" switch is on. This tool writes
+    the subset the allowance reaches instead, and turns that switch OFF, so the
     allowance covers exactly the objects named here and no others. Pass an
     empty list to clear the subset, which leaves the allowance reaching
     nothing; turn "..._all_objects" back on with
@@ -819,7 +819,7 @@ def set_intersection_allowance_objects(
 
     Args:
         group_uuid: UUID of group
-        allowance: "self" or "inter_object"
+        allowance: "self", "inter_object" or "inter_group"
         object_names: Objects of this group the allowance is narrowed to
     """
     group = get_active_group_by_uuid_helper(group_uuid)
@@ -1616,6 +1616,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1639,6 +1641,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1667,6 +1671,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1681,6 +1687,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1695,6 +1703,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1709,6 +1719,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
+        "allow_inter_group_intersection",
+        "allow_inter_group_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1977,27 +1989,35 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     Intersection allowances (accepted on every group type: SOLID, SHELL, ROD,
     PDRD, SAND, STATIC). Each reaches every object assigned to the group while
     its allow_self_intersection_all_objects /
-    allow_inter_object_intersection_all_objects switch is on, and both switches
-    default on; set_intersection_allowance_objects narrows one to named objects
-    and turns its switch off. Self versus inter-object is decided per Blender
-    object, not per group, whichever way the allowance is narrowed:
+    allow_inter_object_intersection_all_objects /
+    allow_inter_group_intersection_all_objects switch is on, and all three
+    switches default on; set_intersection_allowance_objects narrows one to
+    named objects and turns its switch off. Self versus inter-object is decided
+    per Blender object, not per group, whichever way the allowance is narrowed:
 
-    - allow_self_intersection: an overlap of one object with itself is
-      simulated instead of reported, so a run starts and keeps going through a
-      pose that object is tangled in. An overlap between two objects assigned
-      to the same group is an inter-object pair, which this key does not cover.
-    - allow_inter_object_intersection: the same for an overlap between two
-      different objects, including two objects of this group. Either side is
-      enough, so setting it on a garment also covers the body it is fitted to.
+    - allow_self_intersection: one object may pass through itself. Its
+      elements get no contact force with each other, no CCD filter in the line
+      search, and no intersection report. An overlap between two objects
+      assigned to the same group is an inter-object pair, which this key does
+      not cover.
+    - allow_inter_object_intersection: the same for two different objects,
+      including two objects of this group and a static collider mesh, but not
+      the invisible walls and spheres. Either side is enough, so setting it on
+      a garment also lets it pass through the body it is fitted to.
+    - allow_inter_group_intersection: the same for two objects assigned to
+      DIFFERENT groups, including a static collider (a group holds one type,
+      so a collider never shares a group with a dynamic object), but not the
+      invisible walls and spheres. Two objects of this same group still
+      collide with each other, which is what separates it from
+      allow_inter_object_intersection. Either side is enough.
 
-    On a STATIC group both keys reach the solver whenever the collider is part
-    of the solved scene, which covers an animated collider, a soft-constrained
-    one, and one named as a cross-stitch endpoint: each of those decodes to a
-    pin shell whose vertices carry the policy. A collider that is none of them
-    stays a contact-only collision mesh, its vertices carry no object id and an
-    empty policy, and a pair involving it is tolerated only when the opposing
-    dynamic side opts in. Contact and CCD are unaffected; only the report is
-    suppressed.
+    On a STATIC group all three keys reach the solver whenever the collider is
+    part of the solved scene, which covers an animated collider, a
+    soft-constrained one, and one named as a cross-stitch endpoint: each of
+    those decodes to a pin shell whose vertices carry the policy. A collider
+    that is none of them stays a contact-only collision mesh, its vertices
+    carry no object id and an empty policy, and a pair involving it is
+    tolerated only when the opposing dynamic side opts in.
 
     Contact properties (mutually exclusive modes):
 

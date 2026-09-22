@@ -306,8 +306,16 @@ pub struct MeshSet {
     /// a checkpoint whose serialized form omits it deserializes as empty.
     #[serde(default)]
     pub object_vertex_index: Vec<u32>,
-    /// Per-vertex intersection tolerances resolved from each vertex's object's
-    /// material (`INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT`).
+    /// Per-vertex source-group identity (length = vertex count, or empty when
+    /// the session directory carries no `group_vert.bin`, which the frontend
+    /// writes only for a scene that asks for the inter-group allowance).
+    /// Empty puts every vertex in one group. `serde(default)` for the same
+    /// reason as `object_vertex_index`.
+    #[serde(default)]
+    pub group_vertex_index: Vec<u32>,
+    /// Per-vertex intersection allowances resolved from each vertex's object's
+    /// material (`INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT |
+    /// INTERSECT_ALLOW_INTER_GROUP`).
     /// Empty means every object is at the default, which allows nothing.
     #[serde(default)]
     pub intersect_policy: Vec<u8>,

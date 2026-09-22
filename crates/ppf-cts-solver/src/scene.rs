@@ -103,6 +103,10 @@ pub struct Scene {
     /// from an inter-object one. Empty when the session directory predates
     /// `object_vert.bin`, in which case no intersection allowance applies.
     object_vert_index: Vec<u32>,
+    /// Per-vertex source-group identity, used to tell an inter-group pair
+    /// from two objects of one group. Written only when some object asks for
+    /// the inter-group allowance; empty otherwise.
+    group_vert_index: Vec<u32>,
     /// Per-vertex intersection tolerances, resolved by the frontend from each
     /// vertex's object's material. Empty when every object is at the default.
     intersect_policy: Vec<u8>,
@@ -410,8 +414,8 @@ struct Pin {
     /// strengths. Absent for hard pins and scalar pull pins.
     pull_weights: Option<Vec<f32>>,
     pin_group_id: String,
-    /// This pin asks for the intersections of the elements it fully covers to
-    /// be tolerated rather than reported. Carried onto every FixPair and
+    /// This pin allows the elements it fully covers to intersect: they get no
+    /// contact, no CCD filter and no report. Carried onto every FixPair and
     /// PullPair it produces, and consumed once at scene build to latch
     /// `VertexProp::pin_allow_intersection`. Defaults to false, so a session
     /// directory written before the key existed behaves as before.
@@ -1152,8 +1156,18 @@ impl Scene {
         } else {
             Vec::new()
         };
+        // Written only when some object asks for the inter-group allowance,
+        // the one thing that reads it. Absent, every vertex is in one group.
+        let group_vert_path = format!("{}/bin/group_vert.bin", args.path);
+        let group_vert_index = if std::path::Path::new(&group_vert_path).exists() {
+            let m = read_vec::<u32>(&group_vert_path).expect("Failed to read group_vert");
+            assert_eq!(m.len(), n_vert, "group_vert size mismatch");
+            m
+        } else {
+            Vec::new()
+        };
         // Written only when some object actually asks for an allowance, so
-        // absent is the common case and reads as "nothing is tolerated".
+        // absent is the common case and reads as "nothing is allowed".
         let intersect_policy_path = format!("{}/bin/intersect_policy.bin", args.path);
         let intersect_policy = if std::path::Path::new(&intersect_policy_path).exists() {
             let m =
@@ -1884,6 +1898,7 @@ impl Scene {
             bend_rest_vert_mask,
             collider_vert_mask,
             object_vert_index,
+            group_vert_index,
             intersect_policy,
             shell_count,
             rod_param,
@@ -3440,6 +3455,7 @@ impl Scene {
             bend_rest_vertex_mask: self.bend_rest_vert_mask.clone(),
             collider_vertex_mask: self.collider_vert_mask.clone(),
             object_vertex_index: self.object_vert_index.clone(),
+            group_vertex_index: self.group_vert_index.clone(),
             intersect_policy: self.intersect_policy.clone(),
         }
     }

@@ -114,6 +114,7 @@ class EnumColor(Enum):
 # solver reads them; keep the three in step.
 _INTERSECT_ALLOW_SELF = 1 << 0
 _INTERSECT_ALLOW_INTER_OBJECT = 1 << 1
+_INTERSECT_ALLOW_INTER_GROUP = 1 << 2
 
 
 class FixedScene:
@@ -215,6 +216,7 @@ class FixedScene:
         collider_vert_mask: Optional[np.ndarray] = None,
         object_vert_index: Optional[np.ndarray] = None,
         intersect_policy: Optional[np.ndarray] = None,
+        group_vert_index: Optional[np.ndarray] = None,
         pin_allow_vertices: Optional[np.ndarray] = None,
         quiet: bool = False,
     ):
@@ -324,6 +326,7 @@ class FixedScene:
         self._collider_vert_mask = collider_vert_mask
         self._object_vert_index = object_vert_index
         self._intersect_policy = intersect_policy
+        self._group_vert_index = group_vert_index
         self._pin_allow_vertices = pin_allow_vertices
         self._pin: list[PinData] = []
         # Display pins (see `set_display_pin`): each a dict with the owning
@@ -500,6 +503,11 @@ class FixedScene:
             vert_pin_allow=(
                 np.ascontiguousarray(self._pin_allow_vertices, dtype=bool)
                 if self._pin_allow_vertices is not None
+                else None
+            ),
+            vert_group_id=(
+                np.ascontiguousarray(self._group_vert_index, dtype=np.int32)
+                if self._group_vert_index is not None
                 else None
             ),
         )
@@ -1045,6 +1053,16 @@ class FixedScene:
             )
             self._intersect_policy.astype(np.uint8).tofile(
                 os.path.join(bin_path, "intersect_policy.bin")
+            )
+        # Written only when some object asks for the inter-group allowance, the
+        # one reader; absent, the solver puts every vertex in one group.
+        if self._group_vert_index is not None:
+            assert len(self._group_vert_index) == len(self._vert[1]), (
+                f"group_vert_index has {len(self._group_vert_index)} entries "
+                f"but the scene has {len(self._vert[1])} dynamic vertices"
+            )
+            self._group_vert_index.astype(np.uint32).tofile(
+                os.path.join(bin_path, "group_vert.bin")
             )
         self._vert[1].astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
         # rest_vert_mask is shared between the static rest_vert and the
@@ -3058,9 +3076,28 @@ class Scene:
                 bits |= _INTERSECT_ALLOW_SELF
             if float(obj.param.get("allow-inter-object-intersection")) != 0.0:
                 bits |= _INTERSECT_ALLOW_INTER_OBJECT
+            if float(obj.param.get("allow-inter-group-intersection")) != 0.0:
+                bits |= _INTERSECT_ALLOW_INTER_GROUP
             if bits:
                 _policy[np.asarray(map_by_name[name], dtype=np.int64)] = bits
         intersect_policy = _policy if _policy.any() else None
+
+        # Per-vertex group identity, read only by the inter-group allowance
+        # and so resolved only for a scene that asks for it. Labels are
+        # numbered from 1 in the order the objects appear; 0 is the default
+        # group every object told nothing shares.
+        group_vert_index = None
+        if intersect_policy is not None and bool(
+            np.any(intersect_policy & _INTERSECT_ALLOW_INTER_GROUP)
+        ):
+            _labels: dict[str, int] = {}
+            group_vert_index = np.zeros(len(concat_vert), dtype=np.uint32)
+            for name, obj in dyn_objects:
+                label = getattr(obj, "_group_label", None)
+                if label is None:
+                    continue
+                gid = _labels.setdefault(label, len(_labels) + 1)
+                group_vert_index[np.asarray(map_by_name[name], dtype=np.int64)] = gid
 
         concat_pin: list[PinData] = [
             PinData(
@@ -3535,7 +3572,8 @@ class Scene:
         # parameter" panic, so every element kind drops them here. They still
         # travel to the solver as the resolved policy, and they are still
         # visible per object in the addon and in the PARAM payload.
-        for key in ["allow-self-intersection", "allow-inter-object-intersection"]:
+        for key in ["allow-self-intersection", "allow-inter-object-intersection",
+                    "allow-inter-group-intersection"]:
             concat_tri_param[key] = []
             concat_rod_param[key] = []
             concat_tet_param[key] = []
@@ -3622,6 +3660,7 @@ class Scene:
             collider_vert_mask=collider_vert_mask,
             object_vert_index=object_vert_index,
             intersect_policy=intersect_policy,
+            group_vert_index=group_vert_index,
             pin_allow_vertices=(
                 pin_allow_vertices if pin_allow_vertices.any() else None
             ),
