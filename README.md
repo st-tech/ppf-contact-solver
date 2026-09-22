@@ -60,14 +60,14 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
 
 ### 🚧 Gentle Disclaimer and Limitations
 
-- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
-- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
-- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
-- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
-- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
-- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
-- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
-- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
+- **⏳ Offline use:** Not real time, though some examples reach interactive rates.
+- **🐢 Not the fastest:** Other recent work reports faster results.
+- **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
+- **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
+- **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
+- **🟥 AMD GPUs untested:** The ROCm backend has never run on real AMD hardware. We rely on community bug reports.
+- **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
+- **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
 
 ## 🔖 Table of Contents
 
