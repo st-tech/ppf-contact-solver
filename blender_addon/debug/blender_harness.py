@@ -29,6 +29,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -191,6 +192,8 @@ def window_args() -> list[str]:
 # Linux needs an X display.
 _xvfb: Optional[subprocess.Popen] = None
 _xvfb_display: str = ""
+# Where that server's stderr goes (see `_spawn_xvfb`), removed with it.
+_xvfb_log: str = ""
 
 # Display numbers the rig's own server may occupy. High enough to stay
 # clear of a desktop session (:0) and of the :99 that CI and
@@ -322,19 +325,31 @@ def _spawn_xvfb(exe: str, number: int, screen_w: int,
     Returns ``(proc, "")`` once the server reports itself ready, or
     ``(None, reason)`` if it exited or never reported.
     """
+    global _xvfb_log
     read_fd, write_fd = os.pipe()
     os.set_inheritable(write_fd, True)
+    # THE SERVER'S STDERR GOES TO A FILE, NEVER TO A PIPE NOBODY READS. Xvfb
+    # hands its stderr to the xkbcomp it spawns for every client connection,
+    # and each one prints a screenful of unresolved-keysym warnings. An
+    # undrained pipe fills at 64 KiB, about thirty Blender launches into a
+    # run; the next xkbcomp then blocks on its write, Xvfb blocks waiting for
+    # xkbcomp, and every Blender after it hangs at startup having written
+    # nothing, which the orchestrator reads as Blender not starting on this
+    # machine. The file is read back only to explain an early exit.
+    log = tempfile.NamedTemporaryFile(
+        prefix=f"ppf-rig-xvfb-{number}-", suffix=".log", delete=False)
     try:
         proc = subprocess.Popen(
             [exe, f":{number}", "-displayfd", str(write_fd),
              "-screen", "0", f"{screen_w}x{screen_h}x24",
              "-nolisten", "tcp"],
             pass_fds=(write_fd,),
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=log,
             start_new_session=True,
         )
     finally:
         os.close(write_fd)
+        log.close()
 
     # select() rather than a blocking read: an Xvfb that starts but never
     # reports would otherwise hang the run instead of hitting the deadline.
@@ -343,7 +358,9 @@ def _spawn_xvfb(exe: str, number: int, screen_w: int,
     try:
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                err = (proc.stderr.read() or b"").decode("utf-8", "replace")
+                with open(log.name, "rb") as handle:
+                    err = handle.read().decode("utf-8", "replace")
+                os.unlink(log.name)
                 return None, (f"Xvfb :{number} exited with "
                               f"{proc.returncode}: {err.strip()[-300:]}")
             if not select.select([read_fd], [], [], 0.25)[0]:
@@ -353,11 +370,13 @@ def _spawn_xvfb(exe: str, number: int, screen_w: int,
                 break
             buf += chunk
             if b"\n" in buf:
+                _xvfb_log = log.name
                 return proc, ""
     finally:
         os.close(read_fd)
 
     _terminate(proc)
+    os.unlink(log.name)
     return None, f"Xvfb :{number} did not report readiness within 20s"
 
 
@@ -414,10 +433,16 @@ def ensure_display() -> Optional[str]:
 
 def shutdown_display() -> None:
     """Stop an Xvfb this process started. Idempotent."""
-    global _xvfb, _xvfb_display
+    global _xvfb, _xvfb_display, _xvfb_log
     proc, _xvfb, _xvfb_display = _xvfb, None, ""
     if proc is not None:
         _terminate(proc)
+    log, _xvfb_log = _xvfb_log, ""
+    if log:
+        try:
+            os.unlink(log)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
