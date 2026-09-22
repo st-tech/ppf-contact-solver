@@ -58,35 +58,6 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
 - **✨ Stay Clean**: You can remove all traces after use.
 - **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
 
-### 🔒 Our Penetration-free Guarantee
-
-We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, **only when a solution is found.** A solution may not be found in extreme cases, for example:
-
-- The target contact thickness is atom-level thin, with the object size being on the order of meters.
-- An object collides at the speed of light, with the step size being 0.01 seconds.
-- Self-intersectable dynamic objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
-
-In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.**
-
-#### ✅ How Do We Promise No Intersections?
-
-An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
-
-#### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
-
-Examples include pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) and cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
-
-### 🚧 Gentle Disclaimer and Limitations
-
-- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
-- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
-- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
-- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
-- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
-- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
-- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
-- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
-
 ## 🔖 Table of Contents
 
 - [📝 Change History](#-change-history)
@@ -126,6 +97,10 @@ Examples include pinned panels driven through each other ([#116](https://github.
 - [📬 Contributing](#-contributing)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
+- [🔒 Our Penetration-free Guarantee](#-our-penetration-free-guarantee)
+  - [✅ How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections)
+  - [🚨 Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup)
+- [🚧 Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations)
 - [❓ Frequently Asked Questions](#-frequently-asked-questions)
 - [🙏 Acknowledgements](#-acknowledgements)
 
@@ -981,6 +956,35 @@ For bug reports or feature requests, please open an issue on GitHub. For usage q
 If you would prefer to reach out privately, you can also email the author at <ryoichi.ando@zozo.com>. Please do not send any copyrightable materials; anything of that kind will never be read by the author and will be deleted upon receipt.
 
 If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
+
+## 🔒 Our Penetration-free Guarantee
+
+We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, **only when a solution is found.** A solution may not be found in extreme cases, for example:
+
+- The target contact thickness is atom-level thin, with the object size being on the order of meters.
+- An object collides at the speed of light, with the step size being 0.01 seconds.
+- Self-intersectable dynamic objects on the order of meters are placed 1,000 km away from one another, where floating-point approximation cannot find a solution.
+
+In such extreme cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.**
+
+### ✅ How Do We Promise No Intersections?
+
+An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
+
+### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
+
+Examples include pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) and cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
+
+## 🚧 Gentle Disclaimer and Limitations
+
+- **⏳ Offline use:** Built for offline simulation, not real time, though some examples reach interactive rates.
+- **🐢 Not the fastest simulator:** We do try to be fast, but other recent work reports faster results, so do not expect state-of-the-art performance.
+- **📉 Not differentiable:** No gradients with respect to simulation inputs, so inverse design and learning workflows are out of scope.
+- **🧪 Not production ready:** ZOZO's Contact Solver is immature and has many bugs, including undiscovered ones. Production use is not recommended. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues) and fixed once confirmed.
+- **🐌 CPU and Metal backends are much slower:** Next to a modern discrete GPU such as an NVIDIA RTX 40 or 50 series or an AMD Radeon, they are far behind. This is a hardware limitation. These backends are meant for evaluation, learning, and small examples. Mid to large-scale simulations require a powerful GPU.
+- **🟥 AMD GPUs untested on real hardware:** The author owns no AMD GPU and has no access to one, so the ROCm backend has never run on the hardware it targets. We rely on community bug reports when something does not work.
+- **🛠️ Add-on setup takes effort:** Installing the Blender add-on is not a single click; the solver backend is deployed separately, either on the same machine or on a remote one.
+- **👤 Development pace:** Actively maintained by Ryoichi Ando alone, with limited time rather than a team's capacity.
 
 ## ❓ Frequently Asked Questions
 
