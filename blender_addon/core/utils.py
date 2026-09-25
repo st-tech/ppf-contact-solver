@@ -728,10 +728,7 @@ def has_transform_fcurves(obj) -> bool:
     """
     if obj is None or not hasattr(obj, "animation_data"):
         return False
-    ad = obj.animation_data
-    if not ad or not ad.action:
-        return False
-    for fc in _get_fcurves(ad.action):
+    for fc in get_id_fcurves(obj):
         path = getattr(fc, "data_path", "") or ""
         if any(path == p or path.endswith(f".{p}") for p in _TRANSFORM_PATHS):
             return True
@@ -800,10 +797,7 @@ def _has_shape_key_animation(obj) -> bool:
     sk = getattr(obj.data, "shape_keys", None)
     if sk is None:
         return False
-    ad = getattr(sk, "animation_data", None)
-    if ad is None or ad.action is None:
-        return False
-    return any(_get_fcurves(ad.action))
+    return bool(get_id_fcurves(sk))
 
 
 # Geometry Nodes node types that can move existing mesh vertices off
@@ -883,50 +877,82 @@ def has_deforming_modifier_stack(obj) -> bool:
     return False
 
 
-def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None):
-    """Return ``(N, 3)`` float32 local-space vertex positions of *obj*
-    with its deform-only modifier stack evaluated at the current frame,
-    or ``None`` when the result can't stand in for the rest mesh.
+def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None,
+                                exclude_modifier_names=()):
+    """Return ``(N, 3)`` float32 local-space vertex positions of *obj* in the
+    pose the solver starts from, evaluated at the current frame, or ``None``
+    when no such pose keeps the base mesh's vertex count.
 
     Honors Geometry Nodes / Armature / Lattice deforms so callers can
     capture the shape the artist sees, instead of the undeformed rest
-    cage. ``exclude_modifier_name`` (typically the addon's
-    ``ContactSolverCache``) is temporarily hidden during evaluation:
-    that MESH_CACHE replays prior solver output with OVERWRITE, so
-    reading it back would feed the output into the next input.
+    cage. ``exclude_modifier_names`` (see
+    ``pc2.display_only_modifier_names``) are temporarily hidden during
+    evaluation, and ``exclude_modifier_name`` hides one more the same way:
+    the ``ContactSolverCache`` MESH_CACHE among them replays prior solver
+    output with OVERWRITE, so reading it back would feed the output into
+    the next input.
 
-    Returns ``None`` when the evaluated vertex count differs from the
-    base mesh (a generative modifier changed topology, so base
-    triangulation / vertex-group indices would no longer line up) or
-    when evaluation isn't available.
+    When the stack changes the vertex count, it is evaluated again with the
+    stack cut where the ContactSolverCache is placed: the first
+    topology-changing modifier and every modifier after it are hidden too
+    (``pc2.modifiers_after_cache_boundary``). On display the cache replaces
+    the output of everything in front of it, and the modifiers after it run
+    on top of the solver output, so the cut stack is exactly the pose the
+    solver's output stands in for. An Armature or Lattice in front of a
+    Subdivision therefore reaches the result, while one after it does not,
+    since it deforms the simulated mesh on display. A Geometry Nodes
+    modifier in a stack that changes the vertex count is a cut point, as it
+    is for the cache placement.
+
+    Returns ``None`` in two cases: *obj* is not a mesh, or the cut stack
+    still changes the vertex count, which takes a modifier in front of the
+    cut that changes it without being one the cache placement counts as
+    topology-changing (a Fluid domain, an Ocean in Generate mode, a Mesh
+    Sequence Cache whose topology differs from the mesh). A base
+    triangulation or vertex-group index would not line up with the result
+    in either case. Anything that fails during evaluation propagates: every
+    caller runs where the depsgraph can be evaluated.
     """
     import numpy as np
+
+    from .pc2 import modifiers_after_cache_boundary
 
     if obj is None or obj.type != "MESH":
         return None
     if context is None:
         context = bpy.context
+    n_base = len(obj.data.vertices)
+    excluded = set(exclude_modifier_names)
+    if exclude_modifier_name:
+        excluded.add(exclude_modifier_name)
     toggled = []
-    try:
-        if exclude_modifier_name:
-            for m in obj.modifiers:
-                if m.name == exclude_modifier_name and m.show_viewport:
-                    m.show_viewport = False
-                    toggled.append(m)
-        deps = context.evaluated_depsgraph_get()
-        eval_obj = obj.evaluated_get(deps)
+
+    def hide(modifiers):
+        for m in modifiers:
+            if m.show_viewport:
+                m.show_viewport = False
+                toggled.append(m)
+
+    def evaluate():
+        eval_obj = obj.evaluated_get(context.evaluated_depsgraph_get())
         eval_mesh = eval_obj.to_mesh()
         try:
             n = len(eval_mesh.vertices)
-            if n != len(obj.data.vertices):
+            if n != n_base:
                 return None
             co = np.empty(n * 3, dtype=np.float32)
             eval_mesh.vertices.foreach_get("co", co)
             return co.reshape(n, 3)
         finally:
             eval_obj.to_mesh_clear()
-    except Exception:
-        return None
+
+    try:
+        hide(m for m in obj.modifiers if m.name in excluded)
+        co = evaluate()
+        if co is None:
+            hide(modifiers_after_cache_boundary(obj))
+            co = evaluate()
+        return co
     finally:
         for m in toggled:
             m.show_viewport = True
@@ -1214,27 +1240,24 @@ def _mesh_shape_could_animate(obj) -> bool:
     return False
 
 
-def is_deforming_static_object(obj, context, allow_eval: bool = True) -> bool:
-    """True if *obj* needs a Capture Deformation pass for the solver.
+def static_mesh_deforms(obj, context, allow_eval: bool = True) -> bool:
+    """True if *obj*'s mesh changes SHAPE over the timeline.
 
-    Four-tier detection:
+    What the encoder requires a Capture Deformation for: a rigid transform
+    cannot carry it. Three-tier detection:
       1. Declarative: deforming modifier stack.
       2. Shape-key animation.
       3. Local-space mesh shape change across the timeline (catches
          driver-only and geometry-node deformation).
-      4. Externally driven object motion: ``matrix_world`` changes
-         across the timeline AND the object has no own loc/rot/scale
-         fcurves (so the rigid ``transform_animation`` path would
-         silently miss it).
 
-    Pure own-transform animation (rigid loc/rot/scale fcurves on a
-    mesh with constant shape and no parent/constraint motion) returns
-    False, and the encoder uses the lighter ``transform_animation``
-    path instead.
+    Motion of the object as a whole, from its own curves or from a parent,
+    constraint, driver or NLA, is not deformation: the encoder ships it as
+    the world matrix sampled at every solve frame
+    (:func:`sample_transform_animation`).
 
-    ``allow_eval`` gates tiers 3-4, which sample the depsgraph (they call
-    ``scene.frame_set`` and temporarily toggle the ContactSolverCache
-    modifier). Those mutate scene state and must NOT run from a restricted
+    ``allow_eval`` gates tier 3, which samples the depsgraph (it calls
+    ``scene.frame_set`` and temporarily toggles the ContactSolverCache
+    modifier). That mutates scene state and must NOT run from a restricted
     context such as a UI ``draw()`` handler, where Blender forbids ID writes
     and per-redraw frame stepping would be unusable. Pass ``allow_eval=False``
     from draw to get the cheap declarative tiers only; the encoder leaves it
@@ -1248,29 +1271,44 @@ def is_deforming_static_object(obj, context, allow_eval: bool = True) -> bool:
         return True
     if context is None or not allow_eval:
         return False
-    # Tiers 3-4 each step the timeline twice (``scene.frame_set`` at
-    # frame_start and frame_end) and re-evaluate the whole-scene depsgraph,
-    # so a single call costs two full frame evaluations. On a heavy
-    # collision scene with many rigid STATIC colliders this dominates the
-    # encode (hundreds of full-scene evals). Gate each behind a cheap,
-    # no-depsgraph pre-check that is a strict SUPERSET of the motion it can
-    # detect, so an inert rigid collider skips the sampling entirely:
-    #   * tier 3 reports a LOCAL mesh-shape change only if some animatable
-    #     source can move this mesh's verts (``_mesh_shape_could_animate``);
-    #   * tier 4 reports a world-matrix change from a non-own-fcurve source
-    #     (parent / constraint / transform driver / NLA), which is exactly
-    #     what ``_has_nonfcurve_motion_source`` reports.
-    # If the pre-check is False the sampler is provably False, so skipping
-    # it changes no result, only cost.
-    if _mesh_shape_could_animate(obj) and _depsgraph_mesh_differs_across_range(
-        obj, context
-    ):
+    # Tier 3 steps the timeline twice (``scene.frame_set`` at frame_start and
+    # frame_end) and re-evaluates the whole-scene depsgraph, so it is gated
+    # behind a cheap, no-depsgraph pre-check that is a strict SUPERSET of the
+    # motion it can detect: it reports a LOCAL mesh-shape change only if some
+    # animatable source can move this mesh's verts
+    # (``_mesh_shape_could_animate``). If the pre-check is False the sampler
+    # is provably False, so skipping it changes no result, only cost.
+    return bool(
+        _mesh_shape_could_animate(obj)
+        and _depsgraph_mesh_differs_across_range(obj, context)
+    )
+
+
+def is_deforming_static_object(obj, context, allow_eval: bool = True) -> bool:
+    """True if Capture Deformation can record motion *obj* has.
+
+    Either its mesh changes shape (:func:`static_mesh_deforms`), which the
+    encoder requires a capture for, or the object as a whole is moved by
+    something other than its own curves: its ``matrix_world`` changes across
+    the timeline and a parent, constraint, transform driver or NLA strip
+    can move it. The second ships without a capture as sampled world
+    matrices, and a capture of it is accepted in their place.
+
+    ``allow_eval`` is :func:`static_mesh_deforms`'s: False keeps to the
+    declarative tiers, for a ``draw()`` handler.
+    """
+    if static_mesh_deforms(obj, context, allow_eval):
         return True
-    if _has_nonfcurve_motion_source(obj) and _matrix_world_differs_without_own_fcurves(
-        obj, context
-    ):
-        return True
-    return False
+    if obj is None or obj.type != "MESH" or context is None or not allow_eval:
+        return False
+    # Sampled only behind the cheap pre-check: a world-matrix change from a
+    # non-own-fcurve source (parent / constraint / transform driver / NLA) is
+    # exactly what ``_has_nonfcurve_motion_source`` reports, so a False there
+    # proves the sampler False.
+    return bool(
+        _has_nonfcurve_motion_source(obj)
+        and _matrix_world_differs_without_own_fcurves(obj, context)
+    )
 
 
 def get_vertices_in_group(obj, vg) -> list[int]:
@@ -1403,126 +1441,172 @@ def get_pin_vertex_indices(obj, context, frame: int | None = None) -> list[int]:
     return list(indices)
 
 
-def get_transform_keyframes(
-    obj, context, start_frame: int = 1,
-) -> dict | None:
-    """Extract sparse object-level transform keyframes for a STATIC object.
+def get_id_fcurves(id_block) -> list:
+    """The F-curves animating *id_block*, read from the slot it is assigned.
 
-    Only extracts keyframes from object-level animation (location, rotation, scale).
-    Raises RuntimeError if the object has mesh-level-only animation (shape keys).
-
-    Args:
-        obj: The Blender object.
-        context: The Blender context.
-        start_frame: Blender frame that is simulated time zero (see
-            ``resolve_start_frame``). Keyframes authored before it clamp to
-            zero, since the solver's schedules begin there.
-
-    Returns:
-        dict with keys "frame_offset", "translation", "quaternion", "scale",
-        "segments", or None if no animation. ``frame_offset`` values are
-        FRAME offsets relative to *start_frame* (float on the wire for
-        future-proofing; ``int(kp.co[0])`` truncation is retained, so this
-        is NOT subframe support). The decoder derives seconds from the
-        Param payload's fps, keeping the data payload timing-free.
+    Blender 5.x keeps curves under ``action.layers[].strips[].channelbag(slot)``,
+    and one action can hold a bag per slot, each animating a different ID. The
+    bag that animates *id_block* is the one for ``animation_data.action_slot``;
+    taking the first non-empty bag instead reads another ID's curves off a
+    shared action. A legacy (unslotted) action keeps them on the action.
     """
-    if not obj or not hasattr(obj, "animation_data"):
-        return None
+    ad = getattr(id_block, "animation_data", None)
+    action = getattr(ad, "action", None) if ad is not None else None
+    if action is None:
+        return []
+    out = []
+    slot = getattr(ad, "action_slot", None)
+    for layer in action.layers:
+        for strip in layer.strips:
+            bag = strip.channelbag(slot) if slot is not None else None
+            if bag is not None:
+                out.extend(bag.fcurves)
+    out.extend(getattr(action, "fcurves", []) or [])
+    return out
 
-    has_mesh_anim = (
-        obj.data
-        and hasattr(obj.data, "animation_data")
-        and obj.data.animation_data
-        and obj.data.animation_data.action
-        and any(_get_fcurves(obj.data.animation_data.action))
-    )
-    if has_mesh_anim:
-        raise RuntimeError(
-            f"STATIC object '{obj.name}' has mesh-level animation (shape keys). "
-            "Only object-level transform animation is supported for STATIC objects."
-        )
 
-    if not obj.animation_data or not obj.animation_data.action:
-        return None
+def _may_move(obj) -> bool:
+    """True when anything could change *obj*'s world transform over time.
 
-    fcurves = _get_fcurves(obj.animation_data.action)
-    if not fcurves:
-        return None
+    Its own transform curves, a driver, an NLA track or a constraint, on it or
+    on any parent up its chain. A collider carried by an animated parent moves
+    in the viewport without a curve of its own, and treating only its own
+    curves as motion shipped it to the solver frozen at its rest pose.
+    """
+    seen = set()
+    o = obj
+    while o is not None and o.name not in seen:
+        seen.add(o.name)
+        ad = getattr(o, "animation_data", None)
+        if ad is not None and (
+            get_id_fcurves(o) or list(ad.nla_tracks) or list(ad.drivers)
+        ):
+            return True
+        if len(getattr(o, "constraints", ())) > 0:
+            return True
+        o = o.parent
+    return False
 
-    keyframe_frames = set()
-    for fc in fcurves:
-        keyframe_frames.update(int(kp.co[0]) for kp in fc.keyframe_points)
-    if not keyframe_frames:
-        return None
 
-    sorted_frames = sorted(keyframe_frames)
+def sample_transform_animation(objs, context, start_frame: int,
+                               frame_count: int) -> dict:
+    """Every STATIC object's world transform at every frame of the solve.
+
+    Returns ``{obj.name: {"frame_offset", "translation", "quaternion",
+    "scale", "segments"}}`` for each object in *objs* whose transform
+    actually changes over the solve, sampled at frame offsets ``0 ..
+    frame_count - 1`` from *start_frame* with a LINEAR segment between
+    consecutive samples. An object that could move but does not is left out.
+
+    WHY EVERY FRAME RATHER THAN THE KEYS. Blender evaluates each channel with
+    its own interpolation, easing and handles, applies parents, constraints,
+    drivers and NLA, and places keys between frames; the solver evaluates one
+    shared interpolation between the samples it is sent. Sampling Blender's
+    evaluated world matrix at every solve frame makes the two agree at every
+    frame the solve reaches, whatever the animation is built from. The one
+    residual limit is a turn of more than 180 degrees within a single frame,
+    which no sampling can tell from the shorter turn the other way.
+
+    One ``scene.frame_set`` per frame serves every object, and the scene's
+    current frame is restored afterward.
+    """
+    objs = list(objs)
+    if not objs:
+        return {}
+    for obj in objs:
+        data = getattr(obj, "data", None)
+        if data is not None and get_id_fcurves(data):
+            raise RuntimeError(
+                f"STATIC object '{obj.name}' has mesh-level animation "
+                "(shape keys). Only object-level transform animation is "
+                "supported for STATIC objects; use Capture Deformation."
+            )
+    from mathutils import Matrix  # pyright: ignore
+
     scene = context.scene
     current_frame = scene.frame_current
+    n = max(1, int(frame_count))
+    samples = {obj.name: ([], [], [], []) for obj in objs}
+    sheared = {}
+    try:
+        for k in range(n):
+            scene.frame_set(int(start_frame) + k)
+            for obj in objs:
+                matrix = world_matrix(obj)
+                loc, quat, scale = matrix.decompose()
+                # A location, a rotation and a scale are all the solver can
+                # carry. A rotated parent with a non-uniform scale gives a
+                # sheared world matrix, which decompose() would silently
+                # approximate; it is refused below if the object moves.
+                if obj.name not in sheared:
+                    rebuilt = Matrix.LocRotScale(loc, quat, scale)
+                    size = max(1.0, max(abs(v) for row in matrix for v in row))
+                    if max(
+                        abs(a - b)
+                        for ra, rb in zip(matrix, rebuilt)
+                        for a, b in zip(ra, rb)
+                    ) > 1e-5 * size:
+                        sheared[obj.name] = int(start_frame) + k
+                times, translations, quaternions, scales = samples[obj.name]
+                times.append(float(k))
+                translations.append([float(loc.x), float(loc.y), float(loc.z)])
+                quaternions.append(
+                    [float(quat.w), float(quat.x), float(quat.y), float(quat.z)]
+                )
+                scales.append([float(scale.x), float(scale.y), float(scale.z)])
+    finally:
+        scene.frame_set(current_frame)
 
-    times = []
-    translations = []
-    quaternions = []
-    scales = []
-    # Per-segment interpolation between keyframe[i] and keyframe[i+1].
-    # Bezier handles are normalized to the segment's [0,1] time range.
-    segments = []
+    out = {}
+    for name, (times, translations, quaternions, scales) in samples.items():
+        first = (translations[0], quaternions[0], scales[0])
+        moves = any(
+            (t, q, s) != first
+            for t, q, s in zip(translations, quaternions, scales)
+        )
+        if not moves:
+            continue
+        if name in sheared:
+            raise ValueError(
+                f"STATIC object '{name}' is sheared at frame {sheared[name]} "
+                "(a rotated parent with a non-uniform scale), which a moving "
+                "collider's location, rotation and scale cannot carry. Click "
+                "'Capture Deformation' on its row, or give the parent a "
+                "uniform scale."
+            )
+        out[name] = {
+            "frame_offset": times,
+            "translation": translations,
+            "quaternion": quaternions,
+            "scale": scales,
+            "segments": [
+                {
+                    "interpolation": "LINEAR",
+                    "handle_right": [1.0 / 3.0, 0.0],
+                    "handle_left": [2.0 / 3.0, 1.0],
+                }
+                for _ in range(len(times) - 1)
+            ],
+        }
+    return out
 
-    for frame in sorted_frames:
-        scene.frame_set(frame)
-        mat = world_matrix(obj)
-        loc, quat, scale = mat.decompose()
-        times.append(max(0.0, float(frame) - start_frame))
-        translations.append([float(loc.x), float(loc.y), float(loc.z)])
-        quaternions.append([float(quat.w), float(quat.x), float(quat.y), float(quat.z)])
-        scales.append([float(scale.x), float(scale.y), float(scale.z)])
 
-    # Extract interpolation info from fcurves (use location X as representative)
-    loc_fc = None
-    for fc in fcurves:
-        if "location" in fc.data_path:
-            loc_fc = fc
-            break
-    if loc_fc is None:
-        loc_fc = fcurves[0]
+def get_transform_keyframes(
+    obj, context, start_frame: int = 1, frame_count: int | None = None,
+) -> dict | None:
+    """One STATIC object's transform animation over the solve, or None.
 
-    kp_by_frame = {int(kp.co[0]): kp for kp in loc_fc.keyframe_points}
-    for i in range(len(sorted_frames) - 1):
-        f0 = sorted_frames[i]
-        f1 = sorted_frames[i + 1]
-        kp0 = kp_by_frame.get(f0)
-        kp1 = kp_by_frame.get(f1)
-        interp = "LINEAR"
-        handle_right = [1.0 / 3.0, 0.0]
-        handle_left = [2.0 / 3.0, 1.0]
-        if kp0 is not None:
-            interp = kp0.interpolation
-            if interp == "BEZIER" and kp1 is not None:
-                dt = f1 - f0
-                dv = kp1.co[1] - kp0.co[1]
-                hr = kp0.handle_right
-                hl = kp1.handle_left
-                hr_x = float((hr[0] - f0) / dt) if dt > 0 else 1.0 / 3.0
-                hl_x = float((hl[0] - f0) / dt) if dt > 0 else 2.0 / 3.0
-                if abs(dv) > 1e-10:
-                    hr_y = float((hr[1] - kp0.co[1]) / dv)
-                    hl_y = float((hl[1] - kp0.co[1]) / dv)
-                else:
-                    hr_y = 0.0
-                    hl_y = 1.0
-                handle_right = [hr_x, hr_y]
-                handle_left = [hl_x, hl_y]
-        segments.append({
-            "interpolation": interp,
-            "handle_right": handle_right,
-            "handle_left": handle_left,
-        })
-
-    scene.frame_set(current_frame)
-
-    return {
-        "frame_offset": times,
-        "translation": translations,
-        "quaternion": quaternions,
-        "scale": scales,
-        "segments": segments,
-    }
+    :func:`sample_transform_animation` for a single object that
+    :func:`_may_move`, sampled at every frame offset from *start_frame* over
+    *frame_count* frames (the scene's Frame Count when omitted). ``None`` when
+    nothing moves it. Offsets are FRAME offsets; the decoder derives seconds
+    from the Param payload's fps, keeping the data payload timing-free.
+    """
+    if obj is None or not _may_move(obj):
+        return None
+    if frame_count is None:
+        from ..models.groups import get_addon_data
+        frame_count = get_addon_data(context.scene).state.frame_count
+    return sample_transform_animation(
+        [obj], context, start_frame, frame_count,
+    ).get(obj.name)

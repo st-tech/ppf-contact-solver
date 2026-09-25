@@ -258,8 +258,8 @@ def test_harmonic_interior_map_reproduces_linear_boundary_values():
         np.array([[0, 1, 2, 3]], dtype=np.int64),
         [0, 1, 2],
         [3],
+        "Tet",
     )
-    assert harmonic is not None
 
     boundary = np.array(
         [

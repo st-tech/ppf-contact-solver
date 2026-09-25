@@ -319,6 +319,13 @@ pub struct MeshSet {
     /// Empty means every object is at the default, which allows nothing.
     #[serde(default)]
     pub intersect_policy: Vec<u8>,
+    /// Allow Existing Intersections' vertex links, flat `u32` pairs in the
+    /// combined namespace (the dynamic vertices, then the collision-mesh
+    /// vertices after them), exactly as `start_link.bin` carries them.
+    /// `builder::start_link_table` turns them into the per-vertex table the
+    /// contact passes read. Empty means nothing is linked.
+    #[serde(default)]
+    pub start_link: Vec<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -813,13 +820,83 @@ impl Backend {
         );
     }
 
+    /// Hold the run at the current frame until the caller releases it.
+    ///
+    /// The process, the device and every buffer stay alive: this is a wait
+    /// between two steps, not a checkpoint. Before the next step the solver
+    /// takes whatever live inputs the caller rewrote while it was held.
+    fn hold_at_frame(
+        &self,
+        program_args: &ProgramArgs,
+        sim_args: &SimArgs,
+        scene: &mut Scene,
+        dataset: &DataSet,
+    ) {
+        use ppf_cts_formats::files;
+        let output = std::path::Path::new(program_args.output.as_str());
+        let frame = self.state.curr_frame;
+        let held_path = output.join(files::HELD);
+        let save_path = output.join(files::SAVE_AND_QUIT);
+        std::fs::write(&held_path, format!("{frame}\n")).unwrap_or_else(|err| {
+            panic!("cannot write {}: {err}", held_path.display())
+        });
+        info!("held at frame {frame}");
+        let started = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if save_path.exists() {
+                break;
+            }
+            match read_hold(&program_args.output) {
+                None => break,
+                Some((hold, timeout)) => {
+                    if hold > frame {
+                        break;
+                    }
+                    if started.elapsed() > timeout {
+                        info!(
+                            "held at frame {frame} for {:.0} s with no release; saving and \
+                             quitting so the hold does not keep the device",
+                            started.elapsed().as_secs_f64()
+                        );
+                        std::fs::write(&save_path, b"").unwrap();
+                        break;
+                    }
+                }
+            }
+        }
+        let updated = output.join(files::INPUTS_UPDATED);
+        if updated.exists() && !save_path.exists() {
+            scene.reload_dyn_param(&program_args.path);
+            match crate::force_field::load(&program_args.path, dataset.vertex.curr.size as usize) {
+                Ok(Some(field)) => {
+                    info!("held run takes an updated {}", field.describe());
+                    crate::driver::install_force_field(&field, sim_args.world_scaling);
+                }
+                Ok(None) => {
+                    info!("held run takes updated inputs: the force field is removed");
+                    crate::driver::install_force_field(
+                        &crate::force_field::ForceFieldData::default(),
+                        sim_args.world_scaling,
+                    );
+                }
+                Err(message) => panic!("force field: {message}"),
+            }
+            std::fs::remove_file(&updated).unwrap_or_else(|err| {
+                panic!("cannot remove {}: {err}", updated.display())
+            });
+        }
+        let _ = std::fs::remove_file(&held_path);
+        info!("released from frame {frame}");
+    }
+
     pub fn run(
         &mut self,
         program_args: &ProgramArgs,
         sim_args: &SimArgs,
         mut dataset: DataSet,
         mut param: ParamSet,
-        scene: Scene,
+        mut scene: Scene,
     ) {
         let initialize_finish_path = std::path::Path::new(program_args.output.as_str())
             .join(ppf_cts_formats::files::INITIALIZE_FINISH);
@@ -856,6 +933,24 @@ impl Backend {
                         cw.n_groups,
                     );
                 }
+            }
+            // THE EXTERNAL FORCE FIELD, read, verified and installed once. A
+            // malformed field stops the run here, naming the file and the
+            // field, rather than reaching a dispatch; a session with none
+            // installs nothing and every step runs as it always has.
+            match crate::force_field::load(
+                &program_args.path,
+                dataset.vertex.curr.size as usize,
+            ) {
+                Ok(Some(field)) => {
+                    info!("{}", field.describe());
+                    for script in &field.scripts {
+                        info!("force field script:\n{}", script.source);
+                    }
+                    crate::driver::install_force_field(&field, sim_args.world_scaling);
+                }
+                Ok(None) => {}
+                Err(message) => panic!("force field: {message}"),
             }
             write_current_time_to_file(initialize_finish_path.to_str().unwrap()).unwrap();
             crate::status_writer::progress(
@@ -986,6 +1081,17 @@ impl Backend {
                         .open(format!("{}/data/clock.out", program_args.output).as_str())
                         .unwrap();
                     writeln!(clock_log, "{} {}", self.state.time, clock).unwrap();
+                }
+            }
+
+            // THE FRAME-STEP HOLD, checked before save_and_quit so a caller
+            // can save a held run. A run past its last frame is not held: it
+            // finishes, which is what a hold beyond the end means.
+            if self.state.curr_frame < sim_args.frames {
+                if let Some((hold, _)) = read_hold(&program_args.output) {
+                    if self.state.curr_frame >= hold {
+                        self.hold_at_frame(program_args, sim_args, &mut scene, &dataset);
+                    }
                 }
             }
 
@@ -1280,6 +1386,16 @@ let _wphase = crate::driver::phase::start("solver.write_frame");
 drop(_wphase);
                 }
                 self.state.curr_frame = new_frame;
+                // A FIELD GRID IS ZERO OUTSIDE ITS BOX, so a cloth blown out of
+                // the domain stops being pushed. Said once per frame while it
+                // is true, so the log shows it rather than the motion hiding it.
+                if let Some(outside) = crate::driver::force_field_outside_count() {
+                    if outside > 0 {
+                        info!(
+                            "force field: {outside} free vertices are outside every grid at frame {new_frame}"
+                        );
+                    }
+                }
                 crate::status_writer::progress(Phase::Running, new_frame, self.state.time);
                 // Fire the crash injection once on the final frame, preserving
                 // the existing per-advance crash semantics.
@@ -1289,6 +1405,32 @@ drop(_wphase);
             }
         }
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
+    }
+}
+
+/// The hold a caller asked for, `(frame, timeout)`, or `None` when there is
+/// none. A file that does not parse stops the run: a caller that wrote a hold
+/// and got a run that ignored it would lose exactly the frames it wanted.
+fn read_hold(output: &str) -> Option<(i32, std::time::Duration)> {
+    let path = std::path::Path::new(output).join(ppf_cts_formats::files::HOLD_AT_FRAME);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut words = text.split_whitespace();
+    let frame = words.next().and_then(|w| w.parse::<i32>().ok());
+    let timeout = match words.next() {
+        None => Some(3600.0),
+        Some(w) => w.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0),
+    };
+    match (frame, timeout) {
+        (Some(frame), Some(timeout)) => {
+            Some((frame, std::time::Duration::from_secs_f64(timeout)))
+        }
+        // An empty file is a caller mid-write; the next check reads it whole.
+        _ if text.trim().is_empty() => None,
+        _ => panic!(
+            "{}: {:?} is not `<frame> [<timeout seconds>]`",
+            path.display(),
+            text
+        ),
     }
 }
 

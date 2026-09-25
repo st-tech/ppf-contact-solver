@@ -285,7 +285,7 @@ pub fn app_param() -> ParamHolder {
     m.insert("fake-crash-frame".into(), entry(-1i64, "Fake Crash Frame",
         "Frame number to intentionally crash simulation for testing. -1 disables."));
     m.insert("world-scaling".into(), entry(1.0f64, "World Scaling Factor",
-        "Uniform spatial scale applied to all input geometry before the simulation runs; output positions are divided back by it. Values below 1 shrink (e.g. 0.1 simulates a 15 m mesh at 1.5 m and writes results back at 15 m). Only geometry and relative contact gaps scale; gravity and absolute contact gaps do not."));
+        "Uniform spatial scale applied to all input geometry before the simulation runs; output positions are divided back by it. Values below 1 shrink (e.g. 0.1 simulates a 15 m mesh at 1.5 m under the same gravity and writes results back at 15 m). The Blender add-on scales its scene-unit lengths (contact gaps, velocities, the constraint gap) by it at encode; gravity, wind and material parameters are physical and do not scale."));
 
     ParamHolder::new(m)
 }
@@ -372,6 +372,18 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "If non-zero, this object and any DIFFERENT object may pass through each other: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection. That includes static collider meshes, but not the invisible walls and spheres. Treated as a boolean flag. Only one of the two objects has to set it, so flagging a garment also lets it pass through the character it is fitted to. Intersections within this object are unaffected; use 'allow-self-intersection' for those."));
     m.insert("allow-inter-group-intersection".into(), entry(0.0f64, "Allow Inter-Group Intersections",
         "If non-zero, this object and any object in a DIFFERENT group may pass through each other: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection. Objects of the same group still collide; use 'allow-inter-object-intersection' for those. A static collider mesh counts as another group; the invisible walls and spheres are not affected. Treated as a boolean flag. Only one of the two objects has to set it. A group is what the Blender add-on assigns, or what Object.group names in a Python scene; objects given none share one default group."));
+    // Allow Existing Intersections. Unlike the three above it names no pair by
+    // identity: it covers the pairs the scene STARTS intersecting with (or
+    // closer than their contact offsets), found once by the scene-build check
+    // and linked vertex by vertex for the whole run. Same float-encoded
+    // boolean, same every-kind registration.
+    m.insert("allow-existing-intersection".into(), entry(0.0f64, "Allow Existing Intersections",
+        "If non-zero, the pairs of elements this object starts the simulation intersecting with, or closer than their contact offsets, are exempted from contact for the whole run instead of refusing the scene: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection, and neither is a pair of elements sharing a vertex with such a pair. Every other pair keeps full contact, and a new intersection anywhere else still stops the run. It tolerates a tangle and does not untangle it. Only one of the two objects has to set it; it covers self, inter-object and static collider pairs alike, but not the invisible walls and spheres. Treated as a boolean flag. Not supported on sand."));
+    // The external force field's per-object scale. Per OBJECT like the
+    // allowances above: the frontend resolves it into one weight per vertex
+    // and drops it from every element's parameters.
+    m.insert("force-field-weight".into(), entry(1.0f64, "Force Field Weight",
+        "Scale on the scene's external force field (scene.force_field) for this object's vertices. 1.0 applies the field as authored, 0.0 opts the object out, and any other finite value scales it. Fix-pinned vertices ignore the field whatever the weight."));
 
     if matches!(kind, ObjectKind::Tri | ObjectKind::Tet | ObjectKind::Pdrd) {
         m.insert("plasticity".into(), entry(0.0f64, "Plasticity Rate",

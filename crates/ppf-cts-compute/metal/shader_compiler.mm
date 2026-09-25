@@ -475,6 +475,7 @@ inline float min(float a, float b) { return metal::fmin(a, b); }
 inline float fma(float a, float b, float c) { return metal::fma(a, b, c); }
 inline float acos(float x) { return metal::acos(x); }
 inline float atan2(float y, float x) { return metal::atan2(y, x); }
+inline float pow(float x, float y) { return metal::pow(x, y); }
 inline bool isnan(float x) { return metal::isnan(x); }
 inline bool isinf(float x) { return metal::isinf(x); }
 inline float nextafter(float a, float b) { return metal::nextafter(a, b); }

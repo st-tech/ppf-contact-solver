@@ -9,6 +9,7 @@ from ...models.collection_utils import safe_update_index
 from ...models.intersection_allowances import (
     INTERSECTION_ALLOWANCES,
     allowance_by_key,
+    allowance_offered,
     allowance_objects,
     allowed_object_uuids,
 )
@@ -552,15 +553,8 @@ def remove_object_from_group(group_uuid: str, object_name: str):
             group.assigned_objects_index, len(group.assigned_objects)
         )
 
-    # Clean up merge pairs that reference the removed object
-    scene = bpy.context.scene
-    state = get_addon_data(scene).state
-    for i in range(len(state.merge_pairs) - 1, -1, -1):
-        pair = state.merge_pairs[i]
-        if pair.object_a_uuid == obj_uuid or pair.object_b_uuid == obj_uuid:
-            state.merge_pairs.remove(i)
-    if state.merge_pairs_index >= len(state.merge_pairs):
-        state.merge_pairs_index = max(0, len(state.merge_pairs) - 1)
+    # Merge pairs naming the object went with its membership, in
+    # cleanup_group_references_for_object above.
 
     # Apply overlay updates
     from ...ui.dynamics import apply_object_overlays
@@ -797,9 +791,9 @@ def set_intersection_allowance_objects(
     """Narrow one intersection allowance to named objects of a group.
 
     An allowance ("allow_self_intersection",
-    "allow_inter_object_intersection" or "allow_inter_group_intersection",
-    all set by set_group_material_properties) reaches every object of its
-    group while the matching "..._all_objects" switch is on. This tool writes
+    "allow_inter_object_intersection", "allow_inter_group_intersection" or
+    "allow_existing_intersection", all set by set_group_material_properties)
+    reaches every object of its group while the matching "..._all_objects" switch is on. This tool writes
     the subset the allowance reaches instead, and turns that switch OFF, so the
     allowance covers exactly the objects named here and no others. Pass an
     empty list to clear the subset, which leaves the allowance reaching
@@ -819,7 +813,8 @@ def set_intersection_allowance_objects(
 
     Args:
         group_uuid: UUID of group
-        allowance: "self", "inter_object" or "inter_group"
+        allowance: "self", "inter_object", "inter_group" or "existing"
+            ("existing" is refused on a SAND group)
         object_names: Objects of this group the allowance is narrowed to
     """
     group = get_active_group_by_uuid_helper(group_uuid)
@@ -827,6 +822,10 @@ def set_intersection_allowance_objects(
         spec = allowance_by_key(allowance)
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
+    if not allowance_offered(group, spec):
+        raise ValidationError(
+            f"{spec.label} is not supported on a {group.object_type} group"
+        )
 
     if not isinstance(object_names, list):
         raise ValidationError(
@@ -1266,7 +1265,6 @@ def list_pins(group_uuid: str):
                 "object_uuid": pin_item.object_uuid,
                 "vertex_group_name": vg_name,
                 "vertex_group_identifier": f"{obj_name}::{vg_name}",
-                "included": bool(pin_item.included),
                 "use_pin_duration": bool(pin_item.use_pin_duration),
                 "pin_duration": int(pin_item.pin_duration),
                 "use_pull": bool(pin_item.use_pull),
@@ -1586,6 +1584,7 @@ def set_group_overlay_color(
 # accepted in the same edit.
 _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
     "SHELL": {
+        "force_field_weight",
         "enable_strain_limit",
         "strain_limit_percent",
         "shell_density",
@@ -1618,6 +1617,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
         "allow_inter_group_intersection_all_objects",
+        "allow_existing_intersection",
+        "allow_existing_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1625,6 +1626,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "use_group_bounding_box_diagonal",
     },
     "SOLID": {
+        "force_field_weight",
         "solid_density",
         "solid_young_modulus",
         "solid_poisson_ratio",
@@ -1643,6 +1645,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
         "allow_inter_group_intersection_all_objects",
+        "allow_existing_intersection",
+        "allow_existing_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1650,6 +1654,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "use_group_bounding_box_diagonal",
     },
     "ROD": {
+        "force_field_weight",
         "rod_density",
         "rod_young_modulus",
         "rod_model",
@@ -1661,7 +1666,6 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "length_factor",
         "enable_strain_limit",
         "strain_limit_percent",
-        "stitch_stiffness",
         "enable_bend_plasticity",
         "bend_plasticity",
         "bend_plasticity_threshold",
@@ -1673,6 +1677,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
         "allow_inter_group_intersection_all_objects",
+        "allow_existing_intersection",
+        "allow_existing_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1689,6 +1695,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
         "allow_inter_group_intersection_all_objects",
+        "allow_existing_intersection",
+        "allow_existing_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1696,15 +1704,17 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "use_group_bounding_box_diagonal",
     },
     "PDRD": {
+        "force_field_weight",
         "pdrd_density",
         "friction",
-        "stitch_stiffness",
         "allow_self_intersection",
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
         "allow_inter_group_intersection_all_objects",
+        "allow_existing_intersection",
+        "allow_existing_intersection_all_objects",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1712,6 +1722,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "use_group_bounding_box_diagonal",
     },
     "SAND": {
+        "force_field_weight",
         "sand_grain_radius",
         "sand_particle_mass",
         "sand_friction",
@@ -1750,8 +1761,8 @@ def _offered_enum_identifiers(prop) -> list[str]:
     registers a withdrawn identifier that way, with an explicit item number
     so a `.blend` holding it still loads as the same identifier, and an empty
     name is what suppresses the item from the panel's picker.
-    core/encoder/params.py substitutes a supported identifier for it when the
-    scene is encoded, so it is not a model a caller can ask the solver to run.
+    core/encoder/params.py refuses a group holding it when the scene is
+    encoded, so it is not a model a caller can ask the solver to run.
     """
     return [item.identifier for item in prop.enum_items if item.name]
 
@@ -1875,8 +1886,8 @@ def _check_material_value(group, name: str, value) -> None:
             )
             because = (
                 "The property still stores that identifier, so a `.blend` "
-                "holding it keeps loading, but the scene build does not "
-                "encode it as asked."
+                "holding it keeps loading, but the transfer refuses a group "
+                "holding it."
                 if registered
                 else "It is not an identifier the property carries."
             )
@@ -1909,9 +1920,8 @@ def get_group_material_properties(group_uuid: str):
     An enum reports only the identifiers its picker offers. A group loaded
     from a `.blend` holding a withdrawn identifier reports it as the value,
     with "value_withdrawn": true and the identifier absent from "options";
-    the scene build substitutes a supported identifier for it, so set the
-    parameter to one of the offered identifiers to decide what the solver
-    runs.
+    the transfer refuses the group while it holds one, so set the parameter
+    to one of the offered identifiers before transferring.
 
     The values are the authored ones, not what the solver derives from them.
     Contact distances in particular are stored as an absolute pair
@@ -1968,10 +1978,14 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
     - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
-    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, stitch_stiffness
-    - PDRD: pdrd_density, friction, stitch_stiffness (the hinge joint is per-object; use the set_pdrd_hinge tool)
+    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent
+    - PDRD: pdrd_density, friction (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
     - STATIC: friction, enable_soft_constraint, soft_constraint_stiffness (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
+
+    force_field_weight (every type but STATIC) scales the scene's force fields
+    and force-field script on the group's objects: 1.0 as authored, 0.0 leaves
+    the group unaffected.
 
     Rayleigh damping (deformation_damping on Solid/Shell/Rod, bending_damping on
     Shell/Rod only) and young_mod_density_normalized (interpret Young's modulus
@@ -1987,10 +2001,12 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     bending.
 
     Intersection allowances (accepted on every group type: SOLID, SHELL, ROD,
-    PDRD, SAND, STATIC). Each reaches every object assigned to the group while
+    PDRD, SAND, STATIC, except allow_existing_intersection, which SAND does
+    not accept). Each reaches every object assigned to the group while
     its allow_self_intersection_all_objects /
     allow_inter_object_intersection_all_objects /
-    allow_inter_group_intersection_all_objects switch is on, and all three
+    allow_inter_group_intersection_all_objects /
+    allow_existing_intersection_all_objects switch is on, and all four
     switches default on; set_intersection_allowance_objects narrows one to
     named objects and turns its switch off. Self versus inter-object is decided
     per Blender object, not per group, whichever way the allowance is narrowed:
@@ -2010,8 +2026,17 @@ def set_group_material_properties(group_uuid: str, properties: dict):
       invisible walls and spheres. Two objects of this same group still
       collide with each other, which is what separates it from
       allow_inter_object_intersection. Either side is enough.
+    - allow_existing_intersection: names no pair by identity. The pairs this
+      object STARTS the simulation intersecting with, or closer than their
+      contact offsets, are found once by the scene-build check and exempted
+      from contact for the whole run, together with the elements sharing a
+      vertex with them; every other pair keeps full contact, and a new
+      intersection still stops the run. Without it such a start is refused
+      at build. It covers self, inter-object and static collider pairs, but
+      not the invisible walls and spheres, and either side is enough. It does
+      not untangle anything.
 
-    On a STATIC group all three keys reach the solver whenever the collider is
+    On a STATIC group all four keys reach the solver whenever the collider is
     part of the solved scene, which covers an animated collider, a
     soft-constrained one, and one named as a cross-stitch endpoint: each of
     those decodes to a pin shell whose vertices carry the policy. A collider

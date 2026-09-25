@@ -779,7 +779,7 @@ try:
     mcp_check(
         result, "Q_window_inverted_by_both_bounds_is_refused",
         is_refused(
-            refuse_q, "frame_end must be >= frame_start", "[50-45]"
+            refuse_q, "frame_end must be after frame_start", "[50-45]"
         )
         and window_pairs(windows_q) == [[10, 20], [30, 45], [50, 60]],
         {"refusal": refuse_q, "after": window_pairs(windows_q)},
@@ -798,10 +798,10 @@ try:
     mcp_check(
         result, "R_window_inverted_by_one_bound_is_refused",
         is_refused(
-            refuse_r_start, "frame_end must be >= frame_start", "[99-45]"
+            refuse_r_start, "frame_end must be after frame_start", "[99-45]"
         )
         and is_refused(
-            refuse_r_end, "frame_end must be >= frame_start", "[30-5]"
+            refuse_r_end, "frame_end must be after frame_start", "[30-5]"
         )
         and window_pairs(windows_r) == [[10, 20], [30, 45], [50, 60]],
         {

@@ -54,38 +54,26 @@ class _SolidPinGroups:
         return np.asarray(candidates, dtype=np.int64)[np.argmax(rows, axis=1)]
 
 
-_SCIPY_MISSING_WARNED = False
+def _require_scipy(purpose):
+    """Import the SciPy modules the SOLID pin and material maps are solved with.
 
-
-def _warn_if_scipy_missing(context):
-    """Emit a loud one-time warning when SciPy is absent.
-
-    The partial-pin SOLID diffusion (``_build_solid_pin_fields`` /
-    ``_build_harmonic_interior_operator``) imports SciPy inside a
-    ``try/except`` that returns ``None`` on any failure, so a runtime
-    without SciPy does not crash: it silently takes a different
-    surface-only fallback pin path. That yields a DIFFERENT driven-vertex
-    set than a SciPy-equipped runtime (observed: a Windows bundle missing
-    SciPy diverged from the identical Linux scene). Distinguish the
-    packaging problem (SciPy genuinely absent) from a legitimate solve
-    failure so the former is visible instead of silently wrong.
+    SciPy is a required frontend dependency: warmup.py installs it and every
+    distribution ships it. A pin field or a material map built without it
+    would be a different field, so its absence is refused, naming what could
+    not be built and how to install it.
     """
-    global _SCIPY_MISSING_WARNED
-    if _SCIPY_MISSING_WARNED:
-        return
-    import importlib.util
-    if importlib.util.find_spec("scipy") is not None:
-        return  # SciPy present; the None came from a real solve failure.
-    _SCIPY_MISSING_WARNED = True
-    import sys
-    print(
-        "WARNING: SciPy is not installed. Partially-pinned SOLID objects fall "
-        "back to a surface-only pin path that differs from the SciPy-based "
-        "two-stage Poisson diffusion, producing a different (and "
-        "platform-inconsistent) driven-vertex set for the same scene. Install "
-        f"scipy so every platform uses the same pin path (context: {context}).",
-        file=sys.stderr, flush=True,
-    )
+    try:
+        import scipy.sparse  # noqa: F401
+        import scipy.sparse.csgraph  # noqa: F401
+        import scipy.sparse.linalg  # noqa: F401
+    except ImportError as exc:
+        raise RuntimeError(
+            f"SciPy is required to {purpose}, and this Python cannot import "
+            f"it ({exc}). It is a required frontend dependency that every "
+            "distribution ships. Install the frontend dependencies with "
+            "warmup.py (warmup.bat on Windows), or run 'pip install scipy' "
+            "with the interpreter that runs the frontend."
+        ) from exc
 
 
 @dataclass
@@ -94,30 +82,29 @@ class ObjectInfo:
 
     Field shape varies by ``type``:
 
-    * ``SOLID``  populates ``vert``, ``V``, ``F``, and optionally ``orig_to_sim``.
+    * ``SOLID``  populates ``vert``, ``V``, ``F``.
     * ``SHELL``  populates ``vert``, ``V`` (== ``vert``), ``F``.
     * ``ROD``    populates ``vert`` only; ``V`` and ``F`` stay ``None``.
     * ``SAND``   populates ``vert`` only (a faceless point cloud); ``V``
       and ``F`` stay ``None``.
 
-    The Rust ``cross_stitch_apply_batch`` consumer reads via dict access,
-    so :meth:`to_dict` is used at the FFI boundary.
+    ``name`` is the Blender object's name, which is how a refusal about the
+    object is worded. The Rust ``cross_stitch_apply_batch`` consumer reads via
+    dict access, so :meth:`to_dict` is used at the FFI boundary.
     """
 
     type: str
     vert: Any
     V: Optional[Any] = None
     F: Optional[Any] = None
-    orig_to_sim: Optional[Any] = None
+    name: str = ""
 
     def to_dict(self) -> dict:
-        d: dict = {"type": self.type, "vert": self.vert}
+        d: dict = {"type": self.type, "vert": self.vert, "name": self.name}
         if self.V is not None:
             d["V"] = self.V
         if self.F is not None:
             d["F"] = self.F
-        if self.orig_to_sim is not None:
-            d["orig_to_sim"] = self.orig_to_sim
         return d
 
 
@@ -324,17 +311,17 @@ class BlenderApp:
         # reachable by the stitch index space, which addresses only the
         # dynamic vertex namespace (map_by_name -> concat_vert -> eval_x). A
         # non-moving STATIC is otherwise a disjoint contact-only collision
-        # mesh, so we pre-scan the cross-stitch endpoints here and promote any
-        # such STATIC into the dynamic all-pinned namespace at populate time
-        # (it stays kinematically frozen via immovable fixed pins). The
-        # cross_stitch list is loaded eagerly by ParamDecoder.set_path.
+        # mesh. Scene.build keeps every object a cross-stitch names in the
+        # dynamic namespace, all-pinned and frozen at rest; what this pre-scan
+        # decides is how the endpoint is BUILT: as a pin shell carrying the
+        # ObjectInfo that cross_stitch_apply_batch resolves its surface from,
+        # with its intra-mesh stitch suppressed. The cross_stitch list is
+        # loaded eagerly by ParamDecoder.set_path.
         #
-        # This pre-scan reads the RAW param entries; promotion must happen at
-        # populate time (build partitions dyn vs static from the finalized pin
-        # structure), before cross_stitch_apply_batch runs in make(). So a
-        # STATIC named by an entry that apply_batch later drops (e.g. a SOLID
-        # source lacking source_points) is still promoted: a benign frozen
-        # dynamic collider with no surviving stitch, not an error.
+        # This pre-scan reads the RAW param entries, before
+        # cross_stitch_apply_batch runs in make(). That batch applies every
+        # entry or refuses the build naming the pair, so every STATIC named
+        # here is named by a stitch the scene receives.
         stitch_endpoint_uuids: set[str] = set()
         if self._param_decoder is not None:
             for _cs in self._param_decoder.cross_stitch:
@@ -409,22 +396,37 @@ class BlenderApp:
         param_decoder.apply_pin_config(self._scene, verbose=self._verbose)
         if param_decoder.cross_stitch:
             self._report_progress(0.78, "Applying cross-stitch constraints...")
-            # Whole-batch port: Rust validates endpoints, re-projects the
-            # anchors of SOLID source and/or target sides independently onto
-            # their tet surfaces, builds each canonical dict, and appends
-            # directly to ``self._scene._cross_stitch`` so no Python-side
-            # per-entry append loop survives.
+            # Rust validates the endpoints and re-projects the anchors of a
+            # SOLID source and/or target side onto its tet surface, giving one
+            # canonical (source, target, ind, w, stiffness) entry per payload
+            # entry. Each is then added through Scene.cross_stitch, the call a
+            # notebook makes, so both paths meet the same validation.
             obj_info_dict = {
                 k: v.to_dict() for k, v in self._scene_decoder._object_info.items()
             }
-            _rust.cross_stitch_apply_batch(
+            resolved: list = []
+            applied = _rust.cross_stitch_apply_batch(
                 param_decoder.cross_stitch,
                 obj_info_dict,
-                self._scene._cross_stitch,
+                resolved,
                 self._verbose,
             )
+            if applied != len(param_decoder.cross_stitch):
+                raise RuntimeError(
+                    f"cross_stitch_apply_batch applied {applied} of "
+                    f"{len(param_decoder.cross_stitch)} merge pairs"
+                )
+            for cs in resolved:
+                self._scene.cross_stitch(
+                    cs["source_name"],
+                    cs["target_name"],
+                    cs["ind"],
+                    cs["w"],
+                    stiffness=cs["stitch_stiffness"],
+                )
         self._report_progress(0.82, "Applying invisible colliders...")
         param_decoder.apply_invisible_colliders(self._scene, verbose=self._verbose)
+        param_decoder.apply_force_field(self._scene, verbose=self._verbose)
         self._report_progress(0.84, "Building scene: preparing objects...")
         self._fixed_scene = self._scene.build(
             progress_callback=lambda progress, info: self._report_progress(
@@ -805,7 +807,8 @@ class ParamDecoder:
                             obj.lock_all_rotations()
                     elif key in ("allow-self-intersection",
                                  "allow-inter-object-intersection",
-                                 "allow-inter-group-intersection"):
+                                 "allow-inter-group-intersection",
+                                 "allow-existing-intersection"):
                         # Intersection allowances (issue #138). Both are per
                         # OBJECT here and per VERTEX below (`_scene_.py`
                         # resolves each object's pair of values into one
@@ -1805,13 +1808,7 @@ class ParamDecoder:
                     float(cfg["pull_strength"]) * np.asarray(sp_weights)
                 )
         if "pin_group_id" in cfg:
-            # pin_group_id is a mirrored field, but the decode-time override
-            # writes only the canonical _data; the Rust validator mirror is
-            # not updated and may go stale here. That is harmless today
-            # because no consumer (export, scene builder) reads the mirror's
-            # group id, only _data. If export is ever taught to read the
-            # mirror, route this through a setter that updates both.
-            pin_holder._data.pin_group_id = cfg["pin_group_id"]
+            pin_holder.set_pin_group_id(cfg["pin_group_id"])
             if verbose:
                 print(f"  {dyn_name}[{vi}]: pin_group_id={cfg['pin_group_id']}")
         # Per-pin intersection allowance, reduced over EVERY cfg the holder's
@@ -1832,7 +1829,7 @@ class ParamDecoder:
             (obj_cfg.get(v) or {}).get("allow_intersection", False)
             for v in lookup_indices
         )
-        pin_holder._data.allow_intersection = allow_intersection
+        pin_holder.set_allow_intersection(allow_intersection)
         if verbose and allow_intersection:
             print(f"  {dyn_name}[{vi}]: allow_intersection=True")
         if "operations" not in cfg and "embedded_move_index" not in cfg:
@@ -1872,11 +1869,12 @@ class ParamDecoder:
         # rest shape from this holder's target trajectory. Independent of the
         # pin constraint type: a pull pin (soft) and a fixed pin (hard FixPair
         # barrier) BOTH track the rest shape, so the gate is NOT conditioned on
-        # ``pull_strength``. The encoder sets ``rest_shape_track`` only for
-        # has_captured_anim SOLID/SHELL pins, so explicit Move/Spin/fcurve-
-        # keyframed pins never trip it.
+        # ``pull_strength``. The encoder sets ``rest_shape_track`` only for a
+        # SOLID pin with a captured deformation and Track Rest-Pose
+        # Deformation on (``pin_tracks_rest_shape``), so explicit
+        # Move/Spin/fcurve-keyframed pins never trip it.
         if cfg.get("rest_shape_track") and embedded_ops:
-            pin_holder._data.rest_shape_track = True
+            pin_holder.track_rest_shape()
         if verbose:
             print(f"  {dyn_name}[{vi}]: operations={len(pin_holder.operations)}")
 
@@ -2318,6 +2316,57 @@ class ParamDecoder:
             t_end=t_end,
         )
 
+    def apply_force_field(self, scene, verbose: bool = False):
+        """Give the scene the add-on's force field: its sampled grids and its
+        exact script, through the public ``scene.force_field`` API.
+
+        Must be called BEFORE ``scene.build()``, and after ``apply_to_objects``,
+        whose group labels a source's ``groups`` name. The add-on sends grids
+        already in the solver's axes and scene units, zlib-compressed, and
+        each script as source text written in Blender's Z-up axes, which is
+        compiled here with ``z_up=True``.
+
+        Example:
+            ::
+
+                decoder = ParamDecoder().set_path("/path/to/param.pickle")
+                decoder.apply_force_field(scene)
+                fixed_scene = scene.build()
+        """
+        import zlib
+
+        import numpy as np
+
+        ff = self._data.get("force_field")
+        if not ff:
+            return
+
+        def labels(groups):
+            # The add-on names a target group by its position in the payload's
+            # group list, which is the label `apply_to_objects` gave it.
+            if groups is None:
+                return None
+            return [f"addon-group-{int(pos)}" for pos in groups]
+
+        for g in ff.get("grids", []):
+            shape = tuple(int(v) for v in g["shape"])
+            values = np.frombuffer(zlib.decompress(g["data"]), dtype=np.float32)
+            expected = int(np.prod(shape))
+            if values.size != expected:
+                raise ValueError(
+                    f"force field grid carries {values.size} floats for shape {shape}"
+                )
+            scene.force_field.grid(
+                values.reshape(shape), g["min"], g["max"],
+                times=g["times"], kind=g["kind"], groups=labels(g.get("groups")),
+            )
+        for script in ff.get("scripts", []):
+            scene.force_field.script(script["source"], z_up=True,
+                                     groups=labels(script.get("groups")))
+        if verbose:
+            print(f"=== Force field: {len(ff.get('grids', []))} grid(s), "
+                  f"{len(ff.get('scripts', []))} script(s) ===")
+
     def apply_invisible_colliders(self, scene, verbose: bool = False):
         """Create invisible wall and sphere colliders on the scene from the loaded pickle data.
 
@@ -2464,17 +2513,12 @@ def _harmonic_interior_operator_strict(n_verts, tets, surf_ids, interior_ids):
         ValueError: the tet array is not ``(n, 4)``, or the surface or interior
             index set is empty.
     """
-    try:
-        import warnings
+    _require_scipy("extend a field into a tetrahedral mesh's interior")
+    import warnings
 
-        import numpy as np
-        import scipy.sparse.linalg as spla
-    except Exception as exc:
-        raise RuntimeError(
-            "SciPy is required to extend a field into a tetrahedral mesh's "
-            "interior. Install the frontend dependencies with warmup.py "
-            "(warmup.bat on Windows)."
-        ) from exc
+    import numpy as np
+    import scipy.sparse.linalg as spla
+
     T = np.asarray(tets, dtype=np.int64)
     if T.ndim != 2 or T.shape[1] != 4:
         raise ValueError(
@@ -2496,27 +2540,33 @@ def _harmonic_interior_operator_strict(n_verts, tets, surf_ids, interior_ids):
         warnings.simplefilter("ignore", spla.MatrixRankWarning)
         try:
             return _SparseLinearMap(L_II, -L_IS)
-        except Exception as exc:
+        except RuntimeError as exc:
+            # SuperLU reports a singular matrix as a RuntimeError.
             raise RuntimeError(
                 "an interior region of this tetrahedral mesh has no edge path "
                 "to its surface, so no boundary value determines it"
             ) from exc
 
 
-def _build_harmonic_interior_operator(n_verts, tets, surf_ids, interior_ids):
-    """`_harmonic_interior_operator_strict`, or None when it cannot be built.
+def _build_harmonic_interior_operator(
+    n_verts, tets, surf_ids, interior_ids, object_name,
+):
+    """`_harmonic_interior_operator_strict` for the pin map of one SOLID.
 
-    The pin paths degrade to a surface-only pin set, which is the behavior
-    every partial-pin SOLID scene was authored against. A material value has no
-    correct degraded answer, so the map transfer calls the strict builder.
+    Every failure is raised naming *object_name*, the Blender object the tet
+    mesh was built from. A pin map left without its interior would drive a
+    different set of vertices than the one the artist pinned, so there is no
+    degraded answer to return in its place.
     """
     try:
         return _harmonic_interior_operator_strict(
             n_verts, tets, surf_ids, interior_ids
         )
-    except Exception:
-        _warn_if_scipy_missing("_build_harmonic_interior_operator")
-        return None
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(
+            f"the pin on SOLID '{object_name}' cannot be carried into its "
+            f"tetrahedral interior: {exc}"
+        ) from exc
 
 
 def _surface_graph_laplacian(tris, n_surf):
@@ -2613,9 +2663,11 @@ class _SolidWeightTransfer:
 def _build_solid_weight_transfer(tet_mesh, F_arr, object_name):
     """The `_SolidWeightTransfer` for one tetrahedralized object.
 
-    Raises rather than degrading: a pin set has a defensible surface-only
-    reading, and a material value does not.
+    Raises rather than degrading: a material value has no second reading.
     """
+    _require_scipy(
+        f"carry a material map onto the tetrahedra of '{object_name}'"
+    )
     import numpy as np
     import scipy.sparse as sp
 
@@ -2698,11 +2750,11 @@ def _build_solid_weight_transfer(tet_mesh, F_arr, object_name):
 
 
 def _build_solid_pin_fields(
-    tet_mesh, F_arr, pin_index, alpha_rel=0.1, progress_callback=None,
+    tet_mesh, F_arr, pin_index, object_name, alpha_rel=0.1,
+    progress_callback=None,
 ):
     """Two-stage diffusion for a PARTIALLY-pinned SOLID. Returns a dict with
-    a per-tet-vertex pull WEIGHT and a per-frame TARGET operator, or ``None``
-    on failure (caller falls back to surface-only).
+    a per-tet-vertex pull WEIGHT and a per-frame TARGET operator.
 
     Stage 1 (surface, least-squares Poisson): map each input (Blender)
     vertex to its closest tet-surface triangle (barycentric), then solve
@@ -2714,68 +2766,125 @@ def _build_solid_pin_fields(
 
     Stage 2 (interior): graph-Laplace harmonic extension of the surface
     field into the tet interior (reuses :func:`_build_harmonic_interior_operator`).
+
+    Returns ``None`` in exactly two cases, each a property of the geometry the
+    field is solved on, and ``SceneDecoder._apply_pin_mapping`` then pins the
+    tet surface vertices whose closest Blender triangle has a pinned corner
+    instead. A notice naming the object and the case is printed.
+
+    * A connected piece of the tet SURFACE has no Blender vertex mapped onto
+      it: the tetrahedralizer produced surface the Blender mesh does not
+      reach. The weight system has no data on that piece, so it is singular
+      there and the field is undetermined.
+    * The diffused weight exceeds ``_PIN_WEIGHT_EPS`` at no tet vertex, so the
+      field drives nothing. That happens when the pinned Blender vertices are
+      few against a Blender mesh much finer than the tets around them.
+
+    Anything else that stops the field being built raises, naming
+    *object_name* (the Blender object the tet mesh was built from): SciPy
+    missing, a tet mesh with no surface or no record of its Blender surface, a
+    pin index outside that surface, a Blender vertex that matched no tet
+    surface triangle, and a solve that fails or produces non-finite values.
     """
-    try:
-        import warnings
+    _require_scipy(f"build the pin field of the partially pinned SOLID "
+                   f"'{object_name}'")
+    import sys
+    import warnings
 
-        import numpy as np
-        import scipy.sparse as sp
-        import scipy.sparse.linalg as spla
-        from ._bvh_ import frame_mapping
-    except Exception:
-        _warn_if_scipy_missing("_build_solid_pin_fields")
+    import numpy as np
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as spla
+    from scipy.sparse.csgraph import connected_components
+
+    from ._bvh_ import frame_mapping
+
+    bl = getattr(tet_mesh, "_pin_blender_surface", None)
+    if bl is None:
+        raise RuntimeError(
+            f"SOLID '{object_name}' carries no record of the Blender surface "
+            "its tetrahedra were built from, so its partial pin cannot be "
+            "mapped onto them. Transfer the scene again."
+        )
+    bl_verts = np.ascontiguousarray(np.asarray(bl[0], dtype=np.float64))
+    V_local = np.ascontiguousarray(np.asarray(tet_mesh[0], dtype=np.float64))
+    n_tet = V_local.shape[0]
+    sim_surf_ids = np.unique(F_arr.reshape(-1))
+    n_surf = int(sim_surf_ids.size)
+    n_input = int(bl_verts.shape[0])
+    if n_surf == 0:
+        raise RuntimeError(
+            f"SOLID '{object_name}' has no tetrahedral surface to carry its "
+            "pin onto"
+        )
+    pinned = np.asarray(sorted({int(i) for i in pin_index}), dtype=np.int64)
+    outside = pinned[(pinned < 0) | (pinned >= n_input)]
+    if outside.size:
+        raise RuntimeError(
+            f"the pin on SOLID '{object_name}' names vertex "
+            f"{int(outside[0])}, but its Blender surface has {n_input} "
+            "vertices"
+        )
+
+    # Compact surface index space (dense re-index of sim_surf_ids). Every
+    # vertex F names is in sim_surf_ids, so every entry of F_cpt is valid.
+    full2cpt = np.full(n_tet, -1, dtype=np.int64)
+    full2cpt[sim_surf_ids] = np.arange(n_surf)
+    F_cpt = full2cpt[F_arr.reshape(-1, 3)]
+    surf_verts = V_local[sim_surf_ids]
+
+    # Stage 1: closest tet-surface triangle per INPUT vertex (forward map).
+    tri_idx, coefs = frame_mapping(bl_verts, surf_verts, F_cpt)
+    tri_idx = np.asarray(tri_idx, dtype=np.int64)
+    if (tri_idx < 0).any():
+        raise RuntimeError(
+            f"{int((tri_idx < 0).sum())} Blender vertices of SOLID "
+            f"'{object_name}' matched no tetrahedral surface triangle"
+        )
+    rows = np.empty(3 * n_input, dtype=np.int64)
+    cols = np.empty(3 * n_input, dtype=np.int64)
+    data = np.empty(3 * n_input, dtype=np.float64)
+    for a in range(n_input):
+        tri = F_cpt[int(tri_idx[a])]
+        c = coefs[a]
+        w = np.array([1.0 - c[0] - c[1], c[0], c[1]], dtype=np.float64)
+        w = np.clip(w, 0.0, None)
+        s = w.sum()
+        w = (w / s) if s > 1e-12 else np.array([1.0, 0.0, 0.0])
+        for j in range(3):
+            rows[3 * a + j] = a
+            cols[3 * a + j] = int(tri[j])
+            data[3 * a + j] = w[j]
+    B = sp.coo_matrix((data, (rows, cols)), shape=(n_input, n_surf)).tocsr()
+
+    L_s = _surface_graph_laplacian(F_cpt, n_surf)
+    # A surface piece no input vertex maps onto has no data term, only the
+    # Laplacian, whose constants are its null space: the weight system is
+    # singular there. The three corners of a triangle lie in one piece.
+    n_pieces, piece_of = connected_components(L_s, directed=False)
+    reached = np.zeros(n_pieces, dtype=bool)
+    reached[piece_of[F_cpt[tri_idx, 0]]] = True
+    if not reached.all():
+        print(
+            f"SOLID '{object_name}': {int((~reached).sum())} of {n_pieces} "
+            "connected pieces of its tetrahedral surface have no Blender "
+            "vertex mapped onto them, so the partial pin's weight field is "
+            "undetermined there. Pinning the tetrahedral surface vertices "
+            "nearest its pinned Blender vertices instead.",
+            file=sys.stderr, flush=True,
+        )
         return None
+
+    BtB = (B.T @ B).tocsc()
+    diag_btb = BtB.diagonal().mean() if BtB.nnz else 1.0
+    diag_ls = L_s.diagonal().mean() if L_s.nnz else 1.0
+    alpha = alpha_rel * diag_btb / max(diag_ls, 1e-12)
+
+    pin_mask = np.zeros(n_input, dtype=np.float64)
+    pin_mask[pinned] = 1.0
+
+    if progress_callback is not None:
+        progress_callback("Building partial SOLID surface pin map...")
     try:
-        bl = getattr(tet_mesh, "_pin_blender_surface", None)
-        if bl is None:
-            return None
-        bl_verts = np.ascontiguousarray(np.asarray(bl[0], dtype=np.float64))
-        V_local = np.ascontiguousarray(np.asarray(tet_mesh[0], dtype=np.float64))
-        n_tet = V_local.shape[0]
-        sim_surf_ids = np.unique(F_arr.reshape(-1))
-        n_surf = int(sim_surf_ids.size)
-        n_input = int(bl_verts.shape[0])
-        if n_surf == 0 or n_input == 0:
-            return None
-
-        # Compact surface index space (dense re-index of sim_surf_ids).
-        full2cpt = np.full(n_tet, -1, dtype=np.int64)
-        full2cpt[sim_surf_ids] = np.arange(n_surf)
-        F_cpt = full2cpt[F_arr.reshape(-1, 3)]
-        if (F_cpt < 0).any():
-            return None
-        surf_verts = V_local[sim_surf_ids]
-
-        # Stage 1: closest tet-surface triangle per INPUT vertex (forward map).
-        tri_idx, coefs = frame_mapping(bl_verts, surf_verts, F_cpt)
-        rows = np.empty(3 * n_input, dtype=np.int64)
-        cols = np.empty(3 * n_input, dtype=np.int64)
-        data = np.empty(3 * n_input, dtype=np.float64)
-        for a in range(n_input):
-            tri = F_cpt[int(tri_idx[a])]
-            c = coefs[a]
-            w = np.array([1.0 - c[0] - c[1], c[0], c[1]], dtype=np.float64)
-            w = np.clip(w, 0.0, None)
-            s = w.sum()
-            w = (w / s) if s > 1e-12 else np.array([1.0, 0.0, 0.0])
-            for j in range(3):
-                rows[3 * a + j] = a
-                cols[3 * a + j] = int(tri[j])
-                data[3 * a + j] = w[j]
-        B = sp.coo_matrix((data, (rows, cols)), shape=(n_input, n_surf)).tocsr()
-
-        L_s = _surface_graph_laplacian(F_cpt, n_surf)
-        BtB = (B.T @ B).tocsc()
-        diag_btb = BtB.diagonal().mean() if BtB.nnz else 1.0
-        diag_ls = L_s.diagonal().mean() if L_s.nnz else 1.0
-        alpha = alpha_rel * diag_btb / max(diag_ls, 1e-12)
-
-        pin_mask = np.zeros(n_input, dtype=np.float64)
-        pinned = np.asarray(sorted({int(i) for i in pin_index}), dtype=np.int64)
-        pin_mask[pinned[(pinned >= 0) & (pinned < n_input)]] = 1.0
-
-        if progress_callback is not None:
-            progress_callback("Building partial SOLID surface pin map...")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", spla.MatrixRankWarning)
             # Weight field (W = I): diffuse the binary pinned mask. The map is
@@ -2792,44 +2901,57 @@ def _build_solid_pin_fields(
             BtW = (B.T @ Wd).tocsr()
             A_t = (BtW @ B + alpha * L_s + 1e-8 * sp.eye(n_surf)).tocsc()
             surface_map = _SparseLinearMap(A_t, BtW)
-        w_surf = np.clip(np.asarray(w_surf, dtype=np.float64), 0.0, 1.0)
-        if w_surf.shape[0] != n_surf:
-            return None
-        if not np.all(np.isfinite(w_surf)):
-            return None
+    except (RuntimeError, ValueError) as exc:
+        # SuperLU reports a singular matrix as a RuntimeError, and
+        # ``_SparseLinearMap.apply`` a non-finite solution as a ValueError.
+        raise RuntimeError(
+            f"the pin weight field of SOLID '{object_name}' could not be "
+            f"solved on its tetrahedral surface: {exc}"
+        ) from exc
+    w_surf = np.clip(np.asarray(w_surf, dtype=np.float64), 0.0, 1.0)
 
-        # Stage 2: interior harmonic extension of weight + (per-frame) target.
-        surf_ids = [int(s) for s in sim_surf_ids]
-        surf_set = set(surf_ids)
-        interior_ids = [v for v in range(n_tet) if v not in surf_set]
-        interior_map = None
-        interior_w = None
-        if interior_ids:
-            if progress_callback is not None:
-                progress_callback("Building partial SOLID interior pin map...")
-            interior_map = _build_harmonic_interior_operator(
-                n_tet, tet_mesh[2], surf_ids, interior_ids,
-            )
-            if interior_map is not None:
-                try:
-                    interior_w = np.clip(
-                        interior_map.apply(w_surf), 0.0, 1.0
-                    )
-                except ValueError:
-                    interior_map = None
-        return {
-            "surf_ids": surf_ids,
-            "interior_ids": interior_ids if interior_map is not None else [],
-            "w_surf": w_surf,
-            "interior_w": interior_w,
-            "weight_map": weight_map,
-            "surface_map": surface_map,
-            "interior_map": interior_map,
-            "motion_cache": {},
-            "n_input": n_input,
-        }
-    except Exception:
+    # Stage 2: interior harmonic extension of weight + (per-frame) target.
+    surf_ids = [int(s) for s in sim_surf_ids]
+    surf_set = set(surf_ids)
+    interior_ids = [v for v in range(n_tet) if v not in surf_set]
+    interior_map = None
+    interior_w = None
+    full_w = w_surf
+    if interior_ids:
+        if progress_callback is not None:
+            progress_callback("Building partial SOLID interior pin map...")
+        interior_map = _build_harmonic_interior_operator(
+            n_tet, tet_mesh[2], surf_ids, interior_ids, object_name,
+        )
+        try:
+            interior_w = np.clip(interior_map.apply(w_surf), 0.0, 1.0)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"the pin weight field of SOLID '{object_name}' could not be "
+                f"extended into its tetrahedral interior: {exc}"
+            ) from exc
+        full_w = np.concatenate([w_surf, interior_w])
+    if not np.any(full_w > _PIN_WEIGHT_EPS):
+        print(
+            f"SOLID '{object_name}': the partial pin's diffused weight is at "
+            f"most {float(full_w.max()):.3g} at every tetrahedral vertex, "
+            f"below the {_PIN_WEIGHT_EPS} a vertex needs to be driven. "
+            "Pinning the tetrahedral surface vertices nearest its pinned "
+            "Blender vertices instead.",
+            file=sys.stderr, flush=True,
+        )
         return None
+    return {
+        "surf_ids": surf_ids,
+        "interior_ids": interior_ids,
+        "w_surf": w_surf,
+        "interior_w": interior_w,
+        "weight_map": weight_map,
+        "surface_map": surface_map,
+        "interior_map": interior_map,
+        "motion_cache": {},
+        "n_input": n_input,
+    }
 
 
 class SceneDecoder:
@@ -3074,10 +3196,13 @@ class SceneDecoder:
                     _obj.set_bend_rest_vert(brv_world)
 
                 self._apply_pin_mapping(
-                    obj, _obj, group_type, vert, V, F, tet_mesh, verbose,
+                    obj, _obj, name, group_type, vert, V, F, tet_mesh, verbose,
                     progress_callback=report,
                 )
-                self._apply_stitch(obj, _obj, name, verbose)
+                self._apply_stitch(
+                    obj, _obj, name, verbose,
+                    group_type=group_type, vert=vert, V=V, F=F,
+                )
                 progress["completed"] += entry["base_weight"]
                 report(f"Loaded {group_type}: {name}")
 
@@ -3343,7 +3468,7 @@ class SceneDecoder:
             # the solver (SHELL-like). Harmless for non-stitched statics
             # (the decoder only looks up endpoints named in a stitch).
             self._object_info[obj_uuid] = ObjectInfo(
-                type="STATIC", vert=vert, V=vert, F=face,
+                type="STATIC", vert=vert, V=vert, F=face, name=name,
             )
             rest_t = (
                 np.asarray(transform, dtype=np.float64)[:3, 3]
@@ -3511,10 +3636,12 @@ class SceneDecoder:
             # vertex held by an immovable fixed pin (an all-vertex pin carrying
             # no operations) so it stays kinematically frozen at its rest pose:
             # a fixed vertex is prescribed exactly (not softly), so there is no
-            # drift. The _force_dynamic flag routes it into dyn_objects at
-            # build (an all-pinned, no-op object would otherwise classify as
-            # static via scene_all_vertices_pinned and fall back to the
-            # unreachable collision-mesh pool). ObjectInfo is registered by
+            # drift. What keeps it in dyn_objects at build is, for a soft
+            # constraint, its pull strength, and for a cross-stitch endpoint,
+            # the stitch that names it (Object.update_static): an all-pinned,
+            # no-op object would otherwise classify as static via
+            # scene_all_vertices_pinned and fall back to the unreachable
+            # collision-mesh pool. ObjectInfo is registered by
             # _setup_pin_shell; positive per-vertex mass and the density/young
             # the solver asserts come from apply_to_objects' clear_all() tri
             # defaults at make() time (the STATIC encoder prunes those keys).
@@ -3523,15 +3650,14 @@ class SceneDecoder:
             # held at its rest pose, exactly when the pin is a fix and by a
             # spring of the group's stiffness when soft constraints are on.
             _driven_pin(_obj)
-            _obj._force_dynamic = True
             # A promoted STATIC is a cross-stitch TARGET (a collider), never a
             # CIPC stitch SOURCE. The encoder auto-detects intra-mesh
             # loose-edge stitches for any mesh (mesh.py:detect_stitch_edges),
-            # so suppress that here: now that this object is returned non-None
-            # (previously a rest-pose static returned None), the post-dispatch
-            # _apply_stitch would otherwise attach a stitch between this
-            # collider's own (all-fixed) vertices. The cross-stitch itself is
-            # unaffected (it flows through result["cross_stitch"], not obj).
+            # so suppress that here: this object is returned non-None, so the
+            # post-dispatch _apply_stitch would otherwise attach a stitch
+            # between this collider's own (all-fixed) vertices. The
+            # cross-stitch itself is unaffected (it flows through
+            # result["cross_stitch"], not obj).
             if obj.get("_resolved_stitch", obj.get("stitch")) is not None and verbose:
                 print(f"      > suppressing intra-mesh stitch on promoted static {name}")
             obj["_resolved_stitch"] = None
@@ -3647,25 +3773,11 @@ class SceneDecoder:
             V = self._apply_transform(V_local, transform)
         else:
             V = V_local
-        solid_info = ObjectInfo(type="SOLID", vert=vert, V=V, F=F)
+        solid_info = ObjectInfo(type="SOLID", vert=vert, V=V, F=F, name=name)
         if tet_mesh.has_surface_mapping():
             import numpy as np
 
             tri_indices, coefs = tet_mesh.surface_map
-            # Pass local-space tet vertices: the surface-map coefs were
-            # computed in local space, so the in-Rust ``x0 + c1*b1 + c2*b2 +
-            # c3*n̂`` reconstruction (used to pick the closest of three
-            # triangle corners) only matches the original Blender position
-            # when V is in the same space as the coefs. Under non-uniform
-            # world scale, mixing world V with local coefs shifts the bp by
-            # tens of centimeters and can pick the wrong corner.
-            orig_to_sim = _rust.solid_orig_to_sim(
-                np.ascontiguousarray(np.asarray(tri_indices, dtype=np.int64)),
-                np.ascontiguousarray(np.asarray(coefs, dtype=np.float64)),
-                np.ascontiguousarray(np.asarray(F, dtype=np.int64)),
-                np.ascontiguousarray(np.asarray(V_local, dtype=np.float64)),
-            )
-            solid_info.orig_to_sim = orig_to_sim
             scene.set_surface_map(obj_uuid, tri_indices, coefs, F)
             # Stash the source Blender surface (local verts + triangles)
             # that produced the surface map, so _apply_pin_mapping can build
@@ -3708,7 +3820,7 @@ class SceneDecoder:
         if transform is not None:
             _obj.mat4x4(transform)
         self._object_info[obj_uuid] = ObjectInfo(
-            type="SHELL", vert=vert, V=vert, F=face,
+            type="SHELL", vert=vert, V=vert, F=face, name=name,
         )
         if uv is not None:
             assert len(uv) == len(face), "UV length must match face length."
@@ -3734,7 +3846,7 @@ class SceneDecoder:
         if transform is not None:
             _obj.mat4x4(transform)
         self._object_info[obj_uuid] = ObjectInfo(
-            type="PDRD", vert=vert, V=vert, F=face,
+            type="PDRD", vert=vert, V=vert, F=face, name=name,
         )
         return _obj
 
@@ -3748,7 +3860,7 @@ class SceneDecoder:
         _obj = scene.add(name, obj_uuid)
         if transform is not None:
             _obj.mat4x4(transform)
-        self._object_info[obj_uuid] = ObjectInfo(type="ROD", vert=vert)
+        self._object_info[obj_uuid] = ObjectInfo(type="ROD", vert=vert, name=name)
         return _obj
 
     def _populate_sand(self, scene, name, obj_uuid, local_vert, transform, vert):
@@ -3763,17 +3875,18 @@ class SceneDecoder:
         _obj = scene.add(name, obj_uuid)
         if transform is not None:
             _obj.mat4x4(transform)
-        self._object_info[obj_uuid] = ObjectInfo(type="SAND", vert=vert)
+        self._object_info[obj_uuid] = ObjectInfo(type="SAND", vert=vert, name=name)
         return _obj
 
     def _apply_pin_mapping(
-        self, obj, _obj, group_type, vert, V, F, tet_mesh, verbose,
+        self, obj, _obj, name, group_type, vert, V, F, tet_mesh, verbose,
         progress_callback=None,
     ):
         """Pin-mapping pass: register pins on ``_obj`` from ``obj['pin']``,
         building the Blender-to-sim surface transfer for SOLID groups
         with a surface mapping and falling back to direct per-index pins
-        otherwise.
+        otherwise. ``name`` is the Blender object's name, which is how a
+        refusal about its pin is worded.
         """
         if _obj is None or "pin" not in obj:
             return
@@ -3813,10 +3926,17 @@ class SceneDecoder:
             full_pin = bl is not None and n_blender > 0 and len(pinned) == n_blender
             handled = False
             if not full_pin and bl is not None:
+                # A partial pin takes the diffused field. Every failure to
+                # build it raises naming the object; None comes back only for
+                # the two geometric cases ``_build_solid_pin_fields`` lists (a
+                # tet surface piece no Blender vertex maps onto, or a field
+                # that reaches the weight floor at no tet vertex), and only
+                # then does a partial pin take the surface-only path below.
                 fields = _build_solid_pin_fields(
                     tet_mesh,
                     F_arr,
                     pin_index,
+                    name,
                     progress_callback=progress_callback,
                 )
                 if fields is not None:
@@ -3824,7 +3944,7 @@ class SceneDecoder:
                     interior_w = fields["interior_w"]
                     surf_ids = fields["surf_ids"]
                     interior_ids = fields["interior_ids"]
-                    if interior_w is not None and interior_ids:
+                    if interior_ids:
                         full_w = np.concatenate([w_surf, interior_w])
                         driven_full = surf_ids + interior_ids
                     else:
@@ -3833,109 +3953,109 @@ class SceneDecoder:
                     keep = full_w > _PIN_WEIGHT_EPS
                     driven = [int(driven_full[k]) for k in range(len(driven_full))
                               if keep[k]]
-                    if driven:
-                        holder = _obj.pin(driven)
-                        holder._data._blender_pin_indices = list(pin_index)
-                        holder._data._tet_V = V
-                        holder._data._blender_vert = vert
-                        # [0,1] per-driven-vertex weight; _apply_pin_cfg_entry
-                        # scales it by pull_strength and exports pin-pullw.
-                        holder._data._solid_pin_weights = (
-                            full_w[keep].astype(np.float32)
+                    if not driven:
+                        raise RuntimeError(
+                            f"the pin field of SOLID '{name}' drives no tet "
+                            "vertex, a case _build_solid_pin_fields reports "
+                            "as None rather than as a field"
                         )
-                        # This holder spans every pin group of the object;
-                        # apply_pin_config reads each group's share of the
-                        # weight field through this map to divide it by group.
-                        holder._data._solid_weight_map = fields["weight_map"]
-                        holder._data._solid_pin = {
-                            "surface_map": fields["surface_map"],
-                            "interior_map": fields["interior_map"],
-                            "motion_cache": fields["motion_cache"],
-                            "keep": keep,
-                            "n_input": fields["n_input"],
-                            # True tet rest positions on the driven_full axis
-                            # (surf_ids + interior_ids), in the SOLVER/world
-                            # frame (V = transform @ V_local, the same space as
-                            # the captured tracks and the solver rest verts; NOT
-                            # tet_mesh[0], which is the untransformed local
-                            # frame). The rigid-aware move-op builder carries
-                            # THESE rigidly, not the S_t-diffused rest: the
-                            # MoveBy deltas land on the solver's tet rest, so a
-                            # rigid capture must rotate that exact rest or the
-                            # rest/LS-fit mismatch reappears as a rotation-scaled
-                            # bend.
-                            "rest_full": np.asarray(
-                                V, dtype=np.float64
-                            )[driven_full],
-                        }
-                        # Full-axis arrays (length n_surf+n_interior) the
-                        # fix_weight_threshold split needs. ``keep`` and
-                        # ``_solid_pin_weights`` are the compacted view;
-                        # _build_solid_poisson_move_ops slices positions[:, keep]
-                        # over the FULL axis, so the split masks live there too.
-                        holder._data._solid_full_w = full_w
-                        holder._data._solid_driven_full = list(driven_full)
-                        # Surface mask over the full axis. driven_full is
-                        # surf_ids + interior_ids, so the first len(surf_ids)
-                        # entries are the surface verts (solver tet-index <
-                        # surface_vert_count). Hard FixPairs are kept surface
-                        # only as the hard-core / soft-skirt authoring split;
-                        # the old "interior fix pin is a zero-diagonal CG nan"
-                        # reason no longer applies (a fix pin is an exact
-                        # Dirichlet BC whose diagonal block is the identity).
-                        # The threshold keeps interior high-weight verts as
-                        # soft pull.
-                        holder._data._solid_surf_mask = (
-                            np.arange(len(driven_full)) < len(surf_ids)
-                        )
-                        # Per-surface-vertex Blender corners (inverse map),
-                        # aligned to surf_ids / the leading driven_full axis.
-                        # The fix_weight_threshold split uses this to tell
-                        # pull-intent surface verts from hard-intent ones: a
-                        # pull pin overlapping a hard pin-root shares this one
-                        # merged Poisson holder, and hardening its (often
-                        # weight-1.0) verts would freeze them at initial
-                        # geometry and drop the captured target. Mirrors the
-                        # full-pin harmonic mixed-intent path.
-                        try:
-                            _blv = np.ascontiguousarray(
-                                np.asarray(vert, dtype=np.float64)
-                            )
-                            _blt = np.ascontiguousarray(
-                                np.asarray(bl[1], dtype=np.int64)
-                            )
-                            _Vloc = np.ascontiguousarray(
-                                np.asarray(V, dtype=np.float64)
-                            )
-                            _itri, _icoef = frame_mapping(
-                                _Vloc[sim_surf_ids], _blv, _blt
-                            )
-                            _sbw = []
-                            for _k in range(sim_surf_ids.size):
-                                _tri = _blt[int(_itri[_k])]
-                                _c = _icoef[_k]
-                                _w = (1.0 - _c[0] - _c[1], _c[0], _c[1])
-                                _sbw.append([
-                                    (int(_tri[_j]), float(_w[_j]))
-                                    for _j in range(3)
-                                    if _w[_j] > _PIN_WEIGHT_EPS
-                                    and int(_tri[_j]) in pinned
-                                ])
-                            holder._data._sim_blender_weights = _sbw
-                            holder._data._solid_frame_map = {
-                                "triangles": _blt[_itri],
-                                "coefs": _icoef,
-                            }
-                        except Exception:
-                            holder._data._sim_blender_weights = None
-                            holder._data._solid_frame_map = None
-                        handled = True
-                        if verbose:
-                            kw = full_w[keep]
-                            print(f"      > pin (poisson partial): "
-                                  f"{int(keep.sum())} driven tet verts from "
-                                  f"{len(pinned)} blender pins (weight "
-                                  f"[{kw.min():.2f},{kw.max():.2f}])")
+                    holder = _obj.pin(driven)
+                    holder._data._blender_pin_indices = list(pin_index)
+                    holder._data._tet_V = V
+                    holder._data._blender_vert = vert
+                    # [0,1] per-driven-vertex weight; _apply_pin_cfg_entry
+                    # scales it by pull_strength and exports pin-pullw.
+                    holder._data._solid_pin_weights = (
+                        full_w[keep].astype(np.float32)
+                    )
+                    # This holder spans every pin group of the object;
+                    # apply_pin_config reads each group's share of the
+                    # weight field through this map to divide it by group.
+                    holder._data._solid_weight_map = fields["weight_map"]
+                    holder._data._solid_pin = {
+                        "surface_map": fields["surface_map"],
+                        "interior_map": fields["interior_map"],
+                        "motion_cache": fields["motion_cache"],
+                        "keep": keep,
+                        "n_input": fields["n_input"],
+                        # True tet rest positions on the driven_full axis
+                        # (surf_ids + interior_ids), in the SOLVER/world
+                        # frame (V = transform @ V_local, the same space as
+                        # the captured tracks and the solver rest verts; NOT
+                        # tet_mesh[0], which is the untransformed local
+                        # frame). The rigid-aware move-op builder carries
+                        # THESE rigidly, not the S_t-diffused rest: the
+                        # MoveBy deltas land on the solver's tet rest, so a
+                        # rigid capture must rotate that exact rest or the
+                        # rest/LS-fit mismatch reappears as a rotation-scaled
+                        # bend.
+                        "rest_full": np.asarray(
+                            V, dtype=np.float64
+                        )[driven_full],
+                    }
+                    # Full-axis arrays (length n_surf+n_interior) the
+                    # fix_weight_threshold split needs. ``keep`` and
+                    # ``_solid_pin_weights`` are the compacted view;
+                    # _build_solid_poisson_move_ops slices positions[:, keep]
+                    # over the FULL axis, so the split masks live there too.
+                    holder._data._solid_full_w = full_w
+                    holder._data._solid_driven_full = list(driven_full)
+                    # Surface mask over the full axis. driven_full is
+                    # surf_ids + interior_ids, so the first len(surf_ids)
+                    # entries are the surface verts (solver tet-index <
+                    # surface_vert_count). Hard FixPairs are kept surface
+                    # only as the hard-core / soft-skirt authoring split,
+                    # not for well-posedness (a fix pin is an exact
+                    # Dirichlet BC whose diagonal block is the identity).
+                    # The threshold keeps interior high-weight verts as
+                    # soft pull.
+                    holder._data._solid_surf_mask = (
+                        np.arange(len(driven_full)) < len(surf_ids)
+                    )
+                    # Per-surface-vertex Blender corners (inverse map),
+                    # aligned to surf_ids / the leading driven_full axis.
+                    # The fix_weight_threshold split uses this to tell
+                    # pull-intent surface verts from hard-intent ones: a
+                    # pull pin overlapping a hard pin-root shares this one
+                    # merged Poisson holder, and hardening its (often
+                    # weight-1.0) verts would freeze them at initial
+                    # geometry and drop the captured target. Mirrors the
+                    # full-pin harmonic mixed-intent path.
+                    _blv = np.ascontiguousarray(
+                        np.asarray(vert, dtype=np.float64)
+                    )
+                    _blt = np.ascontiguousarray(
+                        np.asarray(bl[1], dtype=np.int64)
+                    )
+                    _Vloc = np.ascontiguousarray(
+                        np.asarray(V, dtype=np.float64)
+                    )
+                    _itri, _icoef = frame_mapping(
+                        _Vloc[sim_surf_ids], _blv, _blt
+                    )
+                    _sbw = []
+                    for _k in range(sim_surf_ids.size):
+                        _tri = _blt[int(_itri[_k])]
+                        _c = _icoef[_k]
+                        _w = (1.0 - _c[0] - _c[1], _c[0], _c[1])
+                        _sbw.append([
+                            (int(_tri[_j]), float(_w[_j]))
+                            for _j in range(3)
+                            if _w[_j] > _PIN_WEIGHT_EPS
+                            and int(_tri[_j]) in pinned
+                        ])
+                    holder._data._sim_blender_weights = _sbw
+                    holder._data._solid_frame_map = {
+                        "triangles": _blt[_itri],
+                        "coefs": _icoef,
+                    }
+                    handled = True
+                    if verbose:
+                        kw = full_w[keep]
+                        print(f"      > pin (poisson partial): "
+                              f"{int(keep.sum())} driven tet verts from "
+                              f"{len(pinned)} blender pins (weight "
+                              f"[{kw.min():.2f},{kw.max():.2f}])")
             if handled:
                 return
             # sim vertex -> list of (blender_index, weight)
@@ -3984,62 +4104,70 @@ class SceneDecoder:
                         sv = [int(tri[int(np.argmax(w))])]
                     for s in sv:
                         support.setdefault(s, []).append((int(i), 1.0))
-            if support:
-                surf_ids = sorted(support.keys())
-                # When the WHOLE sim surface is driven, it forms a complete
-                # Dirichlet boundary: solve Laplace to drive the tet interior
-                # by the harmonic extension of the surface displacement, so
-                # the SOLID is fully kinematic (like a STATIC shell) and its
-                # free elastic interior cannot buckle into self-intersection.
-                # A partially-pinned surface is not a complete boundary, so
-                # the interior stays free (soft) there.
-                n_tet_verts = int(np.asarray(tet_mesh[0]).shape[0])
-                full_surface = len(surf_ids) == int(sim_surf_ids.size)
-                harmonic_M = None
-                interior_ids: list = []
-                if full_surface and n_tet_verts > len(surf_ids):
-                    surf_set = set(surf_ids)
-                    interior_ids = [
-                        v for v in range(n_tet_verts) if v not in surf_set
-                    ]
-                    if progress_callback is not None:
-                        progress_callback(
-                            "Building fully pinned SOLID interior map..."
-                        )
-                    harmonic_M = _build_harmonic_interior_operator(
-                        n_tet_verts, tet_mesh[2], surf_ids, interior_ids,
+            if not support:
+                # Registering no holder would transfer the object unpinned.
+                raise ValueError(
+                    f"the pin on SOLID '{name}' reaches no vertex of its "
+                    "tetrahedral mesh: no tetrahedral surface vertex lies "
+                    "nearest a Blender triangle with a pinned corner. Pin "
+                    "more of the object's vertices, or tetrahedralize it "
+                    "more finely."
+                )
+            surf_ids = sorted(support.keys())
+            # When the WHOLE sim surface is driven, it forms a complete
+            # Dirichlet boundary: solve Laplace to drive the tet interior
+            # by the harmonic extension of the surface displacement, so
+            # the SOLID is fully kinematic (like a STATIC shell) and its
+            # free elastic interior cannot buckle into self-intersection.
+            # A partially-pinned surface is not a complete boundary, so
+            # the interior stays free (soft) there.
+            n_tet_verts = int(np.asarray(tet_mesh[0]).shape[0])
+            full_surface = len(surf_ids) == int(sim_surf_ids.size)
+            harmonic_M = None
+            interior_ids: list = []
+            if full_surface and n_tet_verts > len(surf_ids):
+                surf_set = set(surf_ids)
+                interior_ids = [
+                    v for v in range(n_tet_verts) if v not in surf_set
+                ]
+                if progress_callback is not None:
+                    progress_callback(
+                        "Building fully pinned SOLID interior map..."
                     )
-                if harmonic_M is not None:
-                    driven = surf_ids + interior_ids
-                    holder = _obj.pin(driven)
-                    holder._data._blender_pin_indices = list(pin_index)
-                    holder._data._tet_V = V
-                    holder._data._blender_vert = vert
-                    holder._data._sim_blender_weights = [
-                        support[s] for s in surf_ids
-                    ]
-                    # Interior (holder.index[len(surf_ids):]) follows
-                    # M @ surface; surface keeps its blender transfer.
-                    holder._data._harmonic = (len(surf_ids), harmonic_M)
-                    if verbose:
-                        print(f"      > pin (harmonic solid): {len(surf_ids)} "
-                              f"surface + {len(interior_ids)} interior = "
-                              f"{len(driven)} tet verts (Laplace interior fill)")
-                else:
-                    holder = _obj.pin(surf_ids)
-                    holder._data._blender_pin_indices = list(pin_index)
-                    holder._data._tet_V = V
-                    holder._data._blender_vert = vert
-                    holder._data._sim_blender_weights = [
-                        support[s] for s in surf_ids
-                    ]
-                    if verbose:
-                        why = ("partial surface (interior left elastic)"
-                               if not full_surface
-                               else "harmonic solve unavailable/failed")
-                        print(f"      > pin (inverse mapped): {len(surf_ids)}/"
-                              f"{int(sim_surf_ids.size)} sim surface verts from "
-                              f"{len(pin_index)} blender pins [{why}]")
+                harmonic_M = _build_harmonic_interior_operator(
+                    n_tet_verts, tet_mesh[2], surf_ids, interior_ids, name,
+                )
+            if harmonic_M is not None:
+                driven = surf_ids + interior_ids
+                holder = _obj.pin(driven)
+                holder._data._blender_pin_indices = list(pin_index)
+                holder._data._tet_V = V
+                holder._data._blender_vert = vert
+                holder._data._sim_blender_weights = [
+                    support[s] for s in surf_ids
+                ]
+                # Interior (holder.index[len(surf_ids):]) follows
+                # M @ surface; surface keeps its blender transfer.
+                holder._data._harmonic = (len(surf_ids), harmonic_M)
+                if verbose:
+                    print(f"      > pin (harmonic solid): {len(surf_ids)} "
+                          f"surface + {len(interior_ids)} interior = "
+                          f"{len(driven)} tet verts (Laplace interior fill)")
+            else:
+                holder = _obj.pin(surf_ids)
+                holder._data._blender_pin_indices = list(pin_index)
+                holder._data._tet_V = V
+                holder._data._blender_vert = vert
+                holder._data._sim_blender_weights = [
+                    support[s] for s in surf_ids
+                ]
+                if verbose:
+                    why = ("partial surface (interior left elastic)"
+                           if not full_surface
+                           else "no interior vertices")
+                    print(f"      > pin (inverse mapped): {len(surf_ids)}/"
+                          f"{int(sim_surf_ids.size)} sim surface verts from "
+                          f"{len(pin_index)} blender pins [{why}]")
         else:
             # One holder for the whole pinned set. apply_pin_config
             # later splits it per pin_group_id when the object has
@@ -4049,9 +4177,14 @@ class SceneDecoder:
             if pin_index:
                 _obj.pin(list(pin_index))
 
-    def _apply_stitch(self, obj, _obj, name, verbose):
+    def _apply_stitch(self, obj, _obj, name, verbose, group_type=None,
+                      vert=None, V=None, F=None):
         """Stitch pass: register a stitch asset and attach it to ``_obj``
         when a stitch was resolved during planning.
+
+        A SOLID's stitch is carried onto its tetrahedral surface first
+        (``_solid_stitch_rows``): its rows name Blender vertices, which are not
+        the SOLID's simulated vertices once it is tetrahedralized.
         """
         if _obj is None:
             return
@@ -4059,8 +4192,63 @@ class SceneDecoder:
         if resolved_stitch is None:
             return
         stitch_data = resolved_stitch
+        if group_type == "SOLID":
+            stitch_data = self._solid_stitch_rows(name, stitch_data, vert, V, F)
         stitch_name = f"{name}_stitch"
         if verbose:
             print(f"      > stitch: {len(stitch_data[0])} edges")
         self._asset.add.stitch(stitch_name, stitch_data)
         _obj.stitch(stitch_name)
+
+    @staticmethod
+    def _solid_stitch_rows(name, stitch, vert, V, F):
+        """A SOLID's loose-edge stitch as point-to-point rows on its tet surface.
+
+        The encoder sends a loose-edge seam as ``(Ind, W)`` rows over the
+        Blender mesh: a source vertex ``Ind[:, 0]`` and a target point
+        ``Ind[:, 1:4]`` weighted by ``W[:, 1:4]``. fTetWild resamples that
+        surface, so a Blender index names an unrelated tetrahedral vertex, or
+        none. Both ends are therefore placed in world space from the Blender
+        vertices ``vert`` and projected onto the tetrahedral surface ``(V,
+        F)``, each becoming a barycentric point on a surface triangle, and the
+        row becomes a 6-column point-to-point stitch. An end that finds no
+        triangle is refused by name rather than dropped.
+        """
+        import numpy as np
+
+        ind = np.asarray(stitch[0], dtype=np.int64)
+        w = np.asarray(stitch[1], dtype=np.float64)
+        blender = np.asarray(vert, dtype=np.float64)
+        if ind.ndim != 2 or ind.shape[1] != 4 or w.shape != ind.shape:
+            raise ValueError(
+                f"{name}: a loose-edge stitch arrives as 4-column rows, got "
+                f"Ind {ind.shape} and W {w.shape}"
+            )
+        if len(ind) == 0:
+            raise ValueError(f"{name}: the loose-edge stitch has no rows")
+        if ind.min() < 0 or ind.max() >= len(blender):
+            raise ValueError(
+                f"{name}: the loose-edge stitch names vertex {int(ind.max())} "
+                f"of a mesh with {len(blender)} vertices"
+            )
+        source = blender[ind[:, 0]]
+        target = np.einsum("kj,kjd->kd", w[:, 1:4], blender[ind[:, 1:4]])
+        anchors = np.ascontiguousarray(np.vstack([source, target]))
+        tri, bary = _rust.barycentric_project_anchors(
+            np.ascontiguousarray(np.asarray(F, dtype=np.int64)),
+            np.ascontiguousarray(np.asarray(V, dtype=np.float64)),
+            anchors,
+        )
+        if len(tri) != len(anchors):
+            raise ValueError(
+                f"{name}: {len(anchors) - len(tri)} of the loose-edge "
+                "stitch's endpoints found no triangle on the tetrahedralized "
+                "surface"
+            )
+        k = len(ind)
+        rows_ind = np.hstack([np.asarray(tri[:k]), np.asarray(tri[k:])])
+        rows_w = np.hstack([np.asarray(bary[:k]), np.asarray(bary[k:])])
+        return (
+            np.ascontiguousarray(rows_ind, dtype=np.int64),
+            np.ascontiguousarray(rows_w, dtype=np.float32),
+        )

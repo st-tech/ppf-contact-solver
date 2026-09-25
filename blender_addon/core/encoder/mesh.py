@@ -4,7 +4,6 @@
 # License: Apache v2.0
 
 import hashlib
-import json
 from contextlib import contextmanager
 
 import numpy as np
@@ -12,21 +11,26 @@ from mathutils import Vector  # pyright: ignore
 
 from ...models.groups import decode_vertex_group_identifier, get_addon_data, iterate_object_groups
 from ..utils import (
+    _may_move,
     eval_deform_local_positions,
-    get_transform_keyframes,
     get_vertices_in_group,
     has_deforming_modifier_stack,
-    is_deforming_static_object,
+    has_transform_fcurves,
+    sample_transform_animation,
+    static_mesh_deforms,
     world_matrix,
 )
 from . import (
     _swap_axes,
     _to_solver,
+    check_frame_window,
     frame_to_time,
+    op_type_label,
     resolve_solver_fps,
     resolve_start_frame,
     resolve_time_scale,
 )
+from .pin import pin_vertex_indices
 
 # Minimal diagonal used for a group with no usable extent. Both the
 # empty/no-geometry fallback and the co-located-objects floor use this
@@ -63,9 +67,10 @@ def evaluate_at_start_frame(context, state):
         scene.frame_set(saved)
 
 
-def _start_frame_eval_local_verts(obj, context, state):
+def _start_frame_eval_local_verts(obj, context, state, object_type):
     """Starting-frame deform-evaluated local verts for *obj*, or ``None``
-    when no usable eval is available (caller keeps the rest mesh).
+    in the cases ``eval_deform_local_positions`` lists, where no evaluation
+    keeps the base vertex count (caller keeps the rest mesh).
 
     Honors a deform-only Geometry Nodes / Armature / Lattice stack so
     the solver starts in the shape the artist sees at the starting frame.
@@ -74,13 +79,51 @@ def _start_frame_eval_local_verts(obj, context, state):
     cache's frame-0 row IS the starting-frame deform pose, so initial ==
     cache[0] telescopes to the exact wave (start + (cache[k] - cache[0]) =
     cache[k]). Holding pinned verts at rest instead would shift the whole
-    track by the starting-frame displacement. The addon's MESH_CACHE is
-    excluded so a prior solve's output isn't read back.
+    track by the starting-frame displacement. The addon's display-only
+    modifiers are hidden (``display_only_modifier_names``), the same set
+    Capture Deformation hides, so the cache's row 0 is this pose.
     """
-    from ..pc2 import MODIFIER_NAME
+    from ..pc2 import display_only_modifier_names
     return eval_deform_local_positions(
-        obj, context, exclude_modifier_name=MODIFIER_NAME,
+        obj, context,
+        exclude_modifier_names=display_only_modifier_names(obj, object_type),
     )
+
+
+def _shipped_local_verts(obj, context, state, group, rest_verts):
+    """The object-local pose *obj* ships at: its starting-frame evaluation, or
+    *rest_verts* when no evaluation keeps the vertex count.
+
+    A stack that changes the vertex count is evaluated cut where the output
+    cache is placed (``eval_deform_local_positions``), so an Armature or
+    Lattice in front of a Subdivision still reaches this pose. Only a
+    modifier in front of that cut that changes the count itself leaves
+    *rest_verts*, and that fallback leaves every deformer out, so it is
+    refused for an object holding a pin with a captured deformation: the
+    decoder integrates the captured track from this pose, and the track's row
+    0 is the evaluated one.
+    """
+    eval_verts = _start_frame_eval_local_verts(
+        obj, context, state, group.object_type,
+    )
+    if eval_verts is not None:
+        return eval_verts
+    from ..uuid_registry import get_or_create_object_uuid
+    obj_uuid = get_or_create_object_uuid(obj)
+    for pin_item in group.pin_vertex_groups:
+        if (pin_item.object_uuid == obj_uuid
+                and getattr(pin_item, "has_captured_anim", False)):
+            raise ValueError(
+                f"Object '{obj.name}' in group '{group.name}' has a pin with a "
+                "captured deformation, but a modifier on it changes the vertex "
+                "count in front of the cache, where only a modifier the add-on "
+                "does not count as topology-changing can sit (a Fluid domain, "
+                "an Ocean in Generate mode, or a Mesh Sequence Cache of "
+                "different topology), so the pose the capture starts from "
+                "cannot be shipped. Remove or disable that modifier, or clear "
+                "the capture."
+            )
+    return rest_verts
 
 
 def compute_mesh_hash(context):
@@ -590,7 +633,15 @@ def _build_obj_data(context, *, persist_topology_hash: bool) -> list:
                 # judge the pose and the world matrix the encoder ships rather
                 # than whatever the artist's playhead happens to show.
                 if obj.type == "MESH" and group.object_type in {"SHELL", "SOLID"}:
-                    pinned = _group_pinned_vertex_indices(group, obj)
+                    # A pinned faceless point is a valid SHELL vertex (a sewn
+                    # hook), but a SOLID is rebuilt as tetrahedra from its
+                    # faces alone, so a vertex in no face does not exist in the
+                    # simulated mesh: neither its pin nor a seam to it reaches
+                    # anything, and no pin exempts it there.
+                    pinned = (
+                        _group_pinned_vertex_indices(group, obj)
+                        if group.object_type == "SHELL" else set()
+                    )
                     hanging = detect_hanging_stitch_vertices(obj.data, pinned)
                     if hanging:
                         preview = ", ".join(str(i) for i in hanging[:8])
@@ -711,7 +762,7 @@ def _refuse_degenerate_tessellation(context, scene, state):
                 degenerate = find_degenerate_tessellation(
                     obj,
                     local_verts=_start_frame_eval_local_verts(
-                        obj, context, state
+                        obj, context, state, group.object_type
                     ),
                     conditioning=elastic,
                 )
@@ -794,6 +845,30 @@ def _encode_obj_inner(context, scene, state, data):
     # edit needs only Update Params, never a geometry re-transfer.
     start_frame = resolve_start_frame(state)
 
+    # Every STATIC collider something could move, sampled at every frame of
+    # the solve in ONE sweep over the frames (sample_transform_animation), not
+    # one sweep per object. A collider carrying a static-deform cache ships
+    # that cache instead, which already holds its world motion.
+    from ..pc2 import has_static_deform_animation as _has_static_deform
+    from ..uuid_registry import resolve_assigned
+    _moving_statics = []
+    for _group in iterate_object_groups(scene):
+        if not _group.active or _group.object_type != "STATIC":
+            continue
+        for _assigned in _group.assigned_objects:
+            if not _assigned.included:
+                continue
+            _obj = resolve_assigned(_assigned)
+            if _obj is None:
+                continue
+            if _obj.type == "MESH" and _has_static_deform(_obj):
+                continue
+            if _may_move(_obj):
+                _moving_statics.append(_obj)
+    static_motion = sample_transform_animation(
+        _moving_statics, context, start_frame, state.frame_count,
+    )
+
     # Track canonical meshes for deduplication: hash -> first object name
     canonical_meshes = {}
 
@@ -812,7 +887,18 @@ def _encode_obj_inner(context, scene, state, data):
             # and applied by the decoder, matching mesh encoding behavior.
             if obj.type == "CURVE" and group.object_type == "ROD":
                 from mathutils import Matrix  # pyright: ignore
-                from ..curve_rod import sample_curve
+                from ..curve_rod import nurbs_points_off_the_rod, sample_curve
+                off = nurbs_points_off_the_rod(obj)
+                if off:
+                    si, n_cp, order, lost = off[0]
+                    raise ValueError(
+                        f"Curve '{obj.name}' in group '{group.name}': NURBS "
+                        f"spline {si} has {n_cp} points at order {order}, and "
+                        f"the rod follows it {order - 1} points per arc, so its "
+                        f"last {lost} point(s) would not be simulated. Add or "
+                        "remove points to fill whole arcs, or convert the "
+                        "spline to Bezier or Poly."
+                    )
                 vert, edges_array, _ = sample_curve(obj, Matrix.Identity(4))
                 stitch_data = None
                 uv = []
@@ -828,8 +914,13 @@ def _encode_obj_inner(context, scene, state, data):
                     # ROD objects use edges only - no triangulation needed.
                     # Encode in local space; the decoder applies "transform"
                     # on top, matching the CURVE+ROD and SHELL/SOLID paths.
-                    local_verts = [v.co.copy() for v in mesh.vertices]
-                    vert = np.array(local_verts, dtype=np.float32)
+                    # The positions are the starting-frame evaluation, as
+                    # for SHELL/SOLID.
+                    vert = _shipped_local_verts(
+                        obj, context, state, group,
+                        np.array([v.co.copy() for v in mesh.vertices],
+                                 dtype=np.float32),
+                    )
                     edges = []
                     for edge in mesh.edges:
                         edges.append(list(edge.vertices))
@@ -845,7 +936,9 @@ def _encode_obj_inner(context, scene, state, data):
                     n_v = len(mesh.vertices)
                     flat = np.empty(n_v * 3, dtype=np.float32)
                     mesh.vertices.foreach_get("co", flat)
-                    vert = flat.reshape(n_v, 3)
+                    vert = _shipped_local_verts(
+                        obj, context, state, group, flat.reshape(n_v, 3),
+                    )
                     uv = []
                     stitch_data = None
                 else:
@@ -905,12 +998,13 @@ def _encode_obj_inner(context, scene, state, data):
                         # via Blender's loop_triangles, so quads and N-gons
                         # split exactly the way the viewport shows them
                         # (stable vertex indices). The positions sent to the
-                        # solver honor the frame-1 deform when present,
-                        # except on pin-driven verts (kept at rest so the
-                        # pin delta track isn't double-counted).
+                        # solver are the starting-frame evaluation, pinned
+                        # vertices included, which is the pose every pin
+                        # track starts from (``_shipped_local_verts``).
                         tri, uv = loop_triangulate_mesh(mesh)
-                        eval_verts = _start_frame_eval_local_verts(obj, context, state)
-                        vert = eval_verts if eval_verts is not None else local_verts
+                        vert = _shipped_local_verts(
+                            obj, context, state, group, local_verts,
+                        )
                         stitch_data = detect_stitch_edges(mesh)
 
             info = {}
@@ -960,7 +1054,7 @@ def _encode_obj_inner(context, scene, state, data):
                     # next-action message.
                     if (
                         obj.type == "MESH"
-                        and is_deforming_static_object(obj, context)
+                        and static_mesh_deforms(obj, context)
                     ):
                         raise ValueError(
                             f"STATIC object '{obj.name}' in group "
@@ -974,14 +1068,13 @@ def _encode_obj_inner(context, scene, state, data):
                         )
 
                 transform_kf = (
-                    None if _has_sd_cache
-                    else get_transform_keyframes(obj, context, start_frame)
+                    None if _has_sd_cache else static_motion.get(obj.name)
                 )
                 if transform_kf is not None:
                     info["transform_animation"] = transform_kf
                 # UI-assigned static ops: find the AssignedObject entry
                 # for this obj and serialize its ops list. Mutually
-                # exclusive with Blender fcurve animation AND the new
+                # exclusive with the object's sampled motion AND the
                 # static-deform cache (3-way XOR enforced by the Rust
                 # validator at decode time).
                 from ..uuid_registry import get_or_create_object_uuid as _get_uuid_static
@@ -994,6 +1087,23 @@ def _encode_obj_inner(context, scene, state, data):
                 if (
                     _assigned_static is not None
                     and len(_assigned_static.static_ops) > 0
+                    and transform_kf is not None
+                    and not has_transform_fcurves(obj)
+                ):
+                    # The panel says ops are ignored when the object has its
+                    # own keyframes. Motion from a parent, a constraint, a
+                    # driver or an NLA strip displaces them the same way and
+                    # nothing on the panel says so, so it is refused here.
+                    raise ValueError(
+                        f"STATIC object '{obj.name}' in group '{group.name}' "
+                        "has Static ops and is also moved by its parent, a "
+                        "constraint, a driver or an NLA strip, and a collider "
+                        "takes one source of motion. Remove its ops, or stop "
+                        "the other motion."
+                    )
+                if (
+                    _assigned_static is not None
+                    and len(_assigned_static.static_ops) > 0
                     and transform_kf is None
                     and not _has_sd_cache
                 ):
@@ -1002,20 +1112,24 @@ def _encode_obj_inner(context, scene, state, data):
                     # the user that ops will be ignored.
                     ops_out = []
                     for op in _assigned_static.static_ops:
-                        # Frame offsets relative to the starting frame,
-                        # clamped at zero: an op window authored before the
-                        # starting frame is partly outside the solve, and the
-                        # solver's schedules begin there. Each bound is clamped
-                        # independently, so an inverted window (frame_end <
-                        # frame_start) still reaches the solver inverted,
-                        # exactly as before. Seconds are derived at decode from
+                        # A window that ends before it starts, or starts
+                        # before the starting frame, is refused by name, so
+                        # both offsets below are at or after zero and the end
+                        # is after the start. Offsets are relative to the
+                        # starting frame; seconds are derived at decode from
                         # the PARAM payload's fps.
+                        check_frame_window(
+                            f"STATIC object '{obj.name}' in group "
+                            f"'{group.name}': its {op_type_label(op)} "
+                            "operation",
+                            op.frame_start, op.frame_end, start_frame,
+                        )
                         entry = {
                             "op_type": op.op_type,
-                            "frame_offset_start": max(
-                                0.0, float(op.frame_start) - start_frame),
-                            "frame_offset_end": max(
-                                0.0, float(op.frame_end) - start_frame),
+                            "frame_offset_start": (
+                                float(op.frame_start) - start_frame),
+                            "frame_offset_end": (
+                                float(op.frame_end) - start_frame),
                             "transition": str(op.transition).lower(),
                         }
                         # Spin/scale always pivot around the object origin,
@@ -1024,6 +1138,24 @@ def _encode_obj_inner(context, scene, state, data):
                         if op.op_type == "MOVE_BY":
                             entry["delta"] = _to_solver(op.delta)
                         elif op.op_type == "SPIN":
+                            # A zero-length axis names no rotation, and the
+                            # solver's rotation formula turns it into a
+                            # collapse toward the object origin, so a spin
+                            # that moves at all needs one.
+                            axis_norm = float(np.linalg.norm(
+                                np.asarray(op.spin_axis, dtype=np.float64)
+                            ))
+                            if (
+                                not axis_norm > 0.0
+                                and float(op.spin_angular_velocity) != 0.0
+                            ):
+                                raise ValueError(
+                                    f"STATIC object '{obj.name}' in group "
+                                    f"'{group.name}': its Spin operation has a "
+                                    "zero-length axis but an angular velocity "
+                                    f"of {float(op.spin_angular_velocity)} "
+                                    "deg/s; give it an axis"
+                                )
                             entry["axis"] = _swap_axes(op.spin_axis)
                             # RAW authored degrees per ANIMATION second. The
                             # decoder multiplies by the PARAM payload's
@@ -1044,16 +1176,11 @@ def _encode_obj_inner(context, scene, state, data):
                     if pin_item.object_uuid != obj_uuid:
                         continue
                     _, vg_name = decode_vertex_group_identifier(pin_item.name)
-                    if vg_name:
-                        if obj.type == "CURVE":
-                            key = f"_pin_{vg_name}"
-                            raw = obj.get(key)
-                            if raw:
-                                pin_indices.extend(json.loads(raw))
-                        else:
-                            vg = obj.vertex_groups.get(vg_name)
-                            if vg:
-                                pin_indices.extend(get_vertices_in_group(obj, vg))
+                    # A pin whose group is gone or empty is refused by name:
+                    # skipping it would transfer the object unpinned.
+                    pin_indices.extend(pin_vertex_indices(
+                        obj, vg_name, pin_item.name, group.name,
+                    ))
 
                 if obj.type == "CURVE" and pin_indices:
                     from ..curve_rod import map_cp_pins_to_sampled
@@ -1083,13 +1210,10 @@ def _encode_obj_inner(context, scene, state, data):
                 if group.object_type == "ROD":
                     info["edge"] = edges_array
                 elif group.object_type == "SAND":
-                    # Faceless granular body: just the loose-vert grain
-                    # centers plus the per-grain radius. The radius is the
-                    # value locked on the object at Convert time (the seeding
-                    # spacing was derived from it), so render and contact agree.
-                    info["radius"] = float(
-                        obj.get("grain_radius", group.sand_grain_radius)
-                    )
+                    # Faceless granular body: the grain centers alone. The
+                    # grain radius is the group's contact offset
+                    # (``sand_seeded_radius``), one per group.
+                    pass
                 else:
                     info["face"] = tri
                     if len(uv) > 0:

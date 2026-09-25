@@ -190,11 +190,42 @@ cloth.create_pin("Shirt", "HemPins").pull(strength=2.0)
 | `spin(axis, angular_velocity, flip, center*, frame_start, frame_end, transition)` | Rotate about a derived pivot          |
 | `scale(factor, center*, frame_start, frame_end, transition)`    | Scale from a derived pivot                                |
 | `torque(magnitude, axis_component="PC3", flip, frame_start, frame_end)` | PCA-axis torque                                   |
+| `set_animation(positions)`                                      | Drive the pin through per-frame vertex positions, as **Capture Deformation** does |
 | `unpin(frame)`                                                  | Release the pin after `frame` frames, counted from the solve's Starting Frame (the argument is a frame count, not a frame number) |
 | `delete()`                                                      | Remove this pin from its group                            |
 
 `transition` is `"LINEAR"` or `"SMOOTH"`. `torque`'s `axis_component`
-is `"PC1"` / `"PC2"` / `"PC3"`.
+is `"PC1"` / `"PC2"` / `"PC3"`. `frame_start` and `frame_end` are
+Blender frames, kept as given: Transfer refuses an operation whose
+`frame_end` is not after its `frame_start`, or whose `frame_start` is
+before the solve's Starting Frame.
+
+A pin proxy outlives what it names: after `solver.clear()`, deleting the
+group, or removing the pin, every method in the table raises
+`ValueError` saying whether the group or the pin is gone, rather than
+returning `self` as though the change landed.
+
+### `set_animation` from Per-Frame Positions
+
+`set_animation(positions)` writes the same per-pin cache **Capture
+Deformation** writes, straight from an array, so no deformer is needed
+and it works in a `--background` Blender. `positions` is
+`(n_frames, n_verts, 3)`: every vertex of the pin's mesh on each frame,
+in the mesh's own coordinates, with at least two frames. Row `k` is the
+pose `k` frames after the solve's Starting Frame, so row 0 is the mesh
+as it is now. The pinned vertices follow the sequence and the rest of
+the mesh is simulated.
+
+```python
+import numpy as np
+
+pin = cloth.create_pin("Shirt", "BandPins")
+pin.set_animation(np.stack(frames))   # frames: list of (n_verts, 3) arrays
+```
+
+It raises `ValueError` when the pin's object is not a mesh, its group is
+Static, the pin carries a torque or manual vertex keyframes, or
+`positions` has the wrong shape, too few frames, or a non-finite value.
 
 ### `move_by` over a Frame Range
 
@@ -216,7 +247,7 @@ mode for you:
 
 | Argument you pass    | Inferred `center_mode` |
 | -------------------- | ---------------------- |
-| `center=(x, y, z)`   | `ABSOLUTE`             |
+| `center=(x, y, z)`   | `ABSOLUTE` (a world position) |
 | `center_direction=v` | `MAX_TOWARDS`          |
 | `center_vertex=idx`  | `VERTEX`               |
 | none of the above    | `CENTROID`             |
@@ -292,6 +323,54 @@ solver.clear_invisible_colliders()
 
 See [Invisible Colliders](../workflow/constraints/colliders.md) for how
 the keyframe timeline is evaluated.
+
+## Force Fields
+
+The **Force Fields** box is reached through the same `solver.param`
+proxy. Collections, objects and texts can be given directly or by name,
+and `None` clears them.
+
+```python
+import bpy
+
+solver.param.force_field_padding      = 0.5    # m past the pushed objects
+solver.param.force_field_spacing      = 0.05   # m between sample points
+solver.param.force_field_time_samples = 8
+solver.param.force_field_visualize    = True
+
+text = bpy.data.texts.new("swirl.py")
+text.from_string(
+    "def eval(x, y, z, t):\n"
+    "    return curl_noise(x, y, z, octaves=2, seed=1, time=t, frequency=0.5)\n"
+)
+solver.param.force_field_script = text
+
+# Every function and constant a script may use, as the Built-in Functions
+# button lists them: [{"section", "name", "signature", "description"}, ...]
+print([row["signature"] for row in solver.get_force_field_builtins()])
+
+# Compile the script on the running server, as Compile and Check does.
+print(solver.check_force_field_script())
+# {'ok': True, 'summary': '...'} or {'ok': False, 'error': ..., 'line': n}
+```
+
+A field object (by name) or the script (`"SCRIPT"`) can be limited to
+some groups; `None` restores every group:
+
+```python
+solver.set_force_field_targets("Turbulence", [cloth])
+solver.set_force_field_targets("SCRIPT", None)
+print(solver.get_force_field_targets("Turbulence"))   # [cloth.uuid]
+```
+
+Each group scales the fields on its objects with `force_field_weight`:
+
+```python
+cloth.param.force_field_weight = 0.0   # this group ignores every field
+```
+
+See [Force Fields](../workflow/params/force_fields.md) for what each field
+type does and what the script may contain.
 
 ## Reset
 

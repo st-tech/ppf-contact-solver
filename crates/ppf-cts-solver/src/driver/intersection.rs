@@ -137,27 +137,36 @@ extern "C" {
 /// `kernels/contact/intersect_record.kernel.cpp`, which is where the claim
 /// writes them.
 ///
-/// No PRODUCTION reader matches this constant by name; consumers match the raw
-/// numbers. What reads `RECORD_FACE_EDGE` is `a_crossed_pair_is_reported`,
-/// which asserts that an edge running through a triangle's interior is claimed
-/// as this type and not as one of the other three.
-#[allow(dead_code)]
+/// The production reader is [`describe_record`], which names a pair in the
+/// initialize failure. `a_crossed_pair_is_reported` asserts that an edge running
+/// through a triangle's interior is claimed as this type and not as one of the
+/// other three.
 pub const RECORD_FACE_EDGE: u32 = 0;
-/// What reads this is `edge_edge_reports_each_unordered_pair_once`, which
-/// asserts that two segments crossing closer than their combined offsets are
-/// claimed as this type.
-#[allow(dead_code)]
+/// `edge_edge_reports_each_unordered_pair_once` asserts that two segments
+/// crossing closer than their combined offsets are claimed as this type.
 pub const RECORD_EDGE_EDGE: u32 = 1;
-/// What reads this is `a_dynamic_edge_through_the_collision_mesh_is_reported`,
-/// which asserts that a dynamic edge through the rest-pose static mesh is
-/// claimed as this type rather than as a dynamic face-edge pair.
-#[allow(dead_code)]
+/// `a_dynamic_edge_through_the_collision_mesh_is_reported` asserts that a
+/// dynamic edge through the rest-pose static mesh is claimed as this type
+/// rather than as a dynamic face-edge pair.
 pub const RECORD_COLLISION_MESH: u32 = 2;
-/// What reads this is `overlapping_grains_are_reported_once_each`, which
-/// asserts that two grains inside their combined offsets are claimed as this
-/// type, the pass a faceless SAND cloud depends on.
-#[allow(dead_code)]
+/// `overlapping_grains_are_reported_once_each` asserts that two grains inside
+/// their combined offsets are claimed as this type, the pass a faceless SAND
+/// cloud depends on.
 pub const RECORD_POINT_POINT: u32 = 3;
+
+/// One record's pair, named by element kind and index, as a message can print
+/// it. The indices are the solver's own element arrays, which is what the
+/// intersection records the frontend draws are keyed on too.
+pub fn describe_record(record: &IntersectionRecord) -> String {
+    let (a, b) = (record.elem0, record.elem1);
+    match record.itype {
+        RECORD_FACE_EDGE => format!("face {a} and edge {b}"),
+        RECORD_EDGE_EDGE => format!("edge {a} and edge {b}"),
+        RECORD_COLLISION_MESH => format!("collision-mesh face {a} and edge {b}"),
+        RECORD_POINT_POINT => format!("vertex {a} and vertex {b}"),
+        other => format!("record kind {other}, elements {a} and {b}"),
+    }
+}
 
 /// How many 32-bit words one [`IntersectionRecord`] occupies.
 ///
@@ -280,6 +289,9 @@ pub struct Scene {
     pub vert_prop: Handle,
     pub edge_param: Handle,
     pub vertex_param: Handle,
+    /// Allow Existing Intersections' link table. A linked pair is not
+    /// reported, by the same predicate that keeps it out of contact.
+    pub start_link: super::contact::StartLinkRefs,
     /// THE THREE BOUNDS THE VISITORS CHECK A LEAF INDEX AGAINST. A leaf
     /// primitive is DATA rather than the thread index, so the entry's own
     /// thread-count guard says nothing about it, and Metal returns 0.0 for an
@@ -453,6 +465,9 @@ impl ScanState {
             face_count: scene.faces as u32,
             edge: scene.edge,
             vertex_prop: scene.vert_prop,
+            start_link_index: scene.start_link.index,
+            start_link_offset: scene.start_link.offset,
+            has_start_link: scene.start_link.present,
             face_prop: scene.face_prop,
             edge_prop: scene.edge_prop,
             node: face_tree.node.handle(),
@@ -498,6 +513,9 @@ impl ScanState {
             edge: scene.edge,
             edge_count: count,
             vertex_prop: scene.vert_prop,
+            start_link_index: scene.start_link.index,
+            start_link_offset: scene.start_link.offset,
+            has_start_link: scene.start_link.present,
             edge_prop: scene.edge_prop,
             edge_param: scene.edge_param,
             node: edge_tree.node.handle(),
@@ -543,6 +561,9 @@ impl ScanState {
             vert: scene.vert,
             vertex_count: count,
             vertex_prop: scene.vert_prop,
+            start_link_index: scene.start_link.index,
+            start_link_offset: scene.start_link.offset,
+            has_start_link: scene.start_link.present,
             vertex_param: scene.vertex_param,
             node: vertex_tree.node.handle(),
             node_count: vertex_tree.node_count,
@@ -591,6 +612,9 @@ impl ScanState {
             vert: scene.vert,
             edge: scene.edge,
             vertex_prop: scene.vert_prop,
+            start_link_index: scene.start_link.index,
+            start_link_offset: scene.start_link.offset,
+            has_start_link: scene.start_link.present,
             edge_prop: scene.edge_prop,
             collider_vertex: collider.vert,
             collider_face: collider.face,
@@ -824,6 +848,9 @@ mod tests {
         vertex_param: Buffer<VertexParam>,
         collider_vert: Buffer<f32>,
         collider_face: Buffer<u32>,
+        link_index: Buffer<u32>,
+        link_offset: Buffer<u32>,
+        link_present: u32,
         faces: usize,
         edges: usize,
         surface_vertices: usize,
@@ -876,6 +903,9 @@ mod tests {
                 vertex_param: Buffer::none(),
                 collider_vert: Buffer::none(),
                 collider_face: Buffer::none(),
+                link_index: Buffer::none(),
+                link_offset: Buffer::none(),
+                link_present: 0,
                 faces: 0,
                 edges: 0,
                 surface_vertices: 0,
@@ -908,6 +938,20 @@ mod tests {
             self.surface_vertices = vertex.len();
         }
 
+        /// Allow Existing Intersections' table, one row per dynamic vertex,
+        /// exactly as `builder::start_link_table` lays it out.
+        fn stage_links(&mut self, rows: &[Vec<u32>]) {
+            let mut offset = vec![0u32];
+            let mut index = Vec::new();
+            for row in rows {
+                index.extend_from_slice(row);
+                offset.push(index.len() as u32);
+            }
+            stage(&mut self.device, &mut self.link_index, &index);
+            stage(&mut self.device, &mut self.link_offset, &offset);
+            self.link_present = 1;
+        }
+
         fn stage_collider(&mut self, vertex: &[PositionTriple], face: &[[u32; 3]]) {
             stage(&mut self.device, &mut self.collider_vert, &flat_points(vertex));
             stage(&mut self.device, &mut self.collider_face, &flat_u32(face));
@@ -915,6 +959,11 @@ mod tests {
         }
 
         fn scene(&mut self) -> Scene {
+            if self.link_present == 0 {
+                // No table: real zero-length handles beside a zero flag.
+                stage(&mut self.device, &mut self.link_index, &[]);
+                stage(&mut self.device, &mut self.link_offset, &[]);
+            }
             Scene {
                 vert: self.vert.handle(),
                 face: self.face.handle(),
@@ -924,6 +973,11 @@ mod tests {
                 vert_prop: self.vert_prop.handle(),
                 edge_param: self.edge_param.handle(),
                 vertex_param: self.vertex_param.handle(),
+                start_link: super::super::contact::StartLinkRefs {
+                    index: self.link_index.handle(),
+                    offset: self.link_offset.handle(),
+                    present: self.link_present,
+                },
                 faces: self.faces,
                 edges: self.edges,
                 surface_vertices: self.surface_vertices,
@@ -1150,6 +1204,59 @@ mod tests {
         assert_eq!(report.records[0].elem1, 0);
         assert_eq!(report.records[0].num_verts0, 3);
         assert_eq!(report.records[0].num_verts1, 2);
+    }
+
+    /// The crossed fixture's face-edge scan with a link table installed.
+    fn scan_crossed_linked(rows: &[Vec<u32>]) -> Report {
+        let mut fx = Fixture::new();
+        let (vertex, face, edge) = crossed_triangles();
+        fx.stage_scene(
+            &vertex,
+            &face,
+            &edge,
+            &[free_face(0), free_face(0)],
+            &[free_edge(0); 6],
+            &[free_vertex(0); 6],
+            &[EdgeParam::default()],
+            &[VertexParam::default()],
+        );
+        fx.stage_links(rows);
+        let scene = fx.scene();
+        let mut face_tree = fx.tree(&face_boxes_of(&vertex, &face));
+        let query = fx.query(&edge_boxes_of(&vertex, &edge));
+        fx.begin();
+        // Safety: every handle in `scene` names an allocation this
+        // fixture staged on this device and holds for the call.
+        unsafe { fx.scan.scan_face_edge(&mut fx.device, &scene, &mut face_tree, query) }.unwrap();
+        fx.finish()
+    }
+
+    #[test]
+    fn a_crossed_pair_linked_at_start_is_not_reported() {
+        // Allow Existing Intersections: the two triangles started crossed and
+        // the build linked every vertex of one to every vertex of the other,
+        // which is exactly the table `builder::start_link_table` makes of it.
+        let t0 = vec![3u32, 4, 5];
+        let t1 = vec![0u32, 1, 2];
+        let rows = vec![t0.clone(), t0.clone(), t0, t1.clone(), t1.clone(), t1];
+        let report = scan_crossed_linked(&rows);
+        assert!(
+            report.is_clean(),
+            "a pair linked at start is a neighbor, like two elements sharing a \
+             vertex, and reporting it aborts the run the user asked for"
+        );
+    }
+
+    #[test]
+    fn a_link_table_that_does_not_name_the_pair_changes_nothing() {
+        // The negative control: a table is present and a vertex of each
+        // triangle has a row, but no row reaches the other triangle. Without
+        // this the test above could pass on a scan that ignored every pair once
+        // any table was installed.
+        let rows = vec![vec![1u32], vec![0], vec![], vec![4], vec![3], vec![]];
+        let report = scan_crossed_linked(&rows);
+        assert!(report.found > 0, "an unlinked crossing was not reported");
+        assert!(report.edge_flag[0]);
     }
 
     #[test]
@@ -1606,6 +1713,50 @@ mod tests {
         // so the pair can never resolve and must not be reported.
         let report = run(&[EdgeProp::default()]);
         assert!(report.is_clean());
+    }
+
+    #[test]
+    fn a_dynamic_edge_linked_to_the_collision_mesh_is_not_reported() {
+        // The same pierce as above, with the dynamic edge's first vertex linked
+        // to a collision-mesh vertex: the tagged index is how the table names
+        // that pool, and a link from either end of the edge exempts the pair.
+        let vertex = vec![point(0.0, 0.0, -1.0), point(0.0, 0.0, 1.0)];
+        let edge = vec![[0u32, 1]];
+        let collision_vertex = vec![
+            point(-1.0, -1.0, 0.0),
+            point(1.0, -1.0, 0.0),
+            point(0.0, 1.0, 0.0),
+        ];
+        let collision_face = vec![[0u32, 1, 2]];
+        let tag = crate::data::START_LINK_COLLISION_VERTEX;
+        let run = |rows: &[Vec<u32>]| -> Report {
+            let mut fx = Fixture::new();
+            fx.stage_scene(
+                &vertex,
+                &[],
+                &edge,
+                &[],
+                &[free_edge(0)],
+                &[free_vertex(0); 2],
+                &[EdgeParam::default()],
+                &[VertexParam::default()],
+            );
+            fx.stage_collider(&collision_vertex, &collision_face);
+            fx.stage_links(rows);
+            let scene = fx.scene();
+            let collider = fx.collider();
+            let mut tree = fx.tree(&[box_of(&collision_vertex)]);
+            let query = fx.query(&[box_of(&vertex)]);
+            fx.begin();
+            // Safety: every handle in `scene` names an allocation this
+            // fixture staged on this device and holds for the call.
+            unsafe { fx.scan.scan_collision_mesh(&mut fx.device, &scene, &collider, &mut tree, query) }.unwrap();
+            fx.finish()
+        };
+        assert!(run(&[vec![2 | tag], vec![]]).is_clean());
+        // The UNTAGGED index 2 names no vertex of this collider face, so the
+        // same number without the pool bit links nothing.
+        assert_eq!(run(&[vec![2], vec![]]).found, 1);
     }
 
     #[test]

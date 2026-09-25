@@ -10,6 +10,7 @@ import numpy as np
 
 from ...models.groups import get_addon_data, iterate_object_groups
 from ...models.intersection_allowances import (
+    EXISTING_ALLOWANCE,
     INTER_GROUP_ALLOWANCE,
     INTER_OBJECT_ALLOWANCE,
     SELF_ALLOWANCE,
@@ -17,16 +18,21 @@ from ...models.intersection_allowances import (
     allowance_enabled,
     allowed_object_uuids,
 )
-from ...models.material_maps import to_solver_value
+from ...models.material_maps import rest_shape_plasticity_conflict, to_solver_value
 from . import (
     _normalize_and_scale,
     _swap_axes,
     _to_solver,
+    check_frame_window,
     frame_to_time,
     resolve_solver_fps,
     resolve_start_frame,
     resolve_time_scale,
+    resolve_world_scaling,
+    solver_gravity,
+    solver_wind,
 )
+from .curve_refusal import refuse_unsampled_curves
 from .dyn import _encode_dyn_params, _encode_invisible_colliders
 from .scene_anim import encode_scene_param_anim
 from .param_anim import encode_param_anim
@@ -136,8 +142,10 @@ def _encode_scene_params(context, state, fps):
     )
     use_inactive_momentum = has_shell_type and int(state.inactive_momentum_frames) > 0
 
-    # Z-up (Blender) -> Y-up (solver): (x, y, z) -> (x, z, -y)
-    wind_force = _swap_axes(_normalize_and_scale(state.wind_direction, state.wind_strength))
+    # constraint-ghat is a scene-unit length the solver reads raw, so World
+    # Scaling is applied to it here; gravity and wind are physical constants
+    # and are not scaled (see resolve_world_scaling).
+    world_scaling = resolve_world_scaling(state)
 
     scene_params = {
         "dt": np.float32(state.step_size),
@@ -147,8 +155,10 @@ def _encode_scene_params(context, state, fps):
         "friction-mode": str(state.friction_mode).lower(),
         "precond": "schwarz" if state.precond == "SCHWARZ" else "block-jacobi",
         "schwarz-levels": 1 if state.schwarz_levels == "LEVEL_1" else 2,
-        "gravity": _swap_axes(state.gravity_3d),
-        "wind": wind_force,
+        "gravity": solver_gravity(state.gravity_3d),
+        "wind": solver_wind(
+            state.wind_direction, state.wind_strength, "Wind",
+        ),
         # A count, so the starting frame does not enter: the solve always
         # produces remote frames 0..N-1, which playback places on Blender
         # frames start..start+N-1.
@@ -162,7 +172,7 @@ def _encode_scene_params(context, state, fps):
         "keep-states": keep_states,
         "checkpoints": checkpoints,
         "line-search-max-t": np.float32(state.line_search_max_t),
-        "constraint-ghat": np.float32(state.constraint_ghat),
+        "constraint-ghat": np.float32(state.constraint_ghat * world_scaling),
         "cg-max-iter": int(state.cg_max_iter),
         "cg-tol": np.float32(state.cg_tol),
         "include-face-mass": bool(state.include_face_mass),
@@ -173,10 +183,10 @@ def _encode_scene_params(context, state, fps):
     if use_inactive_momentum:
         scene_params["inactive-momentum"] = float(state.inactive_momentum_frames) / fps
 
-    # Stitch stiffness is per-object now: each group emits its own
+    # Stitch stiffness is per object: each SOLID and SHELL group emits its own
     # "stitch-stiffness" in _encode_group_params (applied to that object's
     # loose-edge stitches), and each merge pair carries its own stiffness in
-    # the cross_stitch payload. No global scene-level stitch stiffness.
+    # the cross_stitch payload. There is no scene-level stitch stiffness.
 
     return scene_params
 
@@ -196,7 +206,7 @@ def _angular_axis_blender_vector(kf):
     return _ANGULAR_WORLD_VECTOR.get(kf.angular_axis, tuple(kf.angular_axis_custom))
 
 
-def _initial_translational_velocity(assigned, start_frame):
+def _initial_translational_velocity(assigned, start_frame, time_scale):
     """The translational velocity an object enters the solve with.
 
     The LAST translational keyframe at or before the starting frame wins: that
@@ -206,6 +216,10 @@ def _initial_translational_velocity(assigned, start_frame):
     the object at rest with no warning while a spin key on the same row (which
     clamps to t=0) still applied. At the default starting frame of 1 this
     selects the frame-1 key, since ``VelocityKeyframe.frame`` has ``min=1``.
+
+    The speed is authored per ANIMATION second like every later key, so it is
+    multiplied by *time_scale* here exactly as the schedule's keys are (see
+    ``resolve_time_scale``); nothing downstream applies Time Scale to it.
 
     Written to vel.bin, which the solver scales by world_scaling on ingest
     (like geometry), so it must NOT be scaled here too (that double-scales to
@@ -220,7 +234,34 @@ def _initial_translational_velocity(assigned, start_frame):
             chosen = kf
     if chosen is None:
         return np.array([0.0, 0.0, 0.0], dtype=np.float32)
-    return _swap_axes(_normalize_and_scale(chosen.direction, chosen.speed))
+    return _swap_axes(_normalize_and_scale(
+        chosen.direction, chosen.speed * time_scale,
+        f"The velocity keyframe at frame {chosen.frame} of '{assigned.name}'",
+    ))
+
+
+def _encode_collision_windows(group, assigned, fps, start_frame):
+    """One object's collision windows as ``[(t_start, t_end), ...]`` seconds.
+
+    Each window is checked by ``check_frame_window`` first: one that ends
+    before it starts, or starts before the starting frame, is refused naming
+    the object and both frames. Shipped as authored, a zero-length window
+    never admits contact (the solver's interval is half-open), and one cut
+    off at the starting frame would end contact earlier than the artist set
+    it to.
+    """
+    windows = []
+    for cw in assigned.collision_windows:
+        check_frame_window(
+            f"Object '{assigned.name}' in group '{group.name}': its "
+            "collision window",
+            cw.frame_start, cw.frame_end, start_frame,
+        )
+        windows.append((
+            frame_to_time(cw.frame_start, fps, start_frame),
+            frame_to_time(cw.frame_end, fps, start_frame),
+        ))
+    return windows
 
 
 def _encode_lock_translation_axis(assigned) -> list[float]:
@@ -285,6 +326,29 @@ def _encode_lock_rotation_axis(assigned) -> list[float]:
     return _swap_axes((axis / norm).tolist())
 
 
+def _encode_force_field(context, groups, state, start_frame, frame_count, fps):
+    """The scene's force fields and exact script, or ``None`` for neither.
+
+    Sampled into grids by ``core.force_field.encode``, over the box the
+    simulated objects occupy at the starting frame unless a Domain is set.
+    """
+    from ..force_field import encode
+    from ..uuid_registry import resolve_assigned
+
+    dynamic = []
+    for group in groups:
+        if str(group.object_type) == "STATIC":
+            continue
+        for assigned in group.assigned_objects:
+            if assigned.included:
+                obj = resolve_assigned(assigned)
+                if obj is not None:
+                    dynamic.append(obj)
+    position_by_uuid = {group.uuid: i for i, group in enumerate(groups)}
+    return encode(context, state, dynamic, start_frame, frame_count, fps,
+                  position_by_uuid)
+
+
 def _encode_intersection_allowance(group, spec, object_uuids):
     """One intersection allowance, as the decoder takes it.
 
@@ -309,6 +373,30 @@ def _encode_intersection_allowance(group, spec, object_uuids):
         obj_uuid: np.float32(1.0 if obj_uuid in allowed else 0.0)
         for obj_uuid in object_uuids
     }
+
+
+def group_contact_lengths(group, scale: float = 1.0) -> tuple[float, float]:
+    """``(contact gap, contact offset)`` of ``group``, times ``scale``.
+
+    The one resolver for these two lengths: the encoder asks with the world
+    scaling (the solver shrinks the mesh by it on ingest, so every branch here
+    is a world-space length scaled by the same factor), and the snap operator
+    and the fetch-time stitch closure ask with 1.0, in Blender units. Nothing
+    stores a copy, so no reader can see a value an earlier encode left behind.
+
+    A SAND grain's physical radius IS its contact skin, so its offset is the
+    locked seeding radius (``sand_seeded_radius``); a group sized by its
+    bounding box takes both as fractions of the diagonal.
+    """
+    if group.object_type == "SAND":
+        from ...models.groups import sand_seeded_radius
+
+        return group.contact_gap * scale, sand_seeded_radius(group) * scale
+    if group.use_group_bounding_box_diagonal:
+        bbox_diagonal = compute_group_bounding_box_diagonal(group) * scale
+        return (bbox_diagonal * group.contact_gap_rat,
+                bbox_diagonal * group.contact_offset_rat)
+    return group.contact_gap * scale, group.contact_offset * scale
 
 
 def _encode_group_params(context, groups, state, fps, start_frame):
@@ -354,6 +442,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "allow-existing-intersection",
+                "force-field-weight",
             ],
             "SHELL": [
                 "density",
@@ -391,12 +481,15 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "allow-existing-intersection",
+                "force-field-weight",
             ],
             "ROD": [
+                # No stitch-stiffness: a rod carries no loose-edge stitch (its
+                # edges are the rod), and a merge pair ships its own.
                 "density",
                 "young-mod",
                 "friction",
-                "stitch-stiffness",
                 "deformation-damping",
                 "bending-damping",
                 "contact-gap",
@@ -419,6 +512,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "allow-existing-intersection",
+                "force-field-weight",
             ],
             "STATIC": [
                 "contact-gap",
@@ -428,6 +523,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "allow-existing-intersection",
             ],
             "SAND": [
                 "sand-particle-mass",
@@ -447,6 +543,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "force-field-weight",
             ],
             "PDRD": [
                 "density",
@@ -468,6 +565,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-self-intersection",
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
+                "allow-existing-intersection",
+                "force-field-weight",
             ],
         }
         model_map = {
@@ -480,14 +579,15 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             model = group.solid_model
         elif group.object_type == "SHELL":
             model = group.shell_model
-            # Stable NeoHookean is a volumetric model; the UI dropped
-            # it from the SHELL picker. A `.blend` saved before that
-            # change can still hold the old enum value, in which case
-            # Blender keeps it on the property even though the items
-            # list no longer offers it. Coerce to ARAP so the upload
-            # carries a model the solver can build a SHELL group with.
-            if model == "STABLE_NEOHOOKEAN":
-                model = "ARAP"
+            # The SHELL picker does not offer Stable NeoHookean, yet a
+            # `.blend` or profile saved with it still loads the identifier.
+            # Running any other model in its place would ship something the
+            # artist did not author, so it is refused by name.
+            from ...models.groups import withdrawn_shell_model_refusal
+
+            refusal = withdrawn_shell_model_refusal(group)
+            if refusal is not None:
+                raise ValueError(refusal)
         elif group.object_type == "ROD":
             model = group.rod_model
         elif group.object_type == "PDRD":
@@ -537,58 +637,47 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             _solver_value_or_zero(group, "young-mod", young_modulus)
         )
 
-        if group.object_type == "SAND":
-            # A sand grain's physical radius IS its contact skin, so the grain
-            # radius is sent as the contact-offset. The contact gap (barrier
-            # activation distance) is the user-set value on top of that skin.
-            # The radius is the locked, seeding-derived value (sand_seeded_radius)
-            # so the contact skin matches the non-overlapping seed spacing.
-            from ...models.groups import sand_seeded_radius
-
-            # The grain radius (sent as the contact skin/offset) is a geometric
-            # length tied to the seed spacing, and the grain seed positions are
-            # scaled by world_scaling in the solver, so scale the radius to match
-            # (otherwise grains overlap). The contact gap on top is a world-space
-            # distance too, so scale it by world_scaling for the same reason.
-            contact_gap_value = group.contact_gap * state.world_scaling
-            contact_offset_value = sand_seeded_radius(group) * state.world_scaling
-        elif group.use_group_bounding_box_diagonal:
-            # Relative gaps/offsets are a fraction of the mesh size, so they scale
-            # with world_scaling (the solver shrinks the mesh by the same factor).
-            bbox_diagonal = compute_group_bounding_box_diagonal(group) * state.world_scaling
-            contact_gap_value = bbox_diagonal * group.contact_gap_rat
-            contact_offset_value = bbox_diagonal * group.contact_offset_rat
-        else:
-            # Absolute gaps/offsets are authored as world-space distances. The
-            # solver shrinks the mesh by world_scaling on ingest, so scale these
-            # by the same factor to keep them a fixed physical size relative to
-            # the geometry (consistent with collider thickness, which the solver
-            # also scales by world_scaling).
-            contact_gap_value = group.contact_gap * state.world_scaling
-            contact_offset_value = group.contact_offset * state.world_scaling
-        group.computed_contact_gap = contact_gap_value
-        group.computed_contact_offset = contact_offset_value
-
-        # A captured pull-pin deformation drives a time-varying rest shape
-        # (decoded as per-frame inv_rest). Plasticity also mutates the rest
-        # shape, so the two cannot coexist: the streamed rest shape would
-        # clobber the plastic creep every frame. Drop plasticity for such a
-        # group and warn, so the rest-shape capture (the explicit user action)
-        # wins deterministically.
-        has_rest_shape_capture = (
-            group.object_type in ("SOLID", "SHELL")
-            and any(
-                p.use_pull and getattr(p, "has_captured_anim", False)
-                for p in group.pin_vertex_groups
+        if group.object_type == "SAND" and allowance_enabled(
+                group, EXISTING_ALLOWANCE):
+            # Refused rather than dropped: a SAND group is never offered this
+            # allowance, so one that carries it came from a script or an older
+            # file, and shipping without it would start a scene the artist
+            # expects to tolerate an overlap that the solver will refuse.
+            raise ValueError(
+                f"Group '{group.name}': Allow Existing Intersections is not "
+                "supported on sand, whose grains overlapping at the start are "
+                "not exempted from contact. Turn it off on this group."
             )
+        if group.object_type == "SAND":
+            # The group ships one grain radius as its contact offset
+            # (`group_contact_lengths`), so every grain must share it.
+            from ...models.groups import sand_radius_conflict
+
+            radii = sand_radius_conflict(group)
+            if radii is not None:
+                listed = ", ".join(f"'{name}' at {radius:g}" for name, radius in radii)
+                raise ValueError(
+                    f"Group '{group.name}': its grains were converted at "
+                    f"different radii ({listed}), and a SAND group is solved "
+                    "at one. Convert them at one radius or split the group."
+                )
+
+        # World-space lengths, scaled like the geometry: the solver shrinks
+        # the mesh by world_scaling on ingest (and collider thickness with it).
+        contact_gap_value, contact_offset_value = group_contact_lengths(
+            group, state.world_scaling,
         )
-        if has_rest_shape_capture and (
-            group.enable_plasticity or group.enable_bend_plasticity
-        ):
-            print(
-                f"[ppf-cts] warning: group '{group.name}' has both a captured "
-                "pull-pin deformation and plasticity enabled. Plasticity is "
-                "ignored for this group; the captured rest shape takes over."
+
+        # A tracked captured deformation streams the rest shape every frame and
+        # plasticity creeps it every step, so a group cannot carry both:
+        # refused here by name rather than one of them dropped in silence.
+        conflict = rest_shape_plasticity_conflict(group)
+        if conflict is not None:
+            raise ValueError(
+                f"Group '{group.name}': pin '{conflict.name}' tracks its "
+                "captured rest shape (Track Rest-Pose Deformation) and the "
+                "group has Plasticity on. Both rewrite the rest shape, so turn "
+                "one of them off."
             )
 
         params = {
@@ -628,6 +717,14 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 group, INTER_OBJECT_ALLOWANCE, object_uuids),
             "allow-inter-group-intersection": _encode_intersection_allowance(
                 group, INTER_GROUP_ALLOWANCE, object_uuids),
+            # Allow Existing Intersections: the pairs this object STARTS
+            # intersecting with are linked at the scene-build check and stay
+            # out of contact for the run; nothing else is exempted.
+            "allow-existing-intersection": _encode_intersection_allowance(
+                group, EXISTING_ALLOWANCE, object_uuids),
+            # The scene force field's scale on this group's objects (issues
+            # #151 and #114): 1.0 applies it as authored, 0.0 opts out.
+            "force-field-weight": np.float32(group.force_field_weight),
             "shrink": np.float32(group.shrink),
             "shrink-x": np.float32(group.shrink_x),
             "shrink-y": np.float32(group.shrink_y),
@@ -647,7 +744,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # pure-spin keyframe does not zero the translation.
             "velocity": {
                 assigned.uuid: _initial_translational_velocity(
-                    assigned, start_frame,
+                    assigned, start_frame, resolve_time_scale(state),
                 )
                 for assigned in group.assigned_objects
                 if assigned.included
@@ -660,6 +757,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                             kf.direction,
                             # Animation m/s -> physical (see resolve_time_scale).
                             kf.speed * state.world_scaling * resolve_time_scale(state),
+                            f"The velocity keyframe at frame {kf.frame} of "
+                            f"'{assigned.name}'",
                         )),
                     )
                     for kf in assigned.velocity_keyframes
@@ -698,9 +797,13 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 assigned.uuid: [
                     (
                         max(0.0, frame_to_time(kf.frame, fps, start_frame)),
+                        # Animation rad/s -> physical (see resolve_time_scale),
+                        # as the principal-axis schedule above.
                         _swap_axes(_normalize_and_scale(
                             _angular_axis_blender_vector(kf),
-                            np.radians(kf.angular_speed),
+                            np.radians(kf.angular_speed) * resolve_time_scale(state),
+                            f"The angular velocity keyframe at frame {kf.frame} "
+                            f"of '{assigned.name}'",
                         )),
                     )
                     for kf in assigned.velocity_keyframes
@@ -728,15 +831,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # parameters instead of the whole mesh dataset.
             "soft-constraint": _encode_soft_constraint(group),
             "collision-windows": {
-                assigned.uuid: [
-                    (
-                        max(0.0, frame_to_time(cw.frame_start, fps, start_frame)),
-                        max(0.0, frame_to_time(
-                            max(cw.frame_end, cw.frame_start), fps, start_frame,
-                        )),
-                    )
-                    for cw in assigned.collision_windows
-                ]
+                assigned.uuid: _encode_collision_windows(
+                    group, assigned, fps, start_frame,
+                )
                 for assigned in group.assigned_objects
                 if assigned.included
             } if group.use_collision_windows else {},
@@ -839,48 +936,38 @@ def _encode_group_params(context, groups, state, fps, start_frame):
 
 
 def _encode_cross_stitch(context):
+    """Every merge pair's stitch, or a refusal naming the pair that cannot ship.
+
+    A pair ``merge_pair_problem`` finds fault with is refused, never skipped:
+    a skipped pair is a seam the artist authored that silently fails to form.
+    """
+    from ...mesh_ops.merge_ops import merge_pair_problem, pair_label
+
     scene = context.scene
-    from ...mesh_ops.merge_ops import cleanup_stale_merge_pairs
-    cleanup_stale_merge_pairs(scene)
     state = get_addon_data(scene).state
     result = []
     for pair in state.merge_pairs:
-        if not pair.cross_stitch_json:
-            continue
-        # Skip entries whose UUIDs could not be resolved (e.g. legacy
-        # names renamed before migration).  The frontend raises ValueError
-        # on empty source_uuid/target_uuid, so silently dropping them here
-        # lets the rest of the simulation proceed.
-        if not pair.object_a_uuid or not pair.object_b_uuid:
-            continue
-        # Every supported pair is a soft, mass-scaled stitch (including
-        # shell-shell and rod-rod, which previously hard-merged DOFs).
-        try:
-            data = json.loads(pair.cross_stitch_json)
-        except json.JSONDecodeError:
-            continue
-        if data:
-            if not data.get("source_uuid") or not data.get("target_uuid"):
-                continue
-            # Upgrade legacy 4-wide rows [si, t0, t1, t2] / [1, a, b, c] to
-            # the 6-wide barycentric-barycentric layout (degenerate source
-            # [si, si, si] / [1, 0, 0]) so pre-migration scenes still build.
-            # Legacy rows carry no source_points, so a SOLID source is
-            # dropped by the decoder until re-snapped, which is safer than
-            # emitting a mis-mapped stitch.
-            ind = data.get("ind")
-            w = data.get("w")
-            if ind and w and len(ind[0]) == 4:
-                data["ind"] = [[r[0], r[0], r[0], r[1], r[2], r[3]] for r in ind]
-                data["w"] = [[1.0, 0.0, 0.0, x[1], x[2], x[3]] for x in w]
-            source_points = data.get("source_points")
-            if source_points:
-                data["source_points"] = [_to_solver(point) for point in source_points]
-            target_points = data.get("target_points")
-            if target_points:
-                data["target_points"] = [_to_solver(point) for point in target_points]
-            data["stitch_stiffness"] = float(pair.stitch_stiffness)
-            result.append(data)
+        problem = merge_pair_problem(scene, pair)
+        if problem is not None:
+            raise ValueError(f"Merge pair {pair_label(pair)}: {problem}.")
+        data = json.loads(pair.cross_stitch_json)
+        # Upgrade 4-wide rows [si, t0, t1, t2] / [ws, a, b, c] to the 6-wide
+        # barycentric-barycentric layout with a degenerate source
+        # [si, si, si] / [1, 0, 0]. The validator refuses a 4-wide pair with a
+        # SOLID side, which needs the points 4-wide rows never carried.
+        ind = data["ind"]
+        w = data["w"]
+        if len(ind[0]) == 4:
+            data["ind"] = [[r[0], r[0], r[0], r[1], r[2], r[3]] for r in ind]
+            data["w"] = [[1.0, 0.0, 0.0, x[1], x[2], x[3]] for x in w]
+        source_points = data.get("source_points")
+        if source_points:
+            data["source_points"] = [_to_solver(point) for point in source_points]
+        target_points = data.get("target_points")
+        if target_points:
+            data["target_points"] = [_to_solver(point) for point in target_points]
+        data["stitch_stiffness"] = float(pair.stitch_stiffness)
+        result.append(data)
     return result
 
 
@@ -897,23 +984,37 @@ def _build_param_dict(context) -> dict:
     state = get_addon_data(scene).state
     groups = [group for group in iterate_object_groups(scene) if group.active]
 
-    # Solver-fps (Time Scale applied): every frame->seconds conversion below,
-    # and the "fps" param itself, must use the scaled rate so the whole
-    # schedule re-interprets time coherently.
-    fps = resolve_solver_fps(state)
-    start_frame = resolve_start_frame(state)
+    # A curve on an add-on property the encoder does not sample is refused
+    # before anything is read. That is also what makes every setting below a
+    # value that cannot move with the playhead unless it is sampled.
+    refuse_unsampled_curves(scene)
 
     # Evaluate the whole param tree at the starting frame, matching the data
-    # encoder (_build_obj_data). EVERY geometry-derived encoding below belongs
-    # inside this block, not only the per-group bounding-box diagonal that
-    # scales contact-gap / contact-offset: a material map's ATTRIBUTE source is
-    # read off the evaluated mesh, and an animated contact distance resolves
-    # that same diagonal per sample. Outside it, both would track the artist's
-    # current timeline frame and drift from what the server stored at upload.
-    # The inner keyframe samplers (_encode_pin_config / _encode_dyn_params /
-    # the F-curve samplers) save and restore their own frame, so nesting them
-    # here is safe.
+    # encoder (_build_obj_data). EVERYTHING the payload reads belongs inside
+    # this block, not only the geometry-derived encodings (the per-group
+    # bounding-box diagonal that scales contact-gap / contact-offset, a
+    # material map's ATTRIBUTE source read off the evaluated mesh): the frame
+    # rate, the starting frame, Time Scale, the invisible colliders and every
+    # static setting are read here too, so the payload and its hash are the
+    # same wherever the artist parked the playhead. Outside it, a value would
+    # track the current timeline frame and drift from what the server stored at
+    # upload. The inner keyframe samplers (_encode_pin_config /
+    # _encode_dyn_params / the F-curve samplers) save and restore their own
+    # frame, so nesting them here is safe.
     with evaluate_at_start_frame(context, state):
+        # Solver-fps (Time Scale applied): every frame->seconds conversion
+        # below, and the "fps" param itself, must use the scaled rate so the
+        # whole schedule re-interprets time coherently.
+        fps = resolve_solver_fps(state)
+        time_scale = resolve_time_scale(state)
+        start_frame = resolve_start_frame(state)
+        # The block moved the playhead to the starting frame it resolved on
+        # entry; resolving it again here must name the same frame, or the
+        # starting frame itself depends on the playhead.
+        assert scene.frame_current == start_frame, (
+            f"the param encode is evaluating frame {scene.frame_current}, "
+            f"but the starting frame resolves to {start_frame}"
+        )
         scene_params = _encode_scene_params(context, state, fps)
         group_params = _encode_group_params(context, groups, state, fps, start_frame)
         pin_config = _encode_pin_config(context, groups, state, fps, start_frame)
@@ -939,6 +1040,10 @@ def _build_param_dict(context) -> dict:
         anim_times, anim_by_group = encode_param_anim(
             state, groups, fps, start_frame, int(state.frame_count), map_schedules
         )
+        ic = _encode_invisible_colliders(state, fps, start_frame)
+        force_field = _encode_force_field(
+            context, groups, state, start_frame, int(state.frame_count), fps
+        )
 
     result = {
         "scene": scene_params,
@@ -947,7 +1052,7 @@ def _build_param_dict(context) -> dict:
         # a params.rs whitelist entry and pollute param.toml. The decoder
         # reads this to convert authored animation rates (a SPIN op's
         # degrees per animation second in the DATA payload) to solver rates.
-        "time_scale": resolve_time_scale(state),
+        "time_scale": time_scale,
         "group": group_params,
         "pin_config": pin_config,
     }
@@ -955,6 +1060,8 @@ def _build_param_dict(context) -> dict:
         result["cross_stitch"] = cross_stitch
     if dyn_param:
         result["dyn_param"] = dyn_param
+    if force_field is not None:
+        result["force_field"] = force_field
 
     if anim_times:
         result["param_anim_times"] = anim_times
@@ -979,7 +1086,6 @@ def _build_param_dict(context) -> dict:
             if series:
                 params_dict["material-maps"] = series
 
-    ic = _encode_invisible_colliders(state, fps, start_frame)
     if ic:
         result["invisible_colliders"] = ic
     return result

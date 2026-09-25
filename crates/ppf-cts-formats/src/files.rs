@@ -102,6 +102,23 @@ pub const FINISHED: &str = "finished.txt";
 /// Sentinel the addon writes to request `save_and_quit` mid-run.
 pub const SAVE_AND_QUIT: &str = "save_and_quit";
 
+/// Written by a caller to HOLD a running solver at a frame boundary: one
+/// line, `<frame> [<timeout seconds>]`. When the solver has written frame
+/// `<frame>` it stops stepping, writes [`HELD`], and waits until the value
+/// grows, the file is removed, [`SAVE_AND_QUIT`] appears, or the timeout
+/// (default one hour) passes, which saves and quits so an abandoned hold
+/// costs a checkpoint rather than a run or a device held forever.
+pub const HOLD_AT_FRAME: &str = "hold_at_frame";
+
+/// Written by a held solver, holding the frame it stopped at, and removed
+/// when it continues. The frontend's frame-step calls wait on it.
+pub const HELD: &str = "held";
+
+/// Touched by a caller that rewrote the session's live inputs (the force
+/// field and `dyn_param.txt`) while the solver was held. The solver re-reads
+/// them before its next step and removes this.
+pub const INPUTS_UPDATED: &str = "inputs_updated";
+
 /// Structured run-status record written by the solver host (CBOR,
 /// `Envelope<RunStatus>`; see [`crate::status`]). The single source of
 /// truth for solver lifecycle and outcome, replacing the free-form log

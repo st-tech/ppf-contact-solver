@@ -110,6 +110,11 @@ pub struct Scene {
     /// Per-vertex intersection tolerances, resolved by the frontend from each
     /// vertex's object's material. Empty when every object is at the default.
     intersect_policy: Vec<u8>,
+    /// Allow Existing Intersections: the vertex links the scene-build check
+    /// made, flat `u32` pairs in the combined namespace (the dynamic vertices,
+    /// then the collision-mesh vertices after them). Empty when nothing was
+    /// linked, which is every scene that does not use the option.
+    start_link: Vec<u32>,
     shell_count: usize,
     rod_param: Vec<(String, ParamValueList)>,
     tri_param: Vec<(String, ParamValueList)>,
@@ -462,7 +467,7 @@ struct Config {
 
 type MatReadResult<T, const C: usize> =
     io::Result<Matrix<T, Const<C>, na::Dyn, VecStorage<T, Const<C>, na::Dyn>>>;
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum DynParamValue {
     Scalar(f64),
     Vec3([f64; 3]),
@@ -1166,6 +1171,28 @@ impl Scene {
         } else {
             Vec::new()
         };
+        // Allow Existing Intersections. Written only when the build linked
+        // something. Every index is checked against the two pools here, where
+        // the file can still be named, rather than trusted into a device table.
+        let start_link_path = format!("{}/bin/start_link.bin", args.path);
+        let start_link = if std::path::Path::new(&start_link_path).exists() {
+            let m = read_vec::<u32>(&start_link_path).expect("Failed to read start_link");
+            assert!(
+                m.len() % 2 == 0,
+                "start_link.bin holds {} indices, which is not a whole number of pairs",
+                m.len()
+            );
+            let pool = n_vert + n_static_vert;
+            if let Some(&bad) = m.iter().find(|&&v| v as usize >= pool) {
+                panic!(
+                    "start_link.bin names vertex {bad}, past the {n_vert} dynamic and \
+                     {n_static_vert} collision-mesh vertices of this scene"
+                );
+            }
+            m
+        } else {
+            Vec::new()
+        };
         // Written only when some object actually asks for an allowance, so
         // absent is the common case and reads as "nothing is allowed".
         let intersect_policy_path = format!("{}/bin/intersect_policy.bin", args.path);
@@ -1664,33 +1691,7 @@ impl Scene {
         let file_content = fs::read_to_string(args_path).unwrap();
         let config: Config = toml::from_str(&file_content).unwrap();
 
-        let dyn_args_path = format!("{}/dyn_param.txt", args.path);
-        let dyn_args = if std::path::Path::new(&dyn_args_path).exists() {
-            read_dyn_param(&dyn_args_path).unwrap()
-        } else {
-            Vec::new()
-        };
-        // Refuse a schedule the solver cannot honor, here at load, rather than
-        // stepping past it every frame. The frontend validates a `dyn()` key
-        // against the whole app-parameter registry, which is a much larger set
-        // than the one with a runtime arm, so a schedule on (say) `cg-tol`
-        // exports cleanly and then does nothing at all. Naming the key and the
-        // set is what turns "my keyframes had no effect" into a fixable
-        // message.
-        for (title, _) in dyn_args.iter() {
-            let known = Self::DYN_PARAM_KEYS.contains(&title.as_str())
-                || Self::DYN_PARAM_PREFIXES
-                    .iter()
-                    .any(|prefix| title.starts_with(prefix));
-            assert!(
-                known,
-                "dynamic parameter '{title}' is not animatable: the solver \
-                 honors a schedule for {:?}, or for a key namespaced {:?}. \
-                 Set it once instead, or remove the schedule.",
-                Self::DYN_PARAM_KEYS,
-                Self::DYN_PARAM_PREFIXES,
-            );
-        }
+        let dyn_args = Self::load_dyn_param(&args.path);
 
         let param_dir = format!("{}/bin/param", args.path);
         // Animated material schedules live beside the static params, one file
@@ -1900,6 +1901,7 @@ impl Scene {
             object_vert_index,
             group_vert_index,
             intersect_policy,
+            start_link,
             shell_count,
             rod_param,
             tri_param,
@@ -3251,6 +3253,64 @@ impl Scene {
         result
     }
 
+    /// Read and validate `<session>/dyn_param.txt`, or an empty table when
+    /// the session has none.
+    fn load_dyn_param(session: &str) -> DynParamTable {
+        let dyn_args_path = format!("{session}/dyn_param.txt");
+        let dyn_args = if std::path::Path::new(&dyn_args_path).exists() {
+            read_dyn_param(&dyn_args_path).unwrap()
+        } else {
+            Vec::new()
+        };
+        // Refuse a schedule the solver cannot honor, here at load, rather than
+        // stepping past it every frame. The frontend validates a `dyn()` key
+        // against the whole app-parameter registry, which is a much larger set
+        // than the one with a runtime arm, so a schedule on (say) `cg-tol`
+        // exports cleanly and then does nothing at all. Naming the key and the
+        // set is what turns "my keyframes had no effect" into a fixable
+        // message.
+        for (title, _) in dyn_args.iter() {
+            let known = Self::DYN_PARAM_KEYS.contains(&title.as_str())
+                || Self::DYN_PARAM_PREFIXES
+                    .iter()
+                    .any(|prefix| title.starts_with(prefix));
+            assert!(
+                known,
+                "dynamic parameter '{title}' is not animatable: the solver \
+                 honors a schedule for {:?}, or for a key namespaced {:?}. \
+                 Set it once instead, or remove the schedule.",
+                Self::DYN_PARAM_KEYS,
+                Self::DYN_PARAM_PREFIXES,
+            );
+        }
+        dyn_args
+    }
+
+    /// Re-read the scene-wide schedule a held run's caller rewrote.
+    ///
+    /// Every per-step reader of the table (`update_param` and the velocity
+    /// overrides) sees the new schedule from the next step on. The collision
+    /// windows are NOT rebuilt: their table is installed once at initialize,
+    /// so a schedule that adds or changes a `collision_window:` key is refused
+    /// here rather than silently ignored.
+    pub fn reload_dyn_param(&mut self, session: &str) {
+        let fresh = Self::load_dyn_param(session);
+        let windows = |table: &DynParamTable| -> Vec<String> {
+            table
+                .iter()
+                .filter(|(title, _)| title.starts_with("collision_window:"))
+                .map(|(title, entries)| format!("{title}{entries:?}"))
+                .collect()
+        };
+        assert!(
+            windows(&fresh) == windows(&self.dyn_args),
+            "a held run's updated dyn_param.txt changes a collision window; \
+             collision windows are installed once at initialize and cannot be \
+             changed mid-run"
+        );
+        self.dyn_args = fresh;
+    }
+
     pub fn build_collision_window_table(&self) -> CollisionWindowTable {
         // Single source of truth for the cap: the device side reads the
         // flat window table with the same stride, which
@@ -3457,6 +3517,7 @@ impl Scene {
             object_vertex_index: self.object_vert_index.clone(),
             group_vertex_index: self.group_vert_index.clone(),
             intersect_policy: self.intersect_policy.clone(),
+            start_link: self.start_link.clone(),
         }
     }
 
@@ -3654,10 +3715,13 @@ fn apply_pin_op(
             t_start,
             t_end,
         } => {
-            let angle = pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
-            if angle <= 0.0 {
+            // Gated on the ELAPSED time, not on the angle: a negative angular
+            // velocity turns the other way and its angle is negative once the
+            // spin has begun.
+            if time.min(*t_end) - *t_start <= 0.0 {
                 return (position, false);
             }
+            let angle = pin_apply::spin_angle_rad(*angular_velocity as f64, *t_start, *t_end, time);
             let c = to_arr(*center);
             let ax = [axis[0] as f64, axis[1] as f64, axis[2] as f64];
             let r = pin_apply::spin_step(to_arr(position), c, ax, angle);
@@ -3721,6 +3785,40 @@ fn apply_pin_op(
             );
             (from_arr(out), true)
         }
+    }
+}
+
+#[cfg(test)]
+mod pin_op_tests {
+    use super::*;
+
+    fn spin(angular_velocity: f32) -> PinOperation {
+        PinOperation::Spin {
+            center: from_arr([0.0, 0.0, 0.0]),
+            axis: Vector3::new(0.0, 0.0, 1.0),
+            angular_velocity,
+            t_start: 1.0,
+            t_end: 2.0,
+        }
+    }
+
+    #[test]
+    fn a_spin_waits_for_its_start() {
+        let (p, active) = apply_pin_op(&spin(90.0), from_arr([1.0, 0.0, 0.0]), 0, 0.5);
+        assert!(!active);
+        assert_eq!(to_arr(p), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_negative_angular_velocity_turns_the_other_way() {
+        // One second at -90 deg/s about +z carries (1, 0, 0) to (0, -1, 0).
+        let (p, active) = apply_pin_op(&spin(-90.0), from_arr([1.0, 0.0, 0.0]), 0, 2.0);
+        let p = to_arr(p);
+        assert!(active);
+        assert!(p[0].abs() < 1e-6 && (p[1] + 1.0).abs() < 1e-6, "{p:?}");
+        let (q, _) = apply_pin_op(&spin(90.0), from_arr([1.0, 0.0, 0.0]), 0, 2.0);
+        let q = to_arr(q);
+        assert!(q[0].abs() < 1e-6 && (q[1] - 1.0).abs() < 1e-6, "{q:?}");
     }
 }
 

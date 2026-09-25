@@ -11,7 +11,7 @@ This page centralizes everything specific to the Static type:
 
 - [Creating a Static group](#creating-a-static-group)
 - [Moving a Static object](#moving-a-static-object): the three ways
-  (Static Ops, Blender keyframes, captured deformation) and the rule
+  (Static Ops, Blender animation, captured deformation) and the rule
   that picks one
 - [The Transform sub-box](#the-transform-sub-box): where Static ops
   live in the UI
@@ -66,30 +66,46 @@ There are **three mutually exclusive** ways to drive that motion:
    entries edited per assigned object inside the group's
    [Transform sub-box](#the-transform-sub-box). You give each op a
    time range and a delta, axis, or factor.
-2. **Blender transform keyframes**. The usual way you animate an
-   object in Blender: select it, hit <kbd>I</kbd> on a frame, and pick
-   **Location**, **Rotation**, or **Scale**. Any keyframes you set on
-   the object's own transform channels get picked up automatically.
-   The add-on samples the world transform at each keyframe and ships
-   the track, including Bezier handles, so eases you see in the Graph
-   Editor carry over to the simulation.
+2. **Blender animation of the object as a whole**. The usual way you
+   animate an object in Blender: select it, hit <kbd>I</kbd> on a
+   frame, and pick **Location**, **Rotation**, or **Scale**. Keyframes
+   on the object's own transform channels are picked up automatically,
+   and so is motion the object gets from a parent, a constraint, a
+   driver, or an NLA strip. The add-on reads the object's world
+   transform at every frame of the solve, so eases, Bezier handles,
+   and parent motion all reach the simulation exactly as Blender plays
+   them back.
 3. **Captured deformation**. For objects whose mesh shape changes
    over time, an **Armature** modifier driven by a posed rig, a
-   **Lattice** or **Mesh Deform** cage, animated **Shape Keys**, and
-   the like, use the
+   **Lattice** or **Mesh Deform** cage, animated **Shape Keys**,
+   **Geometry Nodes**, and the like, use the
    [**Capture Deformation**](#armature-driven-static-objects) button
-   to record the animation onto the collider.
+   to record the animation onto the collider. It is needed only when
+   the mesh changes shape; a collider that only moves, turns, or
+   scales as a whole needs no capture.
 
 :::{warning}
 **Only one source of motion per object at a time.** If an assigned
-Static mesh has Blender transform keyframes, the add-on uses those
-and ignores that object's Static ops list. The UI flags this with
+Static mesh has Blender transform keyframes of its own, the add-on uses
+those and ignores that object's Static ops list. The UI flags this with
 the label *"Object has Blender keyframes — these ops will be
-ignored"* above the ops list. A captured deformation takes priority
-over both: while a deformation cache is present for the object, its
-Static ops and transform keyframes are ignored, because the cache
-already includes any rigid parent motion in the recorded vertex
-positions.
+ignored"* above the ops list. A collider moved by anything else (a
+parent, a constraint, a driver, or an NLA strip) cannot also carry
+Static ops: **Transfer** refuses it and names the object, so remove
+its ops or stop the other motion. A captured deformation takes
+priority over all of these: while a deformation cache is present for
+the object, its Static ops and transform animation are ignored,
+because the cache already includes any rigid parent motion in the
+recorded vertex positions.
+:::
+
+:::{note}
+**A moving collider cannot be sheared.** A location, a rotation, and
+a scale are all a moving collider carries. A rotated child of a parent
+with a non-uniform scale is sheared, and **Transfer** refuses such a
+collider when it moves, naming the object and the first sheared frame.
+Give the parent a uniform scale, or click **Capture Deformation** on
+the collider's row so the recorded shape is used instead.
 :::
 
 :::{note}
@@ -102,9 +118,10 @@ the add-on will refuse to upload it with an explicit error.
 Use **Static ops** when the motion is scripted and easy to describe
 with a few time ranges: a sliding floor plate that moves from A to B
 between frame 30 and 60, a spinning turntable, a shrinking platform.
-Use **Blender keyframes** when the motion lives in Blender's own
+Use **Blender animation** when the motion lives in Blender's own
 timeline already at the object level: a prop animated by hand in the
-Graph Editor, a collider parented to a Camera. Use
+Graph Editor, a collider parented to an animated object such as a
+Camera, a collider that follows a constraint. Use
 **Captured deformation** when the motion is *inside the mesh* (a
 posed armature, a deforming lattice, a Shape Key), not just on the
 object transform.
@@ -124,12 +141,20 @@ types is relabeled **Transform**. Expanding it shows:
    `+` (add menu), `−` (remove), and up/down reorder buttons.
 4. **The per-op editor** with fields for the active row:
    - **Start** / **End**: Blender frames; the op is active across the
-     closed range.
+     closed range. A new op spans frames 1 to 60, or the same 60 frames
+     beginning at the **Starting Frame** when that is later. **Transfer**
+     refuses an op whose **End** is not after its **Start**, or whose
+     **Start** is before the **Starting Frame**, naming the object, the
+     op, and both frames; move the op's frames or the **Starting
+     Frame**.
    - **Transition**: `Linear` or `Smooth` (smoothstep).
    - **Delta (m)**: *Move By* only; `(x, y, z)` translation in
      world units.
    - **Axis** / **Angular Velocity (°/s)**: *Spin* only; pivots
-     around the object's origin.
+     around the object's origin. A negative angular velocity turns the
+     other way. An **Axis** of `(0, 0, 0)` with a nonzero angular
+     velocity is refused at **Transfer**, since it names no axis to
+     turn about.
    - **Factor**: *Scale* only; uniform scale multiplier around the
      object's origin.
 
@@ -175,6 +200,18 @@ grayed out because nothing has been recorded yet; the hint
 to do next.
 ```
 
+Until a recording exists, the line under the two buttons says which
+case the selected object is, taking the first row that applies:
+
+| Line under the buttons | The object | What to do |
+| ---------------------- | ---------- | ---------- |
+| *Deforming modifier detected; capture to encode* | Its mesh changes shape. | Click **Capture Deformation**; **Transfer** refuses the object until you do. |
+| *Parent or constraint motion transfers automatically; capture is optional* | It moves as a whole through a parent, a constraint, a driver, or an NLA strip. | Nothing. The motion is sampled at every frame at **Transfer**. **Capture Deformation** stays available, and a recording, if you take one, is used in place of the samples. |
+| *Keyframe animation transfers automatically; capture is for deformers* | It has transform keyframes of its own. | Nothing. The keyframed motion is sampled at **Transfer**, and **Capture Deformation** stays grayed out. |
+
+Once a recording exists, the line shows the recorded frame count
+instead.
+
 ### The Capture Deformation Button
 
 ```{figure} ../../images/static_objects/armature_btn_capture_deformation.png
@@ -206,16 +243,16 @@ clicked the button. It does not update on its own. If you tweak the
 armature pose, edit the action's keyframes, change the modifier
 stack, edit the rest mesh, or alter parent or constraint chains,
 the recording is now out of date and the solver will keep using the
-old motion. One stack change is worse than stale: a topology-changing
-modifier (Subdivision Surface, Remesh, Decimate) anywhere in the stack
-makes the capture abort on that object's first frame with *'<name>'
-vertex count changed at frame N*, because each captured frame is
-compared against the base mesh's vertex count. Apply or remove the
-modifier, then retry — reordering it above the deformer, as the message
-suggests, does not help.
-Re-press **Capture
-Deformation** before the next
+old motion. Re-press **Capture Deformation** before the next
 **Transfer** so the simulation sees the current animation.
+
+A topology-changing modifier (Subdivision Surface, Remesh, Decimate)
+in the stack does not stop the capture. The recording holds the mesh
+as deformed by everything above the first such modifier, which is the
+shape the solver collides against, and that modifier and everything
+below it apply on top of the recording when the result plays back. So
+put the deformer above the Subdivision Surface: a deformer below it
+changes only what you see, not what the cloth hits.
 :::
 
 ### The Clear Deformation Cache Button
@@ -283,8 +320,9 @@ velocity overwrite) is hidden.
 | **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Let an object pass through itself, with no contact between its parts. |
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Let an object pass through every other object, with no contact.       |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | Let an object pass through objects of other groups, with no contact.  |
+| **Allow Existing Intersections**     | `allow_existing_intersection`     | `False` | Let only the places that overlap at the start pass through, for the whole run. |
 
-The last three rows sit in an **Allow Intersections** box drawn below the
+The last four rows sit in an **Allow Intersections** box drawn below the
 type-specific block, and that box is the same on every group type; a
 Static group is not an exception. What is specific to Static is when the
 boxes take effect: a collider's own boxes reach the solver only while it is
@@ -292,8 +330,8 @@ animated, soft-constrained, or named as one end of a cross-stitch. A
 collider that is none of those stays a collision surface only and ignores
 the boxes on its group, though they are still drawn. A moving object still
 passes through such a collider when the moving object's own group has
-**Allow Inter-Object Intersections** or **Allow Inter-Group Intersections**
-on. See [Allow Intersections](../params/material.md#allow-intersections).
+**Allow Inter-Object Intersections**, **Allow Inter-Group Intersections** or
+**Allow Existing Intersections** on. See [Allow Intersections](../params/material.md#allow-intersections).
 
 **Apply Soft Constraints** matters most for the armature-driven colliders
 above. A body rig folds against itself as it moves, and where it closes onto
@@ -326,7 +364,7 @@ panel walks through active groups in slot order (`object_group_0` →
 `object_group_31`) and processes every assigned object; the one inside a
 group box bakes only the object currently selected in that group's
 **Assigned Objects** list. Static groups are included in the scene-wide
-pass: if a Static collider was driven by Blender transform keyframes and
+pass: if a Static collider was driven by its Blender animation and
 therefore carried a `ContactSolverCache` modifier and `.pc2` file after a
 Fetch, both are cleaned up during bake even though the Static object
 itself has no simulated deformation. Bake never touches object-level
@@ -395,9 +433,9 @@ See the
 [MCP Tool Reference](../../integrations/mcp_reference.rst) for the full
 signatures.
 
-For the Blender-keyframe route there is no add-on-specific API at all.
-Key the object's transform in Blender as you normally would (`I` in the
-viewport, the Graph Editor, constraints baked to fcurves, or
+For the Blender-animation route there is no add-on-specific API at all.
+Animate the object in Blender as you normally would (`I` in the
+viewport, the Graph Editor, a parent, a constraint, a driver, or
 `obj.keyframe_insert(data_path="location", frame=...)` from Python)
 and the encoder picks it up at Transfer time.
 
@@ -414,14 +452,20 @@ The encoder checks each Static object in order:
    already includes any rigid parent motion in the per-vertex
    stream, so emitting `transform_animation` or `static_ops`
    alongside it would double-count.
-2. Else, if the object is *deforming* (its modifier stack would move
-   vertices and the depsgraph confirms it does), refuse the upload
-   with an explicit error. Shipping it as a rest-pose collider
-   would silently mislead the artist.
-3. Else if `obj.animation_data.action` has any transform fcurve,
-   extract sparse `(time, translation, quaternion, scale)` keyframes
-   plus per-segment Bezier-handle data and send them as
-   `transform_animation`.
+2. Else, if the object's mesh changes shape (a deforming modifier
+   stack, Shape Key animation, or a change in its local vertex
+   positions the depsgraph confirms across the frame range), refuse
+   the upload with an explicit error. Shipping it as a rest-pose
+   collider would silently mislead the artist.
+3. Else, if anything can move the object as a whole (its own
+   transform fcurves, or a parent, constraint, driver, or NLA strip up
+   its parent chain) and its world transform does change over the
+   solve, sample `(translation, quaternion, scale)` at every frame of
+   the solve with a linear segment between consecutive samples and
+   send them as `transform_animation`. All moving colliders are
+   sampled in one pass over the frames. A sheared world matrix is
+   refused, and so are `static_ops` on an object moved by anything
+   other than its own fcurves.
 4. Else if the matching `AssignedObject` has a non-empty
    `static_ops` collection, serialize those ops (frames sent as
    offsets from the starting frame, axes swapped into solver
@@ -429,10 +473,15 @@ The encoder checks each Static object in order:
 5. Else send the object with no animation: a rigid, unmoving
    collider.
 
-The first match wins; the other channels are dropped. This is why the
-UI can warn *"these ops will be ignored"* as soon as fcurves appear on
-the object, and why **Capture Deformation** is required (rather than
-just helpful) for an Armature-driven collider.
+The first match wins, and the ops of an object with its own transform
+fcurves are dropped. This is why the UI can warn *"these ops will be
+ignored"* as soon as fcurves appear on the object, and why **Capture
+Deformation** is required (rather than just helpful) for an
+Armature-driven collider. Sampling every frame, rather than the keys,
+is what makes the solver's motion match Blender's at every frame the
+solve reaches, whatever the animation is built from; a turn of more
+than 180 degrees within a single frame is the one motion no per-frame
+sample can tell from the shorter turn the other way.
 
 **Time conversion**
 

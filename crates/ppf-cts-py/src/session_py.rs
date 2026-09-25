@@ -15,11 +15,20 @@
 // holds frontend-side filesystem + parsing primitives.
 
 use numpy::{PyArray2, PyArrayMethods};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
 use ppf_cts_core::datamodel::session as core;
 use ppf_cts_core::parsers as parsers_core;
+use ppf_cts_formats::files::{
+    statistics_filename, STATISTICS_MANIFEST, STATISTICS_PREFIX, STATISTICS_SUFFIX,
+};
+use ppf_cts_formats::statistics::{
+    decode_statistics_frame, decode_statistics_manifest, StatisticChannel,
+};
+
+use crate::errors::into_py_err;
 
 #[pyfunction]
 #[pyo3(signature = (path, n_lines=None))]
@@ -699,7 +708,110 @@ pub fn solver_failed_to_start_message(rc: Option<i32>) -> String {
     core::solver_failed_to_start_message(rc)
 }
 
+// ---------------------------------------------------------------------------
+// Per-object statistics the solver writes beside its frames.
+
+/// The frames in `output_dir` that carry a statistics record, ascending.
+///
+/// Empty when the directory does not exist yet, which is the state of a
+/// session that has not started. The manifest shares the record's prefix and
+/// suffix, and is told apart by not naming a frame number.
+#[pyfunction]
+pub fn statistics_frames(output_dir: &str) -> PyResult<Vec<i32>> {
+    let entries = match std::fs::read_dir(output_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(PyOSError::new_err(format!(
+                "cannot list {output_dir}: {error}"
+            )));
+        }
+    };
+    let mut frames = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| PyOSError::new_err(format!("cannot list {output_dir}: {error}")))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let number = name
+            .strip_prefix(STATISTICS_PREFIX)
+            .and_then(|rest| rest.strip_suffix(STATISTICS_SUFFIX))
+            .and_then(|digits| digits.parse::<i32>().ok());
+        if let Some(frame) = number {
+            frames.push(frame);
+        }
+    }
+    frames.sort_unstable();
+    Ok(frames)
+}
+
+fn read_statistics_file(path: &std::path::Path) -> PyResult<Vec<u8>> {
+    std::fs::read(path)
+        .map_err(|error| PyOSError::new_err(format!("cannot read {}: {error}", path.display())))
+}
+
+/// Frame `frame`'s per-object statistics, checked against the run's manifest.
+///
+/// Returns `{"frame", "time", "objects"}`, where `objects` lists one
+/// `{"uuid", "name", "type", "values"}` per object in the manifest's order and
+/// `values` maps every channel that object SUPPORTS to its value, or to `None`
+/// where the solver marked the channel unavailable for this frame. A channel the
+/// object does not support is absent rather than `None`, so the two cases stay
+/// apart, and no value is ever a stand-in NaN. The contact count is an integer.
+#[pyfunction]
+pub fn read_statistics_frame<'py>(
+    py: Python<'py>,
+    output_dir: &str,
+    frame: i32,
+) -> PyResult<Bound<'py, PyDict>> {
+    let directory = std::path::Path::new(output_dir);
+    let manifest =
+        decode_statistics_manifest(&read_statistics_file(&directory.join(STATISTICS_MANIFEST))?)
+            .map_err(into_py_err)?;
+    manifest
+        .validate()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let record = decode_statistics_frame(&read_statistics_file(
+        &directory.join(statistics_filename(frame)),
+    )?)
+    .map_err(into_py_err)?;
+    record
+        .validate(&manifest)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+
+    let objects = PyList::empty(py);
+    for (object, statistics) in manifest.objects.iter().zip(record.objects.iter()) {
+        let values = PyDict::new(py);
+        for channel in StatisticChannel::ALL {
+            if object.supported_channels & channel.bit() == 0 {
+                continue;
+            }
+            if channel == StatisticChannel::ContactCount {
+                let valid = statistics.valid_channels & channel.bit() != 0;
+                values.set_item(channel.name(), valid.then_some(statistics.contact_count))?;
+            } else {
+                values.set_item(channel.name(), statistics.scalar(channel))?;
+            }
+        }
+        let row = PyDict::new(py);
+        row.set_item("uuid", &object.object_uuid)?;
+        row.set_item("name", &object.object_name)?;
+        row.set_item("type", &object.dynamics_type)?;
+        row.set_item("values", values)?;
+        objects.append(row)?;
+    }
+    let out = PyDict::new(py);
+    out.set_item("frame", record.solver_frame)?;
+    out.set_item("time", record.time_seconds)?;
+    out.set_item("objects", objects)?;
+    Ok(out)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(statistics_frames, m)?)?;
+    m.add_function(wrap_pyfunction!(read_statistics_frame, m)?)?;
     m.add_function(wrap_pyfunction!(get_logging_docstrings, m)?)?;
     m.add_function(wrap_pyfunction!(windows_library_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(read_log_tail, m)?)?;

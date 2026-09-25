@@ -43,7 +43,11 @@ A `.blend` saved by an older build still carries the add-on's own
 scene-parameter keyframe list. It is converted into ordinary F-curves the
 first time the file is opened, and a **Hold** keyframe becomes a
 **Constant** interpolation segment, which is the shape it always
-described.
+described. The list's first keyframe stands for the setting at the
+solve's **Starting Frame**, so its key lands there, and the viewport
+preview reads it there too. An entry with a later keyframe at or before
+the **Starting Frame** cannot become a faithful curve; it stays in the
+list, and **Transfer** refuses it by name.
 :::
 
 ## Supported Parameters
@@ -56,13 +60,38 @@ described.
 | **Air Friction**     | `air_friction`      | `AIR_FRICTION`     | scalar                |
 | **Vertex Air Damping** | `vertex_air_damp` | `VERTEX_AIR_DAMP`  | scalar                |
 | **Step Size**        | `step_size`         | —                  | scalar                |
-| **Inactive Momentum Frames** | `inactive_momentum_frames` | — | scalar (frames)  |
 
-Seven scene settings can be keyframed. The **Enum** column is the
+Six scene settings can be keyframed. The **Enum** column is the
 `param_type` value of the retired keyframe list, which only ever covered
 the first five; those five are also the only keys the legacy
-`solver.param.dyn(...)` builder accepts. **Step Size** and **Inactive
-Momentum Frames** are reachable as F-curves only.
+`solver.param.dyn(...)` builder accepts. **Step Size** is reachable as
+an F-curve only.
+
+These six, and a group's animatable material sliders (see
+[Material Parameters](material.md)), are the only add-on settings that
+offer a keyframe. Every other setting is read once, at the solve's
+**Starting Frame**, and offers no keyframe control. A keyframe that a
+saved file still carries on one of them stops **Transfer** with a
+message naming its data path, rather than being read once in silence;
+delete it. **Inactive Momentum Frames** is one of them: it counts frames
+from the start of the solve, so it has no value that could change over
+it.
+
+Drivers and NLA strips are refused on every add-on setting, the six
+above included. The solve samples only the keyframes in the scene's
+active action, so a driven setting, or one keyed inside an NLA strip,
+would reach the solve at its **Starting Frame** value while the viewport
+shows it changing. **Transfer** names the data path, and the strip and
+track for an NLA strip: remove the driver and keyframe the setting
+instead, or move the strip's keys into the scene's active action.
+
+What **Transfer** sends does not depend on where the playhead sits:
+every setting it reads once is read at the **Starting Frame**, and every
+keyframed one is sampled across the solve's frame range.
+
+A wind keyframe follows the same rule as the static **Wind** fields: a
+**Direction** of `(0, 0, 0)` with a nonzero **Strength** is refused at
+**Transfer**, naming the frame.
 
 Everything the solver reads once at build time (CG tolerance, Max
 Contact, and so on) stays constant for the whole simulation. Per-group
@@ -79,7 +108,11 @@ Blender's `keyframe_insert`. Every builder method returns `self`, so you
 chain them freely. `time(f)` moves the cursor to frame `f` (must be
 strictly increasing), and the next `hold()` or `change(...)` attaches a
 keyframe at that frame. For wind, `change(direction, strength=...)`
-encodes both.
+encodes both. The list's first keyframe holds the scene value at the
+solve's **Starting Frame**; until the list has been converted to
+F-curves, **Transfer** refuses a later keyframe at or before the
+**Starting Frame**, or one not after the keyframe before it, naming the
+parameter and the frame.
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
@@ -127,7 +160,6 @@ Each dynamic-parameter key maps to a solver-side key:
 | `air_friction`      | `air-friction`            |
 | `vertex_air_damp`   | `isotropic-air-friction`  |
 | `step_size`         | `dt`                      |
-| `inactive_momentum_frames` | `inactive-momentum` |
 
 **Encoding rules**
 
@@ -145,10 +177,12 @@ authoring moved. The observable rules:
   so the scene's **Starting Frame** is simulated time zero.
 - Gravity and wind are coordinate-converted from Z-up to Y-up.
 - Wind is sent as `direction × strength` with the direction normalized.
-  A zero direction vector produces a zero wind vector regardless of the
-  strength.
-- **Inactive Momentum Frames** is divided by the frame rate, so the
-  solver receives a duration in seconds.
+  A zero direction vector is accepted only with a zero strength, and
+  sends a zero wind vector.
+- A curve on **Inactive Momentum Frames** is refused rather than
+  sampled. The solver reads that setting's key as an on/off flag that
+  the frontend schedules off at the end of the count, so a per-frame
+  value has no meaning there.
 - `is_hold` is always `False` for a sampled curve: the shape is already
   in the samples, with nothing left to hold. It stays in the format for
   the legacy list, whose entries are dropped when they carry fewer than

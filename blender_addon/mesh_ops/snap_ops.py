@@ -71,6 +71,7 @@ def _get_pair_contact_gaps(scene, obj_a, obj_b):
     OUTSIDE the barrier's activation band. Returning ``gap+offset`` per object
     and summing the pair gives that safe separation. The value also seeds the
     cross-stitch search radius."""
+    from ..core.encoder.params import group_contact_lengths
     from ..core.uuid_registry import get_object_uuid
     uid_a = get_object_uuid(obj_a)
     uid_b = get_object_uuid(obj_b)
@@ -78,9 +79,9 @@ def _get_pair_contact_gaps(scene, obj_a, obj_b):
     for group in iterate_active_object_groups(scene):
         for assigned in group.assigned_objects:
             if uid_a and assigned.uuid == uid_a:
-                gap_a = group.computed_contact_gap + group.computed_contact_offset
+                gap_a = sum(group_contact_lengths(group))
             elif uid_b and assigned.uuid == uid_b:
-                gap_b = group.computed_contact_gap + group.computed_contact_offset
+                gap_b = sum(group_contact_lengths(group))
     return gap_a, gap_b
 
 

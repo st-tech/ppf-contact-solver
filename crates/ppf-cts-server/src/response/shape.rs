@@ -13,7 +13,7 @@ use crate::PROTOCOL_VERSION;
 use ppf_cts_core::state::{Build, ServerState, Solver};
 
 /// Build the always-present base fields: status, data, frame,
-/// initialized, error, crash_kind, violations, root, upload_id, hashes,
+/// initialized, error, crash_kind, violations, exemptions, root, upload_id, hashes,
 /// protocol_version, hardware, git_branch, solver_target_dir, solver_backend.
 pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value> {
     let mut m: Map<String, Value> = Map::new();
@@ -29,6 +29,12 @@ pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value
     m.insert(
         "violations".into(),
         Value::Array(violations_to_json(&state.violations)),
+    );
+    // Allow Existing Intersections: what the latest build exempted, in the
+    // violation record shape, for the add-on's overlay.
+    m.insert(
+        "exemptions".into(),
+        Value::Array(violations_to_json(&state.exemptions)),
     );
     m.insert("root".into(), Value::String(state.root.clone()));
     m.insert("upload_id".into(), Value::String(state.upload_id.clone()));

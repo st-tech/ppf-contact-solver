@@ -62,12 +62,36 @@ _overlay_cache = {
     "collider_batches": [],
     "velocity_batches": [],
     "velocity_labels": [],
+    # The force field's Visualize arrows and the key they were built for
+    # (`overlay_geometry.force_field.force_field_key` plus the view scale).
+    "force_field_key": None,
+    "force_field_batches": [],
     "translation_lock_batches": [],
     "rotation_lock_batches": [],
     "violation_batches": [],
     "violation_labels": [],
     "violation_version": -1,
+    "exemption_batches": [],
+    "exemption_labels": [],
+    "exemption_version": None,
 }
+
+def exemptions_to_draw(scene, exemptions):
+    """The Allow Existing Intersections records to draw on this frame.
+
+    All of them on the frame the simulation starts from, and none on any
+    other: the records are START-POSE geometry, so on a later frame the cloth
+    has moved and the highlight would float where it used to be. The one rule
+    the draw handler applies, kept apart from it so it can be checked without a
+    GPU context.
+    """
+    from ...core.encoder import resolve_start_frame_or_default
+    if not exemptions:
+        return []
+    if scene.frame_current != resolve_start_frame_or_default(scene):
+        return []
+    return exemptions
+
 
 # Zoom delta that triggers rebuild of view-scaled batches.
 _VIEW_DISTANCE_TOL = 0.05
@@ -542,7 +566,33 @@ def draw_overlay_callback():
     except Exception:
         pass
 
-    violation_batches = _overlay_cache["violation_batches"]
+    # --- Allow Existing Intersections: what the build exempted ---
+    #
+    # The pairs are START-POSE geometry, so they are drawn only while the
+    # timeline sits on the frame the simulation starts from; on any other
+    # frame the cloth has moved and the highlight would float where it used
+    # to be. Keyed on the list's first record and on that frame test, so a
+    # poll returning the same exemptions rebuilds nothing.
+    try:
+        from ...core.facade import communicator as _com
+        e_list = exemptions_to_draw(scene, _com.info.exemptions)
+        e_ver = (id(e_list[0]) if e_list else None, len(e_list))
+        if e_ver != _overlay_cache["exemption_version"]:
+            _overlay_cache["exemption_version"] = e_ver
+            if e_list:
+                if depsgraph is None:
+                    depsgraph = context.evaluated_depsgraph_get()
+                eb, el = _build_violation_batches(scene, depsgraph, e_list)
+                _overlay_cache["exemption_batches"] = eb
+                _overlay_cache["exemption_labels"] = el
+            else:
+                _overlay_cache["exemption_batches"] = []
+                _overlay_cache["exemption_labels"] = []
+    except Exception:
+        pass
+
+    violation_batches = (_overlay_cache["violation_batches"]
+                         + _overlay_cache["exemption_batches"])
     if violation_batches:
         # Two shaders: TRIS use UNIFORM_COLOR, POINTS use
         # POINT_UNIFORM_COLOR (Metal point-size, see snap_points block).
@@ -598,6 +648,43 @@ def draw_overlay_callback():
         _overlay_cache["view_distance"] = view_distance
         _overlay_cache["view_version"] = version
         _overlay_cache["view_frame"] = frame
+    # --- Force field arrows (Visualize) ---
+    # Keyed on everything the arrows depend on rather than on the overlay
+    # version, because moving a field object in the viewport changes the field
+    # without touching any addon state.
+    try:
+        from .overlay_geometry.force_field import (
+            build_force_field_batches,
+            force_field_key,
+        )
+
+        ff_state = get_addon_data(scene).state
+        ff_key = force_field_key(scene, ff_state)
+        if ff_key is not None:
+            ff_key = ff_key + (round(view_distance, 1),)
+        if ff_key != _overlay_cache["force_field_key"]:
+            _overlay_cache["force_field_key"] = ff_key
+            _overlay_cache["force_field_batches"] = (
+                build_force_field_batches(scene, ff_state, view_distance)
+                if ff_key is not None else []
+            )
+        ff_batches = _overlay_cache["force_field_batches"]
+        if ff_batches and not hide_arrows:
+            shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+            gpu.state.blend_set("ALPHA")
+            gpu.state.depth_test_set("LESS_EQUAL")
+            for batch, color in ff_batches:
+                shader.bind()
+                shader.uniform_float("color", color)
+                batch.draw(shader)
+            gpu.state.blend_set("NONE")
+    except Exception as exc:
+        signature = repr(exc)
+        if _overlay_cache["failures"].get("force_field") != signature:
+            _overlay_cache["failures"]["force_field"] = signature
+            print(f"[ppf] overlay builder 'force_field' failed: {signature}")
+        _overlay_cache["force_field_batches"] = []
+
     try:
         vel_batches = _overlay_cache["velocity_batches"]
         if vel_batches:

@@ -41,27 +41,43 @@ def count_legacy_dyn_params(scene) -> int:
 
 
 def convert_legacy_dyn_params(scene) -> str:
-    """Convert every legacy entry to F-curves and clear the list.
+    """Convert every legacy entry to F-curves and remove it from the list.
+
+    The legacy first entry is the slider's own value in effect at the starting
+    frame (``resolve_start_frame``), whatever frame it stores, which is how the
+    encoder reads it, so its key lands on the starting frame. An entry with a
+    later keyframe at or before the starting frame has no faithful F-curve (the
+    key would sort ahead of the one standing for time zero), so it is left in
+    the list, where the encoder refuses it by name at Transfer.
 
     Returns a human-readable summary, empty when there was nothing to do.
     """
+    from .encoder import resolve_start_frame
+
     root = getattr(scene, "zozo_contact_solver", None)
     state = getattr(root, "state", None)
     items = getattr(state, "dyn_params", None)
     if not items:
         return ""
+    start_frame = resolve_start_frame(state)
 
     converted = []
-    for item in items:
+    kept = []
+    kept_indices = set()
+    for item_index, item in enumerate(items):
         spec = _LEGACY.get(item.param_type)
         if spec is None or len(item.keyframes) < 2:
             continue
+        if any(int(kf.frame) <= start_frame for kf in list(item.keyframes)[1:]):
+            kept.append(item.param_type)
+            kept_indices.add(item_index)
+            continue
         prop, value_field, length = spec
         for index, kf in enumerate(item.keyframes):
-            frame = int(kf.frame)
+            frame = start_frame if index == 0 else int(kf.frame)
             if index == 0:
                 # The legacy first entry means "the slider's current value at
-                # this frame", so key the slider as it stands.
+                # the starting frame", so key the slider as it stands.
                 pass
             elif kf.use_hold:
                 # Hold repeats the previous value. Setting the slider back to
@@ -81,20 +97,34 @@ def convert_legacy_dyn_params(scene) -> str:
             for index, kf in enumerate(item.keyframes):
                 if index and not kf.use_hold:
                     state.wind_strength = float(kf.wind_strength_value)
-                state.keyframe_insert(data_path="wind_strength", frame=int(kf.frame))
+                state.keyframe_insert(
+                    data_path="wind_strength",
+                    frame=start_frame if index == 0 else int(kf.frame),
+                )
 
         _apply_hold_interpolation(scene, state, item, prop)
         converted.append(item.param_type)
 
     if converted:
-        items.clear()
+        # Everything but a kept entry goes: an entry with fewer than two
+        # keyframes never reached the solver, so it carries nothing to keep.
+        for item_index in reversed(range(len(items))):
+            if item_index not in kept_indices:
+                items.remove(item_index)
         state.dyn_params_index = -1
-    return (
-        "converted %d scene keyframe list(s) to F-curves: %s"
-        % (len(converted), ", ".join(converted))
-        if converted
-        else ""
-    )
+    summary = []
+    if converted:
+        summary.append(
+            "converted %d scene keyframe list(s) to F-curves: %s"
+            % (len(converted), ", ".join(converted))
+        )
+    if kept:
+        summary.append(
+            "left %d scene keyframe list(s) unconverted, each with a keyframe "
+            "at or before the starting frame %d: %s"
+            % (len(kept), start_frame, ", ".join(kept))
+        )
+    return "; ".join(summary)
 
 
 def _apply_hold_interpolation(scene, state, item, prop):

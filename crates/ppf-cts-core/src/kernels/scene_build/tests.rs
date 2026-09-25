@@ -560,6 +560,16 @@ fn spin_apply_quarter_rotation_z() {
 }
 
 #[test]
+fn spin_apply_negative_velocity_turns_the_other_way() {
+    // -90 deg/s for one second about +z carries (1, 0, 0) to (0, -1, 0).
+    let v = vec![1.0, 0.0, 0.0];
+    let r = spin_apply(&v, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], -90.0, 0.0, 10.0, 1.0);
+    assert!(r[0].abs() < 1e-9);
+    assert!((r[1] + 1.0).abs() < 1e-9);
+    assert!(r[2].abs() < 1e-9);
+}
+
+#[test]
 fn scale_apply_endpoints() {
     let v = vec![1.0, 0.0, 0.0, 2.0, 0.0, 0.0];
     // Before t_start
@@ -589,7 +599,7 @@ fn rod_tri_offset_clean_geometry_passes() {
     let rods = vec![[3u32, 4]];
     let tri_off = vec![0.1];
     let rod_off = vec![0.1];
-    rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false).unwrap();
+    rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false, |_, _| false).unwrap();
 }
 
 #[test]
@@ -606,8 +616,32 @@ fn rod_tri_offset_close_rod_violates() {
     let rods = vec![[3u32, 4]];
     let tri_off = vec![0.05];
     let rod_off = vec![0.05];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &tri_off, &rod_off, |_, _| false, |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::VertexInsideOffset { .. })));
+}
+
+#[test]
+fn rod_tri_offset_violation_an_exemption_takes_passes() {
+    // The same close rod as above, with Allow Existing Intersections taking
+    // the pair out of contact: the check asks `exempt` about the violating
+    // pair, and nothing else.
+    let v = vec![
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.1, 0.1, 0.02,
+        0.5, 0.1, 0.02,
+    ];
+    let tris = vec![[0u32, 1, 2]];
+    let rods = vec![[3u32, 4]];
+    let mut asked = Vec::new();
+    rod_tri_contact_offset_check(&v, &rods, &tris, &[0.05], &[0.05], |_, _| false, |r, t| {
+        asked.push((r, t));
+        true
+    })
+    .unwrap();
+    assert!(!asked.is_empty());
+    assert!(asked.iter().all(|&p| p == (0, 0)));
 }
 
 #[test]
@@ -622,7 +656,7 @@ fn rod_tri_offset_short_rod_flagged() {
     ];
     let tris = vec![[0u32, 1, 2]];
     let rods = vec![[3u32, 4]];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false, |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::EdgeShorterThanOffset { .. })));
 }
 
@@ -637,7 +671,7 @@ fn rod_tri_offset_short_rod_flagged_no_tris() {
     ];
     let rods = vec![[0u32, 1]];
     let tris: Vec<[u32; 3]> = vec![];
-    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false);
+    let r = rod_tri_contact_offset_check(&v, &rods, &tris, &[], &vec![0.1], |_, _| false, |_, _| false);
     assert!(matches!(r, Err(RodTriOffsetViolation::EdgeShorterThanOffset { .. })));
 }
 
@@ -702,6 +736,28 @@ fn assemble_empty_scene_returns_empty() {
     assert!(r.concat_tri.is_empty());
     assert_eq!(r.rod_count, 0);
     assert_eq!(r.shell_count, 0);
+}
+
+#[test]
+fn a_stitch_index_past_the_object_is_named_not_a_panic() {
+    let verts = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let color = vec![0.5; 9];
+    let faces: [[u32; 3]; 1] = [[0, 1, 2]];
+    let ind: Vec<i64> = vec![0, 1, 1, 7];
+    let w: Vec<f64> = vec![1.0, 1.0, 0.0, 0.0];
+    let mut obj = make_assemble_obj(
+        "seam", "tri", &verts, &color, Some(&faces), None, None,
+    );
+    obj.stitch_ind = Some(&ind);
+    obj.stitch_ind_cols = 4;
+    obj.stitch_w = Some(&w);
+    obj.stitch_w_cols = 4;
+    let mut map = std::collections::HashMap::new();
+    map.insert("seam".to_string(), vec![0i64, 1, 2]);
+    let disp_idx = vec![("seam".to_string(), [0.0, 0.0, 0.0])];
+    let err = assemble_dyn_scene(&[obj], &map, 3, &disp_idx, &[]).unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("\"seam\"") && message.contains("vertex 7"), "{message}");
 }
 
 #[test]

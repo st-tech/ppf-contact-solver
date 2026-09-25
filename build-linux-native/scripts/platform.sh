@@ -44,7 +44,7 @@
 # lets one distribution carry several. They link the same executable name, so
 # `crates/ppf-cts-solver/build.rs` refuses to put two in one directory and names
 # that variable in its own refusal. `backend_target_dir` below is the one place
-# that spelling lives, and `frontend.get_backend` is what chooses among the
+# that spelling lives, and `App.get_backend` is what chooses among the
 # directories at run time.
 #
 # No `set -euo pipefail` here: this file is sourced, and those options would leak

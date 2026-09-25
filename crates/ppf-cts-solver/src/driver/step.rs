@@ -626,6 +626,15 @@ pub unsafe fn advance<D: Device>(
     // defect: an early return from a failed step never reached the restore,
     // and the NEXT step then gathered the pin indices into an empty slice and
     // handed the shared body a pointer to nothing.
+    //
+    // THE EXTERNAL FORCE FIELD IS EVALUATED FIRST, ONCE PER STEP, at the
+    // committed positions and the step's opening clock. Every target this step
+    // builds (here, after a dt cut, and on each continuing iteration) reads
+    // that one evaluation, which is what keeps the term out of the Newton
+    // system's Hessian. A scene with no field dispatches nothing here.
+    state
+        .field
+        .evaluate(device, curr, state.prop_vertex.handle(), prm.time as f32)?;
     compute_target(
         device,
         &prm,
@@ -636,6 +645,7 @@ pub unsafe fn advance<D: Device>(
         state.fix.handle(),
         dt,
         state.fix_index.handle(),
+        state.field.acceleration(),
     )?;
     // The iterate starts at the committed pose. DEVICE WORK now that both are
     // device buffers, rather than a round trip through the host.
@@ -857,6 +867,7 @@ pub unsafe fn advance<D: Device>(
                 state.fix.handle(),
                 dt,
                 state.fix_index.handle(),
+                state.field.acceleration(),
             )?;
         }
 
@@ -2619,6 +2630,7 @@ pub unsafe fn advance<D: Device>(
                 state.fix.handle(),
                 dt,
                 state.fix_index.handle(),
+                state.field.acceleration(),
             )?;
         }
     }
@@ -2919,6 +2931,7 @@ unsafe fn compute_target<D: Device>(
     fix: Handle,
     dt: f32,
     fix_index: Handle,
+    external: Handle,
 ) -> Result<(), Fault> {
     let args = ComputeTargetSeedArgs {
         current,
@@ -2934,6 +2947,10 @@ unsafe fn compute_target<D: Device>(
         gravity_x: prm.gravity[0],
         gravity_y: prm.gravity[1],
         gravity_z: prm.gravity[2],
+        // THE FIELD'S ACCELERATION RIDES BESIDE GRAVITY, per vertex. It is
+        // this step's evaluation at the step's starting position, so every
+        // rebuild of the target within the step reads the same values.
+        external,
         inactive_momentum: i32::from(prm.inactive_momentum),
         target,
         count: vertices as u32,

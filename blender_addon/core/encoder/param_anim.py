@@ -14,6 +14,7 @@
 import bpy  # pyright: ignore
 
 from ...models.material_maps import gate_open, to_solver_value
+from ..utils import get_id_fcurves
 
 
 # Solver key -> how to read it off a group, per object type.
@@ -125,30 +126,6 @@ def _slot_of(scene, group):
     return get_group_slot_index(scene, group.uuid)
 
 
-def _fcurves_for(scene):
-    """Every F-curve on the scene, across Blender's slotted action layout.
-
-    Blender 5.x keeps curves under ``action.layers[].strips[].channelbag(slot)``
-    and leaves ``action.fcurves`` empty, so reading the latter finds nothing and
-    reports a keyframed slider as unanimated.
-    """
-    ad = getattr(scene, "animation_data", None)
-    action = getattr(ad, "action", None)
-    if action is None:
-        return []
-    out = []
-    slot = getattr(ad, "action_slot", None)
-    for layer in action.layers:
-        for strip in layer.strips:
-            bag = strip.channelbag(slot) if slot is not None else None
-            if bag is None:
-                continue
-            out.extend(bag.fcurves)
-    # A legacy (unslotted) action keeps them on the action itself.
-    out.extend(getattr(action, "fcurves", []) or [])
-    return out
-
-
 def _drop_collinear(times, series):
     """Drop samples that lie on the straight line between their neighbors.
 
@@ -205,6 +182,14 @@ def _track_at_frames(sample_frames, values, frames):
     return out
 
 
+# The keys a SOLID can animate. A SOLID's per-frame values reach only its
+# SURFACE triangles, which carry its contact material (the tetrahedra have no
+# contact fields), while its elastic material lives on its tetrahedra, which
+# have no per-frame table. So friction and the contact distances animate, and
+# every elastic key is refused rather than shipped to a table nothing reads.
+_SOLID_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset"})
+
+
 def encode_param_anim(
     state, groups, fps, start_frame, frame_count, map_schedules=None
 ):
@@ -219,18 +204,12 @@ def encode_param_anim(
     never emitted: the map itself is resolved per element by the frontend.
     """
     scene = bpy.context.scene
-    curves = _fcurves_for(scene)
+    # A curve on any group field outside the sampled set (a material map's
+    # own fields included) has already been refused by
+    # `curve_refusal.refuse_unsampled_curves`.
+    curves = get_id_fcurves(scene)
     if not curves and not map_schedules:
         return [], {}
-    for fcurve in curves:
-        # A curve here would be sampled at whatever frame the timeline sits on
-        # and then ignored, so it is reported rather than left to do nothing.
-        if ".material_maps[" in fcurve.data_path:
-            raise ValueError(
-                f"'{fcurve.data_path}' carries a keyframe, but a material "
-                "map's own fields are not animated. Key the map's weights by "
-                "adding map samples, and delete this curve."
-            )
     by_path = {fc.data_path: fc for fc in curves}
 
     frames = [start_frame + i for i in range(max(1, int(frame_count)))]
@@ -288,6 +267,15 @@ def encode_param_anim(
                     "group's material values are not animated: the solver "
                     "carries a per-frame table for triangles only. Remove the "
                     "keyframes, or split the change into separate solves."
+                )
+            if obj_type == "SOLID" and key not in _SOLID_ANIMATED_KEYS:
+                raise ValueError(
+                    f"group '{group.name}' keyframes '{prop}', but a SOLID "
+                    f"group's '{key}' is not animated: its elastic material "
+                    "lives on its tetrahedra, which carry no per-frame table "
+                    "(only friction and the contact distances, which a SOLID "
+                    "keeps on its surface, animate). Remove the keyframes, or "
+                    "split the change into separate solves."
                 )
             if scale is not None:
                 # A contact distance is a length. It is resolved against the

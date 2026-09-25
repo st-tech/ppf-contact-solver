@@ -24,6 +24,23 @@ def _get_connection_state():
     return state, addon_data.ssh_state
 
 
+def _press_connect():
+    """Start the connection the panel now describes, or raise why it cannot.
+
+    The Connect operator's poll and this refusal are one function,
+    ``connect_refusal``, so the tool refuses exactly what the button refuses
+    and names the reason, where calling the operator directly would fail with
+    Blender's "context is incorrect". The operator runs the modal timer loop
+    the connection lifecycle needs.
+    """
+    from ...ui.connection_ops import connect_refusal
+
+    reason = connect_refusal(bpy.context)
+    if reason is not None:
+        raise MCPError(f"Cannot initiate connection: {reason}")
+    bpy.ops.ssh.run_command()
+
+
 def _require_offline():
     """Raise MCPError unless a connection can actually be started.
 
@@ -84,8 +101,7 @@ def connect_ssh(
         props.container = container
         props.server_type = "DOCKER_SSH"
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     return {
         "message": f"SSH connection initiated to {username}@{host}:{port}",
@@ -128,8 +144,7 @@ def connect_docker(container: str, path: str, port: int = DEFAULT_SERVER_PORT):
     props.docker_path = path
     props.docker_port = port
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     return {
         "message": f"Docker connection initiated to container '{container}'",
@@ -164,8 +179,7 @@ def connect_linux_native(
     if gpu_backend:
         props.native_gpu_backend = gpu_backend.upper()
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     return {
         "message": f"Linux native connection initiated to path '{path}'",
@@ -200,8 +214,7 @@ def connect_win_native(
     if gpu_backend:
         props.native_gpu_backend = gpu_backend.upper()
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     return {
         "message": f"Windows native connection initiated to path '{path}'",
@@ -231,8 +244,7 @@ def connect_mac_native(path: str, port: int = DEFAULT_SERVER_PORT):
     props.mac_native_path = path
     props.docker_port = port
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     return {
         "message": f"macOS native connection initiated to path '{path}'",
@@ -259,8 +271,7 @@ def connect():
     # Get current scene and connection state
     state, props = _get_connection_state()
 
-    # Use bpy.ops for the modal timer loop required by connection lifecycle
-    bpy.ops.ssh.run_command()
+    _press_connect()
 
     # Return current connection info
     return {

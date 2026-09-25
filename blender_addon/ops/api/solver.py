@@ -230,6 +230,13 @@ class _Solver:
 
         _safe_clear(state.clear_fetched_frames)
 
+        # Datablock pointers carry no `default`, so the loop above leaves them:
+        # clear the force field's collection and script explicitly.
+        for pointer in ("force_field_collection", "force_field_script"):
+            setattr(state, pointer, None)
+        _safe_clear(state.force_field_targets.clear)
+        _safe_clear(state.force_field_script_groups.clear)
+
         # Collection properties don't respond to setattr(prop.default), so
         # clear them explicitly, otherwise solver.clear() silently leaves
         # merge pairs and scene colliders behind.
@@ -261,6 +268,105 @@ class _Solver:
         return self
 
     # -- Curve construction --------------------------------------------------
+
+    @blender_api
+    def set_force_field_targets(self, source: str, groups=None) -> "_Solver":
+        """Point a force field source at every group, or at chosen groups.
+
+        Args:
+            source: A force field object's name, or ``"SCRIPT"`` for the
+                script.
+            groups: None (every simulated group, the default), or the groups
+                to push, as :class:`Group` objects or group uuids. Static
+                groups are refused: colliders ignore force fields.
+
+        Returns:
+            ``self`` for chaining.
+
+        Example::
+
+            cloth = solver.create_group("Cloth", "SHELL")
+            solver.set_force_field_targets("Turbulence", [cloth])
+            solver.set_force_field_targets("SCRIPT", None)
+        """
+        from ...models import force_field_targets as targets
+
+        state = get_addon_data(bpy.context.scene).state
+        resolved = targets.resolve_source(state, source)
+        uuids = None
+        if groups is not None:
+            uuids = [getattr(g, "uuid", g) for g in groups]
+        targets.set_targets(bpy.context.scene, state, resolved, uuids)
+        return self
+
+    @blender_api
+    def get_force_field_targets(self, source: str):
+        """The group uuids a force field source is narrowed to, or None when
+        it pushes every group.
+
+        Args:
+            source: A force field object's name, or ``"SCRIPT"`` for the
+                script, as for :meth:`set_force_field_targets`.
+        """
+        from ...models import force_field_targets as targets
+
+        state = get_addon_data(bpy.context.scene).state
+        return targets.target_group_uuids(state, targets.resolve_source(state, source))
+
+    @blender_api
+    def get_force_field_builtins(self) -> list:
+        """Every function and constant a force field script may use, as
+        ``{"section", "name", "signature", "description"}`` dicts: the list
+        the panel's **Built-in Functions** button shows."""
+        from ...core import force_field as ff
+
+        return ff.builtins_reference()
+
+    @blender_api
+    def check_force_field_script(self, timeout: float = 60.0) -> dict:
+        """Compile the force field script on the running server and wait for
+        the answer, as the panel's **Compile and Check** does.
+
+        The script is the Text in ``solver.param.force_field_script``, a
+        ``def eval(x, y, z, t)`` returning ``(ax, ay, az)`` in m/s^2 in
+        Blender's axes. Nothing is transferred and no build starts.
+
+        Args:
+            timeout: Seconds to wait for the server's answer.
+
+        Returns:
+            ``{"ok": True, "summary": ...}``, or
+            ``{"ok": False, "error": ..., "line": n}`` naming the offending
+            line of the script.
+
+        Raises:
+            RuntimeError: When no script is chosen, there is no connection to
+                a running server, or no answer arrives in ``timeout``.
+
+        Example::
+
+            text = bpy.data.texts.new("swirl.py")
+            text.from_string("def eval(x, y, z, t):\\n    return (-y, x, 0.0)\\n")
+            solver.param.force_field_script = text
+            print(solver.check_force_field_script())
+        """
+        import time
+
+        from ...core import force_field as ff
+        from ...core.facade import communicator as com
+        from ...ui.dynamics.force_field_ops import check_unavailable_reason
+
+        reason = check_unavailable_reason(bpy.context)
+        if reason:
+            raise RuntimeError(reason)
+        text = get_addon_data(bpy.context.scene).state.force_field_script
+        ff.request_check(com.channel_opener(), text.as_string(), text.name)
+        deadline = time.time() + timeout
+        while ff.check_state()["running"]:
+            if time.time() > deadline:
+                raise RuntimeError(f"the server gave no answer in {timeout:g} s")
+            time.sleep(0.05)
+        return dict(ff.check_state()["result"] or {})
 
     @blender_api
     def create_curve(self, name: str, *, bevel_depth: float = 0.0,

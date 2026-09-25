@@ -393,12 +393,13 @@ def list_backends():
 
     A fact about the disk and not about the machine: whether a backend has a
     usable device here is :func:`probe_backend`'s question, and which one a run
-    uses is :func:`get_backend`'s.
+    uses is :func:`get_backend`'s. A notebook reaches it as
+    :meth:`App.list_backends`, which is this function.
 
     Example::
 
-        import frontend
-        frontend.list_backends()
+        from frontend import App
+        App.list_backends()
         # {'cuda': '.../target/cuda/release', 'rocm': '.../target/rocm/release',
         #  'cpu': '.../target/cpu/release'}
     """
@@ -419,7 +420,8 @@ def probe_backend(name):
     reports a usable device.
     An answer is remembered for the solver binary that gave it (its real path,
     size and modification time), so asking twice runs the solver once and a
-    rebuilt solver is asked again.
+    rebuilt solver is asked again. A notebook reaches it as
+    :meth:`App.probe_backend`, which is this function.
     """
     built = list_backends()
     if name not in built:
@@ -441,13 +443,14 @@ def set_backend(name):
     ``None`` returns to the automatic choice except where ``CARGO_TARGET_DIR``
     is set, because the build that variable names is itself an explicit choice:
     unsetting the variable is what returns the process to the automatic rule
-    there.
+    there. A notebook reaches it as :meth:`App.set_backend`, which is this
+    function.
 
     Example, on a machine with both an NVIDIA and an AMD GPU, where the
     automatic choice is CUDA::
 
-        import frontend
-        frontend.set_backend("rocm")
+        from frontend import App
+        App.set_backend("rocm")
     """
     global _BACKEND_CHOICE
     if name is not None:
@@ -471,7 +474,8 @@ def get_backend():
     and the one GPU build in a tree with no CPU build beside it answers itself.
     Raises, naming why, when nothing can be chosen: nothing is built here, or
     no GPU backend built here reports a usable device and there is no CPU build
-    to fall back to.
+    to fall back to. A notebook reaches it as :meth:`App.get_backend`, which is
+    this function.
     """
     return _resolve(_run_profile())[0]
 
@@ -530,7 +534,7 @@ def _require_usable_backend():
     ]
     if others:
         parts.append(
-            f"Also built here: {', '.join(others)}; frontend.set_backend(name) "
+            f"Also built here: {', '.join(others)}; App.set_backend(name) "
             "chooses one."
         )
     if others and _explicit_choice(profile) is not None:
@@ -540,7 +544,7 @@ def _require_usable_backend():
             "It is chosen explicitly, and an explicit choice is never moved off "
             "what it names: "
             + (
-                "frontend.set_backend(None)"
+                "App.set_backend(None)"
                 if _BACKEND_CHOICE is not None
                 else "unsetting CARGO_TARGET_DIR"
             )
@@ -649,6 +653,10 @@ __all__ = [
     "SceneInfo",
     "ObjectAdder",
     "FixedScene",
+    "ForceField",
+    "ForceFieldScriptError",
+    "noise",
+    "curl_noise",
     "Object",
     "InvisibleAdder",
     "Wall",
@@ -684,6 +692,7 @@ from ._app_ import App
 from ._asset_ import AssetFetcher, AssetManager, AssetUploader
 from ._decoder_ import BlenderApp
 from ._extra_ import Extra
+from ._force_field_ import ForceField, ForceFieldScriptError, curl_noise, noise
 from ._mesh_ import CreateManager, MeshManager, Rod, TetMesh, TriMesh
 from ._parse_ import CppRustDocStringParser
 from ._plot_ import Plot, PlotManager

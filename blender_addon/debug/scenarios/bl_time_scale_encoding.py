@@ -31,6 +31,11 @@
 #   E. data_channels_frame_indexed (frame_offset present; no seconds keys)
 #   F. structure_and_counts_unchanged
 #   G. spin_rate_scales_down (pin-side rate multiplies by time_scale)
+#   H. angular_velocity_schedules_scale -- velocity keyframes spinning about
+#      a principal axis, a world axis and a custom axis all halve their rate
+#      at time_scale 0.5 while their times double and their axes stay put.
+#      A rate left unscaled on any one axis mode kicks the body 1/time_scale
+#      times too hard per frame on that mode alone.
 
 from __future__ import annotations
 
@@ -218,6 +223,17 @@ try:
     g_def = dh.api.solver.create_group("StatDeform", "STATIC")
     g_def.add(cube_def.name)
 
+    # --- channel 5: angular velocity keyframes after the start frame ------
+    # A spin schedule is authored in animation degrees per second, like a pin
+    # SPIN, so every axis mode must multiply by time_scale.
+    for frame, axis, custom in ((3, "Z", (0.0, 0.0, 1.0)),
+                                (4, "PC3", (0.0, 0.0, 1.0)),
+                                (5, "CUSTOM", (1.0, 1.0, 0.0))):
+        g_op.set_velocity(plane_op.name, direction=(1.0, 0.0, 0.0), speed=0.0,
+                          frame=frame, enable_translational=False,
+                          angular_axis=axis, angular_speed=90.0,
+                          angular_axis_custom=custom)
+
     bpy.context.view_layer.update()
 
     # --- encode at time_scale 1.0 and 0.5 --------------------------------
@@ -340,6 +356,43 @@ try:
         "n_rate_leaves": len(rate_paths),
         "rates_1": [d1[p][1] for p in rate_paths],
         "rates_05": [d2[p][1] for p in rate_paths if p in d2],
+    })
+
+    # H: every angular velocity schedule halves its rate and doubles its time.
+    def _op_schedules(param):
+        for entry in param.get("group") or []:
+            if plane_op.name in list(entry[1]):
+                gp = entry[0]
+                pca = [row for rows in (gp.get("angular-velocity-schedule") or {}).values()
+                       for row in rows]
+                world = [row for rows in (gp.get("angular-velocity-world-schedule") or {}).values()
+                         for row in rows]
+                return pca, world
+        return [], []
+
+    import math
+    pca1, world1 = _op_schedules(p1)
+    pca2, world2 = _op_schedules(p2)
+
+    def _norm(v):
+        return math.sqrt(sum(float(c) * float(c) for c in v))
+
+    rad90 = math.radians(90.0)
+    pca_ok = len(pca1) == 1 and len(pca2) == 1 and all(
+        abs(float(b[0]) - 2.0 * float(a[0])) <= 1e-9
+        and abs(float(a[2]) - rad90) <= 1e-6
+        and abs(float(b[2]) - 0.5 * float(a[2])) <= 1e-9
+        for a, b in zip(pca1, pca2)
+    )
+    world_ok = len(world1) == 2 and len(world2) == 2 and all(
+        abs(float(b[0]) - 2.0 * float(a[0])) <= 1e-9
+        and abs(_norm(a[1]) - rad90) <= 1e-6
+        and abs(_norm(b[1]) - 0.5 * _norm(a[1])) <= 1e-9
+        and all(abs(float(y) - 0.5 * float(x)) <= 1e-9 for x, y in zip(a[1], b[1]))
+        for a, b in zip(world1, world2)
+    )
+    dh.record("H_angular_velocity_schedules_scale", pca_ok and world_ok, {
+        "pca_1": pca1, "pca_05": pca2, "world_1": world1, "world_05": world2,
     })
 
 except Exception as exc:

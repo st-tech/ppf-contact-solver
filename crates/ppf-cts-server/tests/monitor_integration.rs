@@ -116,7 +116,7 @@ fn drive_to_running(engine: &ServerEngine, name: &str, root: &Path) {
 
     // Bypass DoSpawnBuild by faking BuildCompleted directly. The
     // engine's transition layer accepts BuildCompleted unconditionally.
-    engine.dispatch(Event::BuildCompleted);
+    engine.dispatch(Event::BuildCompleted { exemptions: vec![] });
     assert_eq!(engine.state().build, Build::Built);
 
     engine.dispatch(Event::StartRequested);

@@ -89,8 +89,6 @@ OBJECT_GROUP_DEFAULTS = {
     "use_group_bounding_box_diagonal": True,
     "contact_gap_rat": 0.001,
     "contact_offset_rat": 0.0,
-    "computed_contact_gap": 0.001,
-    "computed_contact_offset": 0.0,
     # Solid-specific parameters
     "shrink": 1.0,
     # PDRD-specific parameter: volumetric density. The body moves
@@ -144,11 +142,12 @@ OBJECT_GROUP_DEFAULTS = {
     # exactly as it did before the feature existed.
     "bend_warp": 0.0,
     "bend_weft": 0.0,
-    # Intersection allowances (issue #138). All three default off, so a group
+    # Intersection allowances (issue #138). All four default off, so a group
     # that never touches them reaches the solver exactly as it did before.
     "allow_self_intersection": False,
     "allow_inter_object_intersection": False,
     "allow_inter_group_intersection": False,
+    "allow_existing_intersection": False,
     # Each allowance reaches every object of the group until the user narrows
     # it to a named subset. True keeps a group that ignores the subset list
     # behaving as the checkbox alone always has, which is also what a `.blend`
@@ -156,10 +155,12 @@ OBJECT_GROUP_DEFAULTS = {
     "allow_self_intersection_all_objects": True,
     "allow_inter_object_intersection_all_objects": True,
     "allow_inter_group_intersection_all_objects": True,
+    "allow_existing_intersection_all_objects": True,
     "shrink_x": 1.0,
     "shrink_y": 1.0,
     "enable_inflate": False,
     "inflate_pressure": 0.0,
+    "force_field_weight": 1.0,
     "enable_plasticity": False,
     "plasticity": 0.5,
     "plasticity_threshold": 0.0,
@@ -281,6 +282,54 @@ def sand_seeded_radius(group):
     if obj is not None:
         return float(obj["grain_radius"])
     return float(group.sand_grain_radius)
+
+
+def sand_radius_conflict(group):
+    """The grain radii a SAND group's objects disagree on, or None.
+
+    The group reaches the solver as ONE contact offset, the grain radius
+    ``sand_seeded_radius`` returns, so every converted object in it must have
+    been converted at that radius. A second radius would be solved at the
+    first one's skin, overlapping or separating grains seeded for another.
+    Returns ``[(object name, radius), ...]``, one per distinct radius, when
+    they disagree.
+    """
+    from ..core.uuid_registry import get_object_by_uuid
+
+    first_by_radius = {}
+    for obj_ref in group.assigned_objects:
+        if not obj_ref.included or not obj_ref.uuid:
+            continue
+        obj = get_object_by_uuid(obj_ref.uuid)
+        if obj is None or not obj.get("grain_radius"):
+            continue
+        first_by_radius.setdefault(float(obj["grain_radius"]), obj.name)
+    if len(first_by_radius) <= 1:
+        return None
+    return [(name, radius) for radius, name in sorted(first_by_radius.items())]
+
+
+# The SHELL model identifier the Model picker no longer offers. Its item keeps
+# slot 0 of ``ObjectGroup.shell_model`` with an empty name, so a .blend or a
+# material profile saved with it still loads it as this identifier.
+WITHDRAWN_SHELL_MODEL = "STABLE_NEOHOOKEAN"
+
+
+def withdrawn_shell_model_refusal(group):
+    """Why *group* cannot be transferred with its SHELL Model, or None.
+
+    A SHELL group holding ``WITHDRAWN_SHELL_MODEL`` is refused at encode
+    with this sentence rather than run as another model, and the panel
+    labels the picker whenever this answers, so both ask one predicate.
+    """
+    if group.object_type != "SHELL" or group.shell_model != WITHDRAWN_SHELL_MODEL:
+        return None
+    return (
+        f"Group '{group.name}' is a Shell group whose Model is Stable "
+        "NeoHookean, which the Model picker does not offer for shells; a "
+        ".blend or material profile saved with it still loads it. Choose "
+        "ARAP or Baraff-Witkin as the group's Model."
+    )
 
 
 @dynamic_enum_items

@@ -88,7 +88,7 @@ models are available. **Static** groups collapse to **Friction**, an
 **Apply Soft Constraints** box, the **Contact** rows, and the **Allow
 Intersections** box every type carries, and replace the pin region with a
 **Transform** sub-box that holds per-object **Move By** / **Spin** /
-**Scale** ops (an alternative to Blender transform keyframes). See
+**Scale** ops (an alternative to the object's own Blender animation). See
 [Static Objects](static_objects.md) for the full surface.
 
 **PDRD** (Painless Differentiable Rotation Dynamics) groups move a surface
@@ -109,7 +109,13 @@ viewport instead of filled faces. For a Bezier curve, each control
 point becomes one rod vertex (1:1 mapping; edge length equals CP
 spacing), so simulation resolution is set by the user via CP count.
 NURBS curves are sampled per arc at four `t` values because NURBS
-CPs are off-curve.
+CPs are off-curve. Each arc spans **Order** minus one points, so a NURBS
+spline's points have to fill whole arcs: **Transfer** refuses a spline
+that leaves points past its last whole arc, since those points would not
+be simulated. Blender's **NURBS Circle** (order 3, eight points, cyclic)
+fills whole arcs. See
+[Pins on a Curve Rod](../constraints/pins.md#pins-on-a-curve-rod) for
+which NURBS points can be pinned.
 
 ```{figure} ../../images/object_groups/group_type_matrix.svg
 :alt: Reference matrix with six type columns: Shell (green swatch), Solid (red), Rod (yellow), PDRD (magenta), Sand (tan), Static (blue). Rows: accepted object types (Shell, Solid, PDRD, Sand and Static take a mesh, Sand's annotated "converted to grains"; Rod takes a mesh or a Bezier curve); default material model (Baraff-Witkin for Shell, ARAP for Solid and Rod, n/a for PDRD, Sand and Static); available material models (Shell offers Baraff-Witkin and ARAP; Solid offers Stable NeoHookean and ARAP; Rod offers ARAP as the only option; n/a for PDRD, Sand and Static); density (shell_density in kg/m² areal, solid_density in kg/m³ volumetric, rod_density in kg/m line, pdrd_density in kg/m³ volumetric, sand_particle_mass annotated "g per grain, not a density", n/a for Static); Young's Modulus in Pa per density (check for Shell, Solid and Rod, n/a for PDRD, Sand and Static); Poisson's Ratio (check for Shell and Solid, n/a for the rest); Bend Stiffness (check for Shell and Rod, annotated "shared bend property", n/a for Solid, PDRD, Sand and Static); Shrink (check for Shell reading "Shrink X / Y (anisotropic)" and for Solid reading "Shrink (uniform)", with the Rod, PDRD, Sand and Static cells marked n/a); Strain Limit (check for Shell and Rod, n/a for the rest); Inflate face pressure (check for Shell only); Friction, annotated "shared contact param", and Contact Gap / Offset, annotated "absolute or ratio", both checked in all six columns, with Contact Gap annotated "grain radius is the offset" under Sand; pin vertex storage (a Blender vertex group for Shell, Solid, PDRD and Sand; a custom property named _pin_ followed by the pin name for Rod, because curves have no vertex groups; n/a for Static, which uses a Transform sub-box instead); default overlay color, given as RGB triples (0, 0.75, 0) green, (0.75, 0, 0) red, (0.75, 0.75, 0) yellow, (0.75, 0, 0.75) magenta, (0.75, 0.375, 0) tan, (0, 0, 0.75) blue.
@@ -186,20 +192,33 @@ When an assignment succeeds, the add-on enables the object's
 overlay color enabled, tints its viewport color to the group's color.
 
 :::{important}
-**The solver sees the base mesh, not the modifier-evaluated mesh.** The
-encoder reads `obj.data.vertices` directly, so any **Subdivision
-Surface**, **Bevel**, **Remesh**, **Solidify**, or other modifier on
-the object's stack is **ignored** at transfer time. If the subdivided
-or beveled topology is what you actually want to simulate, **Apply**
-those modifiers first (`Ctrl`-`A` → *Visual Geometry to Mesh*, or
-modifier header → *Apply*) and then **Transfer**.
+**The solver simulates the mesh's own vertices and faces, posed by the
+deformers in front of its first topology-changing modifier.** A
+**Subdivision Surface**, **Mirror**, **Bevel**, **Remesh**,
+**Solidify**, or any other modifier that changes the vertex count adds
+no geometry to the simulation. If the subdivided or beveled topology is
+what you actually want to simulate, **Apply** those modifiers first
+(`Ctrl`-`A` → *Visual Geometry to Mesh*, or modifier header → *Apply*)
+and then **Transfer**.
 
-The one exception is the **ContactSolverCache** MESH_CACHE modifier the
-add-on installs after **Fetch**. It sits in the first modifier slot and
-deforms the rest mesh *before* any other deformer runs, so modifiers
-you add *after* simulation (a Subdivision Surface for smooth render,
-for example) stack on top of the simulated result without interfering
-with it.
+The pose is honored, though. For a simulated object, **Transfer** sends
+each vertex where the modifier stack puts it at the solve's **Starting
+Frame**. When the stack changes the vertex count, it is evaluated cut
+at the first modifier that does so: an
+**Armature**, **Lattice**, or Shape Key in front of a **Subdivision
+Surface** reaches the solve, while a deformer after it applies on
+display only, on top of the simulated result. In a stack that changes
+the vertex count, a **Geometry Nodes** modifier counts as a cut point
+even when it only moves vertices. **Capture Deformation** on a pin
+reads the same cut stack.
+
+The **ContactSolverCache** MESH_CACHE modifier the add-on installs after
+**Fetch** sits at that cut: on a simulated object, in the first slot
+when the object has no deforming modifier, otherwise after the
+deformers and before the first topology-changing modifier (always the
+latter on a **Static** collider). Modifiers after it (a Subdivision Surface
+for smooth render, for example) stack on top of the simulated result
+without interfering with it.
 :::
 
 ### Assigned Objects List
@@ -212,7 +231,9 @@ group.
 
 To remove an object from a group, select it in the **Assigned Objects**
 list and click **Remove Object**. Removing an object resets its viewport
-color to white and strips out any pin vertex groups attached to it.
+color to white and removes the pins registered on it, its entries in the
+group's **Allow Intersections** object lists, and every
+[merge pair](../constraints/snap_merge.md) that names it.
 
 ```{figure} ../../images/object_groups/assigned_objects.png
 :alt: Assigned Objects list showing one entry
@@ -239,9 +260,13 @@ the full timeline. Switching it on reveals a per-object editor:
 - Below it sits a list of **Active Windows** for that object: frame
   ranges during which contact is enabled. Up to **8 windows per object**.
 - The **+** / **−** buttons add and remove entries; new windows default
-  to frames **1 to 60**.
+  to frames **1 to 60**, or to the same 60 frames beginning at the
+  solve's **Starting Frame** when that is later.
 - Selecting a window exposes **Start** and **End** spinners that edit
-  its bounds.
+  its bounds. **Transfer** refuses a window whose **End** is not after
+  its **Start**, or whose **Start** is before the **Starting Frame**,
+  naming the object and both frames. Nothing is clipped: move the
+  window or the **Starting Frame**.
 
 Outside every window listed for an object, that object's contact is
 muted. A few rules worth knowing:
@@ -338,7 +363,9 @@ objects, no pins, and no pin operations.
 
 - **Delete Group** (the trash icon in the group's own box, below the
   Bake row) resets a single group slot. Assigned object colors are
-  restored to white and any pin vertex groups are cleaned up.
+  restored to white, any pin vertex groups are cleaned up, and every
+  [merge pair](../constraints/snap_merge.md) naming one of the group's
+  objects is removed.
 - **Delete All Groups** (top row of the panel, next to **Create Group**)
   iterates all 32 slots and resets each active one. The UI confirms
   before proceeding.

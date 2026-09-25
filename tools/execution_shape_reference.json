@@ -6687,6 +6687,154 @@
       "advances_from_iter": 264,
       "advances_from_newton": 264,
       "solves_per_advance": 2.007575757575758
+    },
+    "force-field": {
+      "backend": "cuda",
+      "status": "measured",
+      "recorded_utc": "2026-09-23T05:27:42Z",
+      "host": "ip-172-31-43-69",
+      "wall_s": 12.7,
+      "vertices": 3072,
+      "frames": 121,
+      "streams": {
+        "iter": {
+          "count": 422,
+          "mean": 80.49763033175356,
+          "median": 72.5,
+          "p90": 102.0,
+          "min": 27.0,
+          "max": 187.0,
+          "sum": 33970.0,
+          "t_first": 0.0,
+          "t_last": 1.999636,
+          "integral": true,
+          "histogram": null,
+          "window_s": 0.25,
+          "windows": [
+            {
+              "bin": 0,
+              "t_start": 0.0,
+              "n": 50,
+              "mean": 69.68
+            },
+            {
+              "bin": 1,
+              "t_start": 0.25,
+              "n": 50,
+              "mean": 74.8
+            },
+            {
+              "bin": 2,
+              "t_start": 0.5,
+              "n": 50,
+              "mean": 77.64
+            },
+            {
+              "bin": 3,
+              "t_start": 0.75,
+              "n": 50,
+              "mean": 77.66
+            },
+            {
+              "bin": 4,
+              "t_start": 1.0,
+              "n": 52,
+              "mean": 80.57692307692308
+            },
+            {
+              "bin": 5,
+              "t_start": 1.25,
+              "n": 59,
+              "mean": 90.30508474576271
+            },
+            {
+              "bin": 6,
+              "t_start": 1.5,
+              "n": 61,
+              "mean": 85.60655737704919
+            },
+            {
+              "bin": 7,
+              "t_start": 1.75,
+              "n": 50,
+              "mean": 84.82
+            }
+          ],
+          "appended_runs": 1,
+          "time_groups": 209
+        },
+        "newton_steps": {
+          "count": 209,
+          "mean": 1.0191387559808613,
+          "median": 1.0,
+          "p90": 1.0,
+          "min": 1.0,
+          "max": 2.0,
+          "sum": 213.0,
+          "t_first": 0.0,
+          "t_last": 1.999636,
+          "integral": true,
+          "histogram": {
+            "1": 205,
+            "2": 4
+          },
+          "window_s": 0.25,
+          "windows": [
+            {
+              "bin": 0,
+              "t_start": 0.0,
+              "n": 25,
+              "mean": 1.0
+            },
+            {
+              "bin": 1,
+              "t_start": 0.25,
+              "n": 25,
+              "mean": 1.0
+            },
+            {
+              "bin": 2,
+              "t_start": 0.5,
+              "n": 25,
+              "mean": 1.0
+            },
+            {
+              "bin": 3,
+              "t_start": 0.75,
+              "n": 25,
+              "mean": 1.0
+            },
+            {
+              "bin": 4,
+              "t_start": 1.0,
+              "n": 26,
+              "mean": 1.0
+            },
+            {
+              "bin": 5,
+              "t_start": 1.25,
+              "n": 28,
+              "mean": 1.1071428571428572
+            },
+            {
+              "bin": 6,
+              "t_start": 1.5,
+              "n": 30,
+              "mean": 1.0333333333333334
+            },
+            {
+              "bin": 7,
+              "t_start": 1.75,
+              "n": 25,
+              "mean": 1.0
+            }
+          ],
+          "appended_runs": 1
+        }
+      },
+      "advances_from_iter": 209,
+      "advances_from_newton": 209,
+      "solves_per_advance": 2.0191387559808613
     }
   },
   "schema": 1,

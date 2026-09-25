@@ -48,7 +48,7 @@ This builds, for each backend in `PPF_WIN_BACKENDS`:
 `PPF_WIN_BACKENDS` defaults to `cuda rocm cpu` on x64 and `cpu` on ARM64, which
 neither NVIDIA nor AMD publishes a Windows toolkit for. Every backend links the
 same executable name, so each one builds into its own target directory, and
-`frontend.get_backend` resolves which build a run uses.
+`App.get_backend` resolves which build a run uses.
 
 ## Running
 

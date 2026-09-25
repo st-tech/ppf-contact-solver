@@ -153,10 +153,12 @@ pub fn spin_apply(
     use crate::datamodel::pin_apply;
     let n = vertex.len();
     let count = n / 3;
-    let angle = pin_apply::spin_angle_rad(angular_velocity_deg_per_s, t_start, t_end, time);
-    if angle <= 0.0 {
+    // Gated on the ELAPSED time, not on the angle: a negative angular velocity
+    // turns the other way and its angle is negative once the spin has begun.
+    if time.min(t_end) - t_start <= 0.0 {
         return vertex.to_vec();
     }
+    let angle = pin_apply::spin_angle_rad(angular_velocity_deg_per_s, t_start, t_end, time);
     let mut out = vec![0.0f64; n];
     for i in 0..count {
         let p = [vertex[3 * i], vertex[3 * i + 1], vertex[3 * i + 2]];

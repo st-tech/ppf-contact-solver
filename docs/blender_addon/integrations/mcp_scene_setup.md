@@ -27,6 +27,12 @@ exists, prefer it:
 - Assigning objects to a group: `add_objects_to_group`.
 - Setting material parameters: `set_group_material_properties`.
 - Scene-level parameters: `set_scene_parameters`.
+- Force fields: `set_force_field_settings`, `get_force_field_settings`,
+  `set_force_field_targets` and `check_force_field_script`, with every
+  function a script may call listed by `get_force_field_settings` under
+  `script_builtins` (see
+  [Force Fields](../workflow/params/force_fields.md)); a group's
+  `force_field_weight` goes through `set_group_material_properties`.
 - Pins, colliders, merges: the dedicated handlers in the
   [reference](mcp_reference.rst).
 

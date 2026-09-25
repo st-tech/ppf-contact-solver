@@ -320,8 +320,8 @@ def main():
               %(prog)s start-mcp
               %(prog)s scene
               %(prog)s resources
-              %(prog)s read llm://overview
-              %(prog)s read llm://index --json
+              %(prog)s read blender://scene/current
+              %(prog)s read blender://scene/current --json
         """),
     )
     parser.add_argument("--host", default=HOST, help="Target host (default: localhost)")
@@ -364,7 +364,7 @@ def main():
     p_resources.add_argument("--json", action="store_true", help="Output raw JSON")
 
     p_read = sub.add_parser("read", help="Read an MCP resource by URI")
-    p_read.add_argument("uri", help="Resource URI (e.g. llm://overview)")
+    p_read.add_argument("uri", help="Resource URI (e.g. blender://scene/current)")
     p_read.add_argument("--json", action="store_true",
                         help="Output raw JSON envelope instead of body text")
 

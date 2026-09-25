@@ -29,8 +29,31 @@ def _coerce_value(prop_group, key, value_str):
         return tuple(float(x) for x in parsed)
     elif prop_type == "FLOAT":
         return float(value_str)
+    elif prop_type == "INT" and is_array:
+        import ast
+        parsed = ast.literal_eval(value_str)
+        return tuple(int(x) for x in parsed)
     elif prop_type == "INT":
         return int(value_str)
+    elif prop_type == "POINTER":
+        # A datablock pointer (the force field's Collection, Domain object and
+        # script Text) is named; an empty name clears it. A name that resolves
+        # to nothing is refused rather than read as clearing.
+        if value_str in ("", "None"):
+            return None
+        collections = {
+            "Object": bpy.data.objects,
+            "Collection": bpy.data.collections,
+            "Text": bpy.data.texts,
+        }
+        kind = prop_info.fixed_type.identifier
+        source = collections.get(kind)
+        if source is None:
+            raise TypeError(f"'{key}' points to a {kind}, which cannot be set by name")
+        found = source.get(value_str)
+        if found is None:
+            raise KeyError(f"no {kind} named {value_str!r}")
+        return found
     elif prop_type == "BOOLEAN":
         return value_str.lower() in ("true", "1", "yes")
     elif prop_type == "ENUM":

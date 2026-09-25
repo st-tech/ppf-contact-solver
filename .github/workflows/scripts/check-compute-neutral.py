@@ -64,7 +64,7 @@
 # REST. The strongest check available for a crate is that it builds alone, and
 # it cannot be satisfied by renaming a file. For this crate it is ALREADY TRUE
 # and it proves almost nothing: `cargo tree -p ppf-cts-compute` shows exactly
-# one dependency, rayon, because cargo compiles only `src/**.rs` here. The
+# one dependency, rayon, because cargo compiles only the `.rs` files here. The
 # 66,000 lines of `.cu` and `.mm` are compiled by the SOLVER's build script
 # through the Makefiles this crate owns, so cargo never sees them. Rule 0
 # therefore checks what it can honestly claim: that the manifest names no
@@ -107,10 +107,10 @@
 # THERE IS DELIBERATELY NO KEYWORD SCAN, AND THAT IS A MEASUREMENT, NOT AN
 # OVERSIGHT. A 23-word vocabulary of solver terms run over the mechanism source
 # files fails 24 of 28, and 15 of 28 with the word "solver" itself removed from
-# it: "Schwarz" in `src/mem.rs` and `metal/metal_context.hpp`, "PCG" in
+# it: "Schwarz" in `cpu/mem.rs` and `metal/metal_context.hpp`, "PCG" in
 # `cuda/utility/dispatcher.cu`, `cuda/seam_cuda.cuh` and `cuda/cuda_vec.hpp`,
-# "DataSet" in `src/device.rs`, `src/host.rs` and `metal/arena.hpp`, "Newton" in
-# `src/sched.rs`. Every one is prose: a comment explaining why a pool grows the
+# "DataSet" in `src/device.rs`, `cpu/host.rs` and `metal/arena.hpp`, "Newton" in
+# `cpu/sched.rs`. Every one is prose: a comment explaining why a pool grows the
 # way it does, or why a helper is `__device__` alone, and the `seam_cuda.cuh`
 # "barrier" is a THREADGROUP barrier, an unrelated meaning of the word. Keyword density already produced a wrong answer on this crate once, in
 # the opposite direction, classifying `contact.cu` as mechanism because its 323
@@ -163,19 +163,19 @@ MECHANISM = {
         "the one Rust declaration of the seam's own header. Its test double is "
         "a fake LIBRARY, not a fake solver: it allocates, copies and counts, "
         "and computes nothing",
-    "src/host.rs":
+    "cpu/host.rs":
         "ALLOC/FREE/COPY/LAUNCH: the host target; binds a caller-supplied "
         "kernel table and calls through it",
-    "src/mem.rs":
+    "cpu/mem.rs":
         "ALLOC/FREE: the block allocator; picks the smallest fitting block",
-    "src/sched.rs":
+    "cpu/sched.rs":
         "LAUNCH: the host range cut. FLAGGED: chunk_for divides a fixed work "
         "budget by a caller-supplied cost, which is a tuning constant rather "
         "than a physical quantity, and it is the one number in the mechanism "
         "set worth re-reading if the rule is ever tightened",
     "src/build/mod.rs":
         "PLATFORM: module declaration",
-    "src/build/host.rs":
+    "cpu/recipe.rs":
         "PLATFORM: runs the generator and drives cc::Build",
 
     # ---- the transcompiler -------------------------------------------
@@ -186,7 +186,7 @@ MECHANISM = {
         "PLATFORM: the generator's own tests",
 
     # ---- recipes ------------------------------------------------------
-    "host/tests/Makefile":
+    "cpu/tests/Makefile":
         "PLATFORM: a recipe taking KERNEL_ROOT; its test sources stayed in the "
         "solver, which is this rule applied correctly",
     "cuda/Makefile":

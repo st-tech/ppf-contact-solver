@@ -319,6 +319,12 @@ struct DataSet {
     Vec<unsigned> statistics_object_index;
     Vec<unsigned> statistics_static_object_index;
     Vec<unsigned> statistics_contact_count;
+    // Allow Existing Intersections' vertex links: one row per dynamic vertex
+    // listing the vertices it is linked to, a collision-mesh vertex carrying
+    // START_LINK_COLLISION_VERTEX. Empty (size 0) when nothing was linked.
+    // Field order must mirror the Rust DataSet in data.rs (repr(C) ABI);
+    // tail-append only.
+    VecVec<unsigned> start_link;
 };
 
 #endif

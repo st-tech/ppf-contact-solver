@@ -67,7 +67,7 @@ REM bundle. Every backend links the same executable name and
 REM crates\ppf-cts-solver\build.rs refuses to put two in one directory, so the
 REM directories are what keep them apart; that layout is not an internal detail
 REM of the build, it is what the addon's selector probes and what
-REM frontend.get_backend resolves among.
+REM App.get_backend resolves among.
 set CPU_RUST_EXE=%SRC_DIR%\target\cpu\release\ppf-contact-solver.exe
 set CPU_SERVER_EXE=%SRC_DIR%\target\cpu\release\ppf-cts-server.exe
 set CPU_PYO3_DLL=%SRC_DIR%\target\cpu\release\_ppf_cts_py.dll
@@ -508,7 +508,7 @@ echo [9/10] Generating launcher and documentation...
 
 REM NO LAUNCHER PINS A TARGET DIRECTORY WHERE A GPU BACKEND SHIPS: each backend
 REM has its own target\<backend>, the frontend searches them, and which one a run
-REM uses is resolved when it starts (frontend.get_backend). A CPU-only
+REM uses is resolved when it starts (App.get_backend). A CPU-only
 REM distribution is the one case with nothing to resolve, and its launchers name
 REM target\cpu so the frontend does not search for a GPU build that never
 REM shipped. The line is held in a variable and echoed through delayed expansion,

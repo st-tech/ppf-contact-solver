@@ -102,7 +102,7 @@ try:
     unknown_pin = call("set_pin_settings",
                        {"group_uuid": shell,
                         "vertex_group_identifier": "Sheet::NoSuch",
-                        "included": True})
+                        "use_pull": True})
     mcp_check(result, "B_unknown_pin_is_refused",
               unknown_pin.get("status") == "error"
               and "Sheet::NoSuch" in unknown_pin.get("message", "")

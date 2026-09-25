@@ -89,6 +89,10 @@ pub(super) fn spawn_build_task(engine: &ServerEngine, preserve_output: bool) {
             (s.name, s.root)
         };
         clear_build_violations(&root);
+        // The same for Allow Existing Intersections' record of what a build
+        // exempted: a build that exempts nothing writes no file, so a stale
+        // one would draw a previous build's tangle over this one.
+        clear_sidecar(&root, BUILD_EXEMPTIONS);
         // Drop a prior run's status record so the post-rebuild status reads
         // READY/RESUMABLE, not the stale "Failed" a reconnect would
         // otherwise reconstruct from a previous run's status.cbor between
@@ -105,7 +109,8 @@ pub(super) fn spawn_build_task(engine: &ServerEngine, preserve_output: bool) {
         // drive the build pipeline in isolation.
         match result {
             BuildOutcome::Completed => {
-                dispatch_re_entrant(&engine, Event::BuildCompleted).await;
+                let exemptions = read_build_exemptions(&root);
+                dispatch_re_entrant(&engine, Event::BuildCompleted { exemptions }).await;
             }
             BuildOutcome::Cancelled => {
                 log::info!(target: "ppf::build", "[BUILD] cancelled by user");
@@ -128,20 +133,30 @@ pub(super) fn spawn_build_task(engine: &ServerEngine, preserve_output: bool) {
     });
 }
 
+/// The sidecar the build worker writes on a SUCCESSFUL build when Allow
+/// Existing Intersections exempted the pairs the scene starts tangled with.
+/// Same record shape as `build_violations.json`, under the key `exemptions`.
+pub(crate) const BUILD_EXEMPTIONS: &str = "build_exemptions.json";
+
 /// Remove a stale `<root>/build_violations.json` before a build runs so
 /// a later failure that produces no structured violations can't inherit
 /// the geometry from a previous self-intersection failure.
 fn clear_build_violations(root: &str) {
+    clear_sidecar(root, "build_violations.json");
+}
+
+/// Remove one of the build worker's sidecars from `<root>`, best-effort.
+fn clear_sidecar(root: &str, file: &str) {
     if root.is_empty() {
         return;
     }
-    let path = Path::new(root).join("build_violations.json");
+    let path = Path::new(root).join(file);
     match std::fs::remove_file(&path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => log::warn!(
             target: "ppf::build",
-            "[BUILD] could not clear build_violations.json: {e}",
+            "[BUILD] could not clear {file}: {e}",
         ),
     }
 }
@@ -174,10 +189,25 @@ fn clear_stale_status(root: &str) {
 /// error yields an empty list so the build still fails cleanly with its
 /// error message, just without the viewport highlight.
 fn read_build_violations(root: &str) -> Vec<String> {
+    read_sidecar_records(root, "build_violations.json", "violations")
+}
+
+/// Read what Allow Existing Intersections exempted, from the sidecar a
+/// successful build wrote; empty when it wrote none. Read on completion by the
+/// build task, and on a re-select of a built project by
+/// `wire::reconcile_project_from_disk`, so a reconnect keeps the overlay.
+pub(crate) fn read_build_exemptions(root: &str) -> Vec<String> {
+    read_sidecar_records(root, BUILD_EXEMPTIONS, "exemptions")
+}
+
+/// One sidecar's records under `key`, each re-encoded as a JSON string, the
+/// opaque shape the state machine carries. Best-effort, as
+/// `read_build_violations` states.
+fn read_sidecar_records(root: &str, file: &str, key: &str) -> Vec<String> {
     if root.is_empty() {
         return vec![];
     }
-    let path = Path::new(root).join("build_violations.json");
+    let path = Path::new(root).join(file);
     let body = match std::fs::read_to_string(&path) {
         Ok(b) => b,
         Err(_) => return vec![],
@@ -185,12 +215,12 @@ fn read_build_violations(root: &str) -> Vec<String> {
     let parsed: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
-            log::warn!(target: "ppf::build", "[BUILD] malformed build_violations.json: {e}");
+            log::warn!(target: "ppf::build", "[BUILD] malformed {file}: {e}");
             return vec![];
         }
     };
     parsed
-        .get("violations")
+        .get(key)
         .and_then(|v| v.as_array())
         .map(|items| {
             items
@@ -695,7 +725,7 @@ fn parse_meta_frames_line(line: &str) -> Option<i32> {
 /// How `python_executable` picked the interpreter, kept so a build
 /// failure can explain which Python ran and why it was chosen.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PythonSource {
+pub(crate) enum PythonSource {
     /// `PPF_CTS_BUILD_PYTHON` env override.
     Explicit,
     /// `VIRTUAL_ENV`'s interpreter (the addon launcher activates it).
@@ -728,7 +758,7 @@ impl PythonSource {
 ///      venv before exec'ing the Rust binary, so this keeps the worker
 ///      on the same interpreter the addon expects.
 ///   3. A bare `python3` / `python.exe` resolved through PATH.
-fn python_executable() -> (PathBuf, PythonSource) {
+pub(crate) fn python_executable() -> (PathBuf, PythonSource) {
     if let Ok(p) = std::env::var("PPF_CTS_BUILD_PYTHON") {
         if !p.is_empty() {
             return (PathBuf::from(p), PythonSource::Explicit);
@@ -912,7 +942,7 @@ fn enrich_build_failure(reason: String, python: &Path, source: PythonSource) -> 
 /// from a separate worktree may have a different frontend they want
 /// to test, and they'll be in that worktree's cwd, not the install
 /// root.
-fn locate_build_worker() -> Option<PathBuf> {
+pub(crate) fn locate_build_worker() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PPF_CTS_BUILD_WORKER") {
         let path = PathBuf::from(p);
         if path.is_file() {
@@ -1458,6 +1488,27 @@ mod tests {
         assert!(read_build_violations(&root).is_empty());
         // Empty root short-circuits.
         assert!(read_build_violations("").is_empty());
+    }
+
+    #[test]
+    fn read_build_exemptions_reads_its_own_sidecar_and_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(read_build_exemptions(&root).is_empty());
+        std::fs::write(
+            dir.path().join(BUILD_EXEMPTIONS),
+            r#"{"exemptions":[{"type":"existing_intersection","count":3,"pairs":[{"a":[[0,0,0],[1,0,0],[0,1,0]],"b":[[0,0,1],[1,0,1]]}]}]}"#,
+        )
+        .unwrap();
+        let out = read_build_exemptions(&root);
+        assert_eq!(out.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(v["type"], "existing_intersection");
+        assert_eq!(v["count"], 3);
+        // The violations reader does not see it, and clearing removes it.
+        assert!(read_build_violations(&root).is_empty());
+        clear_sidecar(&root, BUILD_EXEMPTIONS);
+        assert!(read_build_exemptions(&root).is_empty());
     }
 
     #[test]

@@ -50,9 +50,9 @@
 #   G. ``keyframe_is_refused_while_operations_exist`` -- the mirror refusal:
 #      add_pin_keyframe names the op families and the two tools that clear
 #      them, and writes no key.
-#   H. ``frame_below_one_is_refused`` -- a key under frame 1 is dropped when
-#      the pin track is read, so the scene's frame is refused by number before
-#      the operator writes one, and no marker is left behind.
+#   H. ``frame_zero_is_keyed`` -- the starting frame can be 0, so a key at
+#      frame 0 is written like any other; before a later starting frame it
+#      reaches the track through the curve's value there.
 #   I. ``empty_vertex_group_is_refused`` -- a pin whose vertex group holds no
 #      vertex has nothing to key, and is refused instead of being marked
 #      animated.
@@ -485,15 +485,11 @@ try:
     refused_frame, raw_frame = key_pin(identifier)
     frame_message = refused_frame.get("message") or ""
     mcp_check(
-        result, "H_frame_below_one_is_refused",
-        refused_frame.get("status") == "error"
-        and raw_frame.get("isError") is True
-        and "frame 0" in frame_message
-        and "frame 1" in frame_message
-        # Refused before the operator ran, so neither a key nor the marker
-        # that would claim the pin is animated was written.
-        and keyed_frames(mesh_obj) == []
-        and op_types(identifier) == [],
+        result, "H_frame_zero_is_keyed",
+        refused_frame.get("status") != "error"
+        and raw_frame.get("isError") is not True
+        and 0 in keyed_frames(mesh_obj)
+        and op_types(identifier) == ["EMBEDDED_MOVE"],
         {
             "payload": refused_frame,
             "isError": raw_frame.get("isError"),

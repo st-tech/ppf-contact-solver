@@ -24,7 +24,7 @@ this:
 RULE 3 IS A FALLBACK AND IT IS DELIBERATE, WHICH RULE 1 IS WHAT MAKES SAFE. A
 machine with no GPU is the ordinary case for someone reading this project's
 notebooks, and the answer that serves them is the one backend that will run.
-Refusing instead leaves them one recourse, ``frontend.set_backend("cpu")`` at
+Refusing instead leaves them one recourse, ``App.set_backend("cpu")`` at
 the top of every notebook, which is worse than the fallback: that line is then
 also there on the machine that HAS a GPU, where it pins a run to the slow
 backend for no reason anyone will remember. What must never happen is a SILENT
@@ -220,7 +220,7 @@ def resolve(
             "cpu",
             f"No usable GPU was found on this machine ({reasons}), so the CPU "
             f"backend is selected. It needs no GPU and is substantially slower. "
-            f"Choose another with frontend.set_backend(name).",
+            f"Choose another with App.set_backend(name).",
         )
     raise RuntimeError(
         f"no GPU backend built here has a usable device on this machine "

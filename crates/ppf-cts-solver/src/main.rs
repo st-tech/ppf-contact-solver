@@ -23,6 +23,7 @@ mod driver;
 mod cvec;
 mod cvecvec;
 mod data;
+mod force_field;
 mod mesh;
 mod plastic_state;
 mod raw_vec;
@@ -460,7 +461,13 @@ fn remove_files_in_dir(path: &str) -> std::io::Result<()> {
             // would run to completion. Preserve it. The server's
             // launch_solver already cleared stale sentinels before
             // spawning, so anything present now is fresh.
-            if entry.file_name() == "save_and_quit" {
+            //
+            // ``hold_at_frame`` is preserved for the same reason: a
+            // frontend asking to hold at an early frame writes it before
+            // it launches, and a hold wiped here runs the whole scene.
+            if entry.file_name() == ppf_cts_formats::files::SAVE_AND_QUIT
+                || entry.file_name() == ppf_cts_formats::files::HOLD_AT_FRAME
+            {
                 continue;
             }
             let path = entry.path();

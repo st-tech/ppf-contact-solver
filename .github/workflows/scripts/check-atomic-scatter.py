@@ -2,7 +2,7 @@
 """Refuse a `Scatter::Disjoint` row whose kernel can reach a FLOAT seam atomic.
 
 A `Scatter::Disjoint` row runs as concurrent rayon chunks on the host backend
-(`ppf-cts-compute/src/host.rs`); `Atomic` and `Claim` run as ONE serial
+(`ppf-cts-compute/cpu/host.rs`); `Atomic` and `Claim` run as ONE serial
 ascending pass. So the row is what decides whether a kernel's threads can
 overlap, and two different properties ride on it.
 

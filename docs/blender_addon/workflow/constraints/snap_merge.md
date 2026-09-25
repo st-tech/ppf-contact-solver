@@ -112,14 +112,15 @@ As soon as at least one merge pair exists, a second box labeled
 - A UIList showing each pair, with both object names per row.
 - A **Re-snap** button below the list (disabled unless a row is
   selected). It re-runs the snap on the selected pair and rebuilds its
-  stitch anchors; when a pair has none, the panel says so with a
-  *"No stitch points found. Try Re-snap."* note.
+  stitch anchors. When the selected pair cannot stitch, the panel says
+  why in a line with an error icon, the same reason **Transfer** gives
+  (see [Merge Pairs Without Snapping](#merge-pairs-without-snapping)).
 - A **Remove** button below that, likewise disabled unless a row is
   selected.
 - A **Stitch Stiffness** slider, shown for **every supported pair**.
-  All stitches are soft and mass-scaled, so the slider applies to
-  Shell-Shell and Rod-Rod pairs the same way it applies to the
-  Solid-involved pairs. Raise it to hold a seam together more firmly.
+  All stitches are soft, so the slider applies to Shell-Shell and
+  Rod-Rod pairs the same way it applies to the Solid-involved pairs.
+  Raise it to hold a seam together more firmly.
 
 A separate **Visualization** panel further down the sidebar exposes a
 **Hide all snaps** toggle that hides or shows the merge-pair / stitch
@@ -136,6 +137,13 @@ rule applies to **all supported pairs**:
 | A type ↔ B type          | Applied gap                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------- |
 | Any supported pair       | The sum of both groups' **Contact Gap** and **Contact Offset** values, plus a small safety margin so the closest pair starts just outside the contact band. |
+
+The gap is in scene units and is read from the two groups' current
+settings at the moment you click **Snap A to B**: the absolute
+**Contact Gap** and **Contact Offset**, or, on a group that uses
+**Use Group Bounding Box Diagonal**, the two ratios times that group's
+bounding-box diagonal. **World Scaling** does not change it, and
+neither does anything transferred earlier.
 
 ### Cross-Stitch Anchors
 
@@ -201,20 +209,37 @@ the simulation.
 
 A merge pair on its own only *registers* two objects; it does not yet
 carry the stitch anchors the solver sews with. Those are captured by
-**Snap A to B** (or **Re-snap** on an existing pair), so a pair that was
-added without ever snapping, or whose anchors a later mesh edit
-invalidated, is refused at **Transfer** with *Merge pair(s) with no
-stitch points: A ↔ B* and a prompt to **Re-snap** or remove it. Each
-pair has:
+**Snap A to B** (or **Re-snap** on an existing pair). A pair whose
+stitch cannot reach the solver is kept as it is, with its stored stitch
+untouched: **Transfer** stops with *Merge pair(s) that cannot stitch*,
+naming each such pair and its reason, **Update Params on Remote**
+refuses the same pairs, and the **Merge Pairs** box shows the same
+reason under the selected pair. The reasons are:
+
+- **No stitch points**: the pair was added without ever snapping, or
+  the snap recorded none. Click **Re-snap** or remove the pair.
+- **A mesh changed since the snap**: an object's vertex count differs
+  from when the pair was snapped. Click **Re-snap**.
+- **The stored stitch cannot be read**, or its rows are malformed.
+  Click **Re-snap**.
+- **A Solid side snapped before it recorded its stitch points**: a
+  **Solid** side is placed on its tetrahedralized surface from points
+  recorded at snap time, and a pair snapped without them cannot be.
+  Click **Re-snap**.
+- **An object is in no active dynamics group**: one of the pair's
+  objects is not assigned to any existing group. Add it to a group
+  again or remove the pair.
+
+A merge pair is removed at one moment only: when one of its objects
+leaves its group, through **Remove Object**, **Delete Group**, or by
+being deleted from the scene. Nothing scans for pairs and removes them
+later. Each pair has:
 
 | UI label              | Python / TOML key   | Description                                                                                                                               |
 | --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Object A / B**      | `object_a` / `object_b` | The two mesh objects.                                                                                                                 |
 | **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stiffness of the soft stitch force. Shown for every supported pair; raise it to hold the seam together more firmly. |
 | **Show Stitch**       | `show_stitch`       | Overlay toggle for the viewport stitch preview.                                                                                           |
-
-Merge pairs referencing deleted or unassigned objects are cleaned up
-automatically as the scene updates.
 
 ## Blender Python API
 
@@ -288,8 +313,10 @@ target triangle.
 **Merge-pair encoding**
 
 Merge pairs are tracked by UUID, so renaming either object preserves the
-link. Pairs referencing an object that has never been snapped or merged
-(no UUID yet) are skipped at transfer. An empty cross-stitch payload
-means snap has not run or the pair is not eligible for a stitch, and
-**Transfer** refuses the pair rather than shipping it.
+link. The **Transfer** check, the parameter encoder, and the panel line
+all ask one function why a pair cannot stitch, so none of them can pass
+a pair another refuses, and none of them writes to the pair. A pair
+with a **Solid** side needs the six-wide rows and the snap-time surface
+points, so a pair stored with four-wide rows is upgraded to six-wide
+rows at encode time only when neither side is a **Solid**.
 :::

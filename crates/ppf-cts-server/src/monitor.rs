@@ -1491,7 +1491,7 @@ mod tests {
         let engine = crate::engine::ServerEngine::new(cfg);
         engine.set_project_context("p", root.to_str().unwrap());
         engine.dispatch(Event::upload_landed("uid"));
-        engine.dispatch(Event::BuildCompleted);
+        engine.dispatch(Event::BuildCompleted { exemptions: vec![] });
         engine.dispatch(Event::StartRequested);
         assert_eq!(engine.state().solver, Solver::Running);
         (

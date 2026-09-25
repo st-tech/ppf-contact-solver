@@ -227,7 +227,7 @@ def test_where_no_gpu_answers_the_cpu_backend_is_chosen_and_the_run_says_so(tmp_
     THIS IS THE ONE FALLBACK IN THE RULE, and the notice is what makes it
     honest rather than silent. A reader opening a notebook on a laptop gets a
     run instead of a refusal they would answer by writing
-    `frontend.set_backend("cpu")` at the top of every notebook, including the
+    `App.set_backend("cpu")` at the top of every notebook, including the
     ones they later open on a machine that has a GPU.
     """
     built = backends.builds(
@@ -365,9 +365,10 @@ def test_the_built_cpu_solver_answers_and_carries_this_tree_s_stamp():
         [
             sys.executable,
             "-c",
-            "import frontend, _ppf_cts_py;"
-            "answer = frontend.probe_backend('cpu');"
-            "print(frontend.get_backend(), answer.usable,"
+            "from frontend import App;"
+            "import _ppf_cts_py;"
+            "answer = App.probe_backend('cpu');"
+            "print(App.get_backend(), answer.usable,"
             " answer.stamp == _ppf_cts_py.__source_stamp__)",
         ],
         cwd=str(REPO_ROOT),
@@ -378,3 +379,59 @@ def test_the_built_cpu_solver_answers_and_carries_this_tree_s_stamp():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == "cpu True True", result.stdout
+
+
+def test_app_and_the_package_functions_hold_one_choice():
+    """`App.set_backend` is the package's `set_backend`, not a second copy.
+
+    A notebook imports only `App`, and a script written earlier calls the
+    package function, so a choice made through either must be what the other
+    reads back, and a refusal must come from the one rule both share.
+    """
+    target = REPO_ROOT / "target" / "cpu"
+    solver = (
+        "ppf-contact-solver.exe" if sys.platform == "win32" else "ppf-contact-solver"
+    )
+    if not (target / "release" / solver).is_file():
+        pytest.skip("this tree has no CPU build to choose")
+    env = dict(os.environ)
+    env.pop("CARGO_TARGET_DIR", None)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    script = "\n".join(
+        [
+            "import frontend",
+            "from frontend import App",
+            "assert App.list_backends() == frontend.list_backends()",
+            "App.set_backend('cpu')",
+            "assert frontend.get_backend() == 'cpu'",
+            "assert App.get_backend() == 'cpu'",
+            "try:",
+            "    App.set_backend('no-such-backend')",
+            "except ValueError as refusal:",
+            "    print('refused:', refusal)",
+            "else:",
+            "    raise SystemExit('a name that is no backend was accepted')",
+            "unbuilt = [n for n in ('cuda', 'rocm', 'metal') if n not in App.list_backends()]",
+            "for name in unbuilt[:1]:",
+            "    try:",
+            "        App.set_backend(name)",
+            "    except RuntimeError as refusal:",
+            "        print('refused:', refusal)",
+            "    else:",
+            "        raise SystemExit(f'the unbuilt {name} backend was accepted')",
+            "assert App.get_backend() == 'cpu', 'a refused choice replaced the last one'",
+            "App.set_backend(None)",
+            "assert frontend._BACKEND_CHOICE is None",
+            "print('ok')",
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "ok", result.stdout

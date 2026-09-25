@@ -351,11 +351,12 @@ def resolve_vg_name(obj: bpy.types.Object, stored_name: str, stored_hash: int) -
     if _vg_slot_exists(obj, stored_name):
         return stored_name
     # The stored name is gone, so a rename is the only thing the hash can
-    # still recover. This is the one path that pays for the scan.
-    for name, h in _iter_vg_candidates(obj):
-        if h == stored_hash:
-            return name
-    return stored_name
+    # still recover. This is the one path that pays for the scan. Two groups
+    # with the same contents (a Copy Vertex Group) cannot say which one was
+    # renamed, so only a unique match is followed; otherwise the stored name
+    # stays, finds no group, and the encoder refuses the pin by name.
+    matches = [name for name, h in _iter_vg_candidates(obj) if h == stored_hash]
+    return matches[0] if len(matches) == 1 else stored_name
 
 
 # ---------------------------------------------------------------------------

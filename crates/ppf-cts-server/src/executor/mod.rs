@@ -23,11 +23,12 @@ use ppf_cts_core::events::Event;
 
 use crate::engine::ServerEngine;
 
-mod build;
+pub(crate) mod build;
 mod session;
 pub(crate) mod solver;
 
 pub use build::{solver_build, SolverBuild};
+pub(crate) use build::read_build_exemptions;
 
 // Host-global solver-busy check and terminator. These must stay a MATCHED
 // PAIR: a descendant-only check against a host-global kill would SIGTERM every

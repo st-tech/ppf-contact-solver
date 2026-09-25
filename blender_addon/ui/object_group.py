@@ -21,28 +21,12 @@ from ..models.enum_props import EnumProperty, dynamic_enum_items
 from ..models.groups import OBJECT_GROUP_DEFAULTS, get_object_type, get_vertex_group_items
 from ..models.material_locks import LOCKABLE_MATERIAL_PROPS, lock_name
 from .state_types import (
+    NOT_ANIMATABLE,
     AssignedObject,
     IntersectionAllowanceObject,
     MaterialMapItem,
     PinVertexGroupItem,
 )
-
-
-# Blender makes every property keyframable unless `options` says otherwise, and
-# whatever is passed REPLACES the default `{'ANIMATABLE'}` rather than adding to
-# it, so an empty set is how a property refuses an F-curve.
-#
-# Carry this on any property the solver reads exactly once. The encoder samples
-# a group's material sliders across the frame range and ships a schedule; every
-# other value is read at the frame the transfer happens and never revisited.
-# Leaving the default on one of those puts a working keyframe button in front of
-# the artist, records their curve in the .blend, and then ignores it for the
-# whole solve, which is indistinguishable from the feature being broken.
-#
-# The properties WITHOUT this are the animatable set, and they are the same list
-# the encoder samples. Adding a material parameter to one and not the other is
-# what makes a keyframe silently do nothing, so change them together.
-NOT_ANIMATABLE: set = set()
 
 
 def _build_assigned_object_enum_items(group) -> list:
@@ -313,6 +297,13 @@ class ObjectGroup(PropertyGroup):
         # some other object, a uuid that makes a retired handle resolve to an
         # unrelated live group, or a padlock that silently drops its parameter
         # from the next preset applied.
+        #
+        # Every assigned object's membership ends here, and a merge pair ends
+        # with its object's membership, so the pairs naming them go too.
+        from .dynamics.utils import cleanup_merge_pairs_for_object
+        for assigned in self.assigned_objects:
+            if assigned.uuid:
+                cleanup_merge_pairs_for_object(self.id_data, assigned.uuid)
         self.assigned_objects.clear()
         self.pin_vertex_groups.clear()
         self.material_maps.clear()
@@ -326,6 +317,12 @@ class ObjectGroup(PropertyGroup):
         self.allow_inter_object_intersection_objects_index = -1
         self.allow_inter_group_intersection_objects.clear()
         self.allow_inter_group_intersection_objects_index = -1
+        self.allow_existing_intersection_objects.clear()
+        self.allow_existing_intersection_objects_index = -1
+        # A force field source narrowed to this group names it by uuid, so the
+        # reference goes with the group rather than outliving it.
+        from ..models.force_field_targets import drop_group
+        drop_group(self.id_data, self.uuid)
         self.uuid = ""
         from ..models.material_locks import LOCKABLE_MATERIAL_PROPS, lock_name
         for locked_prop in LOCKABLE_MATERIAL_PROPS:
@@ -343,8 +340,6 @@ class ObjectGroup(PropertyGroup):
             self.use_group_bounding_box_diagonal = False
             self.contact_gap = 0.001
             self.contact_offset = 0.005
-            self.computed_contact_gap = 0.001
-            self.computed_contact_offset = 0.005
             self.bend = 1.0
         from .dynamics.overlay import apply_object_overlays
         apply_object_overlays()
@@ -401,8 +396,9 @@ class ObjectGroup(PropertyGroup):
         # so older ``.blend`` files keep loading as the same identifier
         # even though ``STABLE_NEOHOOKEAN`` is no longer a valid choice
         # for shell groups. The empty visible name suppresses the entry
-        # from the dropdown; ``core/encoder/params.py`` coerces any
-        # remaining ``STABLE_NEOHOOKEAN`` upload to ``ARAP``.
+        # from the dropdown, and the encoder refuses a SHELL group still
+        # holding it (``models.groups.withdrawn_shell_model_refusal``), so
+        # slot 0 stays reserved for it and is never given to another item.
         items=[
             ("STABLE_NEOHOOKEAN", "", "", "NONE", 0),
             ("ARAP", "ARAP", "As-Rigid-As-Possible model", "NONE", 1),
@@ -641,12 +637,6 @@ class ObjectGroup(PropertyGroup):
         precision=5,
         description="Contact gap as ratio of group bounding box diagonal",
     )  # pyright: ignore
-    computed_contact_gap: FloatProperty(
-        name="Computed Contact Gap",
-        default=OBJECT_GROUP_DEFAULTS["computed_contact_gap"],
-        description="Hidden property storing the absolute computed contact gap value",
-        options={"HIDDEN"},
-    )  # pyright: ignore
     contact_offset: FloatProperty(
         name="Contact Offset",
         default=OBJECT_GROUP_DEFAULTS["contact_offset"],
@@ -662,12 +652,6 @@ class ObjectGroup(PropertyGroup):
         max=1.0,
         precision=5,
         description="Contact offset as ratio of group bounding box diagonal",
-    )  # pyright: ignore
-    computed_contact_offset: FloatProperty(
-        name="Computed Contact Offset",
-        default=OBJECT_GROUP_DEFAULTS["computed_contact_offset"],
-        description="Hidden property storing the absolute computed contact offset value",
-        options={"HIDDEN"},
     )  # pyright: ignore
     enable_strain_limit: BoolProperty(
         name="Enable Strain Limit",
@@ -688,6 +672,18 @@ class ObjectGroup(PropertyGroup):
         subtype="PERCENTAGE",
         description="Maximum stretch beyond rest length, as a percentage "
         "(1% allows 1% stretch)",
+    )  # pyright: ignore
+    force_field_weight: FloatProperty(
+        name="Force Field Weight",
+        default=OBJECT_GROUP_DEFAULTS["force_field_weight"],
+        min=0.0,
+        soft_max=2.0,
+        precision=3,
+        description=(
+            "Scale on the scene's force fields for this group's objects: 1 applies "
+            "them as authored, 0 leaves the group unaffected"
+        ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     enable_inflate: BoolProperty(
         name="Inflate",
@@ -909,6 +905,44 @@ class ObjectGroup(PropertyGroup):
         type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
     )  # pyright: ignore
     allow_inter_group_intersection_objects_index: IntProperty(
+        default=-1, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    # Not a pair rule but a starting-state one: the pairs this group's objects
+    # START the simulation intersecting with are exempted from contact for the
+    # whole run, and every other pair keeps full contact. For a garment posed
+    # by a rig, whose fold (an armpit) crosses itself or the body at the start
+    # frame. Per object like the other three, and either side is enough.
+    allow_existing_intersection: BoolProperty(
+        name="Allow Existing Intersections",
+        default=OBJECT_GROUP_DEFAULTS["allow_existing_intersection"],
+        description=(
+            "Start from a pose that already intersects. The places where an "
+            "object crosses itself or another object at the start frame, or "
+            "sits closer than the contact offset, pass through each other for "
+            "the whole simulation instead of stopping the build. Everywhere "
+            "else keeps full contact, and a new intersection still stops the "
+            "run. It does not untangle anything. Only one of the two sides has "
+            "to enable it"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_existing_intersection_all_objects: BoolProperty(
+        name="Apply to All Objects",
+        default=OBJECT_GROUP_DEFAULTS[
+            "allow_existing_intersection_all_objects"
+        ],
+        description=(
+            "Give every object assigned to this group the existing-"
+            "intersection allowance. Turn it off to name the objects "
+            "individually, and only the objects in the list below may start "
+            "intersecting"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    allow_existing_intersection_objects: CollectionProperty(
+        type=IntersectionAllowanceObject, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    allow_existing_intersection_objects_index: IntProperty(
         default=-1, options=NOT_ANIMATABLE
     )  # pyright: ignore
     bend_warp: FloatProperty(

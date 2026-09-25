@@ -348,12 +348,23 @@ $(ENTRY_CHECK_DIR)/%.harness.metal: $(KERNEL_ROOT)/%.kernel.cpp \
 # The renderings are ORDER-ONLY prerequisites as a set, and the two this unit
 # names are real ones: `make -j` may render any file at any time, and the
 # harness names its dependencies by path rather than by mtime.
+#
+# -MMD -MP FOR THE SAME REASON THE HOST OBJECTS BELOW CARRY THEM, and this is
+# the compile that SHIPS (see `entries-lib`). The prerequisites above name only
+# this unit's own renderings, while a body reaches its material through shared
+# headers (`energy/model/*.hpp`) and other renderings by `#include`. Without
+# the dependency file an edit to one of those leaves this `.air` newer than
+# everything make can see, so the linked metallib keeps the OLD arithmetic and
+# the backend runs it without a word, while the CPU and CUDA backends, whose
+# compiles do track headers, run the new one.
 $(ENTRY_CHECK_DIR)/%.air: $(ENTRY_CHECK_DIR)/%.harness.metal $(MSL_PROLOGUE) \
                           $(KERNELGEN_DIR)/%.entry.metal \
                           $(KERNELGEN_DIR)/%.kernel.metal | $(KERNEL_METAL)
 	mkdir -p $(@D)
 	xcrun metal $(METAL_ENTRY_FLAGS) -I$(ENTRY_CHECK_DIR) -I$(KERNEL_ROOT) \
-		-I$(KERNELGEN_DIR) -c $< -o $@
+		-I$(KERNELGEN_DIR) -MMD -MP -c $< -o $@
+
+-include $(ENTRY_AIR:.air=.d)
 
 # ONE LIBRARY OUT OF EVERY GENERATED ENTRY POINT, WHICH IS WHAT A DISPATCHING
 # BACKEND NEEDS AND WHAT `entry-check` DELIBERATELY DOES NOT PRODUCE.
@@ -781,7 +792,7 @@ abi: $(LIBDIR)/libppfbe_metal.dylib $(ENTRY_METALLIB) $(KERNEL_TABLE_RUST)
 # ---------------------------------------------------------------------------
 # The fixture gates.
 #
-# `make fixtures` runs every examples/metal_*.py against the backend the last
+# `make fixtures` runs every fixture script against the backend the last
 # `cargo build --release` produced. Each fixture asserts its own invariants and
 # exits non-zero when one fails, so the loop under `set -e` is the whole gate.
 # This does not build: cargo drives this Makefile, so a build from inside it
@@ -803,19 +814,29 @@ abi: $(LIBDIR)/libppfbe_metal.dylib $(ENTRY_METALLIB) $(KERNEL_TABLE_RUST)
 # possible failure.
 REPO_ROOT := ../../..
 FIXTURE_PYTHON ?= $(HOME)/.local/share/ppf-cts/venv/bin/python
-METAL_FIXTURES := $(patsubst $(REPO_ROOT)/%,%,\
-                    $(wildcard $(REPO_ROOT)/examples/metal_*.py))
+# A fixture is a Python script under the repository that carries the line
+# `# metal-fixture`, so the list is found by what a file declares rather than
+# by where it sits. METAL_FIXTURES overrides it with paths relative to the
+# repository root, and `make fixtures-list` prints what would run.
+METAL_FIXTURES ?= $(shell cd $(REPO_ROOT) && grep -rlx --include='*.py' \
+                    --exclude-dir=target --exclude-dir=.git --exclude-dir=.venv \
+                    '\# metal-fixture' . 2>/dev/null | sed 's|^\./||' | sort)
 
 # An empty value reads as "not set" in the backend, so the plain target passes
 # the variable through with nothing in it rather than needing a second recipe.
 fixtures: METAL_POISON :=
 fixtures-poisoned: METAL_POISON := 1
 
+.PHONY: fixtures-list
+fixtures-list:
+	@for fixture in $(METAL_FIXTURES); do echo "$$fixture"; done
+
 .PHONY: fixtures fixtures-poisoned
 fixtures fixtures-poisoned:
 	@set -e; \
 	if [ -z "$(METAL_FIXTURES)" ]; then \
-		echo "ERROR: no examples/metal_*.py fixtures found under $(REPO_ROOT)."; \
+		echo "ERROR: no fixtures: no .py under $(REPO_ROOT) carries the line"; \
+		echo "       '# metal-fixture', and METAL_FIXTURES names none."; \
 		echo "       A gate that runs nothing would report success."; \
 		exit 1; \
 	fi; \

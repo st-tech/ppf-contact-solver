@@ -687,14 +687,10 @@ if errorlevel 1 (
     REM without nvidia-smi.
     REM scipy: REQUIRED by frontend/_decoder_.py. The two-stage Poisson pin
     REM diffusion for partially-pinned SOLID objects (_build_solid_pin_fields,
-    REM _build_harmonic_interior_operator) uses scipy.sparse solves. It is
-    REM imported inside a try/except that silently returns None when scipy is
-    REM absent, so a Windows build WITHOUT scipy does not crash: it quietly
-    REM takes a different (surface-only) fallback pin path than the Linux build,
-    REM producing a DIFFERENT driven-vertex set (e.g. 861 vs 845 on a partial-
-    REM pin SOLID) and hence a divergent simulation for the same scene. scipy is
-    REM present transitively on Linux but was never installed here, so it must
-    REM be listed explicitly to keep Windows and Linux on the same code path.
+    REM _build_harmonic_interior_operator) uses scipy.sparse solves, and a
+    REM frontend without scipy refuses to build such a scene, naming scipy.
+    REM scipy is present transitively on Linux but not here, so it must be
+    REM listed explicitly.
     REM PIN the ABI-coupled / native-extension deps to a verified-good set.
     REM Left unpinned, every warmup bundles whatever was latest that day.
     REM scipy is built against a specific numpy ABI; when pip pairs a scipy

@@ -74,10 +74,10 @@ Each sidebar panel maps to one chapter below:
 | Panel                                  | What's there                                                                                 | Docs                                           |
 | -------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | **Scene Configuration**                | Global sim params: gravity, time step, frame count, CG tolerances, air density / friction, auto-save. | [Scene Parameters](params/scene.md)            |
-| **Scene Configuration** *(keyframed sliders)* | Gravity, wind, air density, air friction, vertex air damping, step size, and inactive momentum frames are keyframed on their own sliders, so the curves sit on the timeline with every other keyframe. | [Dynamic Parameters](params/dynamic.md)    |
+| **Scene Configuration** *(keyframed sliders)* | Gravity, wind, air density, air friction, vertex air damping, and step size are keyframed on their own sliders, so the curves sit on the timeline with every other keyframe. | [Dynamic Parameters](params/dynamic.md)    |
 | **Dynamics Groups**                    | Per-group type, material model, densities, moduli, contact gap, overlay color.               | [Object Groups](scene/object_groups.md), [Material Parameters](params/material.md) |
 | **Dynamics Groups → Pins** *(**Pins & Motion** on PDRD)* | Pins and their list of operations (**Move By** / **Spin** / **Scale** / **Torque**, plus the auto-attached **Embedded Move**). A **PDRD** group's **Pins & Motion** section offers only two motion steps, **Translate** and **Rotate**. | [Pins and Operations](constraints/pins.md)  |
-| **Dynamics Groups → Transform** *(Static only)* | Per-object **Move By** / **Spin** / **Scale** ops, or Blender transform keyframes.  | [Static Objects](scene/static_objects.md)            |
+| **Dynamics Groups → Transform** *(Static only)* | Per-object **Move By** / **Spin** / **Scale** ops, or the object's own Blender animation.  | [Static Objects](scene/static_objects.md)            |
 | **Scene Configuration → Invisible Colliders** | Walls and spheres with keyframed position / radius.                                   | [Invisible Colliders](constraints/colliders.md)  |
 | **Snap and Merge**                     | Snap/merge pairs with optional stitch stiffness.                                             | [Snap and Merge](constraints/snap_merge.md)            |
 

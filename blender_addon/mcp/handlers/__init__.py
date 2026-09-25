@@ -13,3 +13,4 @@ from .mesh_cleaning import *  # noqa: F401, F403
 from .statistics import *  # noqa: F401, F403
 from .material_maps import *  # noqa: F401, F403
 from .presets import *  # noqa: F401, F403
+from .force_field import *  # noqa: F401, F403

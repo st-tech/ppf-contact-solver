@@ -62,6 +62,9 @@ class OBJECT_OT_AddStaticOp(Operator):
 
         op = assigned.static_ops.add()
         op.op_type = self.op_type
+        from ...core.encoder import seed_window_at_start
+        from ...models.groups import get_addon_data
+        seed_window_at_start(op, get_addon_data(context.scene).state)
         assigned.static_ops.move(len(assigned.static_ops) - 1, 0)
         assigned.static_ops_index = 0
         redraw_all_areas(context)

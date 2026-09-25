@@ -246,6 +246,125 @@ class App:
         Utils.terminate()
 
     @staticmethod
+    def list_backends() -> dict[str, str]:
+        """List the solver backends built into this tree or distribution.
+
+        A fact about the disk, not about the machine: whether a backend has
+        a usable device here is :meth:`probe_backend`'s question, and which
+        one a run uses is :meth:`get_backend`'s.
+
+        Returns:
+            dict[str, str]: The backend name (``"cuda"``, ``"rocm"``,
+            ``"metal"`` or ``"cpu"``) mapped to the directory holding its
+            build.
+
+        Example:
+            See which builds a distribution carries::
+
+                from frontend import App
+
+                print(App.list_backends())
+                # {'cuda': '.../target/cuda/release', 'cpu': '.../target/cpu/release'}
+        """
+        from . import list_backends
+
+        return list_backends()
+
+    @staticmethod
+    def probe_backend(name: str):
+        """Ask backend ``name``'s own solver whether it can run on this machine.
+
+        An unusable answer is not an error: it is what the automatic choice
+        behind :meth:`get_backend` reads. The answer is remembered for the
+        solver binary that gave it, so asking twice runs the solver once and a
+        rebuilt solver is asked again.
+
+        Args:
+            name (str): A backend :meth:`list_backends` reports.
+
+        Returns:
+            A named tuple ``(backend, usable, detail, stamp)``. ``detail`` is
+            the device's name when ``usable`` is true and the backend's own
+            reason when it is not.
+
+        Raises:
+            RuntimeError: If there is no ``name`` build here.
+
+        Example:
+            Check whether the ROCm build finds a GPU before choosing it::
+
+                from frontend import App
+
+                answer = App.probe_backend("rocm")
+                print(answer.usable, answer.detail)
+        """
+        from . import probe_backend
+
+        return probe_backend(name)
+
+    @staticmethod
+    def get_backend() -> str:
+        """Return the backend the next run in this process uses.
+
+        An explicit choice comes first and never falls back:
+        :meth:`set_backend`'s, else the build ``CARGO_TARGET_DIR`` names.
+        Otherwise the choice is automatic: the first of CUDA, ROCm and Metal
+        whose own solver reports a usable device, and failing that the CPU
+        backend, which prints one line naming what each GPU backend reported.
+
+        Returns:
+            str: The backend name.
+
+        Raises:
+            RuntimeError: If nothing can be chosen, naming why.
+
+        Example:
+            Print which backend a notebook will run on::
+
+                from frontend import App
+
+                print(App.get_backend())
+        """
+        from . import get_backend
+
+        return get_backend()
+
+    @staticmethod
+    def set_backend(name: Optional[str]):
+        """Choose the backend this process's runs use.
+
+        A backend with no build here is refused at once rather than at the
+        next run, and an explicit choice never falls back to another backend:
+        naming a GPU backend on a machine that cannot run it is an error where
+        the automatic choice would have selected the CPU backend and said so.
+
+        ``None`` returns to the automatic choice, except where
+        ``CARGO_TARGET_DIR`` is set: the build that variable names is itself
+        an explicit choice, and unsetting it is what returns the process to
+        the automatic rule there.
+
+        Args:
+            name (Optional[str]): ``"cuda"``, ``"rocm"``, ``"metal"`` or
+                ``"cpu"``, or ``None`` for the automatic choice.
+
+        Raises:
+            ValueError: If ``name`` is not one of those backends.
+            RuntimeError: If there is no ``name`` build here. The previous
+                choice stays in effect.
+
+        Example:
+            Run on the CPU build on a machine that also has a GPU build::
+
+                from frontend import App
+
+                App.set_backend("cpu")
+                app = App.create("drape")
+        """
+        from . import set_backend
+
+        set_backend(name)
+
+    @staticmethod
     def recover(name: str) -> FixedSession:
         """Recover the fixed session previously saved under ``name``.
 

@@ -105,6 +105,9 @@ try:
     inverted = call("add_collision_window",
                     {"group_uuid": shell, "object_name": "Sheet",
                      "frame_start": 5, "frame_end": 2})
+    zero_length = call("add_collision_window",
+                       {"group_uuid": shell, "object_name": "Sheet",
+                        "frame_start": 7, "frame_end": 7})
     below_one = call("add_collision_window",
                      {"group_uuid": shell, "object_name": "Sheet",
                       "frame_start": 0, "frame_end": 2})
@@ -112,12 +115,15 @@ try:
                      {"group_uuid": shell, "object_name": "Sheet"}).get("windows") or []
     mcp_check(result, "C_frame_range_rules_are_enforced",
               inverted.get("status") == "error"
-              and "frame_end must be >= frame_start" in inverted.get("message", "")
+              and "frame_end must be after frame_start" in inverted.get("message", "")
+              and zero_length.get("status") == "error"
+              and "[7-7]" in zero_length.get("message", "")
               and below_one.get("status") == "error"
               and ">= 1" in below_one.get("message", "")
               # Both refused, so neither reached the list.
               and len(unchanged) == 2,
-              {"inverted": inverted, "below_one": below_one, "count": len(unchanged)})
+              {"inverted": inverted, "zero_length": zero_length,
+               "below_one": below_one, "count": len(unchanged)})
 
     # ----- D --------------------------------------------------------
     oor = call("remove_collision_window",

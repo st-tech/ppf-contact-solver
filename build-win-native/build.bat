@@ -614,7 +614,7 @@ echo.
 
 REM WHAT THE LAUNCHERS PUT ON PATH IS EVERY BUILT BACKEND'S LIBRARY DIRECTORY,
 REM because which backend a run uses is decided when the run starts
-REM (frontend.get_backend) rather than here: each solver imports its own backend
+REM (App.get_backend) rather than here: each solver imports its own backend
 REM library, so all of them have to be findable, and the solver directories
 REM themselves go on PATH for the same reason.
 REM

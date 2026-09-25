@@ -50,6 +50,27 @@ def cleanup_group_references_for_object(group: ObjectGroup, object_uuid: str):
     """
     cleanup_pin_vertex_groups_for_object(group, object_uuid)
     cleanup_intersection_allowances_for_object(group, object_uuid)
+    cleanup_merge_pairs_for_object(group.id_data, object_uuid)
+
+
+def cleanup_merge_pairs_for_object(scene, object_uuid: str):
+    """Remove every merge pair naming *object_uuid* from *scene*.
+
+    A pair stitches two group members, so it ends with either membership.
+    Removed here, when the membership ends, rather than found stale at the
+    next Transfer, which refuses a pair naming an object outside every group.
+    """
+    from ...models.collection_utils import safe_update_index
+    from ...models.groups import get_addon_data
+
+    state = get_addon_data(scene).state
+    for index in range(len(state.merge_pairs) - 1, -1, -1):
+        pair = state.merge_pairs[index]
+        if object_uuid in (pair.object_a_uuid, pair.object_b_uuid):
+            state.merge_pairs.remove(index)
+    state.merge_pairs_index = safe_update_index(
+        state.merge_pairs_index, len(state.merge_pairs)
+    )
 
 
 def cleanup_intersection_allowances_for_object(group: ObjectGroup, object_uuid: str):

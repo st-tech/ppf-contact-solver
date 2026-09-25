@@ -42,6 +42,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             data_hash,
             param_hash,
             total_frames,
+            exemptions,
         } => {
             let data = if has_data && has_param {
                 Data::Uploaded
@@ -135,6 +136,11 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     data_hash,
                     param_hash,
                     violations: state.violations,
+                    exemptions: if build == Build::Built {
+                        exemptions
+                    } else {
+                        vec![]
+                    },
                 },
                 effects,
             )
@@ -210,6 +216,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     total_frames: 0,
                     error: String::new(),
                     crash_kind: String::new(),
+                    exemptions: vec![],
                     ..state
                 },
                 vec![Effect::DoSpawnBuild { preserve_output }],
@@ -243,7 +250,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             vec![],
         ),
 
-        Event::BuildCompleted => (
+        Event::BuildCompleted { exemptions } => (
             ServerState {
                 build: Build::Built,
                 build_progress: 1.0,
@@ -256,6 +263,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                 // start, so this keeps the in-memory state consistent).
                 solver: Solver::Idle,
                 violations: vec![],
+                exemptions,
                 ..state
             },
             vec![Effect::DoLog {
@@ -270,6 +278,7 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     build: Build::Failed,
                     error,
                     violations,
+                    exemptions: vec![],
                     build_info: "Build failed.".to_string(),
                     ..state
                 },

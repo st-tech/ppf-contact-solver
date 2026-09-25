@@ -342,6 +342,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const VertexParam *vertex_param,
     const FaceParam *face_param,
@@ -381,8 +384,10 @@ template <unsigned N>
     const VertexProp vprop = vertex_prop[vertex_index];
     const VertexProp fanchor = vertex_prop[f[0]];
     const FaceProp fprop = face_prop[face_index];
-    if (!contact_pair_admitted(pair_side_of_vertex(vprop),
-                               pair_side_of_face(fanchor, fprop))) {
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                               pair_side_of_face(fanchor, fprop, f),
+                               start_link_index, start_link_offset,
+                               has_start_link)) {
         return false;
     }
     if (f[0] == vertex_index || f[1] == vertex_index || f[2] == vertex_index) {
@@ -468,6 +473,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face, const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
@@ -507,8 +515,10 @@ template <unsigned N>
     const VertexProp vprop = vertex_prop[vertex_index];
     const VertexProp eanchor = vertex_prop[f[0]];
     const EdgeProp eprop = edge_prop[edge_index];
-    if (!contact_pair_admitted(pair_side_of_vertex(vprop),
-                               pair_side_of_edge(eanchor, eprop))) {
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                               pair_side_of_edge(eanchor, eprop, f),
+                               start_link_index, start_link_offset,
+                               has_start_link)) {
         return false;
     }
     if (f[0] == vertex_index || f[1] == vertex_index) {
@@ -620,6 +630,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face, const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const unsigned *vertex_edge_index,
     const unsigned *vertex_edge_offset,
@@ -675,8 +688,10 @@ template <unsigned N>
     }
     const VertexProp vprop_a = vertex_prop[vertex_index];
     const VertexProp vprop_b = vertex_prop[other];
-    if (!contact_pair_admitted(pair_side_of_vertex(vprop_a),
-                               pair_side_of_vertex(vprop_b))) {
+    if (!contact_pair_admitted(pair_side_of_vertex(vprop_a, vertex_index),
+                               pair_side_of_vertex(vprop_b, other),
+                               start_link_index, start_link_offset,
+                               has_start_link)) {
         return false;
     }
     const Vec3f p = x[vertex_index];
@@ -868,6 +883,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const unsigned *fixed_index,
@@ -912,8 +930,10 @@ template <unsigned N>
     const VertexProp anchor_b = vertex_prop[e1[0]];
     const EdgeProp eprop_a = edge_prop[edge_index];
     const EdgeProp eprop_b = edge_prop[other];
-    if (!contact_pair_admitted(pair_side_of_edge(anchor_a, eprop_a),
-                               pair_side_of_edge(anchor_b, eprop_b))) {
+    if (!contact_pair_admitted(pair_side_of_edge(anchor_a, eprop_a, e0),
+                               pair_side_of_edge(anchor_b, eprop_b, e1),
+                               start_link_index, start_link_offset,
+                               has_start_link)) {
         return false;
     }
     const Vec3f p0 = x[e0[0]];
@@ -1014,6 +1034,9 @@ struct ContactPointFaceEmbed {
     const Vec3f *x;
     const Vec3u *face;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *face_prop;
     const VertexParam *vertex_param;
     const FaceParam *face_param;
@@ -1063,7 +1086,7 @@ struct ContactPointFaceEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_point_face_at(x0, x, face, vertex_prop, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1088,6 +1111,9 @@ struct ContactPointFaceEmbed {
     const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const VertexParam *vertex_param,
     const FaceParam *face_param,
@@ -1122,7 +1148,7 @@ struct ContactPointFaceEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointFaceEmbed embed{x0, x, face, vertex_prop, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactPointFaceEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1134,6 +1160,9 @@ struct ContactPointFaceEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const VertexParam *vertex_param,
     const FaceParam *face_param,
@@ -1174,7 +1203,7 @@ struct ContactPointFaceEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_face_at(x0, x, face, vertex_prop, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1199,6 +1228,9 @@ struct ContactPointEdgeEmbed {
     const Vec3u *face;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const VertexParam *vertex_param;
     const EdgeParam *edge_param;
@@ -1248,7 +1280,7 @@ struct ContactPointEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1265,6 +1297,9 @@ struct ContactPointEdgeEmbed {
     const Vec3u *face,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
@@ -1302,7 +1337,7 @@ struct ContactPointEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1314,6 +1349,9 @@ struct ContactPointEdgeEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face, const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
@@ -1356,7 +1394,7 @@ struct ContactPointEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1386,6 +1424,9 @@ struct ContactPointPointEmbed {
     const Vec3u *face;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const VertexParam *vertex_param;
     const unsigned *vertex_edge_index;
     const unsigned *vertex_edge_offset;
@@ -1445,7 +1486,7 @@ struct ContactPointPointEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (!contact_point_point_at(x0, x, face, edge, vertex_prop, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, query_index, primitive, grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, torque, stiffness, normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (!contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, query_index, primitive, grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, torque, stiffness, normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
             out_overlap[query_index] = overlap;
         }
@@ -1481,6 +1522,9 @@ struct ContactPointPointEmbed {
     const Vec3u *face,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const unsigned *vertex_edge_index,
     const unsigned *vertex_edge_offset,
@@ -1526,7 +1570,7 @@ struct ContactPointPointEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointPointEmbed embed{x0, x, face, edge, vertex_prop, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, grain_inv_inertia, grain_omega, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, grain_torque_vertex,
+    ContactPointPointEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, grain_inv_inertia, grain_omega, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, grain_torque_vertex,
                                  grain_stiffness_vertex, grain_normal_vertex,
                                  grains_present, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
@@ -1540,6 +1584,9 @@ struct ContactPointPointEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face, const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const unsigned *vertex_edge_index,
     const unsigned *vertex_edge_offset,
@@ -1601,7 +1648,7 @@ struct ContactPointPointEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_point_at(x0, x, face, edge, vertex_prop, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, pair[2 * k], pair[2 * k + 1], grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, grain_torque, grain_stiffness, grain_normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, pair[2 * k], pair[2 * k + 1], grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, grain_torque, grain_stiffness, grain_normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1631,6 +1678,9 @@ struct ContactEdgeEdgeEmbed {
     const Vec3f *x;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeParam *edge_param;
     const unsigned *fixed_index;
@@ -1676,7 +1726,7 @@ struct ContactEdgeEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_edge_edge_at(x0, x, edge, vertex_prop, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1692,6 +1742,9 @@ struct ContactEdgeEdgeEmbed {
     const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const unsigned *fixed_index,
@@ -1725,7 +1778,7 @@ struct ContactEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1737,6 +1790,9 @@ struct ContactEdgeEdgeEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const unsigned *fixed_index,
@@ -1776,7 +1832,7 @@ struct ContactEdgeEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }

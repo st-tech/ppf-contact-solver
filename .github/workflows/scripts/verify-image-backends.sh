@@ -52,16 +52,16 @@ echo "== the frontend sees both, and with no GPU it chooses the CPU one and says
 run "
 cd $ROOT
 PYTHONPATH=$ROOT /root/.local/share/ppf-cts/venv/bin/python /dev/stdin <<'PYEOF'
-import frontend
+from frontend import App
 
-built = sorted(frontend.list_backends())
+built = sorted(App.list_backends())
 print('built:', built)
 assert built == ['cpu', 'cuda'], built
 
 # No GPU is visible in this container, so the automatic rule has to land on the
 # CPU build. It prints one line saying so before answering, which is the whole
 # point: a substitution the reader is not told about is the thing to avoid.
-chosen = frontend.get_backend()
+chosen = App.get_backend()
 print('chosen:', chosen)
 assert chosen == 'cpu', chosen
 PYEOF

@@ -51,6 +51,14 @@ pub struct ParamPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dyn_param: Option<BTreeMap<String, ciborium::Value>>,
 
+    /// The external force field (issues #151 and #114): `grids`, each
+    /// `{kind, shape [T, D, H, W, 3], min, max, times, data}` with `data` the
+    /// zlib-compressed little-endian f32 samples in the solver's axes, and
+    /// `script`, `{source, name}` or null. Kept as opaque CBOR: the frontend
+    /// decoder is its only reader, through `scene.force_field`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_field: Option<ciborium::Value>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invisible_colliders: Option<InvisibleColliders>,
 }

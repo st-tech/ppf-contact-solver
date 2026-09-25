@@ -17,11 +17,9 @@
 # scene override is on, so the scene is deliberately left in the disagreeing
 # state and every hop is asserted against the effective value.
 #
-# The substantive assertion is D. Before this feature the encoders hardcoded
-# `(frame - 1) / fps`, so a solve could only ever occupy frames 1..N. A
-# keyframe authored ON the starting frame must encode to t=0, not to
-# `(start - 1) / fps`, or the whole schedule is shifted by the lead-in and the
-# solver would sit idle through it.
+# The substantive assertion is D. A keyframe authored ON the starting frame
+# must encode to t=0, not to `(start - 1) / fps`, or the whole schedule is
+# shifted by the lead-in and the solver sits idle through it.
 #
 # Subtests:
 #   A. field_mode_resolves:    override off -> resolve_start_frame is the
@@ -31,10 +29,10 @@
 #   C. mcp_reports_effective:  get_scene_parameters() surfaces
 #         `effective_start_frame` = the frame actually in use, not the stale
 #         field.
-#   D. keyframes_relative_to_start: a STATIC's transform keys authored at
-#         START and START+k encode to t=0 and t=k/fps. This is the hop that
-#         would silently shift every schedule if an encoder kept the old
-#         `- 1`.
+#   D. keyframes_relative_to_start: a STATIC keyed at START and START+k is
+#         sampled at frame offsets 0.. from START, with the START pose at
+#         offset 0 and the START+k pose at offset k. An offset counted from
+#         frame 1 would shift every schedule by the lead-in.
 #   E. default_is_frame_one:   a fresh state resolves to 1, so every existing
 #         scene keeps its exact current behavior.
 #   F. param_toml_frames_is_a_count (host-side): `frames` in the solver's
@@ -208,13 +206,13 @@ try:
          "use_scene_frame_start": reported.get("use_scene_frame_start")},
     )
 
-    # ---- D: keyframe times are relative to the starting frame --------
+    # ---- D: sampled times are relative to the starting frame --------
     # A STATIC collider with object-level transform keys ON the starting
-    # frame and KEY_OFFSET frames later. get_transform_keyframes is the
-    # encoder's sparse-sample path; its times must read [0, KEY_OFFSET/fps].
-    # Under the old hardcoded origin the first sample would land at
-    # (SCENE_START - 1) / FPS instead, i.e. the solver would idle through
-    # the entire lead-in before the collider started moving.
+    # frame and KEY_OFFSET frames later. The encoder samples a moving
+    # collider at every frame of the solve, so the samples must sit at frame
+    # offsets 0 .. FRAME_COUNT-1 from the STARTING frame, with the first key's
+    # pose at offset 0 and the second's at KEY_OFFSET. Anchored at frame 1
+    # instead, the collider would idle through the lead-in before moving.
     bpy.ops.mesh.primitive_cube_add(size=0.5, location=(0.0, 0.0, 2.0))
     collider = bpy.context.active_object
     collider.name = "StartCollider"
@@ -230,25 +228,25 @@ try:
                        fromlist=["get_transform_keyframes"])
     kf = utils.get_transform_keyframes(
         collider, bpy.context,
-        encoder.resolve_start_frame(state),
-    )
+        encoder.resolve_start_frame(state), FRAME_COUNT,
+    ) or {}
     # v2 wire: FRAME offsets relative to the start frame; the decoder
-    # derives seconds from the Param fps.
-    offsets = [float(t) for t in (kf or {}).get("frame_offset", [])]
-    expected_offsets = [0.0, float(KEY_OFFSET)]
+    # derives seconds from the Param fps. Solver space is Y-up, so the
+    # Blender Z height is the translation's second component.
+    offsets = [float(t) for t in kf.get("frame_offset", [])]
+    heights = [float(t[1]) for t in kf.get("translation", [])]
     times_ok = (
-        len(offsets) == len(expected_offsets)
-        and all(abs(a - b) < 1e-9 for a, b in zip(offsets, expected_offsets))
+        offsets == [float(k) for k in range(FRAME_COUNT)]
+        and len(heights) == FRAME_COUNT
+        and abs(heights[0] - 2.0) < 1e-6
+        and abs(heights[KEY_OFFSET] - 1.0) < 1e-6
+        and all(abs(h - 1.0) < 1e-6 for h in heights[KEY_OFFSET:])
     )
     dh.record(
         "D_keyframes_relative_to_start",
         times_ok,
-        {"frame_offsets": offsets, "expected": expected_offsets,
-         "start_frame_in_use": int(encoder.resolve_start_frame(state)),
-         "old_hardcoded_would_be": [
-             float(SCENE_START - 1),
-             float(SCENE_START + KEY_OFFSET - 1),
-         ]},
+        {"frame_offsets": offsets, "heights": heights,
+         "start_frame_in_use": int(encoder.resolve_start_frame(state))},
     )
 
     # ---- G: "Active Until (frame)" is an absolute frame ---------------
@@ -294,11 +292,14 @@ try:
 
     class _AssignedStub:
         # Deliberately unsorted, and both keys sit BEFORE the start frame:
-        # the later one is the value in effect at t=0.
+        # the later one is the value in effect at t=0. The name is what a
+        # refusal would call the object.
+        name = "Stub"
         velocity_keyframes = [_VelKeyStub(1, 3.0), _VelKeyStub(5, 7.0)]
 
+    # Time Scale 1.0, so the speed read back is the one authored.
     vel = params_mod._initial_translational_velocity(
-        _AssignedStub(), SCENE_START,
+        _AssignedStub(), SCENE_START, 1.0,
     )
     speed_out = float(max(abs(c) for c in vel))
     dh.record(

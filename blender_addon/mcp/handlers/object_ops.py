@@ -125,7 +125,6 @@ def _check_rest_pose_tracking(group, pin, vertex_group_identifier: str):
 def set_pin_settings(
     group_uuid: str,
     vertex_group_identifier: str,
-    included: Optional[bool] = None,
     use_pin_duration: Optional[bool] = None,
     pin_duration: Optional[int] = None,
     use_pull: Optional[bool] = None,
@@ -134,8 +133,8 @@ def set_pin_settings(
     track_rest_pose_deformation: Optional[bool] = None,
     allow_intersection: Optional[bool] = None,
 ):
-    """Set per-pin runtime settings: inclusion, duration, pull, and three
-    conditional fields.
+    """Set per-pin runtime settings: duration, pull, and three conditional
+    fields.
 
     Every argument is optional and an omitted one leaves that field as it is.
 
@@ -159,7 +158,6 @@ def set_pin_settings(
     Args:
         group_uuid: UUID of group
         vertex_group_identifier: Pin id in 'object::vertex_group' form
-        included: Include this pin in the simulation
         use_pin_duration: Enable per-pin active duration
         pin_duration: Number of frames the pin is active
         use_pull: Use pull force instead of hard constraint
@@ -194,7 +192,6 @@ def set_pin_settings(
         _check_rest_pose_tracking(group, pin, vertex_group_identifier)
 
     updates = {
-        "included": included,
         "use_pin_duration": use_pin_duration,
         "pin_duration": pin_duration,
         "use_pull": use_pull,
@@ -401,12 +398,12 @@ def add_pin_operation(
         spin_axis: [x, y, z] rotation axis for SPIN
         spin_angular_velocity: Degrees per second (SPIN)
         spin_flip: Reverse spin direction
-        spin_center: [x, y, z] fixed center for SPIN (ABSOLUTE mode only)
+        spin_center: [x, y, z] world position of the SPIN center (ABSOLUTE mode only)
         spin_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
         spin_center_vertex: Vertex index for SPIN VERTEX mode
         spin_center_direction: [x, y, z] direction vector for SPIN MAX_TOWARDS mode
         scale_factor: Scale multiplier for SCALE
-        scale_center: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
+        scale_center: [x, y, z] world position of the SCALE center (ABSOLUTE mode only)
         scale_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
         scale_center_vertex: Vertex index for SCALE VERTEX mode
         scale_center_direction: [x, y, z] direction vector for SCALE MAX_TOWARDS mode
@@ -435,6 +432,10 @@ def add_pin_operation(
 
     op = pin.operations.add()
     op.op_type = op_type
+    # A window the call leaves unset starts at the starting frame, not frame 1.
+    from ...core.encoder import seed_window_at_start
+    from ...models.groups import get_addon_data
+    seed_window_at_start(op, get_addon_data(bpy.context.scene).state)
     if op_type == "SCALE":
         op.scale_center_mode = "CENTROID"
     elif op_type == "SPIN":
@@ -575,12 +576,12 @@ def set_pin_operation(
         spin_axis: [x, y, z] rotation axis for SPIN
         spin_angular_velocity: Degrees per second (SPIN)
         spin_flip: Reverse spin direction
-        spin_center: [x, y, z] fixed center for SPIN (ABSOLUTE mode only)
+        spin_center: [x, y, z] world position of the SPIN center (ABSOLUTE mode only)
         spin_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
         spin_center_vertex: Vertex index for SPIN VERTEX mode
         spin_center_direction: [x, y, z] direction vector for SPIN MAX_TOWARDS mode
         scale_factor: Scale multiplier for SCALE
-        scale_center: [x, y, z] fixed center for SCALE (ABSOLUTE mode only)
+        scale_center: [x, y, z] world position of the SCALE center (ABSOLUTE mode only)
         scale_center_mode: CENTROID, ABSOLUTE, MAX_TOWARDS, or VERTEX
         scale_center_vertex: Vertex index for SCALE VERTEX mode
         scale_center_direction: [x, y, z] direction vector for SCALE MAX_TOWARDS mode
@@ -808,9 +809,10 @@ def add_pin_keyframe(group_uuid: str, vertex_group_identifier: str):
 
     The key records the positions the mesh holds right now, at the frame the
     scene is on, so move the timeline and pose the mesh before calling; the
-    frame that was keyed comes back in the result. That frame must be 1 or
-    later, since a key below frame 1 is dropped when the pin track is read.
-    Call it once per pose to build the track. The keys are ordinary Blender
+    frame that was keyed comes back in the result. The track starts at the
+    starting frame: a key at or before it is not a sample of its own and
+    reaches the track only through the curve's value there. Call it once per
+    pose to build the track. The keys are ordinary Blender
     keyframes on the mesh, set to LINEAR interpolation to match how the solver
     reads a sparse pin track, and the Dope Sheet retimes or deletes them like
     any other key.
@@ -865,16 +867,6 @@ def add_pin_keyframe(group_uuid: str, vertex_group_identifier: str):
     if scene is None:
         raise MCPError("No active Blender scene")
     frame = int(scene.frame_current)
-    # The encoder collects a pin's vertex-co keys from frame 1 upward
-    # (``_collect_pin_vertex_fcurve_frames``), so a key written below that is
-    # never read. Refuse before the operator writes one and marks the pin
-    # keyframed.
-    if frame < 1:
-        raise MCPError(
-            f"The scene is on frame {frame}, and a pin key below frame 1 is "
-            "dropped when the pin track is read. Move the timeline to frame 1 "
-            "or later and call again."
-        )
 
     # The operator reads the pin off the group's selected row, so point the
     # row at this pin the way capture_static_deformation does.
@@ -1068,6 +1060,10 @@ def add_static_op(
 
     op = assigned.static_ops.add()
     op.op_type = op_type
+    # A window the call leaves unset starts at the starting frame, not frame 1.
+    from ...core.encoder import seed_window_at_start
+    from ...models.groups import get_addon_data
+    seed_window_at_start(op, get_addon_data(bpy.context.scene).state)
     # The entry has to exist before its fields can be written, so a refused
     # field is undone here rather than left as a half-built op the caller was
     # told nothing about.
@@ -2021,12 +2017,17 @@ def add_collision_window(
         group_uuid: UUID of group
         object_name: Name of the assigned object
         frame_start: First frame of the window
-        frame_end: Last frame of the window
+        frame_end: Last frame of the window, after frame_start
     """
     if frame_start < 1 or frame_end < 1:
         raise ValidationError("frame_start and frame_end must be >= 1")
-    if frame_end < frame_start:
-        raise ValidationError("frame_end must be >= frame_start")
+    if frame_end <= frame_start:
+        # A window that does not end after it starts is refused at Transfer
+        # too, so it is refused here, before it reaches the list.
+        raise ValidationError(
+            f"frame_end must be after frame_start; this call would add the "
+            f"window [{frame_start}-{frame_end}]"
+        )
     _, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
     if len(assigned.collision_windows) >= MAX_COLLISION_WINDOWS:
         raise MCPError(
@@ -2095,7 +2096,7 @@ def set_collision_window(
         object_name: Name of the assigned object
         index: Zero-based index into the object's collision_windows list
         frame_start: First frame of the window (>= 1)
-        frame_end: Last frame of the window (>= frame_start)
+        frame_end: Last frame of the window (after frame_start)
     """
     _, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
     windows = assigned.collision_windows
@@ -2113,9 +2114,9 @@ def set_collision_window(
     end = int(window.frame_end if frame_end is None else frame_end)
     if start < 1 or end < 1:
         raise ValidationError("frame_start and frame_end must be >= 1")
-    if end < start:
+    if end <= start:
         raise ValidationError(
-            f"frame_end must be >= frame_start; this call would leave the "
+            f"frame_end must be after frame_start; this call would leave the "
             f"window [{start}-{end}]"
         )
 

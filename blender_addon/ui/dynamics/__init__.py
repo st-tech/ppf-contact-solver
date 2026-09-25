@@ -9,6 +9,7 @@ from . import (
     dyn_param_ops,
     material_map_ops,
     export_ops,
+    force_field_ops,
     group_ops,
     intersection_allowance_ops,
     invisible_collider_ops,
@@ -270,6 +271,7 @@ def register():
     velocity_keyframe_ops.register()
     collision_window_ops.register()
     save_checkpoint_ops.register()
+    force_field_ops.register()
     profile_ops.register()
     ui_lists.register()
     panels.register()
@@ -284,6 +286,7 @@ def unregister():
     panels.unregister()
     ui_lists.unregister()
     profile_ops.unregister()
+    force_field_ops.unregister()
     save_checkpoint_ops.unregister()
     collision_window_ops.unregister()
     velocity_keyframe_ops.unregister()

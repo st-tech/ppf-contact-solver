@@ -18,7 +18,9 @@ class _Pin:
     """A pinned vertex group bound to a dynamics group.
 
     Created via ``Group.create_pin(object_name, vertex_group_name)``.
-    Every mutating method returns ``self`` so operations chain.
+    Every mutating method returns ``self`` so operations chain, and raises
+    ``ValueError`` when the pin or its group no longer exists (for example
+    after ``solver.clear()``) rather than returning as though it wrote.
 
     Example::
 
@@ -83,6 +85,27 @@ class _Pin:
                     return group, pin_item
         return group, None
 
+    def _require_pin_item(self):
+        """The group and pin item this proxy names, or raise saying which is gone.
+
+        A proxy outlives what it names: ``solver.clear()``, deleting the
+        group, or removing the pin leaves it pointing at nothing. Every method
+        that writes the pin refuses then, as :meth:`delete` does, rather than
+        returning ``self`` as though the write landed.
+        """
+        group, pin_item = self._find_pin_item()
+        if group is None:
+            raise ValueError(
+                f"Group '{object.__getattribute__(self, '_group_uuid')}' not found"
+            )
+        if pin_item is None:
+            raise ValueError(
+                f"Pin '{object.__getattribute__(self, '_vertex_group_name')}' on "
+                f"'{object.__getattribute__(self, '_object_name')}' not found in "
+                "its group"
+            )
+        return group, pin_item
+
     @blender_api
     def pull(self, strength: float = 1.0) -> "_Pin":
         """Use pull force instead of hard pin constraint.
@@ -100,10 +123,9 @@ class _Pin:
 
             group.create_pin("Cloth", "shoulder").pull(strength=2.5)
         """
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            pin_item.use_pull = True
-            pin_item.pull_strength = strength
+        _, pin_item = self._require_pin_item()
+        pin_item.use_pull = True
+        pin_item.pull_strength = strength
         return self
 
     @blender_api
@@ -122,7 +144,8 @@ class _Pin:
             axis: Rotation axis vector.
             angular_velocity: Degrees per second.
             flip: Reverse spin direction.
-            center: Center of rotation (for ABSOLUTE mode).
+            center: Center of rotation as a world position (for ABSOLUTE
+                mode).
             center_mode: ``"CENTROID"``, ``"ABSOLUTE"``, ``"MAX_TOWARDS"``, or
                 ``"VERTEX"``.  If ``None``, inferred from other args
                 (``None`` center → ``"CENTROID"``).
@@ -153,24 +176,23 @@ class _Pin:
             else:
                 center_mode = "CENTROID"
 
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            op = pin_item.operations.add()
-            op.op_type = "SPIN"
-            op.spin_center_mode = center_mode
-            if center is not None:
-                op.spin_center = center
-            if center_direction is not None:
-                op.spin_center_direction = center_direction
-            if center_vertex is not None:
-                op.spin_center_vertex = center_vertex
-            op.spin_axis = axis
-            op.spin_angular_velocity = angular_velocity
-            op.spin_flip = flip
-            op.frame_start = frame_start
-            op.frame_end = frame_end
-            op.transition = transition
-            pin_item.operations.move(len(pin_item.operations) - 1, 0)
+        _, pin_item = self._require_pin_item()
+        op = pin_item.operations.add()
+        op.op_type = "SPIN"
+        op.spin_center_mode = center_mode
+        if center is not None:
+            op.spin_center = center
+        if center_direction is not None:
+            op.spin_center_direction = center_direction
+        if center_vertex is not None:
+            op.spin_center_vertex = center_vertex
+        op.spin_axis = axis
+        op.spin_angular_velocity = angular_velocity
+        op.spin_flip = flip
+        op.frame_start = frame_start
+        op.frame_end = frame_end
+        op.transition = transition
+        pin_item.operations.move(len(pin_item.operations) - 1, 0)
         return self
 
     @blender_api
@@ -185,7 +207,8 @@ class _Pin:
 
         Args:
             factor: Scale factor.
-            center: Center point (for ``ABSOLUTE`` mode).
+            center: Center point as a world position (for ``ABSOLUTE``
+                mode).
             center_mode: ``"CENTROID"``, ``"ABSOLUTE"``, ``"MAX_TOWARDS"``, or
                 ``"VERTEX"``.  If ``None``, inferred from other args
                 (``None`` center → ``"CENTROID"``).
@@ -213,22 +236,21 @@ class _Pin:
             else:
                 center_mode = "CENTROID"
 
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            op = pin_item.operations.add()
-            op.op_type = "SCALE"
-            op.scale_center_mode = center_mode
-            op.scale_factor = factor
-            if center is not None:
-                op.scale_center = center
-            if center_direction is not None:
-                op.scale_center_direction = center_direction
-            if center_vertex is not None:
-                op.scale_center_vertex = center_vertex
-            op.frame_start = frame_start
-            op.frame_end = frame_end
-            op.transition = transition
-            pin_item.operations.move(len(pin_item.operations) - 1, 0)
+        _, pin_item = self._require_pin_item()
+        op = pin_item.operations.add()
+        op.op_type = "SCALE"
+        op.scale_center_mode = center_mode
+        op.scale_factor = factor
+        if center is not None:
+            op.scale_center = center
+        if center_direction is not None:
+            op.scale_center_direction = center_direction
+        if center_vertex is not None:
+            op.scale_center_vertex = center_vertex
+        op.frame_start = frame_start
+        op.frame_end = frame_end
+        op.transition = transition
+        pin_item.operations.move(len(pin_item.operations) - 1, 0)
         return self
 
     @blender_api
@@ -256,16 +278,15 @@ class _Pin:
             pin.torque(magnitude=2.0, axis_component="PC1",
                        frame_start=1, frame_end=30)
         """
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            op = pin_item.operations.add()
-            op.op_type = "TORQUE"
-            op.torque_magnitude = magnitude
-            op.torque_axis_component = axis_component
-            op.torque_flip = flip
-            op.frame_start = frame_start
-            op.frame_end = frame_end
-            pin_item.operations.move(len(pin_item.operations) - 1, 0)
+        _, pin_item = self._require_pin_item()
+        op = pin_item.operations.add()
+        op.op_type = "TORQUE"
+        op.torque_magnitude = magnitude
+        op.torque_axis_component = axis_component
+        op.torque_flip = flip
+        op.frame_start = frame_start
+        op.frame_end = frame_end
+        pin_item.operations.move(len(pin_item.operations) - 1, 0)
         return self
 
     @blender_api
@@ -290,15 +311,104 @@ class _Pin:
                         frame_start=10, frame_end=90,
                         transition="SMOOTH")
         """
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            op = pin_item.operations.add()
-            op.op_type = "MOVE_BY"
-            op.delta = delta
-            op.frame_start = frame_start
-            op.frame_end = frame_end
-            op.transition = transition
-            pin_item.operations.move(len(pin_item.operations) - 1, 0)
+        _, pin_item = self._require_pin_item()
+        op = pin_item.operations.add()
+        op.op_type = "MOVE_BY"
+        op.delta = delta
+        op.frame_start = frame_start
+        op.frame_end = frame_end
+        op.transition = transition
+        pin_item.operations.move(len(pin_item.operations) - 1, 0)
+        return self
+
+    @blender_api
+    def set_animation(self, positions) -> "_Pin":
+        """Drive this pin through a per-frame sequence of mesh vertex positions.
+
+        The same cache Capture Deformation writes for a mesh that a deformer
+        moves through ``positions``, written directly: no deformer is needed,
+        and nothing waits on the event loop a capture advances on, so it works
+        in a script and in a ``--background`` Blender. The pinned vertices
+        follow the sequence and the rest of the mesh is simulated. Row ``k``
+        is the pose ``k`` frames after the solve's starting frame, so row 0
+        is the mesh as it is now.
+
+        Args:
+            positions: ``(n_frames, n_verts, 3)`` positions of EVERY vertex
+                of the pin's mesh on each frame, in the mesh's own
+                coordinates (where ``mesh.vertices[i].co`` lives); the
+                object's transform is applied as a capture applies it. At
+                least two frames.
+
+        Returns:
+            ``self`` for chaining.
+
+        Raises:
+            ValueError: If the pin or its group is gone, the pin's object is
+                not a mesh, its group is STATIC, the pin carries a torque or
+                manual vertex keyframes (either of which a captured animation
+                cannot be combined with), or ``positions`` has the wrong
+                shape, too few frames, or a non-finite value.
+
+        Example::
+
+            import numpy as np
+            pin = group.create_pin("Dancer", "all")
+            pin.set_animation(np.stack(frames))  # frames: list of (n_verts, 3)
+        """
+        import numpy as np
+
+        from ...core.encoder.pin import _get_pin_indices
+        from ...core.pc2 import write_pin_anim_pc2
+        from ...core.transform import zup_to_yup
+        from ...ui.dynamics.pin_capture_ops import _pin_has_vertex_co_fcurves
+        from ...ui.dynamics.pin_ops import _ensure_embedded_move_op
+
+        group, pin_item = self._require_pin_item()
+        obj = bpy.data.objects.get(object.__getattribute__(self, "_object_name"))
+        vg_name = object.__getattribute__(self, "_vertex_group_name")
+        if obj is None or obj.type != "MESH":
+            raise ValueError(
+                f"Pin '{vg_name}': a captured animation drives a mesh, and "
+                f"'{object.__getattribute__(self, '_object_name')}' is not one"
+            )
+        if group.object_type == "STATIC":
+            raise ValueError(
+                f"'{obj.name}' is in a STATIC group, whose motion is its own "
+                "transform or a Capture Deformation of the whole object"
+            )
+        if any(op.op_type == "TORQUE" for op in pin_item.operations):
+            raise ValueError(
+                f"Pin '{vg_name}' on '{obj.name}': torque cannot be combined "
+                "with captured embedded animation"
+            )
+        if _pin_has_vertex_co_fcurves(pin_item):
+            raise ValueError(
+                f"Pin '{vg_name}' on '{obj.name}' has manual vertex keyframes; "
+                "delete them first so one animation source drives the pin"
+            )
+        frames = np.asarray(positions, dtype=np.float64)
+        n_verts = len(obj.data.vertices)
+        if frames.ndim != 3 or frames.shape[1:] != (n_verts, 3):
+            raise ValueError(
+                f"positions must be (n_frames, {n_verts}, 3) for '{obj.name}', "
+                f"got {frames.shape}"
+            )
+        if frames.shape[0] < 2:
+            raise ValueError("positions needs at least two frames to animate")
+        if not np.all(np.isfinite(frames)):
+            raise ValueError("positions contains a non-finite value")
+        pinned = np.asarray(_get_pin_indices(obj, vg_name), dtype=np.int64)
+        if pinned.size == 0:
+            raise ValueError(f"Pin '{vg_name}' on '{obj.name}' holds no vertex")
+        # The capture's own sampling (pin_capture_ops._sample_pin_frame_world):
+        # solver world space, zup_to_yup @ matrix_world @ co.
+        m = (np.array(zup_to_yup(), dtype=np.float64).reshape(4, 4)
+             @ np.array(obj.matrix_world, dtype=np.float64).reshape(4, 4))
+        world = frames[:, pinned, :] @ m[:3, :3].T + m[:3, 3]
+        write_pin_anim_pc2(obj, vg_name, world.astype(np.float32))
+        pin_item.has_captured_anim = True
+        _ensure_embedded_move_op(pin_item)
         return self
 
     @blender_api
@@ -321,10 +431,9 @@ class _Pin:
             pin.move_by(delta=(0, 0, 1.0), frame_start=1, frame_end=60)
             pin.unpin(frame=120)  # released 120 frames after the solve starts
         """
-        _, pin_item = self._find_pin_item()
-        if pin_item is not None:
-            pin_item.use_pin_duration = True
-            pin_item.pin_duration = frame
+        _, pin_item = self._require_pin_item()
+        pin_item.use_pin_duration = True
+        pin_item.pin_duration = frame
         return self
 
     @blender_api

@@ -211,7 +211,10 @@ def simulates(script: Path) -> bool:
         text = script.read_text()
     except OSError:
         return True  # cannot tell; judge it as a simulation rather than excuse it
-    return "session.start(" in text
+    # A frame-stepped notebook starts its solver through the stepping calls,
+    # which launch it when it is not running.
+    return any(call in text for call in
+               ("session.start(", "session.run_until_frame(", "session.step_frame("))
 
 
 def app_name(script: Path) -> str | None:

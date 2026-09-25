@@ -25,6 +25,26 @@ FRAME_VERTEX_SIZE = 12  # 3 * sizeof(float32)
 PC2_NVERTS_OFFSET = 16
 PC2_FRAMECOUNT_OFFSET = 28
 MODIFIER_NAME = "ContactSolverCache"
+# The geometry-nodes modifier Convert To Particle Mesh gives a SAND body.
+PARTICLE_MESH_MODIFIER_NAME = "Particle Mesh"
+
+
+def display_only_modifier_names(obj, object_type) -> set:
+    """Names of the modifiers on *obj* that exist only to DRAW it.
+
+    Every read of the pose a simulated object starts from hides these: the
+    encoder's starting-frame evaluation and Capture Deformation both, so the
+    two agree by construction. The ContactSolverCache replays a previous solve,
+    a ROD's Wireframe turns an edge-only mesh into zero vertices (and a faced
+    one into different vertices), and a SAND body's Particle Mesh turns it into
+    a point cloud with no mesh vertices at all.
+    """
+    names = {MODIFIER_NAME}
+    if object_type == "ROD":
+        names.update(m.name for m in obj.modifiers if m.type == "WIREFRAME")
+    elif object_type == "SAND":
+        names.add(PARTICLE_MESH_MODIFIER_NAME)
+    return names
 # Cache namespace suffixes embedded in PC2 keys / on-disk filenames.
 STATIC_DEFORM_SUFFIX = "_staticdeform"
 PIN_DEFORM_SUFFIX = "__pindeform"
@@ -373,6 +393,30 @@ def _cache_insertion_index(obj) -> int:
             return pos
         pos += 1
     return pos
+
+
+def modifiers_after_cache_boundary(obj) -> list:
+    """The modifiers ContactSolverCache sits in front of when it is placed
+    after the deformers: the first topology-changing modifier and every one
+    after it, as :func:`_cache_insertion_index` finds them. The cache itself
+    is not listed.
+
+    On display these run on top of the solver output, while the cache
+    replaces everything in front of it. So the pose the solver starts from is
+    the stack evaluated WITHOUT them, which is how
+    ``utils.eval_deform_local_positions`` reads a stack that changes the
+    vertex count.
+    """
+    boundary = _cache_insertion_index(obj)
+    after = []
+    pos = 0
+    for m in obj.modifiers:
+        if m.name == MODIFIER_NAME:
+            continue
+        if pos >= boundary:
+            after.append(m)
+        pos += 1
+    return after
 
 
 def cache_placement_is_stale(obj, place_after_deformers) -> bool:

@@ -25,6 +25,7 @@ _PARAM_PROPS = {
     "contact_offset", "contact_offset_rat",
     "enable_strain_limit", "strain_limit_percent",
     "enable_inflate", "inflate_pressure",
+    "force_field_weight",
     "enable_plasticity", "plasticity", "plasticity_threshold",
     "enable_bend_plasticity", "bend_plasticity", "bend_plasticity_threshold",
     "bend_rest_angle_source", "bend_rest_from_reference",
@@ -65,6 +66,9 @@ class _ParamProxy:
       directly.
     - **Strain limit**: ``enable_strain_limit``, ``strain_limit_percent``
     - **Inflation**: ``enable_inflate``, ``inflate_pressure``
+    - **Force fields**: ``force_field_weight`` (every type but Static): the
+      scene's force fields and force field script scale by this on the
+      group's objects, 1.0 as authored, 0.0 not at all
     - **Plasticity**: ``enable_plasticity``, ``plasticity``,
       ``plasticity_threshold``
     - **Bend plasticity**: ``enable_bend_plasticity``, ``bend_plasticity``,
@@ -73,7 +77,7 @@ class _ParamProxy:
     - **Rest-shape scale**: ``shrink_x`` / ``shrink_y`` (Shell, per axis),
       ``shrink`` (Solid, uniform), ``length_factor`` (Rod, labeled
       **Shrink** in the panel; it scales the rod's rest edge length)
-    - **Stitch**: ``stitch_stiffness`` (Solid, Shell and Rod)
+    - **Stitch**: ``stitch_stiffness`` (Solid and Shell)
     - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric). The PDRD hinge
       joint is per-object, set via :meth:`set_hinge` (not a group material).
     - **Sand-specific**: ``sand_grain_radius`` (meters), ``sand_particle_mass``

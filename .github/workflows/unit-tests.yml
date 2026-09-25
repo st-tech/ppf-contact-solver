@@ -285,7 +285,7 @@ jobs:
 
       - name: Host C++ test
         if: matrix.os != 'windows-2025'
-        run: make -C crates/ppf-cts-compute/host/tests test
+        run: make -C crates/ppf-cts-compute/cpu/tests test
 
       - name: Host C++ test (not run on Windows)
         if: matrix.os == 'windows-2025'

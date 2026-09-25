@@ -11,6 +11,7 @@ from ...core.encoder import resolve_fps, resolve_start_frame
 from ...models.groups import get_addon_data
 from ..decorators import (
     MCPError,
+    ValidationError,
     mcp_handler,
     remote_handler,
 )
@@ -111,10 +112,13 @@ def set_scene_parameters(
         wind_strength: Wind speed magnitude (m/s)
         air_density: Air density (kg/m^3)
         air_friction: Tangential/normal air friction ratio
-        world_scaling: Uniform scale applied to all geometry before
-            simulating; results are scaled back so the scene keeps its
-            authored size. Must be within [0.001, 1000.0], and 1.0 disables
-            it. Gravity and material stiffness do not scale
+        world_scaling: Uniform scale applied to the scene before
+            simulating, which changes the physical size it is simulated at
+            (0.1 simulates a 15 m mesh at 1.5 m under the same gravity);
+            results are scaled back so the scene keeps its authored size.
+            Must be within [0.001, 1000.0], and 1.0 disables it. Positions,
+            contact gaps, velocities and constraint_ghat scale with it;
+            gravity, wind, material parameters and torques do not
         vertex_air_damp: Vertex-level air damping factor
         fix_xz: Height threshold (m) above which lateral motion (XY in
             Blender, XZ in the solver's Y-up frame) is constrained. Must be
@@ -316,16 +320,24 @@ def get_scene_parameters():
 def set_save_checkpoint_frames(frames: list[int]):
     """Set the explicit frames at which to save a resumable checkpoint.
 
-    Replaces the current Save Checkpoints list. Frames are de-duplicated,
-    clamped to Blender's 1-based minimum, and sorted ascending. These are
-    the frames the Resume dialog offers, in addition to Auto Save and Save
-    State on Finish.
+    Replaces the current Save Checkpoints list. Frames are de-duplicated and
+    sorted ascending. These are the frames the Resume dialog offers, in
+    addition to Auto Save and Save State on Finish. A frame at or before the
+    starting frame is refused: nothing has been simulated there to save.
 
     Args:
-        frames: Frame indices (1-based) to save checkpoints at.
+        frames: Blender frames after the starting frame to save checkpoints at.
     """
     state = get_addon_data(bpy.context.scene).state
-    cleaned = sorted({max(1, int(f)) for f in frames})
+    start = resolve_start_frame(state)
+    early = sorted(int(f) for f in frames if int(f) <= start)
+    if early:
+        raise ValidationError(
+            f"Checkpoint frame {early[0]} is at or before the starting frame "
+            f"{start}, where nothing has been simulated yet; give frames after "
+            f"{start}"
+        )
+    cleaned = sorted({int(f) for f in frames})
     state.save_checkpoint_frames.clear()
     for f in cleaned:
         item = state.save_checkpoint_frames.add()

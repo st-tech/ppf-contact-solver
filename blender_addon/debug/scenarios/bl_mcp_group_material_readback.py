@@ -22,7 +22,7 @@
 # loads as that identifier while the panel's picker does not offer it. The
 # report lists the offered identifiers only, and the writer refuses the
 # withdrawn one, which is what keeps a caller from asking for a model the
-# scene build would substitute for.
+# transfer would refuse.
 #
 # The pin half covers list order. A pin's position decides which of two pins
 # holding one vertex that vertex takes its settings from, so a rename has to
@@ -75,6 +75,12 @@
 #      and moving back restores the original order.
 #   N. ``move_past_the_end_is_refused`` -- the first pin cannot move up, and
 #      the refusal names the edge it is already at.
+#   O. ``pdrd_takes_no_stitch_stiffness`` -- a PDRD group neither offers nor
+#      accepts stitch_stiffness, which its solve has no seam to apply to and
+#      the encoder does not send for it.
+#   P. ``rod_takes_no_stitch_stiffness`` -- nor does a ROD group, whose edges
+#      are the rod rather than stitches, and whose encoded parameters carry
+#      no stitch-stiffness.
 
 from __future__ import annotations
 
@@ -696,6 +702,66 @@ try:
             "message": message_n,
             "order": order_n,
         },
+    )
+
+    # ----- O. a PDRD group is offered only what reaches its solve -----
+    # A rigid body is one transform with no seams, and the encoder's PDRD
+    # allowlist sends no stitch-stiffness, so a writer that accepted it would
+    # report a change the solve never sees. Measured on its own group, since
+    # the SHELL group above does carry a stitch stiffness.
+    rigid = expect("create_group", {"name": "RigidReadback", "type": "PDRD"})
+    rigid_uuid = rigid.get("group_uuid") or ""
+    refuse_o, raw_o = refusal(
+        "set_group_material_properties",
+        {"group_uuid": rigid_uuid, "properties": {"stitch_stiffness": 2.0}},
+    )
+    message_o = refuse_o.get("message") or ""
+    offered_o = sorted(
+        (expect("get_group_material_properties", {"group_uuid": rigid_uuid})
+         .get("properties") or {})
+    )
+    mcp_check(
+        result, "O_pdrd_takes_no_stitch_stiffness",
+        bool(rigid_uuid)
+        and refuse_o.get("status") == "error"
+        and raw_o.get("isError") is True
+        and "stitch_stiffness" in message_o
+        and "stitch_stiffness" not in offered_o
+        and "pdrd_density" in offered_o,
+        {"message": message_o, "offered": offered_o},
+    )
+
+    # ----- P. nor is a ROD group --------------------------------------
+    strand = expect("create_group", {"name": "RodReadback", "type": "ROD"})
+    strand_uuid = strand.get("group_uuid") or ""
+    refuse_p, raw_p = refusal(
+        "set_group_material_properties",
+        {"group_uuid": strand_uuid, "properties": {"stitch_stiffness": 2.0}},
+    )
+    message_p = refuse_p.get("message") or ""
+    offered_p = sorted(
+        (expect("get_group_material_properties", {"group_uuid": strand_uuid})
+         .get("properties") or {})
+    )
+    params_mod = __import__(pkg + ".core.encoder.params",
+                            fromlist=["_encode_group_params"])
+    rod_group = groups.get_active_group_by_uuid(bpy.context.scene, strand_uuid)
+    rod_state = groups.get_addon_data(bpy.context.scene).state
+    (rod_params, _names, _uuids), = params_mod._encode_group_params(
+        bpy.context, [rod_group], rod_state, 24.0, 1,
+    )
+    rod_keys = sorted(rod_params)
+    mcp_check(
+        result, "P_rod_takes_no_stitch_stiffness",
+        bool(strand_uuid)
+        and refuse_p.get("status") == "error"
+        and raw_p.get("isError") is True
+        and "stitch_stiffness" in message_p
+        and "stitch_stiffness" not in offered_p
+        and "rod_density" in offered_p
+        and "stitch-stiffness" not in rod_keys
+        and "young-mod" in rod_keys,
+        {"message": message_p, "offered": offered_p, "encoded": rod_keys},
     )
 
     mcp_mod.stop_mcp_server()

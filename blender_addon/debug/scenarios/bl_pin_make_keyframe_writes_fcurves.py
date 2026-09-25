@@ -9,8 +9,10 @@
 # directly at Transfer time and emits a sparse ``pin_anim`` track
 # spliced at ``embedded_move_index``.
 #
-# There is no dense-PC2 path for SHELL/SOLID pins anymore: the old
-# ``_pininput.pc2`` cache and the ``set_animation`` API are gone.
+# A dense per-frame track for a SHELL/SOLID pin comes from one place, the
+# Capture Deformation cache (``_pindeform.pc2``), which Capture Deformation
+# and ``_Pin.set_animation`` write and ``bl_pin_capture_deformation`` covers;
+# it takes precedence over the fcurves this scenario authors.
 # STATIC mesh colliders have their own separate dense path
 # (``_staticdeform.pc2`` via Capture Deformation, consumed by
 # ``encoder/mesh.py``), exercised by ``bl_static_deform_anim``.
@@ -22,9 +24,10 @@
 #   B. delete_all_removes_fcurves: Delete All Keyframes wipes every
 #      ``vertices[N].co`` fcurve AND removes the EMBEDDED_MOVE op.
 #   C. encoder_emits_sparse_pin_anim_from_fcurves: with fcurves
-#      authored, the encoder emits a per-vertex ``pin_anim`` with one
-#      (time, position) sample per authored keyframe and sets
-#      ``embedded_move_index = 0``.
+#      authored, the encoder emits a per-vertex ``pin_anim`` whose first
+#      sample is the pose at the starting frame (time zero, the pose the
+#      vertex ships at) followed by one (time, position) sample per
+#      keyframe after it, and sets ``embedded_move_index = 0``.
 
 from __future__ import annotations
 
@@ -176,7 +179,8 @@ try:
         encode_err is None
         and any_vert_cfg is not None
         and any_vert_cfg.get("embedded_move_index") == 0
-        and len(sample_times) == 2,
+        and len(sample_times) == 3
+        and sample_times[0] == 0.0,
         {
             "encode_err": encode_err,
             "embedded_move_index": (

@@ -61,6 +61,11 @@ pub enum Event {
         /// disk so the progress bar keeps working after the connect
         /// probe's `--name __probe__` transition cleared the field.
         total_frames: i32,
+        /// The exempted pairs the project's last successful build recorded
+        /// (`build_exemptions.json`), opaque like `BuildCompleted`'s. Read
+        /// only when the selection changes, and used only when the project
+        /// is built; empty otherwise.
+        exemptions: Vec<String>,
     },
 
     /// Client requested a scene build. `preserve_output` keeps the
@@ -112,8 +117,9 @@ pub enum Event {
     /// `frame / total_frames` without re-reading the param file.
     BuildMetadata { total_frames: i32 },
 
-    /// Build task finished successfully.
-    BuildCompleted,
+    /// Build task finished successfully. `exemptions` is opaque: the pairs
+    /// Allow Existing Intersections exempted, empty when none were.
+    BuildCompleted { exemptions: Vec<String> },
 
     /// Build task encountered an error. `violations` is opaque.
     BuildFailed {

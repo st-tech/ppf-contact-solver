@@ -350,41 +350,33 @@ def _check_uuid_consistency(context) -> str:
 
 
 def _check_merge_pairs_stitch(context) -> str:
-    """Reject a transfer when any merge pair carries no stitch points.
+    """Reject a transfer when any merge pair's stitch cannot reach the solver.
 
-    A pair whose ``cross_stitch_json`` is empty, never captured or cleared
-    as stale after a topology edit, is silently dropped by the encoder
-    (:func:`core.encoder.params._encode_cross_stitch`), so its stitch
-    stiffness has no effect and the seam never forms at solve time. Surface
-    it as a hard error instead of shipping a scene that looks stitched but
-    is not. Returns an error message string, or empty string if all OK.
+    Asks ``merge_pair_problem``, the same function the encoder refuses with,
+    so the check and the encode cannot disagree about a pair. Returns an
+    error message naming each such pair and its reason, or an empty string.
+    Nothing is written to a pair: a stale one is reported, not cleared.
     """
-    from ..mesh_ops.merge_ops import cleanup_stale_merge_pairs, pair_has_stitch
-    from ..core.uuid_registry import get_object_by_uuid
+    from ..mesh_ops.merge_ops import _member_types, merge_pair_problem, pair_label
 
-    # Run the same cleanup the encoder runs first, so a pair whose stored
-    # stitch was invalidated by a mesh edit is seen here as empty rather than
-    # stale-valid, and unassigned pairs are dropped before we inspect them.
-    cleanup_stale_merge_pairs(context.scene)
-    state = get_addon_data(context.scene).state
-    empty = []
+    scene = context.scene
+    state = get_addon_data(scene).state
+    members = _member_types(scene)
+    problems = []
     for pair in state.merge_pairs:
-        if pair_has_stitch(pair):
-            continue
-        obj_a = get_object_by_uuid(pair.object_a_uuid) if pair.object_a_uuid else None
-        obj_b = get_object_by_uuid(pair.object_b_uuid) if pair.object_b_uuid else None
-        name_a = obj_a.name if obj_a else (pair.object_a or iface_("(missing)"))
-        name_b = obj_b.name if obj_b else (pair.object_b or iface_("(missing)"))
-        empty.append(f"{name_a} ↔ {name_b}")
-    if not empty:
+        problem = merge_pair_problem(scene, pair, members)
+        if problem is not None:
+            problems.append(f"{pair_label(pair)}: {problem}")
+    if not problems:
         return ""
-    names = ", ".join(empty[:3])
-    more = iface_(" (+{count} more)").format(count=len(empty) - 3) if len(empty) > 3 else ""
+    more = (
+        iface_(" (+{count} more)").format(count=len(problems) - 3)
+        if len(problems) > 3 else ""
+    )
     return iface_(
-        "Merge pair(s) with no stitch points: {names}{more}. "
-        "Select each under Merge Pairs and click Re-snap, or remove the pair, "
-        "before transferring."
-    ).format(names=names, more=more)
+        "Merge pair(s) that cannot stitch: {problems}{more}. Fix each under "
+        "Merge Pairs before transferring."
+    ).format(problems="; ".join(problems[:3]), more=more)
 
 
 def report_build_outcome(op) -> None:

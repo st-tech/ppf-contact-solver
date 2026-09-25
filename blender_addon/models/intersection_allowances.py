@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The three group-level intersection allowances of issue #138, and which of a
+# The four group-level intersection allowances of issue #138, and which of a
 # group's objects each one reaches.
 #
 # An allowance is a per-OBJECT fact all the way down: the frontend resolves
@@ -22,7 +22,7 @@
 #
 # So each allowance carries a subset: an "Apply to All Objects" switch and,
 # while it is off, a list naming the objects the allowance reaches. This
-# module is the one place the three allowances' property names are spelled,
+# module is the one place the four allowances' property names are spelled,
 # so the panel, the operators, the encoder and the MCP surface cannot drift
 # into disagreeing about which list belongs to which checkbox.
 
@@ -77,11 +77,37 @@ INTER_GROUP_ALLOWANCE = AllowanceSpec(
     "allow-inter-group-intersection",
 )
 
+# The fourth allowance names no pair by identity. It covers the pairs the
+# scene STARTS intersecting with (or closer than their contact offsets): the
+# scene-build check links them vertex by vertex and they stay out of contact
+# for the whole run, one ring around them included, while every other pair
+# keeps full contact. Which of the group's objects it reaches is per object,
+# exactly like the other three, and a pair is covered when either side's
+# object carries it. Sand is out of its scope: a SAND group is never offered it
+# and the encoder refuses one that carries it.
+EXISTING_ALLOWANCE = AllowanceSpec(
+    "existing",
+    "Allow Existing Intersections",
+    "allow_existing_intersection",
+    "allow-existing-intersection",
+)
+
 INTERSECTION_ALLOWANCES = (
     SELF_ALLOWANCE,
     INTER_OBJECT_ALLOWANCE,
     INTER_GROUP_ALLOWANCE,
+    EXISTING_ALLOWANCE,
 )
+
+
+def allowance_offered(group, spec: AllowanceSpec) -> bool:
+    """Whether *group*'s type can carry *spec* at all.
+
+    Every allowance is offered on every type except Allow Existing
+    Intersections on SAND, whose grains form no element the scene-build check
+    could find tangled.
+    """
+    return not (spec is EXISTING_ALLOWANCE and group.object_type == "SAND")
 
 # Operator / MCP enum items, in panel order.
 INTERSECTION_ALLOWANCE_ITEMS = [
@@ -99,6 +125,11 @@ INTERSECTION_ALLOWANCE_ITEMS = [
         INTER_GROUP_ALLOWANCE.key,
         "Inter-Group Intersections",
         "An overlap between two objects assigned to different groups",
+    ),
+    (
+        EXISTING_ALLOWANCE.key,
+        "Existing Intersections",
+        "An overlap the scene already has at the start frame",
     ),
 ]
 

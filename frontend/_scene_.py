@@ -31,6 +31,11 @@ from tqdm.auto import tqdm
 from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
+from ._force_field_ import (
+    ForceField,
+    resolve_targets as _resolve_force_field_targets,
+    write_session as _write_force_field,
+)
 from ._param_ import ParamHolder
 from ._plot_ import Plot, PlotManager, _renumber
 from ._render_ import MitsubaRenderer, Rasterizer
@@ -218,6 +223,9 @@ class FixedScene:
         intersect_policy: Optional[np.ndarray] = None,
         group_vert_index: Optional[np.ndarray] = None,
         pin_allow_vertices: Optional[np.ndarray] = None,
+        allow_existing_vertices: Optional[np.ndarray] = None,
+        force_field: Optional[dict] = None,
+        force_field_context: Optional[dict] = None,
         quiet: bool = False,
     ):
         """Initialize the fixed scene.
@@ -253,7 +261,7 @@ class FixedScene:
             surface_map_by_name (Optional[dict[str, tuple]]): Frame-embedding surface maps for tetrahedralized objects.
             concat_rest_vert (Optional[np.ndarray]): Concatenated rest-shape vertices for objects whose pins release at ``unpin_time``.
             rest_vert_mask (Optional[np.ndarray]): Per-vertex uint8 mask marking entries in ``concat_rest_vert`` (and ``rest_vert_anim``) that are valid.
-            rest_vert_anim (Optional[np.ndarray]): Frame-major time-varying rest shape, shape ``(n_frames * n_vert, 3)``, from a captured pull-pin deformation. The solver recomputes ``inv_rest`` per frame and interpolates.
+            rest_vert_anim (Optional[np.ndarray]): Frame-major time-varying rest shape, shape ``(n_frames * n_vert, 3)``, from the operations of the pins tracking the rest shape (``PinHolder.track_rest_shape``). The solver recomputes ``inv_rest`` per frame and interpolates.
             rest_vert_times (Optional[np.ndarray]): Keyframe times in seconds, length ``n_frames``, aligned to ``rest_vert_anim``.
             bend_rest_vert (Optional[np.ndarray]): Concatenated reference vertices for the bending rest angle, one row per global vertex (unmasked rows equal the initial vert). The solver computes hinge rest angles from these positions for masked objects.
             bend_rest_vert_mask (Optional[np.ndarray]): Per-vertex uint8 mask marking rows of ``bend_rest_vert`` that belong to an object with an enabled reference rest angle.
@@ -262,6 +270,7 @@ class FixedScene:
             translation_lock_mode (Optional[np.ndarray]): Per-dmap-entry (n_objects,) uint32, aligned with ``translation_lock``: 0 means the center of mass is held on the line through that row's axis (or the row is disabled, its axis being zero); 1 means the center of mass is pinned to its initial point, in which case the axis row carries no direction and is exactly zero. Read together with ``translation_lock``, never alone. None under the same condition as ``translation_lock``.
             rotation_lock (Optional[np.ndarray]): Per-dmap-entry (n_objects, 3) normalized Lock Rotation axis, aligned with ``concat_displacement``. A zero row means either that the object's rotation is not locked or that it is locked on all axes, which is decided by ``rotation_lock_mode``. None when no object in the scene has Lock Rotation enabled in any mode. Independent of ``translation_lock``.
             rotation_lock_mode (Optional[np.ndarray]): Per-dmap-entry (n_objects,) uint32, aligned with ``rotation_lock``: 0 means allow-only (rotation about that row's axis is the only freedom, or the row is disabled, its axis being zero); 1 means prohibit-axis (rotation about the axis is forbidden, the perpendicular plane stays free); 2 means all axes are locked, in which case the axis row carries no direction and is exactly zero. Read together with ``rotation_lock``, never alone. None under the same condition as ``rotation_lock``.
+            allow_existing_vertices (Optional[np.ndarray]): Per-vertex bool mask marking dynamic vertices whose object set ``allow-existing-intersection``. The scene checks link a pair they find intersecting, or closer than its contact offsets, when either side is marked, instead of refusing it. None when no object set it.
             quiet (bool): When True, suppress the scene-check summary prints. Defaults to False, preserving the interactive diagnostic output.
         """
 
@@ -328,6 +337,21 @@ class FixedScene:
         self._intersect_policy = intersect_policy
         self._group_vert_index = group_vert_index
         self._pin_allow_vertices = pin_allow_vertices
+        self._allow_existing_vertices = allow_existing_vertices
+        # Allow Existing Intersections: the vertex links the scene checks
+        # produced, (L, 2) uint32 in the combined namespace (the dynamic
+        # vertices, then the static collision vertices). Filled below.
+        self._start_links = np.zeros((0, 2), dtype=np.uint32)
+        self._n_start_link_pairs = 0
+        self._start_link_pairs: list[dict] = []
+        # The resolved force field (`Scene.build`'s dict of grids, scripts and
+        # target mask), or None when the scene carries no force field.
+        self._force_field = force_field
+        # `{"weight": per-vertex weight or None, "group_vertices": label ->
+        # vertex indices}`, the part of the field that belongs to the scene
+        # rather than to its sources.
+        self._force_field_context = force_field_context or {
+            "weight": None, "group_vertices": {}}
         self._pin: list[PinData] = []
         # Display pins (see `set_display_pin`): each a dict with the owning
         # object's name ("uuid"), its Blender vertex indices, their rest
@@ -510,6 +534,11 @@ class FixedScene:
                 if self._group_vert_index is not None
                 else None
             ),
+            vert_allow_existing=(
+                np.ascontiguousarray(self._allow_existing_vertices, dtype=bool)
+                if self._allow_existing_vertices is not None
+                else None
+            ),
         )
         checks_pbar.update(1)
         checks_pbar.set_postfix_str("rod-tri offset")
@@ -545,11 +574,67 @@ class FixedScene:
         if all_violations:
             raise ValidationError(result["combined_message"], violations=all_violations)
 
+        self._start_links = np.asarray(result["start_links"], dtype=np.uint32).reshape(-1, 2)
+        self._n_start_link_pairs = int(result["n_start_link_pairs"])
+        self._start_link_pairs = list(result["start_link_pairs"])
+        if not quiet and self._n_start_link_pairs > 0:
+            print(
+                f"allow existing intersections: {self._n_start_link_pairs} "
+                f"intersecting or too-close pairs exempted from contact "
+                f"({len(self._start_links)} vertex links)"
+            )
+
         self._area = np.asarray(result["area"], dtype=np.float64)
         ftvw = result["face_to_vert_weights"]
         self._face_to_vert_weights = (
             np.asarray(ftvw, dtype=np.float64) if ftvw is not None else None
         )
+
+    @property
+    def start_links(self) -> np.ndarray:
+        """The vertex links Allow Existing Intersections made at build.
+
+        An ``(L, 2)`` uint32 array. Each row links two vertices whose elements
+        started intersecting, or closer than their contact offsets, in a pair
+        an ``allow-existing-intersection`` object belongs to. Indices below
+        the dynamic vertex count name dynamic vertices; the rest name static
+        collider vertices, offset by that count. Two elements are exempt from
+        contact for the whole run when any vertex of one is linked to any
+        vertex of the other. Empty when nothing was linked.
+
+        Example:
+            Count the exempted region after building::
+
+                fixed = scene.build()
+                print(len(fixed.start_links), "vertex links")
+        """
+        return self._start_links
+
+    def start_link_exemptions(self) -> list[dict[str, Any]]:
+        """The pairs Allow Existing Intersections exempted, for display.
+
+        Empty when nothing was linked. Otherwise one record in the shape of a
+        ``ValidationError.violations`` entry, ``{"type":
+        "existing_intersection", "count": N, "pairs": [{"a": [[x, y, z],
+        ...], "b": [...]}, ...]}``, where ``count`` is every exempted element
+        pair and ``pairs`` holds the first few thousand as the world-space
+        vertex positions of their two elements (three for a triangle, two for
+        a rod edge). The Blender add-on draws this over the start frame.
+
+        Example:
+            Report how many pairs the build exempted::
+
+                fixed = scene.build()
+                for record in fixed.start_link_exemptions():
+                    print(record["count"], "pairs start tangled")
+        """
+        if self._n_start_link_pairs == 0:
+            return []
+        return [{
+            "type": "existing_intersection",
+            "count": self._n_start_link_pairs,
+            "pairs": self._start_link_pairs,
+        }]
 
     @property
     def tri_param(self) -> dict[str, list[Any]]:
@@ -1054,6 +1139,14 @@ class FixedScene:
             self._intersect_policy.astype(np.uint8).tofile(
                 os.path.join(bin_path, "intersect_policy.bin")
             )
+        # Allow Existing Intersections' vertex links, written only when the
+        # build linked something, so a scene that does not use the feature
+        # exports byte-identically. `u32` pairs in the combined namespace; the
+        # solver splits it into its dynamic and collision-mesh pools.
+        if len(self._start_links) > 0:
+            np.ascontiguousarray(self._start_links, dtype=np.uint32).tofile(
+                os.path.join(bin_path, "start_link.bin")
+            )
         # Written only when some object asks for the inter-group allowance, the
         # one reader; absent, the solver puts every vertex in one group.
         if self._group_vert_index is not None:
@@ -1065,6 +1158,16 @@ class FixedScene:
                 os.path.join(bin_path, "group_vert.bin")
             )
         self._vert[1].astype(np.float64).tofile(os.path.join(bin_path, "vert.bin"))
+        if self._force_field is not None:
+            ff = self._force_field
+            weight = self._force_field_context["weight"]
+            for what, arr in (("weight", weight), ("mask", ff["mask"])):
+                if arr is not None:
+                    assert len(arr) == len(self._vert[1]), (
+                        f"force-field {what} has {len(arr)} entries "
+                        f"but the scene has {len(self._vert[1])} dynamic vertices"
+                    )
+            _write_force_field(path, ff["grids"], ff["scripts"], weight, ff["mask"])
         # rest_vert_mask is shared between the static rest_vert and the
         # time-varying rest_vert_anim, so write it whenever either is present.
         if self._rest_vert_mask is not None:
@@ -1329,12 +1432,17 @@ class FixedScene:
                 os.path.join(bin_path, "stitch_w.bin")
             )
             # Per-stitch-row stiffness (M,), parallel to stitch_ind/stitch_w.
-            # Fall back to ones for legacy scenes built before per-object
-            # stitch stiffness so the count still matches.
+            # A count that does not match names no stiffness for some rows,
+            # and any value put in their place would be one nobody authored.
             n_stitch = self._stitch_ind.shape[0]
             stiffness = np.asarray(self._stitch_stiffness, dtype=np.float32)
-            if stiffness.shape[0] != n_stitch:
-                stiffness = np.ones(n_stitch, dtype=np.float32)
+            if stiffness.shape != (n_stitch,):
+                raise ValueError(
+                    f"this scene carries {n_stitch} stitches but "
+                    f"{stiffness.shape[0] if stiffness.ndim else 0} stitch "
+                    "stiffnesses; rebuild it with Scene.build() so every "
+                    "stitch has the stiffness its object gives it"
+                )
             stiffness.tofile(os.path.join(bin_path, "stitch_stiffness.bin"))
         pbar.update(1)
 
@@ -2183,6 +2291,8 @@ class Scene:
         # Empty means no object animates a material, which writes no
         # bin/param_anim and leaves the solver on its build-time tables.
         self._param_anim_times: list[float] = []
+        #: ForceField: The external force field (grids and an exact script).
+        self.force_field = ForceField()
         self.add = ObjectAdder(self)  #: ObjectAdder: The object adder.
         self.info = SceneInfo(name, self)  #: SceneInfo: The scene information.
 
@@ -2371,6 +2481,230 @@ class Scene:
         self._param_anim_times = t
         return self
 
+    def cross_stitch(
+        self,
+        source: str,
+        target: str,
+        ind,
+        w,
+        stiffness: float = 1.0,
+    ) -> "Scene":
+        """Stitch points on one object to points on another.
+
+        Each row of ``ind`` and ``w`` is one stitch between a point on
+        ``source`` and a point on ``target``. Slots 0..2 name three vertices
+        of ``source`` and slots 3..5 three vertices of ``target``, each in
+        that object's own vertex numbering (a tetrahedral object's is its
+        tetrahedral mesh), and ``w`` holds each point's barycentric weights,
+        which sum to one on each side. A point at a single vertex ``i`` is
+        ``[i, i, i]`` with weights ``[1, 0, 0]``. The solver pulls the two
+        points together with a spring whose rest length comes from the
+        contact gaps of the six vertices, so the seam closes to contact
+        distance rather than to zero.
+
+        This is a soft stitch, not a weld: both objects keep their own
+        vertices and contact still applies between them. Each call adds a set
+        of stitches, and a pair of objects may be stitched more than once.
+        A seam WITHIN one object is :meth:`Object.stitch`.
+
+        An object a stitch names is always simulated, because a stitch joins
+        simulated vertices only. A fully pinned object with no pin operations
+        would otherwise become a static collision mesh; here it stays
+        simulated with every vertex held at rest by its pins, so it can serve
+        as a fixed anchor for the seam.
+
+        Args:
+            source (str): Reference name of the object the slots 0..2 name.
+            target (str): Reference name of the object the slots 3..5 name.
+            ind: ``(K, 6)`` integer vertex indices.
+            w: ``(K, 6)`` barycentric weights, each non-negative, with
+                ``w[:, 0:3]`` and ``w[:, 3:6]`` each summing to one per row.
+            stiffness (float, optional): Force factor of every stitch in this
+                set, applied as is with no mass or time-step scaling. Zero
+                keeps the stitches and applies no force. Defaults to 1.0.
+
+        Returns:
+            Scene: This scene, for chaining.
+
+        Raises:
+            ValueError: If an object is unknown, both names are the same
+                object, an object has no vertices a stitch can hold, or
+                ``ind``, ``w`` or ``stiffness`` violate the shapes, ranges
+                or sums above.
+
+        Example:
+            Stitch every vertex along a sleeve's cuff to the closest points
+            of a shirt, then hold the shirt fixed::
+
+                scene.add("shirt").pin()
+                scene.add("sleeve")
+                ind = [[i, i, i, *tri] for i, tri in zip(cuff, shirt_tris)]
+                w = [[1, 0, 0, *bary] for bary in shirt_barys]
+                scene.cross_stitch("sleeve", "shirt", ind, w, stiffness=10.0)
+        """
+        labels = {n: self._label(n, self.select(n)) for n in (source, target)}
+        if source == target:
+            raise ValueError(
+                f"a cross-stitch joins two objects, and both sides name "
+                f"'{labels[source]}'; a seam within one object is Object.stitch"
+            )
+        counts = []
+        for side, name in (("source", source), ("target", target)):
+            obj = self.select(name)
+            if obj.obj_type not in ("tri", "tet", "rod"):
+                raise ValueError(
+                    f"cross-stitch {side} '{labels[name]}' is a '{obj.obj_type}' "
+                    "object; a stitch holds the vertices of a surface, a "
+                    "tetrahedral mesh or a rod"
+                )
+            counts.append(len(obj.get("V")))
+        ind_arr = np.asarray(ind)
+        w_arr = np.asarray(w, dtype=np.float64)
+        if ind_arr.ndim != 2 or ind_arr.shape[1] != 6 or ind_arr.shape[0] == 0:
+            raise ValueError(
+                f"cross-stitch ind must be (K, 6) with K > 0, got shape "
+                f"{ind_arr.shape}"
+            )
+        if w_arr.shape != ind_arr.shape:
+            raise ValueError(
+                f"cross-stitch w has shape {w_arr.shape} but ind has "
+                f"{ind_arr.shape}; they hold one weight per index"
+            )
+        if not np.issubdtype(ind_arr.dtype, np.integer):
+            raise ValueError(
+                f"cross-stitch ind must hold integers, got {ind_arr.dtype}"
+            )
+        ind_arr = ind_arr.astype(np.int64)
+        for side, name, cols, n_vert in (
+            ("source", source, slice(0, 3), counts[0]),
+            ("target", target, slice(3, 6), counts[1]),
+        ):
+            side_ind = ind_arr[:, cols]
+            if side_ind.min() < 0 or side_ind.max() >= n_vert:
+                raise ValueError(
+                    f"cross-stitch {side} indices span "
+                    f"[{int(side_ind.min())}, {int(side_ind.max())}] but "
+                    f"'{labels[name]}' has {n_vert} vertices"
+                )
+            side_w = w_arr[:, cols]
+            if not np.all(np.isfinite(side_w)) or side_w.min() < 0.0:
+                raise ValueError(
+                    f"cross-stitch {side} weights must be finite and "
+                    "non-negative"
+                )
+            sums = side_w.sum(axis=1)
+            worst = int(np.argmax(np.abs(sums - 1.0)))
+            if abs(sums[worst] - 1.0) > 1e-4:
+                raise ValueError(
+                    f"cross-stitch {side} weights of row {worst} sum to "
+                    f"{float(sums[worst])}; each side is a barycentric point "
+                    "and sums to one"
+                )
+        stiffness = float(stiffness)
+        if not np.isfinite(stiffness) or stiffness < 0.0:
+            raise ValueError(
+                f"cross-stitch stiffness must be finite and non-negative, got "
+                f"{stiffness}"
+            )
+        self._cross_stitch.append(
+            {
+                "source_name": source,
+                "target_name": target,
+                "ind": ind_arr,
+                "w": w_arr,
+                "stitch_stiffness": stiffness,
+            }
+        )
+        return self
+
+    @staticmethod
+    def _label(name: str, obj: "Object") -> str:
+        """The name a refusal gives the object keyed `name`.
+
+        A scene decoded from the Blender add-on keys its objects by UUID and
+        records each Blender name on the object (`_statistics_name`); a
+        notebook's key is already the name it chose.
+        """
+        return getattr(obj, "_statistics_name", "") or name
+
+    @staticmethod
+    def _check_static_material(name: str, obj: "Object") -> None:
+        """Refuse a varying material on an object built as a collision mesh.
+
+        A static object (every vertex pinned, and no pin carrying an
+        operation, a pull or a release time) leaves the solved vertices for a
+        contact-only collision mesh, whose parameters are one value per face,
+        written once at build. An animated value has no per-frame table to
+        reach there and a spatial map is never reduced onto those faces, so
+        building the object would run the solve on its plain parameters with
+        nothing to say the rest was dropped.
+        """
+        if not obj.static:
+            return
+        name = Scene._label(name, obj)
+        varying = sorted(set(obj.param_anim) | set(obj.param_spatial))
+        if varying:
+            raise ValueError(
+                f"'{name}' is built as a static collision mesh (every vertex "
+                "pinned and no pin operation, pull or release), whose "
+                "parameters are fixed at build, but it animates or maps "
+                f"{', '.join(repr(k) for k in varying)}. Remove the animation "
+                "and the map, or give one of its pins an operation, a pull or "
+                "a release time so it is simulated."
+            )
+
+    @staticmethod
+    def _check_rest_shape_tracking(name: str, obj: "Object") -> None:
+        """Refuse rest-shape tracking that would move only part of `obj`.
+
+        The builder applies each tracking pin's operations to the rest shape
+        of the vertices that pin holds and leaves every other vertex at its
+        build-time rest. Tracking pins that do not together hold the whole
+        object would therefore give a rest shape moved on one side of a
+        boundary and fixed on the other, whose elastic energy tears along it.
+        A tracking pin with no operation schedules no keyframe at all.
+        """
+        tracking = [p for p in obj.pin_list if p.rest_shape_track]
+        if not tracking:
+            return
+        key, name = name, Scene._label(name, obj)
+        idle = [p.pin_group_id for p in tracking if not p.operations]
+        if idle:
+            # A decoded pin's group id is "<object uuid>:<vertex group>".
+            pin = str(idle[0]).removeprefix(f"{key}:")
+            raise ValueError(
+                f"'{name}': pin '{pin}' tracks the rest shape but carries no "
+                "operation to track"
+            )
+        n_vert = len(obj.get("V"))
+        covered = np.unique(
+            np.concatenate([np.asarray(p.index, dtype=np.int64) for p in tracking])
+        )
+        if covered.size != n_vert or covered[0] != 0 or covered[-1] != n_vert - 1:
+            raise ValueError(
+                f"'{name}': the pins tracking its rest shape hold {covered.size} "
+                f"of its {n_vert} vertices; they must hold every vertex, or the "
+                "rest shape tears where the moved region meets the rest"
+            )
+        # Plasticity creeps the rest shape each step, and the solver replaces
+        # it wholesale with the tracked keyframes on the promise that the two
+        # never ship together, which is kept here.
+        keys = obj.param.key_list()
+        plastic = [
+            key for key in ("plasticity", "bend-plasticity")
+            if key in keys and (
+                float(obj.param.get(key) or 0.0) > 0.0
+                or key in obj.param_anim
+                or key in obj.param_spatial
+            )
+        ]
+        if plastic:
+            raise ValueError(
+                f"'{name}': its rest shape is tracked by a pin and it carries "
+                f"'{plastic[0]}'; both rewrite the rest shape, so set the "
+                "plasticity to 0 or stop tracking"
+            )
+
     def build(self, progress_callback=None, quiet: bool = False) -> FixedScene:
         """Build the fixed scene from the current scene.
 
@@ -2402,8 +2736,22 @@ class Scene:
 
         pbar = tqdm(total=total_steps, desc="build scene")
         report("Building scene: preparing objects...")
-        for _, obj in self._object.items():
-            obj.update_static()
+        stitched = {
+            cs[side]
+            for cs in self._cross_stitch
+            for side in ("source_name", "target_name")
+        }
+        for name, obj in self._object.items():
+            if name in stitched and obj.pdrd:
+                raise ValueError(
+                    f"'{self._label(name, obj)}' is a PDRD body and a "
+                    "cross-stitch names it; a "
+                    "PDRD body moves as one rigid transform, which a stitch "
+                    "cannot hold"
+                )
+            obj.update_static(stitched=name in stitched)
+            self._check_static_material(name, obj)
+            self._check_rest_shape_tracking(name, obj)
         pbar.update(1)
         advance("Building scene: preparing objects...")
 
@@ -2512,7 +2860,8 @@ class Scene:
             if obj._collision_windows:
                 if len(obj._collision_windows) > MAX_COLLISION_WINDOWS:
                     raise ValueError(
-                        f"Object '{name}' has {len(obj._collision_windows)} collision windows "
+                        f"Object '{self._label(name, obj)}' has "
+                        f"{len(obj._collision_windows)} collision windows "
                         f"(max {MAX_COLLISION_WINDOWS})"
                     )
                 collision_windows[name] = obj._collision_windows
@@ -2663,7 +3012,8 @@ class Scene:
             lock_all = bool(getattr(obj, "_translation_lock_all", False))
             if lock_all and axis is not None:
                 raise ValueError(
-                    f"object {name!r} carries both a Lock Translation axis and "
+                    f"object {self._label(name, obj)!r} carries both a Lock "
+                    "Translation axis and "
                     "Lock All Translations; the two are mutually exclusive "
                     "spellings of one lock and the last call must clear the other"
                 )
@@ -2689,7 +3039,8 @@ class Scene:
             lock_all = bool(getattr(obj, "_rotation_lock_all", False))
             if lock_all and axis is not None:
                 raise ValueError(
-                    f"object {name!r} carries both a Lock Rotation axis and "
+                    f"object {self._label(name, obj)!r} carries both a Lock "
+                    "Rotation axis and "
                     "Lock All Rotations; the two are mutually exclusive "
                     "spellings of one lock and the last call must clear the other"
                 )
@@ -3025,7 +3376,19 @@ class Scene:
         # on the inner mapped_ops list. Each comprehension is a single
         # CPython allocation.
         def _remap_op(op, map_arr):
-            if isinstance(op, TorqueOperation) and op.hint_vertex >= 0:
+            if isinstance(op, TorqueOperation):
+                # The solver orients the torque axis toward this vertex and
+                # has no reading for a missing one. PinHolder.torque refuses
+                # one, so only an operation built another way (an unpickled
+                # scene, a hand-made TorqueOperation) can arrive without it,
+                # and it is refused here rather than on the GPU.
+                if not 0 <= op.hint_vertex < len(map_arr):
+                    raise ValueError(
+                        f"a torque operation names hint_vertex {op.hint_vertex}, "
+                        f"which is not one of its object's {len(map_arr)} "
+                        "vertices; give PinHolder.torque the vertex its axis "
+                        "points toward"
+                    )
                 return _dc_replace(op, hint_vertex=int(map_arr[op.hint_vertex]))
             return op
 
@@ -3062,6 +3425,33 @@ class Scene:
         )
         object_vert_index = _object_index
 
+        # The external force field's per-vertex weight, resolved from each
+        # object's `force-field-weight`, and the group-to-vertex map a source
+        # with `groups=` targets. Both are computed whether or not the scene
+        # has a field yet, because a held run can be given one later
+        # (`FixedSession.update_force_field`) and must target it the same way.
+        _weight = np.ones(len(concat_vert), dtype=np.float32)
+        _group_vertices: dict = {}
+        for name, obj in dyn_objects:
+            w = float(obj.param.get("force-field-weight"))
+            if not np.isfinite(w):
+                raise ValueError(
+                    f"object {name!r} has force-field-weight {w}, which is not finite"
+                )
+            _weight[np.asarray(map_by_name[name], dtype=np.int64)] = w
+            label = getattr(obj, "_group_label", None)
+            if label is not None:
+                _group_vertices.setdefault(label, []).extend(map_by_name[name])
+        force_field_context = {
+            "weight": _weight if bool(np.any(_weight != 1.0)) else None,
+            "group_vertices": _group_vertices,
+        }
+        force_field = None
+        if not self.force_field.empty:
+            _grids, _scripts, _mask = _resolve_force_field_targets(
+                self.force_field, _group_vertices, len(concat_vert))
+            force_field = {"grids": _grids, "scripts": _scripts, "mask": _mask}
+
         # Per-vertex intersection tolerances, resolved from each object's
         # material. Resolved per OBJECT rather than replicated per element on
         # purpose: that is the granularity the two params actually have, and
@@ -3081,6 +3471,27 @@ class Scene:
             if bits:
                 _policy[np.asarray(map_by_name[name], dtype=np.int64)] = bits
         intersect_policy = _policy if _policy.any() else None
+
+        # Allow Existing Intersections, per vertex, resolved per OBJECT like
+        # the three allowances above. It names no pair by itself: the
+        # scene-build check links the pairs it FINDS intersecting (or closer
+        # than their contact offsets) when either side's object set it, and
+        # those links travel to the solver as bin/start_link.bin. A points
+        # (SAND) object is refused by name: its grains form no element the
+        # check could find, and the grain-grain contact never reads a link,
+        # so the flag would be accepted and do nothing.
+        _allow_existing = np.zeros(len(concat_vert), dtype=bool)
+        for name, obj in dyn_objects:
+            if float(obj.param.get("allow-existing-intersection")) == 0.0:
+                continue
+            if obj.obj_type == "points":
+                raise ValueError(
+                    f"object '{name}' sets 'allow-existing-intersection', which "
+                    "sand does not support: grains overlapping at the start are "
+                    "not exempted from contact. Clear it on this object."
+                )
+            _allow_existing[np.asarray(map_by_name[name], dtype=np.int64)] = True
+        allow_existing_vertices = _allow_existing if _allow_existing.any() else None
 
         # Per-vertex group identity, read only by the inter-group allowance
         # and so resolved only for a scene that asks for it. Labels are
@@ -3160,12 +3571,12 @@ class Scene:
                 gram_inv = np.linalg.inv(gram)
             except np.linalg.LinAlgError as e:
                 raise ValueError(
-                    f"PDRD body {name!r}: rest-shape Gram matrix is singular "
+                    f"PDRD body {self._label(name, obj)!r}: rest-shape Gram matrix is singular "
                     "(degenerate body geometry, at least 4 non-coplanar vertices required)"
                 ) from e
             density = float(obj.param.get("density"))
             assert density > 0.0, (
-                f"PDRD body {name!r}: density must be > 0 (got {density})"
+                f"PDRD body {self._label(name, obj)!r}: density must be > 0 (got {density})"
             )
 
             body_id = next_body_id + 1  # 1-based; 0 means "not PDRD"
@@ -3204,7 +3615,7 @@ class Scene:
                     nrm = float(np.linalg.norm(axis_vec))
                     if nrm <= 1e-12:
                         raise ValueError(
-                            f"PDRD body {name!r}: degenerate principal axis "
+                            f"PDRD body {self._label(name, obj)!r}: degenerate principal axis "
                             "for hinge (rest shape too symmetric to pick an axle)"
                         )
                     axis_vec = axis_vec / nrm
@@ -3573,7 +3984,8 @@ class Scene:
         # travel to the solver as the resolved policy, and they are still
         # visible per object in the addon and in the PARAM payload.
         for key in ["allow-self-intersection", "allow-inter-object-intersection",
-                    "allow-inter-group-intersection"]:
+                    "allow-inter-group-intersection", "allow-existing-intersection",
+                    "force-field-weight"]:
             concat_tri_param[key] = []
             concat_rod_param[key] = []
             concat_tet_param[key] = []
@@ -3660,10 +4072,13 @@ class Scene:
             collider_vert_mask=collider_vert_mask,
             object_vert_index=object_vert_index,
             intersect_policy=intersect_policy,
+            allow_existing_vertices=allow_existing_vertices,
             group_vert_index=group_vert_index,
             pin_allow_vertices=(
                 pin_allow_vertices if pin_allow_vertices.any() else None
             ),
+            force_field=force_field,
+            force_field_context=force_field_context,
             pdrd_body_rows=pdrd_body_rows if pdrd_body_rows else None,
             pdrd_vert_index=pdrd_vert_index if next_body_id > 0 else None,
             pdrd_vert_list=pdrd_vert_list if next_body_id > 0 else None,

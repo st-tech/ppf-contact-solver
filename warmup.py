@@ -192,13 +192,11 @@ def python_packages():
         "numpy",
         # frontend/_decoder_.py runs the two-stage Poisson pin diffusion for
         # partially pinned SOLID objects (_build_solid_pin_fields,
-        # _build_harmonic_interior_operator) on scipy.sparse solves. It
-        # imports scipy inside a try/except that returns None when scipy is
-        # absent, so a host without it does not crash: it takes the
-        # surface-only fallback and produces a DIFFERENT driven-vertex set,
-        # so the same scene simulates differently there. Every provisioning
-        # path installs it for that reason; build-win-native/warmup.bat
-        # pins it against the numpy ABI it is built for.
+        # _build_harmonic_interior_operator) and carries material maps onto
+        # tetrahedra on scipy.sparse solves, and refuses to build such a scene
+        # without scipy, naming it. Every provisioning path installs it for
+        # that reason; build-win-native/warmup.bat pins it against the numpy
+        # ABI it is built for.
         "scipy",
         # frontend/_rasterizer_.py imports PIL at top level. matplotlib and
         # pyvista both depend on pillow, which is the only reason a set

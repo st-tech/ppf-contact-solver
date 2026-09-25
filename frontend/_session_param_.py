@@ -128,7 +128,14 @@ class ParamManager:
         return self
 
     def dyn(self, key: str) -> "ParamManager":
-        """Select the current dynamic parameter key and reset the internal time cursor.
+        """Select the current dynamic parameter key and move the time cursor to its end.
+
+        The cursor lands on the last time already scheduled for ``key``, or on
+        0 for a key with no schedule, so a second ``dyn`` on the same key
+        continues the schedule rather than rewinding it. :meth:`time` then
+        refuses a time before what is already scheduled; two entries out of
+        order would leave which value the solver applies to the order it reads
+        them in.
 
         Args:
             key (str): The dynamic parameter key.
@@ -149,7 +156,8 @@ class ParamManager:
                               .time(2.0).change(g))
         """
         _rust.scene_validate_param_key_exists(key in self._param.key_list(), key)
-        self._time = 0.0
+        scheduled = self._dyn_param.get(key)
+        self._time = float(scheduled[-1][0]) if scheduled else 0.0
         self._key = key
         return self
 

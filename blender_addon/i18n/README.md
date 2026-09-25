@@ -9,8 +9,10 @@ it when the addon starts.
 ## Files
 
 - `en.json` is the master list of every translatable English string. It is an
-  identity map (each key maps to itself) and is generated from the source
-  code, so do not edit it by hand.
+  identity map (each key maps to itself). When the add-on gains a string, add
+  it here and to every locale file in the same change;
+  `addon_host_tests/_i18n_catalog_coverage_.py` fails on any string the add-on
+  shows that is missing from this file, and names where it is used.
 - `<locale>.json` (for example `ja_JP.json`, `zh_HANS.json`, `ko_KR.json`)
   maps each English string from `en.json` to its translation.
 

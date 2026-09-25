@@ -488,14 +488,35 @@ pub struct IntersectionInput<'a> {
     pub vert_pin_allow: Option<&'a [bool]>,
 }
 
+/// Every intersecting pair a self-intersection scan found, with each side
+/// named as an element of the input.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SelfIntersections {
+    /// Sorted, deduplicated triangle pairs `(i, j)` with `i < j`.
+    pub tri_tri: Vec<(i32, i32)>,
+    /// `(rod edge, triangle)` hits, the rod edge indexing `rod_edges` pairwise.
+    pub rod_tri: Vec<(usize, i32)>,
+}
+
 /// Check a triangle mesh for self-intersections, optionally including
 /// rod edges. Output is sorted, deduplicated `(i, j)` pairs with `i <
 /// j`. Rod-triangle hits are appended at the end as `(-1, tri_idx)`.
 pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> {
+    let found = scan_self_intersection(input);
+    let mut out = found.tri_tri;
+    out.extend(found.rod_tri.iter().map(|&(_, ti)| (-1, ti)));
+    out
+}
+
+/// The scan behind [`check_self_intersection`], keeping which rod edge each
+/// rod-triangle hit came from. A caller that only reports needs the triangle;
+/// one that exempts the pair (Allow Existing Intersections) needs both
+/// elements' vertices.
+pub fn scan_self_intersection(input: IntersectionInput<'_>) -> SelfIntersections {
     let n_tris = input.tris.len() / 3;
     let n_rod_edges = input.rod_edges.map(|r| r.len() / 2).unwrap_or(0);
     if n_tris < 2 && n_rod_edges == 0 {
-        return vec![];
+        return SelfIntersections::default();
     }
 
     // Step 1: derive mesh edges + per-edge parents.
@@ -574,12 +595,12 @@ pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> 
     // hits collected separately and appended after triangle-triangle
     // pairs.
     let mut tri_pairs: BTreeSet<(i32, i32)> = BTreeSet::new();
-    let mut rod_pairs: Vec<(i32, i32)> = Vec::new();
+    let mut rod_pairs: Vec<(usize, i32)> = Vec::new();
     for (ei, ti) in edge_tri_pairs {
         let ei_us = ei as usize;
         if ei_us >= n_mesh_edges {
             // Rod edge.
-            rod_pairs.push((-1, ti));
+            rod_pairs.push((ei_us - n_mesh_edges, ti));
         } else {
             let p0 = all_e2t[2 * ei_us];
             let p1 = all_e2t[2 * ei_us + 1];
@@ -592,9 +613,10 @@ pub fn check_self_intersection(input: IntersectionInput<'_>) -> Vec<(i32, i32)> 
         }
     }
 
-    let mut out: Vec<(i32, i32)> = tri_pairs.into_iter().collect();
-    out.extend(rod_pairs);
-    out
+    SelfIntersections {
+        tri_tri: tri_pairs.into_iter().collect(),
+        rod_tri: rod_pairs,
+    }
 }
 
 #[cfg(test)]

@@ -89,10 +89,12 @@ def make_scene_payload() -> list:
             dtype=np.float32,
         ),
         "face": np.array([[0, 1, 2], [0, 2, 3]], dtype=np.uint32),
-        # detect_stitch_edges returns (edges_int_array, weights_float_array)
+        # detect_stitch_edges returns (Ind, W), each (K, 4): a source vertex
+        # and a target point weighted over three vertices. A loose edge
+        # (a, b) is Ind [a, b, b, b] with W [1, 1, 0, 0].
         "stitch": (
-            np.array([[0, 1]], dtype=np.uint32),
-            np.array([1.0], dtype=np.float32),
+            np.array([[0, 1, 1, 1]], dtype=np.uint32),
+            np.array([[1.0, 1.0, 0.0, 0.0]], dtype=np.float32),
         ),
         "uv": [
             [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
@@ -133,7 +135,7 @@ def make_scene_payload() -> list:
         "transform_animation": {
             "frame_offset": [0.0, 12.0, 24.0],
             "translation": [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
-            "quaternion": [[0.0, 0.0, 0.0, 1.0]] * 3,
+            "quaternion": [[1.0, 0.0, 0.0, 0.0]] * 3,
             "scale": [[1.0, 1.0, 1.0]] * 3,
         },
         "transform": eye4.copy(),

@@ -614,6 +614,14 @@ pub fn build(
         );
     }
     let shell_face_count = mesh.mesh.mesh.shell_face_count;
+    // Allow Existing Intersections. Built before `constraint` moves into the
+    // dataset, because the collision-mesh vertex count is what splits the
+    // combined namespace the links arrive in.
+    let start_link = start_link_table(
+        &mesh.start_link,
+        n_vert,
+        constraint.mesh.vertex.size as usize,
+    );
     let rod_count = mesh.mesh.mesh.rod_count;
     let neighbor = marshal_neighbor(&mesh.mesh.neighbor);
 
@@ -1972,7 +1980,76 @@ pub fn build(
         statistics_object_index: CVec::new(),
         statistics_static_object_index: CVec::new(),
         statistics_contact_count: CVec::new(),
+        start_link: CVecVec::from(&start_link[..]),
     }
+}
+
+/// Allow Existing Intersections: the per-vertex link table the contact passes
+/// read, from the flat pairs `start_link.bin` carries.
+///
+/// `flat` is `[u0, v0, u1, v1, ...]` in the COMBINED namespace the scene-build
+/// check scanned: the `n_vert` dynamic vertices, then the `n_collision_vert`
+/// collision-mesh vertices after them. The table has one row per DYNAMIC
+/// vertex. A dynamic-dynamic link is written into BOTH rows, so either side of a
+/// pair can answer; a dynamic-collision link is written into the dynamic row
+/// only, the collision vertex carrying [`data::START_LINK_COLLISION_VERTEX`],
+/// since a collision-mesh element is always looked up from its dynamic partner.
+/// Rows are sorted and deduplicated.
+///
+/// Empty when `flat` is, which is what makes the table absent on the device.
+///
+/// A link between two collision-mesh vertices is refused: the build check never
+/// makes one (two collider elements are never a contact pair), so such a file
+/// did not come from that check. So is a dynamic vertex count that reaches the
+/// tag bit, which would make a dynamic index read as a collision one.
+pub fn start_link_table(flat: &[u32], n_vert: usize, n_collision_vert: usize) -> Vec<Vec<u32>> {
+    if flat.is_empty() {
+        return Vec::new();
+    }
+    assert!(
+        flat.len() % 2 == 0,
+        "start_link holds {} indices, which is not a whole number of pairs",
+        flat.len()
+    );
+    let tag = data::START_LINK_COLLISION_VERTEX as usize;
+    assert!(
+        n_vert < tag && n_collision_vert < tag,
+        "Allow Existing Intersections cannot index a scene of {n_vert} dynamic and \
+         {n_collision_vert} collision-mesh vertices: its link table reserves the top bit"
+    );
+    let mut rows: Vec<Vec<u32>> = vec![Vec::new(); n_vert];
+    for pair in flat.chunks(2) {
+        let (u, v) = (pair[0] as usize, pair[1] as usize);
+        let pool = n_vert + n_collision_vert;
+        assert!(
+            u < pool && v < pool,
+            "start link ({u}, {v}) is past the {n_vert} dynamic and {n_collision_vert} \
+             collision-mesh vertices of this scene"
+        );
+        assert_ne!(u, v, "start link ({u}, {v}) links a vertex to itself");
+        match (u < n_vert, v < n_vert) {
+            (true, true) => {
+                rows[u].push(v as u32);
+                rows[v].push(u as u32);
+            }
+            (true, false) => {
+                rows[u].push((v - n_vert) as u32 | data::START_LINK_COLLISION_VERTEX);
+            }
+            (false, true) => {
+                rows[v].push((u - n_vert) as u32 | data::START_LINK_COLLISION_VERTEX);
+            }
+            (false, false) => panic!(
+                "start link ({u}, {v}) joins two collision-mesh vertices; the scene-build \
+                 check never links a pair of collider elements, so this file did not come \
+                 from it"
+            ),
+        }
+    }
+    for row in rows.iter_mut() {
+        row.sort_unstable();
+        row.dedup();
+    }
+    rows
 }
 
 pub fn make_param(args: &SimArgs) -> data::ParamSet {
@@ -2948,5 +3025,42 @@ mod rest_shape_tests {
             )
         })
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod start_link_tests {
+    use super::*;
+
+    const TAG: u32 = data::START_LINK_COLLISION_VERTEX;
+
+    #[test]
+    fn no_links_is_no_table() {
+        assert!(start_link_table(&[], 10, 4).is_empty());
+    }
+
+    #[test]
+    fn a_dynamic_link_is_written_into_both_rows_sorted_and_deduplicated() {
+        let rows = start_link_table(&[0, 3, 0, 2, 2, 0, 1, 3], 4, 0);
+        assert_eq!(rows, vec![vec![2, 3], vec![3], vec![0], vec![0, 1]]);
+    }
+
+    #[test]
+    fn a_collision_link_is_tagged_and_only_in_the_dynamic_row() {
+        // Two dynamic vertices, then collision vertices 0 and 1 at 2 and 3.
+        let rows = start_link_table(&[0, 2, 1, 3, 0, 3], 2, 2);
+        assert_eq!(rows, vec![vec![TAG, 1 | TAG], vec![1 | TAG]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "two collision-mesh vertices")]
+    fn a_link_between_two_collision_vertices_is_refused() {
+        start_link_table(&[2, 3], 2, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "past the")]
+    fn a_link_past_both_pools_is_refused() {
+        start_link_table(&[0, 9], 2, 2);
     }
 }

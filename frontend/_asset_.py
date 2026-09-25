@@ -322,13 +322,18 @@ class AssetUploader:
 
         Args:
             name (str): The name of the asset. Must not already exist.
-            stitch (tuple[np.ndarray, np.ndarray]): A pair ``(Ind, W)``
-                where ``Ind`` is the index array (#x4) and ``W`` is the
-                weight array (#x4) of the stitch.
+            stitch (tuple[np.ndarray, np.ndarray]): A pair ``(Ind, W)`` of
+                index and weight arrays with one row per stitch. Four
+                columns join a source vertex ``Ind[:, 0]`` (weight
+                ``W[:, 0]``) to the target point of vertices ``Ind[:, 1:4]``
+                weighted by ``W[:, 1:4]``. Six columns join two barycentric
+                points, ``Ind[:, 0:3]`` / ``W[:, 0:3]`` and ``Ind[:, 3:6]`` /
+                ``W[:, 3:6]``, each side's weights summing to one; use them
+                when neither end is a vertex.
 
         Raises:
-            Exception: If ``Ind`` or ``W`` does not have 4 columns, or
-                if ``name`` already exists.
+            Exception: If ``Ind`` and ``W`` are not both 4 or both 6
+                columns wide, or if ``name`` already exists.
 
         Example:
             Load a CIPC-format stitch mesh and register its stitch
@@ -342,8 +347,17 @@ class AssetUploader:
                 app.asset.add.stitch("glue", S)
         """
         Ind, W = stitch
-        _rust.check_cols(Ind, "Ind", 4)
-        _rust.check_cols(W, "W", 4)
+        ind_shape, w_shape = np.shape(Ind), np.shape(W)
+        if (
+            len(ind_shape) != 2
+            or ind_shape != w_shape
+            or ind_shape[1] not in (4, 6)
+        ):
+            raise ValueError(
+                "stitch Ind and W must both have 4 columns (a vertex to a "
+                "point) or both 6 (a point to a point), one row per stitch, "
+                f"got {ind_shape} and {w_shape}"
+            )
         self._manager._registry.add_stitch(name, Ind, W)
 
 

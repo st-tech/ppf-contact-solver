@@ -21,7 +21,7 @@
 # via source_points. The STATIC target is SHELL-like (never re-tetrahedralized,
 # 1:1 indices), so type="STATIC" != "SOLID" makes the decoder keep its target
 # slots (3..5) verbatim. The unit-level projection/passthrough is covered by
-# tests/test_cross_stitch_apply_batch.py; this is the integration counterpart.
+# frontend/tests/_decoder_cross_stitch_.py; this is the integration counterpart.
 #
 # Subtests:
 #   A. static_stitch_encoded:

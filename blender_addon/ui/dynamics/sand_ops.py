@@ -248,9 +248,10 @@ def build_and_commit_particle_mesh(obj, radius, extra_spacing=0.0, rng_seed=0):
 
     mat = _build_sand_material()
     ng = _build_particle_mesh_node_group(grain_radius, mat)
-    mod = obj.modifiers.get("Particle Mesh")
+    from ...core.pc2 import PARTICLE_MESH_MODIFIER_NAME
+    mod = obj.modifiers.get(PARTICLE_MESH_MODIFIER_NAME)
     if mod is None or mod.type != "NODES":
-        mod = obj.modifiers.new("Particle Mesh", "NODES")
+        mod = obj.modifiers.new(PARTICLE_MESH_MODIFIER_NAME, "NODES")
     mod.node_group = ng
 
     obj["particle_mesh"] = 1

@@ -214,6 +214,7 @@ pub unsafe fn momentum<D: Device>(
     // dereference autorefs, which is a reference into memory this function does
     // not own.
     let wind = (*param).wind;
+    let (field_air_velocity, has_field_air) = state.field.air_velocity();
     let args = MomentumEmbedArgs {
         eval_x: state.eval_x.handle(),
         current: state.positions.handle(),
@@ -242,6 +243,8 @@ pub unsafe fn momentum<D: Device>(
         air_friction: (*param).air_friction,
         isotropic_air_friction: (*param).isotropic_air_friction,
         fix_xz: (*param).fix_xz,
+        field_air_velocity,
+        has_field_air: u32::from(has_field_air),
         force: state.force.handle(),
         diagonal: state.diagonal.handle(),
         count: vertices as u32,

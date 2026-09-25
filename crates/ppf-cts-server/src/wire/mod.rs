@@ -32,6 +32,7 @@ use crate::protocol::{
 use crate::response::build_response;
 
 mod data;
+mod force_field;
 mod notebook;
 mod upload;
 
@@ -316,6 +317,16 @@ fn reconcile_project_from_disk(name: &str, root: &str, selected_name: &str) -> E
     // transition layer can rehydrate the field without forcing a
     // rebuild.
     let total_frames = read_total_frames_from_scene_info(&root_path);
+    // What Allow Existing Intersections exempted in the project's last
+    // successful build, so a reconnect keeps drawing it. Only when the
+    // selection changes and the project is built, for the same reason the
+    // crash is read only then: the same-project branch discards it, and a
+    // status poll stamps the project name several times a second.
+    let exemptions = if name == selected_name || !has_app {
+        vec![]
+    } else {
+        crate::executor::read_build_exemptions(root)
+    };
 
     Event::ProjectSelected {
         name: name.to_string(),
@@ -329,6 +340,7 @@ fn reconcile_project_from_disk(name: &str, root: &str, selected_name: &str) -> E
         data_hash,
         param_hash,
         total_frames,
+        exemptions,
     }
 }
 
@@ -416,6 +428,7 @@ where
         "data_receive" => data::handle_data_receive(writer, engine, &req).await,
         "notebook_send" => notebook::handle_notebook_send(reader, writer, &req).await,
         "notebook_delete" => notebook::handle_notebook_delete(writer, &req).await,
+        "force_field_check" => force_field::handle_force_field_check(writer, &req).await,
         other => {
             let resp = ServerError::UnknownRequest(other.to_string()).into_response();
             write_response(writer, &resp).await

@@ -26,6 +26,112 @@ from ..core.utils import (
 )
 from ..models.groups import get_addon_data
 
+# WHAT EACH REMOTE CONNECTION TYPE NEEDS BEFORE CONNECT CAN START IT, in the
+# order a refusal names them: a field that must not be empty, a path that is
+# interpolated into a shell command and so must hold no space or
+# metacharacter, and a module the transport imports.
+#
+# DOCKER takes no SSH key. Local Docker reaches the daemon over the Docker
+# socket, so no key takes part in the connection and the panel does not draw
+# the SSH Key field in this mode. Gating the button on that field made it
+# unpressable for a reason nothing on screen could explain: the default key
+# path is derived from the user's home directory, so a Windows account whose
+# name holds a space put a space in it, and the shell-safety test rejected a
+# value the user could neither see nor edit here.
+_CONNECT_REQUIREMENTS = {
+    "COMMAND": (
+        ("nonempty", "command"), ("path", "ssh_remote_path"), ("module", "paramiko"),
+    ),
+    "CUSTOM": (
+        ("nonempty", "host"), ("path", "key_path"), ("path", "ssh_remote_path"),
+        ("module", "paramiko"),
+    ),
+    "DOCKER": (
+        ("nonempty", "container"), ("path", "docker_path"), ("module", "docker"),
+    ),
+    "DOCKER_SSH": (
+        ("nonempty", "host"), ("nonempty", "container"), ("path", "key_path"),
+        ("path", "docker_path"), ("module", "paramiko"),
+    ),
+    "DOCKER_SSH_COMMAND": (
+        ("nonempty", "command"), ("nonempty", "container"),
+        ("path", "docker_path"), ("module", "paramiko"),
+    ),
+}
+
+# The operator in the connection panel that installs each module a transport
+# imports, which is what a refusal for a missing one tells the caller to run.
+_MODULE_INSTALLERS = {"paramiko": "ssh.install_paramiko", "docker": "ssh.install_docker"}
+
+
+def connect_refusal(context) -> str | None:
+    """Why Connect cannot start a connection now, or ``None`` when it can.
+
+    ONE ANSWER FOR THE BUTTON AND FOR EVERY CALLER THAT PRESSES IT: the
+    Connect operator's ``poll`` is ``connect_refusal(context) is None``, and
+    the MCP connect tools raise the returned reason. A poll that answers only
+    False tells a caller nothing it can act on, and Blender reports the call
+    as "context is incorrect", which names no field and no missing module.
+    """
+    # A SECOND REQUEST WHILE ONE IS HANDSHAKING CHANGES NOTHING, because the
+    # reducer accepts a connect only from the offline phase. Refusing it here
+    # keeps a click that would start a modal watching an attempt it did not
+    # start from being possible at all.
+    if com.is_connecting():
+        return "an earlier connection attempt is still connecting"
+    if com.is_connected():
+        return "already connected"
+    root = get_addon_data(context.scene)
+    props = root.ssh_state
+    name = root.state.project_name
+    if name.strip() == "":
+        return "the project name is empty"
+    bad = find_invalid_name_char(name)
+    if bad is not None:
+        return (
+            f"the project name contains {bad!r}; a project name holds only "
+            "letters, digits, '.', '-' and '_'"
+        )
+    kind = props.server_type
+    if kind in NATIVE_PATH_FIELDS:
+        # A NATIVE ROOT NEVER REACHES A SHELL (it is an os.path.join base, a
+        # Popen argv element, and that Popen's cwd), so it is held to the
+        # metacharacter rule only. A space is ordinary in a path on all three
+        # platforms, and this button is the only place the user could act on
+        # a refusal of one, with no field on screen to change and nothing
+        # wrong with what they picked.
+        field = NATIVE_PATH_FIELDS[kind]
+        checks = (("nonempty", field), ("native_path", field))
+    else:
+        checks = _CONNECT_REQUIREMENTS.get(kind)
+        if checks is None:
+            return f"the connection type {kind!r} is not one Connect can start"
+    for rule, what in checks:
+        if rule == "module":
+            if not module_exists([what]):
+                return (
+                    f"{what} is not installed in Blender's Python, and this "
+                    f"connection type needs it; install it with "
+                    f"{_MODULE_INSTALLERS[what]} (the connection panel's "
+                    "install button)"
+                )
+            continue
+        value = getattr(props, what)
+        label = props.bl_rna.properties[what].name
+        if rule == "nonempty":
+            if value.strip() == "":
+                return f"{label} is empty"
+            continue
+        finder = (
+            find_shell_unsafe_path_char if rule == "native_path"
+            else find_invalid_path_char
+        )
+        ch = finder(value)
+        if ch is not None:
+            return f"{label} contains {ch!r}, which a path here cannot hold"
+    return None
+
+
 # THE CONNECTION TYPES WHOSE SERVER RUNS ON THIS MACHINE, mapped to the property
 # holding the folder it runs from.
 #
@@ -118,87 +224,7 @@ class REMOTE_OT_Connect(Operator):
 
     @classmethod
     def poll(cls, context):
-        # A SECOND REQUEST WHILE ONE IS HANDSHAKING CHANGES NOTHING, because
-        # the reducer accepts a connect only from the offline phase. Refusing
-        # it here is what the MCP tool already does (``_require_offline``), and
-        # it keeps a click that would start a modal watching an attempt it did
-        # not start from being possible at all.
-        if com.is_connecting():
-            return False
-        root = get_addon_data(context.scene)
-        props = root.ssh_state
-        state = root.state
-        project_name_valid = (
-            state.project_name.strip() != ""
-            and find_invalid_name_char(state.project_name) is None
-        )
-
-        if props.server_type == "COMMAND":
-            return (
-                not com.is_connected()
-                and props.command.strip() != ""
-                and find_invalid_path_char(props.ssh_remote_path) is None
-                and module_exists(["paramiko"])
-                and project_name_valid
-            )
-        elif props.server_type == "CUSTOM":
-            return (
-                not com.is_connected()
-                and props.host.strip() != ""
-                and find_invalid_path_char(props.key_path) is None
-                and find_invalid_path_char(props.ssh_remote_path) is None
-                and module_exists(["paramiko"])
-                and project_name_valid
-            )
-        elif props.server_type == "DOCKER":
-            # Local Docker reaches the daemon over the Docker socket, so no
-            # SSH key takes part in the connection and the panel does not draw
-            # the SSH Key field in this mode. Gating the button on that field
-            # made the button unpressable for a reason nothing on screen could
-            # explain: the default key path is derived from the user's home
-            # directory, so a Windows account whose name holds a space put a
-            # space in it, and the shell-safety test rejected a value the user
-            # could neither see nor edit here.
-            return (
-                not com.is_connected()
-                and props.container.strip() != ""
-                and find_invalid_path_char(props.docker_path) is None
-                and module_exists(["docker"])
-                and project_name_valid
-            )
-        elif props.server_type == "DOCKER_SSH":
-            return (
-                not com.is_connected()
-                and props.host.strip() != ""
-                and props.container.strip() != ""
-                and find_invalid_path_char(props.key_path) is None
-                and find_invalid_path_char(props.docker_path) is None
-                and module_exists(["paramiko"])
-                and project_name_valid
-            )
-        elif props.server_type == "DOCKER_SSH_COMMAND":
-            return (
-                not com.is_connected()
-                and props.command.strip() != ""
-                and props.container.strip() != ""
-                and find_invalid_path_char(props.docker_path) is None
-                and module_exists(["paramiko"])
-                and project_name_valid
-            )
-        elif props.server_type in NATIVE_PATH_FIELDS:
-            # A NATIVE ROOT NEVER REACHES A SHELL (it is an os.path.join base, a
-            # Popen argv element, and that Popen's cwd), so it is held to the
-            # metacharacter rule only. A space is ordinary in a path on all
-            # three platforms, and this button is the only place the user could
-            # act on a refusal of one, with no field on screen to change and
-            # nothing wrong with what they picked.
-            path = getattr(props, NATIVE_PATH_FIELDS[props.server_type])
-            return (
-                not com.is_connected()
-                and path.strip() != ""
-                and find_shell_unsafe_path_char(path) is None
-                and project_name_valid
-            )
+        return connect_refusal(context) is None
 
     def _connect_ssh(self, **kwargs) -> bool:
         """Ask the facade for an SSH connection; report a bad jump spec.

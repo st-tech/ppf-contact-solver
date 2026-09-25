@@ -11,7 +11,7 @@ Holds:
 * ``SessionExport`` (animation + frame + shell-command exporters)
 * ``SessionOutput`` (output-directory accessor)
 * ``SessionLog`` (stdout/stderr/log readers)
-* ``SessionGet`` (vertex/log/command getters)
+* ``SessionGet`` (vertex/log/command/statistics getters)
 * The ``display_log`` helper.
 * The ``CONSOLE_STYLE`` HTML snippet shared with ``FixedSession``.
 
@@ -123,7 +123,7 @@ class SessionExport:
             self._session.proj_root,
             which,
             # THE BUILD DIRECTORY OF THE BACKEND THIS RUN RESOLVES TO
-            # (``frontend.get_backend``), checked to hold a solver built from
+            # (``App.get_backend``), checked to hold a solver built from
             # the same sources as this process's extension module. A path
             # composed here instead would name a build nobody asked about.
             _run_directory(),
@@ -609,6 +609,133 @@ class SessionGet:
         if arr is None:
             return None
         return (arr, int(n))
+
+    def statistics_frames(self) -> list[int]:
+        """List the output frames that carry per-object statistics.
+
+        Returns:
+            list[int]: The frame numbers, ascending. Empty before the first
+            frame is written.
+
+        Example:
+            Count how many frames have statistics so far::
+
+                print(len(session.get.statistics_frames()))
+        """
+        return [int(n) for n in _rust.statistics_frames(self._fixed_session.output.path)]
+
+    def statistics(self, n: Optional[int] = None) -> Optional[dict]:
+        """Get every object's statistics at one output frame.
+
+        The solver records these for each object at each output frame: the
+        mass-weighted center ``location_x/y/z``, ``velocity_x/y/z`` and
+        ``speed``, ``acceleration_x/y/z`` and ``acceleration_magnitude``,
+        ``angular_velocity_x/y/z``, ``angular_speed`` and ``angular_axis_x/y/z``,
+        ``volume``, ``surface_area`` and ``rod_length`` with their
+        ``volume_stretch``, ``area_stretch`` and ``length_stretch`` against the
+        rest shape, and ``contact_count``. They are what the Blender add-on's
+        Object Statistics panel shows.
+
+        Args:
+            n (Optional[int], optional): The frame number. If ``None``, the
+                latest frame with statistics. Defaults to ``None``.
+
+        Returns:
+            Optional[dict]: ``None`` before the first frame is written.
+            Otherwise ``{"frame": int, "time": float, "objects": {...}}``,
+            where ``time`` is the simulated time in seconds and ``objects``
+            maps each object's name to ``{"uuid", "type", "values"}``.
+            ``values`` holds every channel the object's type supports, with
+            ``None`` where the solver had no value at this frame (an
+            object's first frame has no acceleration, for example); a channel
+            the type does not support, such as a rod's volume, is absent.
+
+        Raises:
+            OSError: If frame ``n`` has no statistics record.
+            ValueError: If two objects of the session share a name.
+
+        Example:
+            Print how fast each object is moving at the latest frame::
+
+                stats = session.get.statistics()
+                for name, obj in stats["objects"].items():
+                    print(name, obj["values"].get("speed"))
+        """
+        path = self._fixed_session.output.path
+        if n is None:
+            frames = _rust.statistics_frames(path)
+            if not frames:
+                return None
+            n = frames[-1]
+        record = _rust.read_statistics_frame(path, int(n))
+        objects = {}
+        for row in record["objects"]:
+            name = row["name"]
+            if name in objects:
+                raise ValueError(
+                    f"two objects of this session are both named '{name}', "
+                    "and statistics are keyed by name"
+                )
+            objects[name] = {
+                "uuid": row["uuid"],
+                "type": row["type"],
+                "values": row["values"],
+            }
+        return {
+            "frame": int(record["frame"]),
+            "time": float(record["time"]),
+            "objects": objects,
+        }
+
+    def statistics_series(
+        self, name: str, channel: str
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Get one object's statistic over every frame it was recorded at.
+
+        Frames where the solver had no value for the channel are left out
+        rather than filled, so the two arrays can be plotted as they are.
+
+        Args:
+            name (str): The object's name, as :meth:`statistics` keys it.
+            channel (str): A channel :meth:`statistics` lists for the object.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: The simulated times in seconds and
+            the channel's values at them.
+
+        Raises:
+            KeyError: If no frame records ``name``, or ``name``'s type does
+                not support ``channel``.
+
+        Example:
+            Plot a falling sheet's speed over the run::
+
+                import matplotlib.pyplot as plt
+
+                t, speed = session.get.statistics_series("sheet", "speed")
+                plt.plot(t, speed)
+        """
+        times, values = [], []
+        found = False
+        for n in self.statistics_frames():
+            record = self.statistics(n)
+            obj = record["objects"].get(name)
+            if obj is None:
+                continue
+            found = True
+            if channel not in obj["values"]:
+                raise KeyError(
+                    f"'{name}' is a {obj['type']} object, whose statistics "
+                    f"have no '{channel}'; they have "
+                    f"{', '.join(sorted(obj['values']))}"
+                )
+            value = obj["values"][channel]
+            if value is not None:
+                times.append(record["time"])
+                values.append(value)
+        if not found:
+            raise KeyError(f"no statistics record names an object '{name}'")
+        return np.asarray(times, dtype=np.float64), np.asarray(values)
 
     def command(self) -> Optional[str]:
         """Get the path to the solver launcher script.

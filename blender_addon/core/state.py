@@ -122,6 +122,11 @@ class AppState:
     # that sets ``server_error``, so the two cannot disagree.
     crash_kind: str = ""
     violations: list = field(default_factory=list)
+    # Allow Existing Intersections: what the server's latest successful build
+    # exempted (the response's ``exemptions``), in the violation record shape.
+    # Mirrored from every response, so it empties when a build starts, fails,
+    # or exempts nothing.
+    exemptions: list = field(default_factory=list)
     message: str = ""
     progress: float = 0.0
     traffic: str = ""

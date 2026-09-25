@@ -18,6 +18,7 @@ use crate::kernels::intersection as isect;
 use crate::kernels::invisible_collider as inv_coll;
 use crate::kernels::proximity as prox;
 use crate::kernels::scene_build as sb;
+use crate::kernels::start_links::StartLinks;
 
 /// One static wall (single-keyframe only). Kinematic walls are
 /// filtered out *before* assembly because the solver handles their
@@ -85,6 +86,12 @@ pub struct AssembleInput<'a> {
     pub vert_group_id: Option<&'a [i32]>,
     pub vert_policy: Option<&'a [u8]>,
     pub vert_pin_allow: Option<&'a [bool]>,
+    /// Allow Existing Intersections, per DYNAMIC vertex: true where the
+    /// vertex's object opted in. `None` means no object did. A pair the three
+    /// scans find (a crossing, or a pair closer than its contact offsets) is
+    /// LINKED rather than reported when either side opted in; see
+    /// `start_links.rs`. The appended STATIC collision vertices never opt in.
+    pub vert_allow_existing: Option<&'a [bool]>,
     /// Static walls only. Kinematic walls are filtered upstream.
     pub walls: &'a [WallEntry],
     /// Static spheres only.
@@ -152,6 +159,18 @@ pub struct AssembleOutput {
     pub n_sphere_total: usize,
     pub first_sphere: Option<(usize, usize)>,
     pub combined_message: String,
+    /// Allow Existing Intersections: the vertex links, flat `[u0, v0, ...]`
+    /// with `u < v`, in the COMBINED namespace (the dynamic vertices, then the
+    /// STATIC collision vertices after them). Empty when nothing was linked.
+    pub start_links: Vec<u32>,
+    /// How many element pairs the links came from: crossings and clearance
+    /// violations the build exempted instead of refusing.
+    pub n_start_link_pairs: usize,
+    /// The first `start_links::MAX_RECORDED_PAIRS` of those element pairs, each
+    /// as the world-space positions of its two elements' vertices (three for a
+    /// triangle, two for a rod edge), for the add-on's overlay of what was
+    /// exempted. A collision-mesh element reads its own static positions.
+    pub start_link_pairs: Vec<(Vec<[f64; 3]>, Vec<[f64; 3]>)>,
     /// Per-tri area, computed from `vert_local` (NOT the displaced
     /// world-space positions, mirroring the Python source).
     pub area: Vec<f64>,
@@ -203,6 +222,28 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
 
     let mut out = AssembleOutput::default();
 
+    // Allow Existing Intersections. The opt-in array covers the COMBINED
+    // namespace the self-intersection scan uses, so the STATIC collision
+    // vertices appended after the dynamic ones read false, and it is `None`
+    // when no object opted in, which leaves every check exactly as it was.
+    let n_static_verts = match (input.static_verts, input.static_tris) {
+        (Some(sv), Some(st)) if !st.is_empty() => sv.len() / 3,
+        _ => 0,
+    };
+    let allow_existing: Option<Vec<bool>> = input.vert_allow_existing.map(|a| {
+        assert_eq!(
+            a.len(),
+            n_verts,
+            "vert_allow_existing has {} entries but the scene has {} dynamic vertices",
+            a.len(),
+            n_verts
+        );
+        let mut v = a.to_vec();
+        v.resize(n_verts + n_static_verts, false);
+        v
+    });
+    let mut links: Option<StartLinks<'_>> = allow_existing.as_deref().map(StartLinks::new);
+
     // Step 2. Rod-tri offset pre-check (fatal; bubbles up as Err).
     let has_tri_offset = !input.tri_offset.is_empty() && input.tri_offset.iter().any(|&o| o > 0.0);
 
@@ -234,8 +275,12 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
                     &policy.side_of(&input.tri[3 * ti..3 * ti + 3]),
                 )
         };
+        let exempt = |ri: usize, ti: usize| match links.as_mut() {
+            Some(links) => links.link_if_covered(&rods_u32[ri], &tris_u32[ti]),
+            None => false,
+        };
         sb::rod_tri_contact_offset_check(
-            &dyn_verts, &rods_u32, &tris_u32, &tri_off, &rod_off, allowed,
+            &dyn_verts, &rods_u32, &tris_u32, &tri_off, &rod_off, allowed, exempt,
         )
         .map_err(AssembleError::RodTriOffset)?;
     }
@@ -321,7 +366,7 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             v.resize(n_combined_verts, false);
             v
         });
-        let pairs = isect::check_self_intersection(isect::IntersectionInput {
+        let found = isect::scan_self_intersection(isect::IntersectionInput {
             verts: &combined_verts,
             tris: &combined_tris,
             is_collider: Some(&combined_is_collider),
@@ -332,6 +377,34 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             vert_policy: extend_policy.as_deref(),
             vert_pin_allow: extend_pin_allow.as_deref(),
         });
+        // A pair the opt-in covers is linked and leaves the report; every
+        // other pair is reported exactly as it is without the option.
+        let tri_of = |ti: i32| -> [u32; 3] {
+            let t = 3 * ti as usize;
+            [
+                combined_tris[t] as u32,
+                combined_tris[t + 1] as u32,
+                combined_tris[t + 2] as u32,
+            ]
+        };
+        let mut pairs: Vec<(i32, i32)> = Vec::new();
+        for &(ti, tj) in &found.tri_tri {
+            let linked = links
+                .as_mut()
+                .is_some_and(|l| l.link_if_covered(&tri_of(ti), &tri_of(tj)));
+            if !linked {
+                pairs.push((ti, tj));
+            }
+        }
+        for &(ri, tj) in &found.rod_tri {
+            let rod = [input.rod[2 * ri] as u32, input.rod[2 * ri + 1] as u32];
+            let linked = links
+                .as_mut()
+                .is_some_and(|l| l.link_if_covered(&rod, &tri_of(tj)));
+            if !linked {
+                pairs.push((-1, tj));
+            }
+        }
         if !pairs.is_empty() {
             out.has_self_intersection = true;
             let mut tri_data: Vec<SelfIntersectionEntry> = Vec::new();
@@ -412,6 +485,24 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             vert_policy: input.vert_policy,
             vert_pin_allow: input.vert_pin_allow,
         });
+        // The proximity namespace is the triangles, then the rod edges.
+        let element_of = |e: i32| -> Vec<u32> {
+            let e = e as usize;
+            if e < n_tris {
+                input.tri[3 * e..3 * e + 3].iter().map(|&v| v as u32).collect()
+            } else {
+                let r = e - n_tris;
+                input.rod[2 * r..2 * r + 2].iter().map(|&v| v as u32).collect()
+            }
+        };
+        let pairs: Vec<(i32, i32)> = pairs
+            .into_iter()
+            .filter(|&(ei, ej)| {
+                !links
+                    .as_mut()
+                    .is_some_and(|l| l.link_if_covered(&element_of(ei), &element_of(ej)))
+            })
+            .collect();
         if !pairs.is_empty() {
             out.has_contact_offset_violation = true;
             out.n_contact_offset_total = pairs.len();
@@ -462,6 +553,33 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
                 });
             }
         }
+    }
+
+    if let Some(links) = links.take() {
+        // Positions in the combined namespace the links use: the dynamic
+        // vertices, then the static collision vertices after them.
+        let position = |v: u32| -> [f64; 3] {
+            let v = v as usize;
+            if v < n_verts {
+                [dyn_verts[3 * v], dyn_verts[3 * v + 1], dyn_verts[3 * v + 2]]
+            } else {
+                let s = v - n_verts;
+                let sv = input.static_verts.expect("a static link implies static vertices");
+                [sv[3 * s], sv[3 * s + 1], sv[3 * s + 2]]
+            }
+        };
+        out.start_link_pairs = links
+            .recorded_pairs()
+            .iter()
+            .map(|(a, b)| {
+                (
+                    a.iter().map(|&v| position(v)).collect(),
+                    b.iter().map(|&v| position(v)).collect(),
+                )
+            })
+            .collect();
+        out.n_start_link_pairs = links.element_pairs();
+        out.start_links = links.into_flat();
     }
 
     // Step 5. Wall + sphere scans.
@@ -640,6 +758,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         }
     }
 
@@ -684,6 +803,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection);
@@ -722,6 +842,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         let w = out.face_to_vert_weights.as_ref().unwrap();
@@ -766,6 +887,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -810,6 +932,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_wall_violation);
@@ -849,6 +972,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -891,6 +1015,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_sphere_violation);
@@ -939,6 +1064,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_self_intersection);
@@ -982,6 +1108,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert_eq!(out.area.len(), 2);
@@ -1028,6 +1155,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -1067,6 +1195,7 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection);
@@ -1113,10 +1242,129 @@ mod tests {
             vert_group_id: None,
             vert_policy: None,
             vert_pin_allow: None,
+            vert_allow_existing: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection, "collider × collider must be skipped");
         // No violations ⇒ area path runs, both triangle areas reported.
         assert_eq!(out.area.len(), 2);
+    }
+
+    // THE CROSSING "T" of `self_intersection_pair_detected`, as a fixture the
+    // Allow Existing Intersections cases below vary.
+    const CROSSING_T: [f64; 18] = [
+        0.0, 0.0, 0.0,
+        2.0, 0.0, 0.0,
+        1.0, 0.0, 2.0,
+        1.0, -1.0, 1.0,
+        1.0, 1.0, 0.5,
+        1.0, 1.0, 1.5,
+    ];
+
+    fn crossing_input<'a>(allow: Option<&'a [bool]>) -> AssembleInput<'a> {
+        AssembleInput {
+            vert_dmap: &[0; 6],
+            vert_local: &CROSSING_T,
+            displacement: &[0.0; 3],
+            tri: &[0, 1, 2, 3, 4, 5],
+            tri_is_collider: &[false, false],
+            vert_allow_existing: allow,
+            ..empty_input()
+        }
+    }
+
+    #[test]
+    fn an_opted_in_crossing_is_linked_rather_than_reported() {
+        // Only the first triangle's object opted in: either side is enough.
+        let allow = [true, true, true, false, false, false];
+        let out = fixed_scene_assemble(crossing_input(Some(&allow))).unwrap();
+        assert!(!out.has_self_intersection, "{}", out.combined_message);
+        assert!(out.combined_message.is_empty());
+        assert_eq!(out.n_start_link_pairs, 1);
+        // Every vertex of one triangle against every vertex of the other.
+        assert_eq!(out.start_links.len(), 2 * 9);
+        for u in 0..3u32 {
+            for v in 3..6u32 {
+                assert!(out.start_links.chunks(2).any(|p| p == [u, v]));
+            }
+        }
+        // The success path runs, so the derived data is there.
+        assert_eq!(out.area.len(), 2);
+    }
+
+    #[test]
+    fn a_crossing_no_side_opted_into_is_still_reported() {
+        let allow = [false; 6];
+        let out = fixed_scene_assemble(crossing_input(Some(&allow))).unwrap();
+        assert!(out.has_self_intersection);
+        assert_eq!(out.n_start_link_pairs, 0);
+        assert!(out.start_links.is_empty());
+        // And with the option absent altogether, the same.
+        let out = fixed_scene_assemble(crossing_input(None)).unwrap();
+        assert!(out.has_self_intersection);
+        assert!(out.start_links.is_empty());
+    }
+
+    #[test]
+    fn a_dynamic_triangle_through_a_static_collider_links_into_the_combined_namespace() {
+        // The first triangle is dynamic; the second is the STATIC collision
+        // mesh, appended after the three dynamic vertices.
+        let allow = [true; 3];
+        let input = AssembleInput {
+            vert_dmap: &[0; 3],
+            vert_local: &CROSSING_T[..9],
+            displacement: &[0.0; 3],
+            tri: &[0, 1, 2],
+            tri_is_collider: &[false],
+            static_verts: Some(&CROSSING_T[9..]),
+            static_tris: Some(&[0, 1, 2]),
+            vert_allow_existing: Some(&allow),
+            ..empty_input()
+        };
+        let out = fixed_scene_assemble(input).unwrap();
+        assert!(!out.has_self_intersection, "{}", out.combined_message);
+        assert_eq!(out.n_start_link_pairs, 1);
+        // The display record reads the static element's own positions.
+        assert_eq!(out.start_link_pairs.len(), 1);
+        let (ref dynamic, ref collider) = out.start_link_pairs[0];
+        assert_eq!(dynamic[0], [0.0, 0.0, 0.0]);
+        assert_eq!(collider[0], [1.0, -1.0, 1.0]);
+        // Static vertex s is combined index 3 + s.
+        for pair in out.start_links.chunks(2) {
+            assert!(pair[0] < 3 && (3..6).contains(&pair[1]), "{pair:?}");
+        }
+        assert_eq!(out.start_links.len(), 2 * 9);
+    }
+
+    // Two parallel triangles 0.01 apart: too close for offsets summing to
+    // 0.1, and not crossing.
+    const PARALLEL: [f64; 18] = [
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 0.01,
+        1.0, 0.0, 0.01,
+        0.0, 1.0, 0.01,
+    ];
+
+    #[test]
+    fn an_opted_in_contact_offset_violation_is_linked() {
+        let make = |allow: Option<&'static [bool]>| AssembleInput {
+            vert_dmap: &[0; 6],
+            vert_local: &PARALLEL,
+            displacement: &[0.0; 3],
+            tri: &[0, 1, 2, 3, 4, 5],
+            tri_is_collider: &[false, false],
+            tri_offset: &[0.05, 0.05],
+            vert_allow_existing: allow,
+            ..empty_input()
+        };
+        let out = fixed_scene_assemble(make(None)).unwrap();
+        assert!(out.has_contact_offset_violation);
+        assert!(!out.has_self_intersection);
+        let out = fixed_scene_assemble(make(Some(&[false, false, false, true, true, true]))).unwrap();
+        assert!(!out.has_contact_offset_violation, "{}", out.combined_message);
+        assert_eq!(out.n_start_link_pairs, 1);
+        assert_eq!(out.start_links.len(), 2 * 9);
     }
 }

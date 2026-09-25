@@ -981,7 +981,7 @@ done
 
 # THE SOLVER BUILD, CHOSEN ONLY AMONG THIS FOLDER'S OWN. Each backend ships in
 # its own target/<backend>, and NOTHING IS PINNED HERE: the frontend searches
-# them and resolves which one a run uses (frontend.get_backend), which is the one
+# them and resolves which one a run uses (App.get_backend), which is the one
 # GPU build present or, where several are, the first whose solver reports a
 # usable device. CARGO_TARGET_DIR names one explicitly, and a value naming
 # anywhere outside this folder would load a build this folder did not ship, so it
@@ -1860,7 +1860,7 @@ printf '  launcher   --help answers through a file symlink and a directory symli
 # WITH NO CARGO_TARGET_DIR THE EXPECTED DIRECTORY IS THE ONE THE FRONTEND
 # SEARCHES FIRST, which is `frontend._load_dirs`'s order: the CPU build, whose
 # extension module loads no GPU runtime. Which backend a RUN uses is a separate
-# question, answered by `frontend.get_backend` when the run starts, and
+# question, answered by `App.get_backend` when the run starts, and
 # verify-distribution.sh is what checks that answer against each build.
 PYMODE_PROBE='import sys, frontend; print(sys.executable); print(frontend.__file__); print(frontend.artifact_dir())'
 DEFAULT_RELEASE="$PKG_REAL/target/cpu/release"

@@ -881,6 +881,9 @@ class OBJECT_OT_AddPinOperation(Operator):
             return {"CANCELLED"}
         op = pin_item.operations.add()
         op.op_type = self.op_type
+        from ...core.encoder import seed_window_at_start
+        from ...models.groups import get_addon_data
+        seed_window_at_start(op, get_addon_data(context.scene).state)
         # Default center mode to CENTROID for scale and spin
         # (the solver computes the center from vertex positions at runtime)
         if self.op_type == "SCALE":

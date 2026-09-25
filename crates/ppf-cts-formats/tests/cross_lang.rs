@@ -53,8 +53,8 @@ fn scene_fixture_decodes() {
     assert_eq!(canonical.face.as_deref().unwrap()[0], [0, 1, 2]);
     assert_eq!(canonical.pin.as_deref().unwrap(), &[0, 3]);
     let stitch = canonical.stitch.as_ref().unwrap();
-    assert_eq!(stitch.0, vec![[0, 1]]);
-    assert_eq!(stitch.1, vec![1.0]);
+    assert_eq!(stitch.0, vec![[0, 1, 1, 1]]);
+    assert_eq!(stitch.1, vec![[1.0, 1.0, 0.0, 0.0]]);
 
     let dup = &payload[0].objects[1];
     assert_eq!(dup.mesh_ref.as_deref(), Some("uuid-shell-1"));

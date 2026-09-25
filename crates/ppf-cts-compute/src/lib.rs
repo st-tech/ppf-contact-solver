@@ -39,20 +39,35 @@ pub use device::*;
 // loaded is what `be_backend_name` reports.
 pub mod abi;
 
+// THE CPU TARGET'S SOURCES ARE IN `cpu/`, beside `cuda/`, `rocm/` and
+// `metal/`, so every target is one top-level directory of this crate and
+// `src/` holds only what no single target owns: the seam, the C ABI client and
+// the build API's module root. The `#[path]` attributes below are what that
+// layout costs, since cargo looks for a module under `src/` by default.
+//
+// The modules are named `host`, not `cpu`, because that is the target's name at
+// the seam, and the seam is wider than the CPU backend: the solver's own unit
+// tests run on `HostDevice` in every build, whichever GPU backend the binary
+// links, and the solver crate names no backend in any symbol it spells,
+// which includes this type's.
+
 // The scratch pool. Allocation computes no value, so it is mechanism by
 // definition: it decides where bytes live and never what is in them.
+#[path = "../cpu/mem.rs"]
 pub mod mem;
 // How a range is cut across threads. It is on this side of the seam because a
 // backend's only contribution to a dispatch is how the range is cut, and it is
 // a MODULE rather than a flat re-export because a caller outside a dispatch
 // (a driver walking a tree with its own parallel loop) reads the same two
 // functions and should be seen to be reading the backend's rule.
+#[path = "../cpu/sched.rs"]
 pub mod sched;
 
 // The host target. Compiled unconditionally: it is pure Rust over the caller's
 // own entry points, so it builds on every platform, and a target that only
 // compiles where its vendor toolchain is installed would make the seam itself
 // unbuildable on the machines that review it.
+#[path = "../cpu/host.rs"]
 pub mod host;
 pub use host::{DiagRecord, HostDevice, Launch};
 

@@ -30,9 +30,9 @@
 # This is the scale-invariance the feature promises: an over- or under-
 # sized scene simulated at a sane scale reproduces (size-scaled) the
 # physically authored result. Relative contact gaps participate because
-# the encoder scales the bbox-diagonal by world_scaling; absolute gaps
-# do NOT scale and so are deliberately avoided here (they are covered at
-# the encode level in bl_world_scaling_encoder_scales).
+# the encoder scales the bbox-diagonal by world_scaling; absolute gaps are
+# scaled by the encoder too, and are covered at the encode level in
+# bl_world_scaling_encoder_scales rather than here.
 #
 # Both build / run cycles happen in ONE Blender session on ONE server
 # connection. The rebuild between cycles dispatches a fresh

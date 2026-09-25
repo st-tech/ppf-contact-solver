@@ -14,6 +14,8 @@ from bpy.props import (  # pyright: ignore
     FloatProperty,
     FloatVectorProperty,
     IntProperty,
+    IntVectorProperty,
+    PointerProperty,
     StringProperty,
 )
 from bpy.types import PropertyGroup  # pyright: ignore
@@ -34,6 +36,7 @@ from ..models.groups import (  # noqa: F401
 
 # Re-exports for backward compatibility
 from .state_types import (
+    NOT_ANIMATABLE,
     CheckpointFrameItem,
     SaveCheckpointFrameItem,
     FetchedFrameItem,
@@ -44,6 +47,8 @@ from .state_types import (
     InvisibleColliderItem,
     AssignedObject,
     IntersectionAllowanceObject,
+    ForceFieldGroupRef,
+    ForceFieldTarget,
     MaterialMapItem,
     MaterialMapSample,
     PinOperation,
@@ -201,9 +206,10 @@ class SSHState(PropertyGroup):
         items=_get_profile_items,
         update=_on_profile_selected,
         description="Select a connection profile",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     host: StringProperty(name="Host", default="")  # pyright: ignore
-    port: IntProperty(name="Port", default=22)  # pyright: ignore
+    port: IntProperty(name="Port", default=22, options=NOT_ANIMATABLE)  # pyright: ignore
     username: StringProperty(name="User", default="")  # pyright: ignore
     default_key_path = os.path.expanduser("~/.ssh/id_ed25519")
     if not os.path.exists(default_key_path):
@@ -294,6 +300,7 @@ class SSHState(PropertyGroup):
             ),
         ],
         default="CUSTOM",
+        options=NOT_ANIMATABLE,
     )
     command: StringProperty(name="SSH Command", default="ssh -p xxx root@zzz")  # pyright: ignore
     # The default names the container the project's own public instructions
@@ -385,7 +392,7 @@ class SSHState(PropertyGroup):
     # more than one GPU build. A Windows x64 distribution carries CUDA and ROCm
     # together, a Linux x86_64 one carries both as well, and a machine can have
     # an NVIDIA and an AMD card at once, so the artist needs a way to say which
-    # one runs; a notebook says the same thing with ``frontend.set_backend``
+    # one runs; a notebook says the same thing with ``App.set_backend``
     # (``frontend/_backends_.py``).
     #
     # AUTOMATIC IS SLOT 0 AND THE DEFAULT, so a `.blend` saved before this
@@ -441,6 +448,7 @@ class SSHState(PropertyGroup):
         default=-1,
         min=-1,
         description="CUDA device index for the solver server, or -1 to set no CUDA_VISIBLE_DEVICES",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     solver_gpu_uuid: StringProperty(
         name="GPU UUID",
@@ -453,6 +461,7 @@ class SSHState(PropertyGroup):
         get=_get_solver_gpu,
         set=_set_solver_gpu,
         description="Which CUDA device on the solver host the server runs the solver on",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     docker_port: IntProperty(
         name="Docker Port",
@@ -460,6 +469,7 @@ class SSHState(PropertyGroup):
         min=1024,
         max=65535,
         description="Port for the remote server (must be exposed in Docker)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -555,6 +565,7 @@ class State(PropertyGroup):
         items=_get_scene_profile_items,
         update=_on_scene_profile_selected,
         description="Select a scene parameter profile",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     step_size: FloatProperty(
         name="Step Size",
@@ -573,6 +584,7 @@ class State(PropertyGroup):
         min=1,
         max=64,
         description="Minimum number of Newton steps",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     air_density: FloatProperty(
         name="Air Density (kg/m\u00b3)",
@@ -598,11 +610,13 @@ class State(PropertyGroup):
         default=False,
         description="Show gravity direction preview in viewport",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_wind: BoolProperty(
         name="Wind",
         default=False,
         description="Toggle visibility of wind parameters",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     wind_direction: FloatVectorProperty(
         name="Direction",
@@ -625,6 +639,116 @@ class State(PropertyGroup):
         default=False,
         description="Show wind direction preview in viewport",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    # --- Force fields (issues #151 and #114) ---
+    #
+    # Every one of these is read ONCE per Transfer and so NOT_ANIMATABLE: a
+    # keyframe on one would be ignored by the solve. The fields themselves
+    # animate through their own objects.
+    show_force_field: BoolProperty(
+        name="Force Fields",
+        default=False,
+        description="Toggle visibility of the force field settings",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_collection: PointerProperty(
+        name="Collection",
+        type=bpy.types.Collection,
+        description=(
+            "Take force fields only from this collection. Empty takes every "
+            "force field in the scene"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_padding: FloatProperty(
+        name="Padding",
+        default=0.5,
+        min=0.0,
+        soft_max=10.0,
+        unit="LENGTH",
+        description=(
+            "How far each field's sampled box extends past the objects it "
+            "pushes, so they stay inside it as they move. Outside the box a "
+            "sampled field is zero"
+        ),
+        update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_spacing: FloatProperty(
+        name="Spacing",
+        default=0.1,
+        min=1e-3,
+        soft_max=1.0,
+        unit="LENGTH",
+        description=(
+            "Distance between neighboring sample points sent to the solver, "
+            "the same along X, Y and Z. Smaller follows the fields more "
+            "closely and takes more memory"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_time_samples: IntProperty(
+        name="Time Samples",
+        default=8,
+        min=1,
+        max=100000,
+        description=(
+            "Instants the fields are sampled at, spread evenly over the "
+            "simulation; the solver interpolates between them. 1 samples the "
+            "starting frame only"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_max_mb: FloatProperty(
+        name="Size Limit (MB)",
+        default=2000.0,
+        min=1.0,
+        description="Transfer refuses sampled fields larger than this",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_script: PointerProperty(
+        name="Script",
+        type=bpy.types.Text,
+        description=(
+            "A text holding def eval(x, y, z, t) returning (ax, ay, az) in m/s^2, "
+            "in Blender's axes and scene units, t in seconds. Evaluated exactly "
+            "at every vertex on the solver, in addition to the sampled fields"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_targets: CollectionProperty(
+        type=ForceFieldTarget, options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_script_all: BoolProperty(
+        name="Apply to All Groups",
+        default=True,
+        description="The script pushes every simulated group; turn off to choose the groups",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_script_groups: CollectionProperty(
+        type=ForceFieldGroupRef, options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_script_groups_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
+    force_field_visualize: BoolProperty(
+        name="Visualize",
+        default=False,
+        description="Draw the force field as arrows in the viewport",
+        update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    force_field_preview_resolution: IntVectorProperty(
+        name="Preview Resolution",
+        size=3,
+        default=(8, 8, 8),
+        min=2,
+        max=48,
+        description=(
+            "Arrows drawn along X, Y and Z, at the timeline's current frame. "
+            "Only for drawing; the solver receives the Spacing above"
+        ),
+        update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     air_friction: FloatProperty(
         name="Air Friction",
@@ -643,12 +767,13 @@ class State(PropertyGroup):
         soft_max=100.0,
         precision=4,
         description=(
-            "Uniform scale applied to all geometry before simulating; results are "
-            "scaled back so the scene stays at its authored size. Use it to "
-            "simulate an over- or under-sized scene at a sensible physical scale "
-            "(e.g. 0.1 simulates a 15 m mesh at 1.5 m). Only geometry and relative "
-            "contact gaps scale; gravity and absolute gaps do not"
+            "Uniform scale applied to the scene before simulating; results are "
+            "scaled back so the scene stays at its authored size (e.g. 0.1 "
+            "simulates a 15 m mesh at 1.5 m, under the same gravity). Positions, "
+            "contact gaps, velocities and the constraint gap scale with it; "
+            "gravity, wind, material parameters and torques do not"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     friction_mode: EnumProperty(
         name="Friction Mode",
@@ -659,6 +784,7 @@ class State(PropertyGroup):
         ],
         default="MIN",
         description="How to combine friction coefficients of two contacting elements",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     precond: EnumProperty(
         name="Preconditioner",
@@ -677,6 +803,7 @@ class State(PropertyGroup):
         ],
         default="BLOCK_JACOBI",
         description="Preconditioner for the PCG linear solver",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     schwarz_levels: EnumProperty(
         name="Schwarz Levels",
@@ -696,6 +823,7 @@ class State(PropertyGroup):
             "Number of additive levels for the Schwarz preconditioner "
             "(only used when the preconditioner is Schwarz)"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     inactive_momentum_frames: IntProperty(
         name="Inactive Momentum Frames",
@@ -703,6 +831,9 @@ class State(PropertyGroup):
         min=0,
         max=600,
         description="Number of frames with inactive momentum (0 to disable)",
+        # A count of frames from the start of the solve has no per-frame value
+        # (see NOT_ANIMATABLE in state_types.py).
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     save_state_on_finish: BoolProperty(
         name="Save State on Finish",
@@ -711,6 +842,7 @@ class State(PropertyGroup):
             "Save the simulation state on the final frame before the solver "
             "exits, so the result stays resumable even when auto-save is off"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # "Save and Checkpoints" UI box: a collapsible group above Wind that
     # collects Save State on Finish, the Auto Save sub-box, and the
@@ -719,16 +851,19 @@ class State(PropertyGroup):
         name="Save and Checkpoints",
         default=False,
         description="Toggle visibility of the save and checkpoint settings",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_auto_save: BoolProperty(
         name="Auto Save",
         default=False,
         description="Toggle visibility of the auto-save interval settings",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_checkpoints: BoolProperty(
         name="Save Checkpoints",
         default=False,
         description="Toggle visibility of the per-frame save checkpoints list",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Per-frame save checkpoints (input side). Each item is a Blender
     # 1-based frame at which the solver writes a resumable state. The
@@ -736,7 +871,7 @@ class State(PropertyGroup):
     # ``checkpoint_frames`` below, which lists states the solver has
     # already saved (the Resume-From dialog reads that one).
     save_checkpoint_frames: CollectionProperty(type=SaveCheckpointFrameItem)  # pyright: ignore
-    save_checkpoint_frames_index: IntProperty(default=-1)  # pyright: ignore
+    save_checkpoint_frames_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
 
     def convert_save_checkpoint_frames_to_remote(self) -> list[int]:
         """Sorted, de-duplicated solver 0-based frames for the encoder.
@@ -744,14 +879,24 @@ class State(PropertyGroup):
         The UIList stores Blender frames; the solver counts frames from 0 at
         the resolved starting frame (Blender N -> solver N - start). Solver
         frame 0 is the rest pose written before the step loop and is never a
-        checkpoint, so frames at or before the starting frame are dropped.
+        checkpoint, so a checkpoint at or before the starting frame would save
+        nothing, and is refused by frame rather than dropped.
         """
         # Local import: ``core.encoder`` pulls in the encoders, which read
         # this module's PropertyGroups.
         from ..core.encoder import resolve_start_frame
         start = resolve_start_frame(self)
-        remote = {int(item.frame) - start for item in self.save_checkpoint_frames}
-        return sorted(f for f in remote if f > 0)
+        early = sorted(
+            int(item.frame) for item in self.save_checkpoint_frames
+            if int(item.frame) <= start
+        )
+        if early:
+            raise ValueError(
+                f"Checkpoint frame {early[0]} is at or before the starting "
+                f"frame {start}, where nothing has been simulated yet, so it "
+                f"would save nothing. Move it after frame {start}, or remove it."
+            )
+        return sorted({int(item.frame) - start for item in self.save_checkpoint_frames})
     frame_start: IntProperty(
         name="Starting Frame",
         default=1,
@@ -763,6 +908,7 @@ class State(PropertyGroup):
             "zero is this frame. Ignored while Take Starting Frame from Scene "
             "is on"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_scene_frame_start: BoolProperty(  # pyright: ignore
         name="Take Starting Frame from Scene",
@@ -772,6 +918,7 @@ class State(PropertyGroup):
             "Start the simulation at the Blender scene's start frame instead of "
             "the Starting Frame field, so the solve tracks the scene timeline"
         ),
+        options=NOT_ANIMATABLE,
     )
     frame_count: IntProperty(
         name="Frame Count",
@@ -779,6 +926,7 @@ class State(PropertyGroup):
         min=10,
         update=_sync_scene_timeline_to_sim,
         description="Number of frames for simulation",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     frame_rate: IntProperty(
         name="FPS",
@@ -793,6 +941,7 @@ class State(PropertyGroup):
             "Frame rate the simulation runs at: how much simulated time one "
             "frame covers. Ignored while Take FPS from Scene is on"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_scene_fps: BoolProperty(  # pyright: ignore
         name="Take FPS from Scene",
@@ -801,6 +950,7 @@ class State(PropertyGroup):
             "Run the simulation at the Blender scene's frame rate instead of "
             "the FPS field, so simulated time matches the scene timeline"
         ),
+        options=NOT_ANIMATABLE,
     )
     time_scale: FloatProperty(  # pyright: ignore
         name="Time Scale",
@@ -818,17 +968,20 @@ class State(PropertyGroup):
             "physical, so cloth settles more per frame at lower values. "
             "Solve cost grows as 1 / Time Scale"
         ),
+        options=NOT_ANIMATABLE,
     )
     show_advanced_parameters: BoolProperty(
         name="Advanced Params",
         default=False,
         description="Toggle visibility of advanced parameters",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     contact_nnz: IntProperty(
         name="Max Contact",
         default=100000000,
         min=10000000,
         description="Number of non-zero entries in the contact matrix",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     line_search_max_t: FloatProperty(
         name="Line Search Max T",
@@ -837,6 +990,7 @@ class State(PropertyGroup):
         max=10.0,
         precision=2,
         description="Factor to extend TOI for CCD to avoid possible solver divergence",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     constraint_ghat: FloatProperty(
         name="Constraint Gap",
@@ -845,6 +999,7 @@ class State(PropertyGroup):
         max=0.1,
         precision=4,
         description="Gap distance to activate boundary condition barriers",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     cg_max_iter: IntProperty(
         name="PCG Max Iterations",
@@ -852,6 +1007,7 @@ class State(PropertyGroup):
         min=100,
         max=100000,
         description="Maximum number of PCG iterations before divergence",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     cg_tol: FloatProperty(
         name="PCG Tolerance",
@@ -860,27 +1016,32 @@ class State(PropertyGroup):
         max=0.1,
         precision=5,
         description="Relative tolerance for PCG solver termination",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     include_face_mass: BoolProperty(
         name="Include Face Mass",
         default=False,
         description="Include shell mass for surface elements of volume solids",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     disable_contact: BoolProperty(
         name="Disable Contact",
         default=False,
         description="Disable all contact detection in the simulation",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     auto_save: BoolProperty(  # pyright: ignore
         name="Auto Save",
         default=False,
         description="Enable auto-saving of the simulation state",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     auto_save_interval: IntProperty(  # pyright: ignore
         name="Auto Save Interval",
         default=10,
         min=1,
         description="Interval for auto-saving the simulation state",
+        options=NOT_ANIMATABLE,
     )
     keep_states: IntProperty(  # pyright: ignore
         name="Keep Saved States",
@@ -890,6 +1051,7 @@ class State(PropertyGroup):
             "Number of auto-saved checkpoints to retain. 0 keeps all "
             "(required for resuming from older frames)."
         ),
+        options=NOT_ANIMATABLE,
     )
     vertex_air_damp: FloatProperty(  # pyright: ignore
         name="Vertex Air Damping",
@@ -910,26 +1072,31 @@ class State(PropertyGroup):
             "XZ in solver Y-up) motion is constrained. 0 disables. "
             "Useful for hanging cloth/rods from above without an explicit pin."
         ),
+        options=NOT_ANIMATABLE,
     )
     show_statistics: BoolProperty(
         name="Statistics",
         default=True,
         description="Toggle visibility of simulation statistics",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_scene_info: BoolProperty(
         name="Scene Info",
         default=True,
         description="Toggle visibility of scene information",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_hardware: BoolProperty(
         name="Remote Hardware",
         default=False,
         description="Toggle visibility of remote hardware info",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     debug_mode: BoolProperty(
         name="Debug Options",
         default=False,
         description="Enable or disable debug mode",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     server_script: StringProperty(
         name="Args",
@@ -947,6 +1114,7 @@ class State(PropertyGroup):
         min=1024,
         max=65535,
         description="Port number for MCP server communication",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     reload_port: IntProperty(
         name="Reload Port",
@@ -954,6 +1122,7 @@ class State(PropertyGroup):
         min=1024,
         max=65535,
         description="UDP port for addon reload server",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     jupyter_port: IntProperty(
         name="JupyterLab Port",
@@ -961,21 +1130,25 @@ class State(PropertyGroup):
         min=1024,
         max=65535,
         description="Port number for JupyterLab server",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_connection: BoolProperty(
         name="Connection",
         default=True,
         description="Toggle visibility of connection settings",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_mcp: BoolProperty(
         name="MCP Settings",
         default=False,
         description="Toggle visibility of MCP settings panel",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_jupyter: BoolProperty(
         name="JupyterLab",
         default=False,
         description="Toggle visibility of JupyterLab export panel",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     jupyter_last_export: StringProperty(
         name="Last Export Path",
@@ -988,11 +1161,13 @@ class State(PropertyGroup):
         min=8,
         max=10000,
         description="Maximum number of lines to keep in the console",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_shell: BoolProperty(
         name="Run as Shell",
         default=True,
         description="Execute commands using a shell",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     data_size: IntProperty(
         name="Data Size (MB)",
@@ -1000,6 +1175,7 @@ class State(PropertyGroup):
         min=1,
         max=256,
         description="Size of data to transfer in MB",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     log_file_path: StringProperty(
         name="Log Path",
@@ -1049,7 +1225,7 @@ class State(PropertyGroup):
     # on the operator's invoke from ``com.saved_state_frames()`` and drawn
     # through ``SOLVER_UL_CheckpointFrames``.
     checkpoint_frames: CollectionProperty(type=CheckpointFrameItem)  # pyright: ignore
-    checkpoint_frames_index: IntProperty(default=-1)  # pyright: ignore
+    checkpoint_frames_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
 
     def convert_checkpoint_frames_to_list(self) -> list[int]:
         """Convert the checkpoint frames collection to a list of integers."""
@@ -1077,7 +1253,7 @@ class State(PropertyGroup):
 
     # Merge pairs (auto-populated by Snap A to B)
     merge_pairs: CollectionProperty(type=MergePairItem)  # pyright: ignore
-    merge_pairs_index: IntProperty(default=-1)  # pyright: ignore
+    merge_pairs_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
 
     # Global (not per-pair) toggle: when on, fetched frames snap every
     # stitched source vertex exactly onto its target so seams read as
@@ -1090,30 +1266,34 @@ class State(PropertyGroup):
             "target so seams appear joined. Applies to all stitch pairs. "
             "Turn off to keep the raw simulated gap between stitched parts"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
     # Dynamic scene parameters
     dyn_params: CollectionProperty(type=DynParamItem)  # pyright: ignore
-    dyn_params_index: IntProperty(default=-1)  # pyright: ignore
+    dyn_params_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
     show_dyn_params: BoolProperty(
         name="Dynamic Parameters",
         default=False,
         description="Toggle visibility of dynamic parameters",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
     # Invisible colliders
     invisible_colliders: CollectionProperty(type=InvisibleColliderItem)  # pyright: ignore
-    invisible_colliders_index: IntProperty(default=-1)  # pyright: ignore
+    invisible_colliders_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
     show_invisible_colliders: BoolProperty(
         name="Invisible Colliders",
         default=False,
         description="Toggle visibility of invisible colliders section",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
     show_linear_system_solver: BoolProperty(
         name="Linear System Solver",
         default=False,
         description="Toggle visibility of linear system solver settings",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
     # Visualization master toggles
@@ -1122,30 +1302,35 @@ class State(PropertyGroup):
         default=False,
         description="Hide pin vertex overlays across all groups",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     hide_arrows: BoolProperty(
         name="Hide all directional arrows",
         default=False,
         description="Hide gravity, wind, and per-object velocity direction arrows",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     hide_overlay_colors: BoolProperty(
         name="Hide all overlaid colors",
         default=False,
         description="Suppress per-group object color tinting in the viewport",
         update=_on_hide_overlay_colors_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     hide_snaps: BoolProperty(
         name="Hide all snaps",
         default=False,
         description="Hide snap correspondence lines and merge-pair markers",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     hide_pin_operations: BoolProperty(
         name="Hide all pin operations",
         default=False,
         description="Hide pin operation overlays (spin circles, move/scale trajectories, torque arcs)",
         update=_on_direction_preview_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     statistics_object_uuid: StringProperty(
         name="Statistics Object",
@@ -1252,6 +1437,8 @@ classes = [
     StaticOpItem,
     AssignedObject,
     IntersectionAllowanceObject,
+    ForceFieldGroupRef,
+    ForceFieldTarget,
     PinOperation,
     PinVertexGroupItem,
     MaterialMapSample,

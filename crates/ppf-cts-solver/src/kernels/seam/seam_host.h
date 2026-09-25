@@ -212,6 +212,10 @@ inline float acos(float x) {
 inline float atan2(float y, float x) {
     return ::atan2f(y, x);
 }
+// A real exponent.
+inline float pow(float x, float y) {
+    return ::powf(x, y);
+}
 inline bool isnan(float x) {
     return std::isnan(x);
 }
@@ -364,7 +368,7 @@ static_assert(sizeof(atomic_uint_t) == 4 && alignof(atomic_uint_t) == 4,
 // CUDA's `atomicAdd` and MSL's `atomic_fetch_add_explicit` are atomic against
 // a fully concurrent grid; a plain `storage += value` here is not, and the
 // host backend runs a `Scatter::Disjoint` row as concurrent rayon chunks
-// (`ppf-cts-compute/src/host.rs`). So a body that reaches this from such a row
+// (`ppf-cts-compute/cpu/host.rs`). So a body that reaches this from such a row
 // would be a data race on THIS BACKEND ALONE, invisible wherever CUDA is the
 // oracle. RELAXED is the right order and not a weakening: what these carry is
 // a count or a claim, so only the operation's own indivisibility is needed,

@@ -215,6 +215,14 @@ class CommunicatorFacade:
     def is_connecting(self) -> bool:
         return self._engine.state.phase == Phase.CONNECTING
 
+    def channel_opener(self):
+        """The live connection's channel opener, or ``None`` when there is no
+        connection. For a short request/answer exchange made on its own thread
+        (the force field's Compile and Check), which must not hold the I/O
+        worker a connect or a Run is waiting on."""
+        backend = self._runner.backend
+        return backend.open_channel if backend is not None else None
+
     def is_server_running(self) -> bool:
         return self._engine.state.server == Server.RUNNING
 
@@ -418,6 +426,7 @@ class CommunicatorFacade:
             error=s.error,
             server_error=s.server_error,
             violations=list(s.violations),
+            exemptions=list(s.exemptions),
             response=dict(self._runner._response_cache.last_response),
             progress=s.progress,
             traffic=s.traffic,

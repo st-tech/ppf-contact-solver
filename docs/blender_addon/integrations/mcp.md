@@ -69,7 +69,9 @@ Once the server is running, point your MCP client at
 http://localhost:9633/mcp
 ```
 
-using the **Streamable HTTP** transport (protocol version `2025-06-18`).
+using the **Streamable HTTP** transport. The server answers protocol
+versions `2026-07-28` and `2025-06-18` on that one URL, so a client of
+either revision connects without further setup (see [Protocol](#protocol)).
 If the default port was busy and the add-on fell back to `9634`, `9635`,
 and so on, use the port printed to the Blender console.
 
@@ -120,16 +122,101 @@ Rules of the road:
 
 | Property     | Value                                                             |
 | ------------ | ----------------------------------------------------------------- |
-| Version      | `2025-06-18`                                                      |
+| Versions     | `2026-07-28` (stateless) and `2025-06-18` (session-bound), both on one endpoint |
 | Transport    | Streamable HTTP on a single `/mcp` endpoint                       |
-| Requests     | `POST /mcp` with a JSON-RPC message                               |
-| Server push  | `GET /mcp` with `Accept: text/event-stream` (keep-alives only; the server never pushes events) |
+| Requests     | `POST /mcp`, one JSON-RPC request or notification per POST (no batches) |
+| Origin       | Requests from a browser origin other than `localhost`, `127.0.0.1` or `::1` are refused with HTTP 403 |
 | CORS         | Enabled on every response                                         |
 
-All traffic goes through `/mcp`. The client calls `initialize` first; the
-server replies with the negotiated `protocolVersion` and capabilities. The
-JSON-RPC surface itself is the standard MCP set: `initialize`, `tools/list`,
-`tools/call`, `resources/list`, `resources/read`.
+All traffic goes through `/mcp`. The server reads which revision a
+request is written in from the request itself, so the two need no
+configuration and one running server answers clients of both:
+
+- **`2026-07-28`, stateless.** A request is modern when its
+  `params._meta` carries `io.modelcontextprotocol/protocolVersion`, or
+  its `MCP-Protocol-Version` header names `2026-07-28` or later. There
+  is no handshake and no session: every request stands alone.
+- **`2025-06-18`, session-bound.** Every other request. The client
+  opens with `initialize`, and the response carries an `Mcp-Session-Id`
+  header.
+
+The methods are the same in both: `server/discover`, `tools/list`,
+`tools/call`, `resources/list`, `resources/templates/list` (always
+empty), `resources/read`, `prompts/list` and `prompts/get`, plus
+`initialize` for the session-bound revision.
+
+### A `2026-07-28` Client
+
+Every request is a `POST /mcp` whose body carries the protocol version
+and the client's capabilities in `params._meta`, and whose headers
+repeat what the body says:
+
+| Where            | What                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `params._meta`   | `io.modelcontextprotocol/protocolVersion`: `"2026-07-28"` (required)           |
+| `params._meta`   | `io.modelcontextprotocol/clientCapabilities`: an object, `{}` at least (required) |
+| Header           | `MCP-Protocol-Version`: the same version as the body                          |
+| Header           | `Mcp-Method`: the request's `method`                                          |
+| Header           | `Mcp-Name`: the tool name for `tools/call`, the URI for `resources/read`, the prompt name for `prompts/get` |
+| Header           | `Accept`: when sent, it must allow `application/json`; add `text/event-stream` to let a slow tool call answer on a stream |
+
+A request missing either `_meta` field is refused with error `-32602`,
+and a header that is missing or disagrees with the body with `-32020`.
+A version this revision does not serve is refused with
+`-32022`, and the error's `data.supported` lists the versions to retry
+with. An `Mcp-Name` that is not plain ASCII is sent as
+`=?base64?<Base64 of its UTF-8>?=`.
+
+To learn what the server speaks before sending anything else, call
+`server/discover`. It needs no session in either revision and answers
+with `supportedVersions`, the server's `capabilities` and its
+`instructions`.
+
+A modern result carries `resultType: "complete"` and names the server
+under `_meta`. The results of `server/discover`, the three list methods
+and `resources/read` also carry caching hints, `ttlMs` and
+`cacheScope`. No list is ever paged, so a request carrying a `cursor`
+is refused.
+
+### A `2025-06-18` Client
+
+The client sends `initialize` first. The response names protocol
+version `2025-06-18` and carries an `Mcp-Session-Id` header, and every
+later request sends that id back; a request with a missing or unknown
+id is refused with HTTP 400. A `GET /mcp` with `Accept:
+text/event-stream` and the session id opens a stream that carries only
+keep-alive comments, since the server never pushes events, and a
+`DELETE /mcp` with the id ends the session. Without a session, `GET`
+and `DELETE` are answered with HTTP 405. Results in this revision carry
+none of the modern fields above.
+
+### Tool Calls and Long-Running Tools
+
+A `tools/call` that finishes within about a second is answered with a
+single JSON response. A slower one, when the request's `Accept` allows
+`text/event-stream`, is answered on an event stream: the result arrives
+as the stream's last event, preceded every two seconds by a
+`notifications/progress` event when the request's `params._meta`
+carried a `progressToken`, or by a keep-alive comment otherwise. A
+client that does not accept a stream simply waits on the connection.
+Closing the connection cancels the call. A call still running after 900
+seconds is abandoned and answered with an error result, though the
+handler may still be running on Blender's main thread.
+
+The result's `content` holds the tool's return value as JSON text, and
+`structuredContent` holds the same value parsed. A tool that reports a
+failure sets `isError`, so a failure never arrives as a successful
+result.
+
+### Errors
+
+Every failure is a JSON-RPC error carrying the HTTP status that belongs
+to it: `400` for a malformed request, invalid parameters, a header
+mismatch or an unsupported version, `404` for an unknown method, and
+`500` for an internal error. A body that is not JSON, a JSON-RPC batch,
+and a body over 10 MB are refused with `400`; an `Accept` header that
+does not allow `application/json` with `406`; and any path other than
+`/mcp` with `404`.
 
 ## Exposed Tools
 
@@ -139,11 +226,30 @@ That page is regenerated from the handler sources at every docs build,
 so it cannot drift. For a live, schema-attached enumeration against a
 running server, use `tools/list` (or the CLI `tools` subcommand).
 
-Tool descriptions returned by `tools/list` are built from the function
-docstrings registered via the handler decorators, with a pointer to the
-relevant `llm://` resources appended so a client scanning descriptions
-knows where to read for usage context. Do not match on the docstring
-text verbatim.
+Tool descriptions returned by `tools/list` are the function docstrings
+registered via the handler decorators, exactly as the handler declares
+them. A tool's description and input schema are its whole reference:
+they state what the tool needs, its units, and what it refuses, and
+they come from the code that runs, so they describe that tool and no
+other. Do not match on the docstring text verbatim.
+
+## Instructions and Prompts
+
+The server's instructions, returned by `server/discover`, tell an agent
+to read each tool's description and input schema before calling it, and
+give the order a scene is built in: connect, create a group, assign
+objects, constrain, set parameters, build, solve, fetch.
+
+`prompts/list` and `prompts/get` offer four prompts, each a short
+starting point that names the ordered steps of one workflow and leaves
+the detail to the tools' own descriptions:
+
+| Prompt              | Arguments                                   | Workflow                                                         |
+| ------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `run_simulation`    | `backend`, `frames` (both optional)         | Take a scene from unconfigured to fetched results.               |
+| `pin_and_constrain` | `object_name`, `intent` (optional)          | Hold or drive part of a mesh with pins, colliders, or merges.    |
+| `tune_parameters`   | `goal`                                      | Choose parameters for a goal and read back what the solver got.  |
+| `diagnose_failure`  | `symptom`                                   | Work from a failed or stalled solve's symptom to its cause.      |
 
 ## Calling a Tool from the CLI
 
@@ -178,57 +284,48 @@ surface.
 ## Calling a Tool over HTTP
 
 If you are integrating from something that is not the bundled CLI, drive the
-HTTP transport directly. The server is stateful: the `initialize` response
-returns an `Mcp-Session-Id` header, and every subsequent request must send it
-back. A non-`initialize` POST without a valid `Mcp-Session-Id` is rejected with
-HTTP 404.
+HTTP transport directly. A `2026-07-28` request needs no handshake: send
+the version and the client's capabilities in `params._meta`, and repeat
+the version, the method and the tool name in the headers.
 
 ```bash
-HDR_ACCEPT='Accept: application/json, text/event-stream'
-HDR_JSON='Content-Type: application/json'
-
-# 1. Initialize. Use `-D -` to dump response headers and read the session id.
-SID=$(curl -s -D - -o /dev/null -X POST http://localhost:9633/mcp \
-  -H "$HDR_JSON" -H "$HDR_ACCEPT" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
-       "params":{"protocolVersion":"2025-06-18","capabilities":{},
-                 "clientInfo":{"name":"example","version":"0"}}}' \
-  | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}' | tr -d '\r')
-
-# 2. Call a tool, passing the captured session id on every request.
 curl -s -X POST http://localhost:9633/mcp \
-  -H "$HDR_JSON" -H "$HDR_ACCEPT" -H "Mcp-Session-Id: $SID" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: tools/call' \
+  -H 'Mcp-Name: run_python_script' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
        "params":{"name":"run_python_script",
-                 "arguments":{"code":"import bpy; print(bpy.app.version_string)"}}}'
+                 "arguments":{"code":"import bpy; print(bpy.app.version_string)"},
+                 "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                          "io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
-
-POST bodies over 10 MB are rejected with HTTP 413.
 
 ## Resources
 
-The MCP server exposes two resource families via `resources/list` and
+The MCP server exposes one resource via `resources/list` and
 `resources/read`:
 
 | URI                       | Content                                                                   |
 | ------------------------- | ------------------------------------------------------------------------- |
 | `blender://scene/current` | Live JSON snapshot of the current Blender scene. Refreshed on every read. |
-| `llm://index`             | Top-level router listing every other `llm://` resource.                   |
-| `llm://<topic>`           | One markdown topic from the bundled LLM doc set under `blender_addon/LLM/`. |
 
-The `llm://` URIs are enumerated dynamically at every `resources/list`
-call. Use `llm://index` first to see the available topics. Bare names
-without a slash resolve under the `blender_addon` section, so
-`llm://overview` reads `LLM/blender_addon/overview.md` from the
-installed add-on.
+It serves no documentation as resources: what a tool does is in its
+description and input schema from `tools/list`, and the pages of this
+guide cover the rest.
 
 ### Enumerating Resources
 
 ```bash
 curl -s -X POST http://localhost:9633/mcp \
   -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"resources/list"}'
+  -H 'Accept: application/json' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: resources/list' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"resources/list",
+       "params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                          "io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
 ### Reading a Resource
@@ -236,17 +333,19 @@ curl -s -X POST http://localhost:9633/mcp \
 ```bash
 curl -s -X POST http://localhost:9633/mcp \
   -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "resources/read",
-    "params": {"uri": "blender://scene/current"}
-  }'
+  -H 'Accept: application/json' \
+  -H 'MCP-Protocol-Version: 2026-07-28' \
+  -H 'Mcp-Method: resources/read' \
+  -H 'Mcp-Name: blender://scene/current' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"resources/read",
+       "params":{"uri":"blender://scene/current",
+                 "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                          "io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
 The response is a JSON-RPC envelope whose `result.contents[0].text`
-holds the JSON body:
+holds the JSON body. The scene changes between reads, so its caching
+hint is `ttlMs: 0`:
 
 ```json
 {
@@ -259,7 +358,11 @@ holds the JSON body:
         "mimeType": "application/json",
         "text": "{...}"
       }
-    ]
+    ],
+    "resultType": "complete",
+    "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "zozo_contact_solver", "version": "..."}},
+    "ttlMs": 0,
+    "cacheScope": "private"
   }
 }
 ```

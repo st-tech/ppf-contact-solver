@@ -531,11 +531,11 @@ pub fn dedup_and_rebuild_tetra_jobs<'py>(
 /// (`V`/`F` in its `obj_info`) to recover the correct triangle +
 /// barycentric weights.
 ///
-/// Returns `Some((tri_flat, bary_flat))` of length `n_rows * 3`, aligned
-/// per row, or `None` when the side needs no projection (anchors absent
-/// or mis-sized) or the tet surface dropped every anchor (degenerate).
-/// The caller treats `None` for a SOLID side as a hard skip of the
-/// entry, since keeping snap-time indices would generate ghost forces.
+/// Returns `(tri_flat, bary_flat)` of length `n_rows * 3`, aligned per row.
+/// A side that cannot be placed is REFUSED, naming the object: anchors
+/// absent or not one per row, or any anchor that finds no triangle on the tet
+/// surface. Keeping the snap-time indices would pull on the wrong vertices,
+/// and dropping the entry would leave a seam the artist authored unformed.
 fn project_stitch_side<'py>(
     py: Python<'py>,
     np: &Bound<'py, PyModule>,
@@ -543,14 +543,20 @@ fn project_stitch_side<'py>(
     info: &Bound<'py, PyDict>,
     points_key: &str,
     n_rows: usize,
-) -> PyResult<Option<(Vec<i64>, Vec<f32>)>> {
-    let points = match entry.get_item(points_key)? {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let pts_len: usize = points.len().unwrap_or(0);
+) -> PyResult<(Vec<i64>, Vec<f32>)> {
+    let side = object_name(info);
+    let points = entry.get_item(points_key)?.ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "the stitch's SOLID side '{side}' carries no {points_key}, which \
+             places it on the tetrahedral surface; Re-snap the merge pair"
+        ))
+    })?;
+    let pts_len: usize = points.len()?;
     if pts_len != n_rows {
-        return Ok(None);
+        return Err(PyValueError::new_err(format!(
+            "the stitch's SOLID side '{side}' carries {pts_len} {points_key} \
+             for {n_rows} rows; Re-snap the merge pair"
+        )));
     }
     let pos_v = info
         .get_item("V")?
@@ -593,8 +599,11 @@ fn project_stitch_side<'py>(
         .map_err(|_| PyTypeError::new_err("points must be C-contiguous"))?;
     let rows = py.detach(|| dec::barycentric_project_anchors(tf, tp, an));
     if rows.tri.len() != n_rows {
-        // Degenerate tet surface dropped every anchor; leave side as-is.
-        return Ok(None);
+        return Err(PyValueError::new_err(format!(
+            "{} of the stitch's {n_rows} points found no triangle on the \
+             tetrahedralized surface of '{side}'",
+            n_rows - rows.tri.len()
+        )));
     }
     let mut tri_flat = Vec::with_capacity(n_rows * 3);
     let mut bary_flat = Vec::with_capacity(n_rows * 3);
@@ -604,7 +613,18 @@ fn project_stitch_side<'py>(
     for r in &rows.bary {
         bary_flat.extend_from_slice(r);
     }
-    Ok(Some((tri_flat, bary_flat)))
+    Ok((tri_flat, bary_flat))
+}
+
+/// An object's name from its `obj_info`, for wording a refusal; its UUID key
+/// is what the payload carries, and the name is what the artist recognizes.
+fn object_name(info: &Bound<'_, PyDict>) -> String {
+    info.get_item("name")
+        .ok()
+        .flatten()
+        .and_then(|v| v.extract::<String>().ok())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "(unnamed)".to_string())
 }
 
 /// Apply a batch of explicit cross-stitch entries to a scene's
@@ -613,13 +633,14 @@ fn project_stitch_side<'py>(
 /// (frontend/_decoder_.py:229) plus the per-call `.append` in
 /// `BlenderApp._apply_explicit_cross_stitch`.
 ///
-/// For each entry: validate that source/target are known, drop
-/// entries with empty `ind` / `w`, run `barycentric_project_anchors`
-/// for SOLID targets, build the canonical dict, and append it to
-/// `scene_cross_stitch`. The Python caller never grows a list in its
-/// own loop body.
+/// For each entry: validate that source/target are known, run
+/// `barycentric_project_anchors` for SOLID sides, build the canonical dict,
+/// and append it to `scene_cross_stitch`. An entry that cannot be applied
+/// (no rows, a SOLID side that cannot be placed, a stiffness that is not a
+/// number) is refused with the objects' names rather than skipped, so every
+/// entry is either appended or an error.
 ///
-/// Returns the count of entries that were actually appended.
+/// Returns the count of entries appended, which is every entry.
 #[pyfunction]
 #[pyo3(signature = (entries, obj_info, scene_cross_stitch, verbose))]
 pub fn cross_stitch_apply_batch<'py>(
@@ -662,12 +683,6 @@ pub fn cross_stitch_apply_batch<'py>(
         let mut w_arr: Bound<'py, PyAny> = np
             .call_method1("asarray", (w_raw,))?
             .call_method1("astype", ("float32",))?;
-        let ind_len: usize = ind_arr.len()?;
-        let w_len: usize = w_arr.len()?;
-        if ind_len == 0 || w_len == 0 {
-            continue;
-        }
-
         let target_info_dict = target_info
             .expect("validated above")
             .cast_into::<PyDict>()
@@ -676,6 +691,19 @@ pub fn cross_stitch_apply_batch<'py>(
             .expect("validated above")
             .cast_into::<PyDict>()
             .map_err(|_| PyTypeError::new_err("source obj_info entry must be a dict"))?;
+        let pair = format!(
+            "the stitch between '{}' and '{}'",
+            object_name(&source_info_dict),
+            object_name(&target_info_dict),
+        );
+        let ind_len: usize = ind_arr.len()?;
+        let w_len: usize = w_arr.len()?;
+        if ind_len == 0 || w_len == 0 || ind_len != w_len {
+            return Err(PyValueError::new_err(format!(
+                "{pair} has {ind_len} index rows and {w_len} weight rows; \
+                 Re-snap the merge pair or remove it"
+            )));
+        }
         let target_is_solid = match target_info_dict.get_item("type")? {
             Some(t) => t.extract::<String>().unwrap_or_default() == "SOLID",
             None => false,
@@ -730,28 +758,20 @@ pub fn cross_stitch_apply_batch<'py>(
                 .to_vec()
         };
         let n_rows = base_ind.len() / 6;
-        if n_rows == 0 {
-            continue;
-        }
 
+        // A SOLID side's snap-time surface indices do not map to its solver
+        // mesh, so it is placed from its recorded points; one that cannot be
+        // placed is refused inside project_stitch_side.
         let src_proj = if source_is_solid {
-            project_stitch_side(py, &np, entry, &source_info_dict, "source_points", n_rows)?
+            Some(project_stitch_side(py, &np, entry, &source_info_dict, "source_points", n_rows)?)
         } else {
             None
         };
         let tgt_proj = if target_is_solid {
-            project_stitch_side(py, &np, entry, &target_info_dict, "target_points", n_rows)?
+            Some(project_stitch_side(py, &np, entry, &target_info_dict, "target_points", n_rows)?)
         } else {
             None
         };
-
-        // A SOLID side with no usable projection (missing anchors/geometry
-        // or a degenerate tet surface) would otherwise keep snap-time
-        // surface indices that don't map to the solver mesh -> ghost
-        // forces. Skip the whole entry rather than emit a wrong stitch.
-        if (source_is_solid && src_proj.is_none()) || (target_is_solid && tgt_proj.is_none()) {
-            continue;
-        }
 
         // Merge: source slots [0..2] from src_proj or the baseline,
         // target slots [3..5] from tgt_proj or the baseline.
@@ -789,7 +809,11 @@ pub fn cross_stitch_apply_batch<'py>(
         w_arr = w_new.into_any();
 
         let stitch_stiffness: f64 = match entry.get_item("stitch_stiffness")? {
-            Some(v) => v.extract().unwrap_or(1.0f64),
+            Some(v) => v.extract().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "{pair} carries a stitch_stiffness that is not a number"
+                ))
+            })?,
             None => 1.0f64,
         };
         let row = PyDict::new(py);

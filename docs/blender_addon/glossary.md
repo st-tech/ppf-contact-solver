@@ -33,13 +33,15 @@ documentation, grouped by subject and alphabetized within each group.
 **Intersection allowance**
 : An opt-in that lets chosen geometry pass through other geometry: an
   allowed pair has no contact, and its overlap is never reported as an
-  error. Three are set on a group (**Allow Self-Intersections**, **Allow
-  Inter-Object Intersections**, **Allow Inter-Group Intersections**), each
-  reaching every object assigned to it or only the objects its list names,
-  and one is set on a pin (**Allow Intersections Here**). "Self" means one
-  object passing through itself, so two objects in one group make an
-  inter-object pair; "inter-group" covers only objects of different groups.
-  None of them affects the invisible walls and spheres. See
+  error. Four are set on a group (**Allow Self-Intersections**, **Allow
+  Inter-Object Intersections**, **Allow Inter-Group Intersections**, **Allow
+  Existing Intersections**), each reaching every object assigned to it or
+  only the objects its list names, and one is set on a pin (**Allow
+  Intersections Here**). "Self" means one object passing through itself, so
+  two objects in one group make an inter-object pair; "inter-group" covers
+  only objects of different groups; "existing" covers only the places that
+  already overlap at the start, and everything else keeps colliding. None of
+  them affects the invisible walls and spheres. See
   [Allow Intersections](workflow/params/material.md#allow-intersections).
 
 **Invisible collider**
@@ -115,12 +117,16 @@ documentation, grouped by subject and alphabetized within each group.
 
 **Static**
 : Group type for non-deforming collision objects (ground planes, props,
-  mannequins). Exposes friction and contact settings; motion is driven by
-  Blender transform keyframes rather than by the solver.
+  mannequins). Exposes friction and contact settings; motion comes from
+  Static ops, from the object's own Blender animation (its keyframes, a
+  parent, a constraint, a driver, or an NLA strip), or from a captured
+  deformation, rather than from the solver. See
+  [Static Objects](workflow/scene/static_objects.md).
 
 **Stitch stiffness**
 : Strength of the soft force that holds a stitch together, set
-  per-merge-pair (or per-group for loose edges), default 1.0. The stitch
+  per-merge-pair (or per **Shell** or **Solid** group for loose edges),
+  default 1.0. The stitch
   is always a soft force, never an exact weld, and is exposed for every
   supported pair: Shell-Shell, Shell-Solid, Rod-Shell, Rod-Solid,
   Rod-Rod, Solid-Solid, and any dynamic group stitched to a Static
@@ -166,13 +172,13 @@ documentation, grouped by subject and alphabetized within each group.
   NeoHookean and ARAP, Rod is locked to ARAP.
 
 **Dynamic parameter**
-: A scene-level parameter whose value is keyframed over time. Seven can
-  be: gravity, wind, air density, air friction, vertex air damp, step
-  size, and inactive momentum frames. They are keyframed on their own
-  **Scene Configuration** sliders as ordinary Blender F-curves — there is
-  no dynamic-parameter sub-panel — then sampled per frame, uploaded with
-  the rest of the parameters at transfer time, and replayed by the solver
-  during the run. See
+: A scene-level parameter whose value is keyframed over time. Six can
+  be: gravity, wind, air density, air friction, vertex air damp, and step
+  size. They are keyframed on their own **Scene Configuration** sliders
+  as ordinary Blender F-curves (there is no dynamic-parameter
+  sub-panel), then sampled per frame, uploaded with the rest of the
+  parameters at transfer time, and replayed by the solver during the run.
+  See
   [Dynamic Parameters](workflow/params/dynamic.md).
 
 **Fetch**
@@ -318,8 +324,8 @@ documentation, grouped by subject and alphabetized within each group.
 
 **MCP resource**
 : A read-only asset exposed by the [MCP server](integrations/mcp.md) via
-  `resources/read`, covering live scene snapshots (`blender://scene/current`)
-  and the bundled `llm://<topic>` markdown docs.
+  `resources/read`. The server exposes one, the live scene snapshot
+  `blender://scene/current`.
 
 **MCP server**
 : The bundled Model Context Protocol server on `localhost:9633` that
@@ -388,9 +394,10 @@ documentation, grouped by subject and alphabetized within each group.
   by SSH, with credentials entered as explicit fields. See [SSH](connections/ssh.md).
 
 **Streamable HTTP**
-: The MCP transport profile (protocol version `2025-06-18`) used by the
-  bundled MCP server. All traffic goes through a single `/mcp` endpoint
-  with a server-assigned `Mcp-Session-Id`.
+: The MCP transport used by the bundled MCP server. All traffic goes
+  through a single `/mcp` endpoint, which answers stateless protocol
+  version `2026-07-28` requests and session-bound `2025-06-18` ones. See
+  [Protocol](integrations/mcp.md#protocol).
 
 **Windows Native connection**
 : A connection type where the solver runs directly as a Windows

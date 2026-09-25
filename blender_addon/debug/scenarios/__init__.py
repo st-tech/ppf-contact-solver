@@ -23,12 +23,30 @@ REPO_ROOT_POSIX: str = os.path.abspath(
 on Windows would otherwise emit backslash escapes."""
 
 from . import rig_lock_axes
+from . import rig_force_field_sources
+from . import rig_force_field_spatial
+from . import rig_force_field_script
+from . import rig_frame_step
+from . import rig_force_field_targets
+from . import rig_force_field_noise
+from . import bl_force_field_encode
+from . import bl_force_field_solve
+from . import bl_force_field_objects_only
+from . import bl_force_field_check
+from . import bl_force_field_visualize
+from . import bl_force_field_visualize_draws
+from . import bl_force_field_targets
+from . import bl_mcp_force_field
 from . import rig_lock_axes_projector
 from . import rig_intersection_allowances
 from . import rig_intersection_allowance_isolation
 from . import rig_intersection_allowance_contact
 from . import rig_intersection_allowance_contact_pins_groups
 from . import rig_intersection_allowance_contact_drape
+from . import rig_existing_intersection_build
+from . import rig_existing_intersection_run
+from . import bl_existing_intersection
+from . import bl_existing_intersection_draws
 from . import bl_server_stop_is_real
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
@@ -162,6 +180,7 @@ from . import bl_profile_load_batch
 from . import bl_pin_rod_curve
 from . import bl_static_deform_anim
 from . import bl_static_deform_first_frame
+from . import bl_static_capture_cache_boundary
 from . import bl_static_fcurve_anim
 from . import bl_static_op_anim
 from . import bl_static_panel_draws
@@ -174,6 +193,16 @@ from . import bl_group_slot_reuse
 from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
+from . import bl_blender_examples
+from . import bl_static_transform_sampling
+from . import bl_encode_refusals
+from . import bl_api_stale_pin_proxy
+from . import bl_solid_loose_edge_stitch
+from . import bl_pin_track_lead_in_and_spin_axis
+from . import bl_pin_resolution_refusals
+from . import bl_timing_refusals
+from . import bl_fallback_refusals
+from . import bl_animation_and_units
 from . import bl_merge_pair_no_stitch_rejection
 from . import bl_post_snap_toggle
 from . import bl_solid_solid_stitch
@@ -226,7 +255,6 @@ from . import bl_bake_animation
 from . import bl_export_cache
 from . import bl_mcp_mesh_cleaning
 from . import bl_mcp_roundtrip
-from . import bl_mcp_doc_coverage
 from . import bl_mcp_deformation_and_bake
 from . import bl_mcp_object_settings
 from . import bl_mcp_collision_windows
@@ -341,6 +369,20 @@ REGISTRY = {
     # The `bl_lock_*` scenarios cover the addon encoder and the same physics
     # driven through Blender; neither of these needs it.
     "rig_lock_axes": rig_lock_axes,
+    "rig_force_field_sources": rig_force_field_sources,
+    "rig_force_field_spatial": rig_force_field_spatial,
+    "rig_force_field_script": rig_force_field_script,
+    "rig_frame_step": rig_frame_step,
+    "rig_force_field_targets": rig_force_field_targets,
+    "rig_force_field_noise": rig_force_field_noise,
+    "bl_force_field_encode": bl_force_field_encode,
+    "bl_force_field_solve": bl_force_field_solve,
+    "bl_force_field_objects_only": bl_force_field_objects_only,
+    "bl_force_field_check": bl_force_field_check,
+    "bl_force_field_visualize": bl_force_field_visualize,
+    "bl_force_field_visualize_draws": bl_force_field_visualize_draws,
+    "bl_force_field_targets": bl_force_field_targets,
+    "bl_mcp_force_field": bl_mcp_force_field,
     "rig_lock_axes_projector": rig_lock_axes_projector,
 
     # The issue-#138 intersection allowances, at their gates: the solver's
@@ -354,6 +396,10 @@ REGISTRY = {
         rig_intersection_allowance_contact_pins_groups,
     "rig_intersection_allowance_contact_drape":
         rig_intersection_allowance_contact_drape,
+    "rig_existing_intersection_build": rig_existing_intersection_build,
+    "rig_existing_intersection_run": rig_existing_intersection_run,
+    "bl_existing_intersection": bl_existing_intersection,
+    "bl_existing_intersection_draws": bl_existing_intersection_draws,
 
     # The solver's build-time rest-shape gate: a near-collinear shell face is
     # finite and invertible, so only its conditioning gives it away (issue
@@ -537,6 +583,7 @@ REGISTRY = {
     "bl_pin_rod_curve": bl_pin_rod_curve,
     "bl_static_deform_anim": bl_static_deform_anim,
     "bl_static_deform_first_frame": bl_static_deform_first_frame,
+    "bl_static_capture_cache_boundary": bl_static_capture_cache_boundary,
     "bl_static_fcurve_anim": bl_static_fcurve_anim,
     "bl_static_op_anim": bl_static_op_anim,
     "bl_static_panel_draws": bl_static_panel_draws,
@@ -549,6 +596,16 @@ REGISTRY = {
     "bl_multi_group": bl_multi_group,
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
+    "bl_blender_examples": bl_blender_examples,
+    "bl_static_transform_sampling": bl_static_transform_sampling,
+    "bl_encode_refusals": bl_encode_refusals,
+    "bl_api_stale_pin_proxy": bl_api_stale_pin_proxy,
+    "bl_solid_loose_edge_stitch": bl_solid_loose_edge_stitch,
+    "bl_pin_track_lead_in_and_spin_axis": bl_pin_track_lead_in_and_spin_axis,
+    "bl_pin_resolution_refusals": bl_pin_resolution_refusals,
+    "bl_timing_refusals": bl_timing_refusals,
+    "bl_fallback_refusals": bl_fallback_refusals,
+    "bl_animation_and_units": bl_animation_and_units,
     "bl_merge_pair_no_stitch_rejection": bl_merge_pair_no_stitch_rejection,
     "bl_post_snap_toggle": bl_post_snap_toggle,
     "bl_solid_solid_stitch": bl_solid_solid_stitch,
@@ -600,7 +657,6 @@ REGISTRY = {
     "bl_mcp_mesh_cleaning": bl_mcp_mesh_cleaning,
     "bl_mcp_roundtrip": bl_mcp_roundtrip,
     "bl_mcp_transport_conformance": bl_mcp_transport_conformance,
-    "bl_mcp_doc_coverage": bl_mcp_doc_coverage,
     "bl_mcp_deformation_and_bake": bl_mcp_deformation_and_bake,
     "bl_mcp_object_settings": bl_mcp_object_settings,
     "bl_mcp_collision_windows": bl_mcp_collision_windows,

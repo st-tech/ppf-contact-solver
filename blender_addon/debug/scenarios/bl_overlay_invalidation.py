@@ -161,8 +161,6 @@ try:
                          not pin_item.use_pin_duration)),
         ("pin.pin_duration",
          lambda: setattr(pin_item, "pin_duration", 30)),
-        ("pin.included",
-         lambda: setattr(pin_item, "included", not pin_item.included)),
         # MOVE_BY pin op ----------------------------------------
         ("move_op.show_overlay",
          lambda: setattr(move_op, "show_overlay",

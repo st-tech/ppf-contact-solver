@@ -97,7 +97,7 @@ python blender_addon/debug/main.py tools
 python blender_addon/debug/main.py call run_python_script '{"code": "print(1+1)"}'
 python blender_addon/debug/main.py scene
 python blender_addon/debug/main.py resources
-python blender_addon/debug/main.py read llm://overview
+python blender_addon/debug/main.py read blender://scene/current
 ```
 
 :::{tip}

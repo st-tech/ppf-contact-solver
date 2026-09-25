@@ -55,7 +55,7 @@ if exist "%SRC%\frontend" (
 
 REM NOTHING IS PINNED WHERE A GPU BACKEND IS BUILT. Each backend has its own
 REM target\<backend>, the frontend searches them, and which one a run uses is
-REM resolved when it starts (frontend.get_backend), exactly as the launchers
+REM resolved when it starts (App.get_backend), exactly as the launchers
 REM leave it. A tree holding ONLY the CPU build is the one case with nothing to
 REM resolve, and naming it keeps the frontend from searching for a GPU build that
 REM was never made.

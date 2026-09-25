@@ -175,6 +175,9 @@ struct CcdPointFaceVisitor {
     const Vec3f *x1;
     const Vec3u *face;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *face_prop;
     const VertexParam *vertex_param;
     const FaceParam *face_param;
@@ -202,8 +205,10 @@ struct CcdPointFaceVisitor {
         const VertexProp vprop = vertex_prop[vertex_index];
         const FaceProp fprop = face_prop[index];
         const VertexProp anchor = vertex_prop[f[0]];
-        if (!contact_pair_admitted(pair_side_of_vertex(vprop),
-                                   pair_side_of_face(anchor, fprop))) {
+        if (!contact_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                                   pair_side_of_face(anchor, fprop, f),
+                                   start_link_index, start_link_offset,
+                                   has_start_link)) {
             return false;
         }
         const VertexParam vparam = vertex_param[vprop.param_index];
@@ -271,6 +276,9 @@ struct CcdPointPointVisitor {
     const Vec3f *x0;
     const Vec3f *x1;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const VertexParam *vertex_param;
     unsigned vertex_index;
     unsigned vertex_count;
@@ -299,8 +307,10 @@ struct CcdPointPointVisitor {
         }
         const VertexProp a = vertex_prop[vertex_index];
         const VertexProp b = vertex_prop[index];
-        if (!contact_pair_admitted(pair_side_of_vertex(a),
-                                   pair_side_of_vertex(b))) {
+        if (!contact_pair_admitted(pair_side_of_vertex(a, vertex_index),
+                                   pair_side_of_vertex(b, index),
+                                   start_link_index, start_link_offset,
+                                   has_start_link)) {
             return false;
         }
         const VertexParam pa = vertex_param[a.param_index];
@@ -333,6 +343,9 @@ struct CcdEdgeEdgeVisitor {
     const Vec3f *x1;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeParam *edge_param;
     unsigned edge_index;
@@ -364,8 +377,10 @@ struct CcdEdgeEdgeVisitor {
         const EdgeProp pb = edge_prop[index];
         const VertexProp anchor_a = vertex_prop[e0[0]];
         const VertexProp anchor_b = vertex_prop[e1[0]];
-        if (!contact_pair_admitted(pair_side_of_edge(anchor_a, pa),
-                                   pair_side_of_edge(anchor_b, pb))) {
+        if (!contact_pair_admitted(pair_side_of_edge(anchor_a, pa, e0),
+                                   pair_side_of_edge(anchor_b, pb, e1),
+                                   start_link_index, start_link_offset,
+                                   has_start_link)) {
             return false;
         }
         const EdgeParam ea = edge_param[pa.param_index];
@@ -437,6 +452,9 @@ struct CcdCollisionPointFaceM2cVisitor {
     const Vec3f *collider_vertex;
     const Vec3u *collider_face;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *collider_face_prop;
     const VertexParam *vertex_param;
     const FaceParam *collider_face_param;
@@ -469,6 +487,14 @@ struct CcdCollisionPointFaceM2cVisitor {
             return false;
         }
         const Vec3u f = collider_face[index];
+        // The allowance half was settled once for this vertex before the walk;
+        // the start link is a property of the PAIR, so it is asked here.
+        if (!collider_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                                    pair_side_of_collision_face(f),
+                                    start_link_index, start_link_offset,
+                                    has_start_link)) {
+            return false;
+        }
         const Vec3f t0 = collider_vertex[f[0]];
         const Vec3f t1 = collider_vertex[f[1]];
         const Vec3f t2 = collider_vertex[f[2]];
@@ -505,6 +531,9 @@ struct CcdCollisionPointFaceC2mVisitor {
     const Vec3f *collider_vertex;
     const Vec3u *face;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *face_prop;
     const VertexProp *collider_vertex_prop;
     const FaceParam *face_param;
@@ -535,7 +564,10 @@ struct CcdCollisionPointFaceC2mVisitor {
         }
         const Vec3u f = face[index];
         const VertexProp anchor = vertex_prop[f[0]];
-        if (collider_intersection_allowed(pair_side_of_face(anchor, fprop))) {
+        if (!collider_pair_admitted(pair_side_of_face(anchor, fprop, f),
+                                    pair_side_of_collision_vertex(vertex_index),
+                                    start_link_index, start_link_offset,
+                                    has_start_link)) {
             return false;
         }
         const Vec3f t00 = x0[f[0]];
@@ -575,6 +607,10 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec2u *edge;
     const Vec3f *collider_vertex;
     const Vec2u *collider_edge;
+    const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeProp *collider_edge_prop;
     const EdgeParam *edge_param;
@@ -606,6 +642,13 @@ struct CcdCollisionEdgeEdgeVisitor {
         }
         const Vec2u e0 = edge[edge_index];
         const Vec2u e1 = collider_edge[index];
+        const VertexProp anchor = vertex_prop[e0[0]];
+        if (!collider_pair_admitted(pair_side_of_edge(anchor, dyn, e0),
+                                    pair_side_of_collision_edge(e1),
+                                    start_link_index, start_link_offset,
+                                    has_start_link)) {
+            return false;
+        }
         const Vec3f p00 = x0[e0[0]];
         const Vec3f p01 = x0[e0[1]];
         const Vec3f p10 = x1[e0[0]];
@@ -706,6 +749,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *x0, const Vec3f *x1,
     const Vec3u *face, unsigned face_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const VertexParam *vertex_param,
     const FaceParam *face_param,
@@ -723,6 +769,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.x1 = x1;
     op.face = face;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.face_prop = face_prop;
     op.vertex_param = vertex_param;
     op.face_param = face_param;
@@ -744,6 +793,9 @@ struct CcdCollisionEdgeEdgeVisitor {
 [[seam::device_fn]] inline void ccd_point_point(
     const Vec3f *x0, const Vec3f *x1,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const unsigned *node, unsigned node_count,
     const AABB *aabb, unsigned root,
@@ -759,6 +811,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.x0 = x0;
     op.x1 = x1;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.vertex_param = vertex_param;
     op.vertex_index = i;
     op.vertex_count = query_count;
@@ -786,6 +841,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *x0, const Vec3f *x1,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const unsigned *node, unsigned node_count,
@@ -803,6 +861,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.x1 = x1;
     op.edge = edge;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.edge_prop = edge_prop;
     op.edge_param = edge_param;
     op.edge_index = i;
@@ -830,6 +891,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *collider_vertex,
     const Vec3u *collider_face, unsigned collider_face_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *collider_face_prop,
     const VertexParam *vertex_param,
     const FaceParam *collider_face_param,
@@ -843,7 +907,7 @@ struct CcdCollisionEdgeEdgeVisitor {
     if (vprop.fix_index != 0u) {
         return;
     }
-    if (collider_intersection_allowed(pair_side_of_vertex(vprop))) {
+    if (collider_intersection_allowed(pair_side_of_vertex(vprop, element))) {
         return;
     }
     const VertexParam vparam = vertex_param[vprop.param_index];
@@ -853,6 +917,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.collider_vertex = collider_vertex;
     op.collider_face = collider_face;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.collider_face_prop = collider_face_prop;
     op.vertex_param = vertex_param;
     op.collider_face_param = collider_face_param;
@@ -881,6 +948,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *collider_vertex,
     const Vec3u *face, unsigned face_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const VertexProp *collider_vertex_prop,
     const FaceParam *face_param,
@@ -896,6 +966,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.collider_vertex = collider_vertex;
     op.face = face;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.face_prop = face_prop;
     op.collider_vertex_prop = collider_vertex_prop;
     op.face_param = face_param;
@@ -925,6 +998,9 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec3f *collider_vertex,
     const Vec2u *collider_edge, unsigned collider_edge_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeProp *collider_edge_prop,
     const EdgeParam *edge_param,
@@ -939,7 +1015,7 @@ struct CcdCollisionEdgeEdgeVisitor {
     const Vec2u e = edge[element];
     const EdgeProp eprop = edge_prop[element];
     const VertexProp anchor = vertex_prop[e[0]];
-    if (collider_intersection_allowed(pair_side_of_edge(anchor, eprop))) {
+    if (collider_intersection_allowed(pair_side_of_edge(anchor, eprop, e))) {
         return;
     }
     const EdgeParam eparam = edge_param[eprop.param_index];
@@ -949,6 +1025,10 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.edge = edge;
     op.collider_vertex = collider_vertex;
     op.collider_edge = collider_edge;
+    op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.edge_prop = edge_prop;
     op.collider_edge_prop = collider_edge_prop;
     op.edge_param = edge_param;

@@ -354,8 +354,8 @@ python_env() {
 devices() {
     local out bad=0 backend directory
     out="$(env -u PPF_CTS_VENV -u CARGO_TARGET_DIR "$LAUNCHER" python -c \
-        'import frontend
-built = frontend.list_backends()
+        'from frontend import App
+built = App.list_backends()
 for name in sorted(built):
     print(name, built[name])')" || return 1
     printf '%s\n' "$out"

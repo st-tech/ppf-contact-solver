@@ -37,6 +37,28 @@ How the vertex set is stored depends on the object type:
   read through the **Create** button and the Edit-mode
   select/deselect actions.
 
+### Pins on a Curve Rod
+
+On a **Bezier** or **Poly** spline every control point is a vertex of the
+simulated rod, and a pinned control point holds that one vertex.
+
+A **NURBS** spline's points mostly sit off the curve, so the rod follows
+the spline arc by arc, each arc spanning **Order** minus one points. Only
+the point that ends an arc is a vertex of the rod: the one whose index
+along its spline is a multiple of **Order** minus one (every second point
+at order 3, every third at order 4). A pin on any other NURBS point, or
+on a spline with a single point, has no rod vertex to hold, and
+**Transfer** refuses it, naming the curve, the spline, and the point.
+Pin arc-end points, or convert the spline to **Bezier** or **Poly** with
+**Set Spline Type**.
+
+The same arcs set a rule for the whole spline: its points have to fill
+whole arcs, since points past the last whole arc would not be simulated.
+**Transfer** refuses a NURBS spline that leaves points over, naming it;
+add or remove points, or convert the spline. Blender's **NURBS Circle**
+(order 3, eight points, cyclic) fills whole arcs and is accepted as it
+is.
+
 ## The Pins Section in a Group Box
 
 Each group box on the **Dynamics Groups** panel contains a **Pins**
@@ -88,7 +110,15 @@ the section is laid out top-to-bottom as follows:
      error icon without the `(Missing)` suffix. **Remove** the row, or
      recreate the vertex group under the same name. A plain rename needs
      no action: the list re-resolves the object by UUID and the vertex
-     group by content hash, and rewrites the label.
+     group by its members, and rewrites the label. A renamed group is
+     found this way only while its members are unchanged and no other
+     vertex group on the object has the same members.
+   - A pin whose vertex group is gone (deleted, or renamed and then
+     edited so its members no longer identify it), or holds no vertices
+     (no control points, on a curve), is never skipped: **Transfer**
+     stops with a message naming the pin, the object, and the group,
+     rather than sending the object without a pin the list shows. Pin
+     the group you mean again, assign vertices to it, or remove the pin.
 
    Below the list, a **Size** field sets the overlay dot size and the
    **▲** / **▼** buttons reorder the pins; for a vertex covered by
@@ -158,6 +188,45 @@ decides how the pin holds its vertices there, softly with the given
 strength instead of prescribing them exactly. The one control it does
 disable is **Fix Weight Threshold**, a **Solid**-only field that applies
 to hard pins.
+
+### Pinning Part of a Solid
+
+A **Solid** is simulated as tetrahedra built from its surface, so its
+tetrahedral vertices are not the Blender vertices you pinned. A pin on
+part of a **Solid** is therefore carried over as a weight: the pinned
+region is spread smoothly across the tetrahedral surface and into the
+interior, and each tetrahedral vertex it reaches is held in proportion
+to its weight, strongest in the middle of the region and fading toward
+its edge. On a hard pin, **Fix Weight Threshold** sets the weight at or
+above which a surface vertex is held exactly; lower-weight surface
+vertices and every interior vertex are pulled softly instead, which
+gives the body a firmly held shell and a compliant core.
+
+Two shapes of geometry cannot carry that spread, and the pin then holds
+only the tetrahedral surface vertices nearest the pinned Blender
+vertices, with a notice naming the object:
+
+- a piece of the tetrahedral surface that no Blender vertex lies on,
+  which the tetrahedralizer can produce;
+- a pin so small against a much finer Blender mesh that the spread
+  reaches no tetrahedral vertex.
+
+A pin that reaches no tetrahedral vertex even that way would leave the
+object unpinned, so the scene build stops, naming the object: pin more
+of its vertices, or tetrahedralize it more finely. Any other failure to
+carry the pin over stops the build the same way, naming the object,
+rather than simulating it unpinned.
+
+:::{admonition} Under the hood
+:class: toggle
+
+The spread is a least-squares Poisson solve on the tetrahedral surface
+followed by a harmonic extension into the interior, solved with SciPy on
+the solver host. SciPy is a required frontend dependency that every
+distribution ships; a Python that cannot import it stops the build with
+a message saying how to install it, rather than building a different
+pin.
+:::
 
 ### Allow Intersections Here
 
@@ -311,7 +380,10 @@ vector, **Angular Velocity (°/s)**, **Flip Direction** toggle, **Start
   **Transition** dropdown (**Linear** / **Smooth**).
 - **Spin**: **Axis** (XYZ vector), **Angular Velocity (°/s)**, a
   **Center** dropdown (see below), the center-mode's companion field,
-  **Start**, **End**, **Transition**.
+  **Start**, **End**, **Transition**. A negative **Angular Velocity**
+  turns the other way, as **Flip Direction** does. An **Axis** of
+  `(0, 0, 0)` with a nonzero **Angular Velocity** names no axis to turn
+  about, and **Transfer** refuses it, naming the pin.
 - **Scale**: **Factor** (scalar), a **Center** dropdown + companion
   field, **Start**, **End**, **Transition**.
 - **Torque**: **Magnitude (N·m)**, **Axis** dropdown (**1st
@@ -321,6 +393,15 @@ vector, **Angular Velocity (°/s)**, **Flip Direction** toggle, **Start
 - **Embedded Move**: no editable fields; this operation is managed
   entirely via the **Make Keyframe** and **Delete All Keyframes**
   buttons (see below).
+
+**Start** and **End** are Blender frames. A new operation spans frames
+1 to 60, or, when the solve's **Starting Frame** is later than frame 1,
+the same 60 frames beginning at the **Starting Frame**. **Transfer**
+refuses an operation whose **End** is not after its **Start**, or whose
+**Start** is before the **Starting Frame** (the part before it would
+never run), naming the pin, the operation, and both frames. Nothing is
+clipped for you: move the operation's frames, or move the **Starting
+Frame**.
 
 :::{warning}
 **Torque** cannot coexist with **Move By**, **Spin**, or **Scale** on
@@ -349,6 +430,14 @@ simulation runs.
 
 **Delete All Keyframes** removes every keyframe *and* the **Embedded
 Move** operation in one step.
+
+The keyed vertices start the solve at their pose at the **Starting
+Frame**, read from the keyframes' curves at that frame, and then follow
+each key after it. A key at or before the **Starting Frame**, frame 0
+included, still counts: it shapes that starting pose through the curve.
+A pin whose keys begin before the **Starting Frame** therefore starts
+the solve where its curve is at the **Starting Frame**, and still ends
+on its last key.
 
 ### Capture Deformation
 
@@ -418,6 +507,23 @@ not refresh on its own.
 its previous state. If the pin had no manual **Make Keyframe**
 authoring underneath, the **`[Embedded] Move`** entry is removed too.
 
+Capture works on any mesh a pin sits on: a **Shell** or **Solid**, a
+mesh **Rod**, or a **Sand** body. Modifiers that only draw the object
+are left out of the capture, as they are left out of the pose the
+object is sent at: the add-on's own cache modifier, a **Rod**'s
+**Wireframe**, and a **Sand** body's **Particle Mesh**. In a stack that
+changes the vertex count, capture reads the stack cut at the first
+modifier that does so, the same cut **Transfer** sends (see
+[Object Groups](../scene/object_groups.md#assigning-objects)): a deformer
+in front of a **Subdivision Surface** is captured, and one after it is
+not. A modifier that changes the vertex count ahead of every one the
+add-on recognizes (a Fluid domain, an Ocean in Generate mode, or a Mesh
+Sequence Cache of different topology) leaves no cut to read: the
+capture stops with a message naming the pin, the object, and the frame,
+and **Transfer** refuses an object that holds a captured pin while such
+a modifier is on it. Remove or disable the modifier, or clear the
+capture.
+
 :::{note}
 **Capture Deformation** and manual **Make Keyframe** authoring cannot
 co-exist on the same pin. Capture refuses to start while manual
@@ -452,7 +558,7 @@ with four modes, each revealing a different companion field underneath:
 | ---------------- | ------------------------- | ----------------------------------------------------------------------------------------------- |
 | **Centroid**     | *(none)*                  | Mean of the pinned vertex positions.                                                            |
 | **Fixed**        | XYZ coordinate + **Pick from Selected** eyedropper | Fixed world-space point. With the mesh in Edit Mode and one or more vertices selected, the eyedropper writes the selection's world-space centroid into the XYZ field. |
-| **Max Towards**  | Unit direction vector     | Centroid of the vertices furthest in that direction.                                            |
+| **Max Towards**  | Unit direction vector     | Centroid of the vertices furthest in that direction. A direction of `(0, 0, 0)` picks no vertex, and **Transfer** refuses it, naming the pin. |
 | **Vertex**       | Vertex index + **Pick Vertex** eyedropper | A single vertex on the mesh. The eyedropper reads the one selected vertex in Edit Mode; it reports an error if zero or more than one vertex is selected. The pivot deforms with the mesh. |
 
 Alongside each operation are viewport-overlay toggles (**Show Max
@@ -547,7 +653,7 @@ into a new resting configuration before letting it fall freely.
 | **Duration** / **Active For** | `use_pin_duration` / `pin_duration` | Number of frames the pin stays active, counted from the solve's **Starting Frame**; the pin is released after that many frames. `pin.unpin(frame=...)` sets this count despite the keyword's name. |
 | **Pull** / **Strength**       | `use_pull` / `pull_strength`        | Replace the hard pin with a soft pull force.                  |
 | **Allow Intersections Here**  | `allow_intersection`                | Let the elements this pin holds completely pass through whatever they meet, with no contact. |
-| **Track Rest-Pose Deformation** | `track_rest_pose_deformation`     | **Solid** only, off by default. Drives a time-varying rest pose from the pin's captured deformation, so the body settles into the captured shape instead of straining against it. Editable only on a *full* pin (one covering every vertex of the mesh) that has a capture; the **Refresh** button beside it re-checks that coverage. It cannot coexist with plasticity, and the panel warns when both are on. |
+| **Track Rest-Pose Deformation** | `track_rest_pose_deformation`     | **Solid** only, off by default. Drives a time-varying rest pose from the pin's captured deformation, so the body settles into the captured shape instead of straining against it. Editable only on a *full* pin (one covering every vertex of the mesh) that has a capture; the **Refresh** button beside it re-checks that coverage, and **Transfer** refuses a tracking pin that no longer holds every vertex. It cannot be combined with the group's **Plasticity**: the panel shows *Plasticity and rest-pose tracking cannot both be on; Transfer will refuse*, and **Transfer** does refuse until one of them is off. |
 
 ## Operations Reference
 
@@ -605,8 +711,7 @@ hem.scale(
 shoulder.unpin(frame=90)
 
 # Translate the pinned vertices by a fixed offset, ramped over a frame
-# range. (The interactive keyframed move, EMBEDDED_MOVE, is UI-only; the
-# Python API exposes move_by instead.)
+# range.
 sleeve = cloth.create_pin("Shirt", "SleevePins")
 sleeve.move_by(delta=(0, 0, 0.5), frame_start=20, frame_end=30, transition="SMOOTH")
 sleeve.unpin(frame=60)
@@ -615,6 +720,14 @@ sleeve.unpin(frame=60)
 twist = cloth.create_pin("Shirt", "TwistPins")
 twist.torque(magnitude=1.0, axis_component="PC3", frame_start=1, frame_end=60)
 ```
+
+`set_animation(positions)` drives a pin through a per-frame sequence of
+vertex positions, writing the same cache **Capture Deformation** writes,
+with no deformer needed; see
+[`set_animation` from Per-Frame Positions](../../integrations/python_api.md#set_animation-from-per-frame-positions).
+Every pin method that changes the pin raises `ValueError` when the pin
+or its group no longer exists, for example after `solver.clear()`,
+rather than returning as though it wrote.
 
 ### Center-Mode Inference
 
@@ -625,7 +738,7 @@ you pass:
 | ---------------------- | -------------- |
 | `center_vertex=<int>`  | `VERTEX`       |
 | `center_direction=...` | `MAX_TOWARDS`  |
-| `center=(x,y,z)`       | `ABSOLUTE`     |
+| `center=(x,y,z)`       | `ABSOLUTE` (a world position) |
 | *(none)*               | `CENTROID`     |
 
 Pass `center_mode=` explicitly if you want to override.

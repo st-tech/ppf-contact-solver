@@ -12,7 +12,7 @@
 # Pipeline exercised end-to-end:
 #
 #   Blender object fcurves
-#       -> core/utils.py:get_transform_keyframes  (sparse T/R/S samples)
+#       -> core/utils.py:get_transform_keyframes  (T/R/S every solve frame)
 #       -> encoder/mesh.py STATIC branch          (info["transform_animation"])
 #       -> frontend _populate_static Case 1       (pin.transform_keyframes)
 #       -> solver binary
@@ -24,7 +24,7 @@
 # Subtests:
 #   A. encoder_emits_transform_animation
 #         The encoded data tree's STATIC entry carries
-#         transform_animation with the sampled keyframes and no
+#         transform_animation sampled at every solve frame and no
 #         static_ops / static_deform_animation alongside.
 #   B. static_pc2_exists_and_has_expected_shape
 #         After fetch + drain, the cube has a ContactSolverCache
@@ -169,11 +169,11 @@ try:
         if has_xform else []
     )
     n_keyframes = len(offsets)
-    # v2 wire: frame offsets = keyframe frame - start frame (start is 1
-    # here), fps-free by design.
-    expected_offsets = [float(KEY_FRAME_START - 1), float(KEY_FRAME_END - 1)]
+    # Frame offsets from the start frame (1 here), one per solve frame,
+    # fps-free by design.
+    expected_offsets = [float(k) for k in range(FRAME_COUNT)]
     offsets_ok = (
-        n_keyframes == 2
+        n_keyframes == FRAME_COUNT
         and all(abs(a - b) < 1e-9 for a, b in zip(offsets, expected_offsets))
     )
     dh.record(

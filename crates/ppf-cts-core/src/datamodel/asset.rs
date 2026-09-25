@@ -107,6 +107,11 @@ pub enum AssetError {
     OutOfBounds { index: u32, n: usize },
     #[error("{0} must have {1} columns")]
     InvalidShape(&'static str, usize),
+    #[error(
+        "stitch Ind and W must both have 4 columns (a vertex to a point) or \
+         both 6 (a point to a point), got {ind} and {w}"
+    )]
+    StitchWidth { ind: usize, w: usize },
 }
 
 /// Registry of named assets. The chained-API uploader / fetcher are
@@ -250,11 +255,15 @@ impl AssetRegistry {
         ind: Array2<i32>,
         w: Array2<f32>,
     ) -> Result<(), AssetError> {
-        if ind.ncols() != 4 {
-            return Err(AssetError::InvalidShape("Ind", 4));
-        }
-        if w.ncols() != 4 {
-            return Err(AssetError::InvalidShape("W", 4));
+        // Four columns name a source vertex and a target point; six name a
+        // barycentric point on each side, which is what a stitch needs when
+        // both of its ends lie inside surface triangles rather than on
+        // vertices (a SOLID's ends, placed on its tetrahedralized surface).
+        if ind.ncols() != w.ncols() || !matches!(ind.ncols(), 4 | 6) {
+            return Err(AssetError::StitchWidth {
+                ind: ind.ncols(),
+                w: w.ncols(),
+            });
         }
         if self.assets.contains_key(name) {
             return Err(AssetError::Duplicate(name.to_string()));
@@ -419,6 +428,25 @@ mod tests {
         r.add_stitch("glue", ind, w).unwrap();
 
         assert_eq!(r.list(), vec!["glue", "strand"]);
+    }
+
+    #[test]
+    fn a_stitch_is_four_or_six_matching_columns() {
+        let mut r = AssetRegistry::new();
+        let six = array![[0i32, 1, 2, 3, 4, 5]];
+        let w6 = array![[0.5f32, 0.25, 0.25, 1.0, 0.0, 0.0]];
+        r.add_stitch("point_to_point", six.clone(), w6).unwrap();
+        let w4 = array![[1.0f32, 1.0, 0.0, 0.0]];
+        assert!(matches!(
+            r.add_stitch("mixed", six, w4),
+            Err(AssetError::StitchWidth { ind: 6, w: 4 })
+        ));
+        let five = array![[0i32, 1, 2, 3, 4]];
+        let w5 = array![[1.0f32, 0.0, 0.0, 1.0, 0.0]];
+        assert!(matches!(
+            r.add_stitch("five", five, w5),
+            Err(AssetError::StitchWidth { ind: 5, w: 5 })
+        ));
     }
 
     #[test]

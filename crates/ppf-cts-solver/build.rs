@@ -615,7 +615,7 @@ fn guard_cpu() {
 /// both in the list below now, each having landed in the change that removed its
 /// entry from `refusal.rs`. `sand_rigid` needs `contact/grain_pair` with it,
 /// the per-grain angular accumulators being contact's to produce.
-const KERNELS: [&str; 87] = [
+const KERNELS: [&str; 88] = [
     // The linear solve.
     "solver/spmv",
     "solver/block_jacobi",
@@ -629,6 +629,8 @@ const KERNELS: [&str; 87] = [
     // The step: the Newton driver's position arithmetic, written once here so
     // no backend re-spells it.
     "main/target",
+    // The external force field, whose per-vertex output `main/target` reads.
+    "energy/external_field",
     "main/override_seed",
     "main/velocity",
     "main/rewind_fix",
@@ -810,6 +812,22 @@ const KERNELS: [&str; 87] = [
 /// typo cannot quietly leave a buffer unmigrated: the transcompiler prints the
 /// buffer fields that file does declare.
 const HANDLE_FIELDS: &[(&str, &str)] = &[
+    ("energy/external_field", "ExternalFieldArgs.current"),
+    ("energy/external_field", "ExternalFieldArgs.prop"),
+    ("energy/external_field", "ExternalFieldArgs.weight"),
+    ("energy/external_field", "ExternalFieldArgs.grid_header"),
+    ("energy/external_field", "ExternalFieldArgs.grid_box"),
+    ("energy/external_field", "ExternalFieldArgs.grid_times"),
+    ("energy/external_field", "ExternalFieldArgs.grid_data"),
+    ("energy/external_field", "ExternalFieldArgs.script_code"),
+    ("energy/external_field", "ExternalFieldArgs.script_header"),
+    ("energy/external_field", "ExternalFieldArgs.target_mask"),
+    ("energy/external_field", "ExternalFieldArgs.script_constants"),
+    ("energy/external_field", "ExternalFieldArgs.acceleration"),
+    ("energy/external_field", "ExternalFieldArgs.air_velocity"),
+    ("energy/external_field", "ExternalFieldArgs.outside"),
+    ("main/target", "ComputeTargetSeedArgs.external"),
+    ("main/momentum", "MomentumEmbedArgs.field_air_velocity"),
     ("main/velocity", "VelocityTermsArgs.prop"),
     ("main/dx_seed", "DxSeedArgs.prop"),
     ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.inverse_rest"),
@@ -3173,6 +3191,57 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("csrmat/dynamic_csr", "DynRowEmitPassArgs.pattern"),
     ("csrmat/dynamic_csr", "DynRowEmitPassArgs.flat_index"),
     ("csrmat/dynamic_csr", "DynRowEmitPassArgs.flat_value"),
+    // ALLOW EXISTING INTERSECTIONS' LINK TABLE, which every contact, CCD and
+    // intersection-scan record reads through `pair_filter.kernel.cpp`. Built
+    // once at scene build and staged once, like the neighbor adjacencies.
+    ("contact/contact_narrow", "ContactPointFaceArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactPointPointArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointPointArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.start_link_offset"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.start_link_index"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdPointFaceArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdPointFaceArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdPointPointArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdPointPointArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdEdgeEdgeArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdEdgeEdgeArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdCollisionPointFaceM2cArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdCollisionPointFaceM2cArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdCollisionPointFaceC2mArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdCollisionPointFaceC2mArgs.start_link_offset"),
+    ("contact/ccd_sweep", "CcdCollisionEdgeEdgeArgs.start_link_index"),
+    ("contact/ccd_sweep", "CcdCollisionEdgeEdgeArgs.start_link_offset"),
+    ("contact/intersect_geometry", "IntersectScanFaceEdgeArgs.start_link_index"),
+    ("contact/intersect_geometry", "IntersectScanFaceEdgeArgs.start_link_offset"),
+    ("contact/intersect_geometry", "IntersectScanEdgeEdgeArgs.start_link_index"),
+    ("contact/intersect_geometry", "IntersectScanEdgeEdgeArgs.start_link_offset"),
+    ("contact/intersect_geometry", "IntersectScanPointPointArgs.start_link_index"),
+    ("contact/intersect_geometry", "IntersectScanPointPointArgs.start_link_offset"),
+    ("contact/intersect_geometry", "IntersectScanCollisionMeshArgs.start_link_index"),
+    ("contact/intersect_geometry", "IntersectScanCollisionMeshArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.start_link_offset"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.start_link_index"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.start_link_offset"),
 ];
 
 /// Compiles the CPU backend's kernel entry points, through the compute crate's

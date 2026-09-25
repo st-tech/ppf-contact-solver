@@ -38,6 +38,7 @@ fn new_project_no_data() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.name, "test");
@@ -63,6 +64,7 @@ fn new_project_with_data() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.data, Data::Uploaded);
@@ -87,6 +89,7 @@ fn new_project_with_existing_app() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.build, Build::Built);
@@ -118,6 +121,7 @@ fn reconnect_after_crash_reconstructs_failed() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.build, Build::Built);
@@ -156,6 +160,7 @@ fn reconnect_crash_without_build_stays_idle() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.solver, Solver::Idle);
@@ -186,6 +191,7 @@ fn same_project_refreshes_data() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.data, Data::Uploaded);
@@ -209,6 +215,7 @@ fn project_selected_stamps_upload_id() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.upload_id, "abc123");
@@ -237,6 +244,7 @@ fn same_project_refreshes_upload_id() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.upload_id, "new");
@@ -392,7 +400,7 @@ fn build_completed() {
         root: "/tmp/test".into(),
         ..Default::default()
     };
-    let (s2, _) = transition(s, Event::BuildCompleted);
+    let (s2, _) = transition(s, Event::BuildCompleted { exemptions: vec![] });
     assert_eq!(s2.build, Build::Built);
     assert_eq!(s2.build_progress, 1.0);
     assert!(!s2.resumable);
@@ -1030,6 +1038,7 @@ fn project_selected_carries_total_frames_for_new_project() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 89,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.total_frames, 89);
@@ -1066,6 +1075,7 @@ fn project_selected_same_project_rehydrates_total_frames_when_lost() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 89,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.total_frames, 89);
@@ -1100,7 +1110,68 @@ fn project_selected_same_project_does_not_clobber_live_total_frames() {
             data_hash: String::new(),
             param_hash: String::new(),
             total_frames: 0,
+            exemptions: vec![],
         },
     );
     assert_eq!(s2.total_frames, 120);
+}
+
+// ---------------------------------------------------------------------------
+// Allow Existing Intersections: the exempted pairs of the latest build
+
+fn select(name: &str, has_app: bool, exemptions: Vec<String>) -> Event {
+    Event::ProjectSelected {
+        name: name.into(),
+        root: format!("/tmp/{name}"),
+        has_data: true,
+        has_param: true,
+        has_app,
+        is_resumable: false,
+        crash: None,
+        upload_id: String::new(),
+        data_hash: String::new(),
+        param_hash: String::new(),
+        total_frames: 0,
+        exemptions,
+    }
+}
+
+#[test]
+fn a_completed_build_carries_its_exemptions_and_the_next_build_clears_them() {
+    let s = ServerState {
+        data: Data::Uploaded,
+        build: Build::Building,
+        ..Default::default()
+    };
+    let record = r#"{"type":"existing_intersection","count":1}"#.to_string();
+    let (s, _) = transition(s, Event::BuildCompleted { exemptions: vec![record.clone()] });
+    assert_eq!(s.exemptions, vec![record]);
+    let (s, _) = transition(s, Event::BuildRequested { preserve_output: false });
+    assert!(s.exemptions.is_empty(), "a new build must not show the last one's");
+}
+
+#[test]
+fn a_failed_build_shows_no_exemptions() {
+    let s = ServerState {
+        build: Build::Building,
+        exemptions: vec!["stale".into()],
+        ..Default::default()
+    };
+    let (s, _) = transition(
+        s,
+        Event::BuildFailed {
+            error: "refused".into(),
+            violations: vec![],
+        },
+    );
+    assert!(s.exemptions.is_empty());
+}
+
+#[test]
+fn a_reselected_built_project_restores_its_exemptions_and_an_unbuilt_one_does_not() {
+    let record = r#"{"type":"existing_intersection","count":2}"#.to_string();
+    let (s, _) = transition(ServerState::default(), select("built", true, vec![record.clone()]));
+    assert_eq!(s.exemptions, vec![record.clone()]);
+    let (s, _) = transition(ServerState::default(), select("unbuilt", false, vec![record]));
+    assert!(s.exemptions.is_empty());
 }

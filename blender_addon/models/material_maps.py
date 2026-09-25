@@ -101,12 +101,34 @@ _DENSITY_PROP = {
     "ROD": "rod_density",
 }
 
-_PLASTICITY_KEYS = (
-    "plasticity",
-    "plasticity-threshold",
-    "bend-plasticity",
-    "bend-plasticity-threshold",
-)
+def pin_tracks_rest_shape(group, pin_item) -> bool:
+    """Whether `pin_item` streams its captured deformation as `group`'s rest shape.
+
+    The ONE predicate for it, which the encoder, the panel and the refusal
+    below all ask: Track Rest-Pose Deformation on a captured pin of a SOLID
+    group. The encoder refuses the toggle on a pin that does not hold every
+    vertex, so these flags are the whole answer once an encode succeeds.
+    """
+    return (
+        group.object_type == "SOLID"
+        and bool(getattr(pin_item, "track_rest_pose_deformation", False))
+        and bool(getattr(pin_item, "has_captured_anim", False))
+    )
+
+
+def rest_shape_plasticity_conflict(group):
+    """The pin whose tracked rest shape collides with `group`'s plasticity, or None.
+
+    Plasticity creeps the rest shape each step and a tracked capture replaces
+    it each frame, so the two cannot both hold it: the solver overwrites the
+    rest shape wholesale on the assumption the frontend never ships both.
+    """
+    if not getattr(group, "enable_plasticity", False):
+        return None
+    for pin_item in group.pin_vertex_groups:
+        if pin_tracks_rest_shape(group, pin_item):
+            return pin_item
+    return None
 
 
 # Where a map's weights are read from. NUMERIC IDS ARE PERMANENT, for the same
@@ -138,15 +160,6 @@ def gate_open(group, key: str) -> bool:
     gate = MATERIAL_GATE.get(key)
     if gate is not None and not getattr(group, gate):
         return False
-    if key in _PLASTICITY_KEYS and group.object_type in ("SOLID", "SHELL"):
-        # A captured pull-pin deformation streams a per-frame rest shape, and
-        # plasticity mutates the rest shape too, so the two describe the same
-        # quantity. The capture is the explicit user action and takes it.
-        if any(
-            p.use_pull and getattr(p, "has_captured_anim", False)
-            for p in group.pin_vertex_groups
-        ):
-            return False
     if key == "strain-limit" and group.object_type == "SHELL":
         # The strain-limit solver bakes its rest shape assuming unit scaling,
         # so a shrink factor other than 1 leaves the limit undefined.
@@ -180,17 +193,12 @@ def gate_reason(group, key: str):
 
     Names the condition an artist can act on, which is not always the key's own
     checkbox: a shrunk shell and a captured rest shape each close a gate that
-    no single boolean describes.
+    no single boolean describes. Plasticity against a tracked rest shape is
+    not a closed gate but a refused encode (`rest_shape_plasticity_conflict`).
     """
     gate = MATERIAL_GATE.get(key)
     if gate is not None and not getattr(group, gate):
         return f"'{gate}' is off"
-    if key in _PLASTICITY_KEYS and group.object_type in ("SOLID", "SHELL"):
-        if any(
-            p.use_pull and getattr(p, "has_captured_anim", False)
-            for p in group.pin_vertex_groups
-        ):
-            return "the group has a captured pull-pin rest shape, which takes over from plasticity"
     if key == "strain-limit" and group.object_type == "SHELL":
         if group.shrink_x != 1.0 or group.shrink_y != 1.0:
             return "the shell is shrunk, which leaves the strain limit undefined"

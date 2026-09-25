@@ -71,10 +71,10 @@ def _needs_per_frame_matrix(obj):
     depsgraph eval (rather than re-implementing fcurve/NLA/driver math)
     so this also covers parent chains, constraints, and drivers.
     """
-    from .utils import _get_fcurves
+    from .utils import get_id_fcurves
     ad = obj.animation_data
     if ad:
-        if ad.action and any(_get_fcurves(ad.action)):
+        if get_id_fcurves(obj):
             return True
         if list(ad.nla_tracks):
             return True
@@ -109,6 +109,18 @@ def _needs_after_deformers(object_type, obj):
 # ---------------------------------------------------------------------------
 # Animation helpers (main-thread only)
 # ---------------------------------------------------------------------------
+
+def _group_type_of(obj):
+    """The object type of the active group *obj* is assigned to, or None."""
+    from .uuid_registry import get_object_uuid
+    uid = get_object_uuid(obj)
+    if not uid:
+        return None
+    for group in iterate_active_object_groups(bpy.context.scene):
+        if any(a.uuid == uid for a in group.assigned_objects):
+            return group.object_type
+    return None
+
 
 def _apply_post_snap_closure(context, world_by_uuid):
     """Snap every stitched source vertex exactly onto its target, in world
@@ -170,11 +182,13 @@ def _apply_post_snap_closure(context, world_by_uuid):
         # Intra-object loose-edge stitches. Skip ROD: every rod edge is
         # "loose", so averaging endpoints would corrupt the rod.
         from .encoder import detect_stitch_edges
+        from .encoder.params import group_contact_lengths
         from .uuid_registry import get_object_uuid, resolve_assigned
         for group in iterate_active_object_groups(context.scene):
             if group.object_type == "ROD":
                 continue
-            thr = 2 * group.computed_contact_gap + group.computed_contact_offset
+            gap, offset = group_contact_lengths(group)
+            thr = 2 * gap + offset
             for obj_ref in group.assigned_objects:
                 if not obj_ref.included:
                     continue
@@ -296,9 +310,11 @@ def _gap_fill_poses(obj, n_verts):
         has_deforming_modifier_stack,
     )
     if has_deforming_modifier_stack(obj):
-        from .pc2 import MODIFIER_NAME
+        from .pc2 import display_only_modifier_names
         deform_co = eval_deform_local_positions(
-            obj, exclude_modifier_name=MODIFIER_NAME,
+            obj, exclude_modifier_names=display_only_modifier_names(
+                obj, _group_type_of(obj),
+            ),
         )
         if deform_co is not None and len(deform_co) == n_verts:
             rest_co = deform_co.astype(numpy.float64)
@@ -351,15 +367,16 @@ def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
             for _ in range(frame_idx):
                 append_pc2_frame(pc2_path, rest_co, n_verts)
             return
-        from .pc2 import MODIFIER_NAME
+        from .pc2 import display_only_modifier_names
         from .utils import eval_deform_local_positions
+        hidden = display_only_modifier_names(obj, _group_type_of(obj))
         scene = bpy.context.scene
         saved_frame = scene.frame_current
         try:
             for gap_i in range(frame_idx):
                 scene.frame_set(gap_i + start_frame)
                 co = eval_deform_local_positions(
-                    obj, exclude_modifier_name=MODIFIER_NAME,
+                    obj, exclude_modifier_names=hidden,
                 )
                 if co is None or len(co) != n_verts:
                     co = rest_co

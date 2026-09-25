@@ -27,18 +27,18 @@
 // accepts here; the body reads one field of it.
 //
 // The seed a Newton solve starts from: where an unconstrained vertex would be
-// at the end of the step under its own momentum and gravity, and exactly its
-// prescribed position when the vertex is fix-pinned. The extrapolation is built
-// as a DISPLACEMENT, `(current - previous) * ratio` plus the gravity term, and
-// added to `current` once, so the coordinate's magnitude never multiplies
-// anything.
+// at the end of the step under its own momentum, gravity and the external
+// field's acceleration, and exactly its prescribed position when the vertex is
+// fix-pinned. The extrapolation is built as a DISPLACEMENT,
+// `(current - previous) * ratio` plus the gravity and field terms, and added to
+// `current` once, so the coordinate's magnitude never multiplies anything.
 
 template <class Fix>
 [[seam::device_fn]] inline Vec3f compute_target(
     unsigned fix_index, const Vec3f &current,
     const Vec3f &previous, const Fix *fix,
     float dt, float previous_dt, const Vec3f &gravity,
-    bool inactive_momentum) {
+    const Vec3f &external, bool inactive_momentum) {
     if (fix_index > 0) {
         return fix[fix_index - 1].position;
     }
@@ -54,7 +54,8 @@ template <class Fix>
             ratio;
         target[dimension] =
             current[dimension] +
-            float(velocity_displacement + dt_squared * gravity[dimension]);
+            float(velocity_displacement +
+                  dt_squared * (gravity[dimension] + external[dimension]));
     }
     return target;
 }
@@ -80,6 +81,12 @@ template <class Fix>
 // on arity; the census is the stricter reader, and the new function is the one
 // that takes the new name because the template already has callers under its.
 //
+// THE EXTERNAL FIELD ARRIVES AS A PER-VERTEX BUFFER, beside gravity rather
+// than instead of it: it is `energy/external_field.kernel.cpp`'s output for
+// this step, evaluated at the step's starting position, so it enters the seed
+// exactly as gravity does and adds no Hessian term. A scene with no field
+// carries a zero-filled buffer, which adds exactly zero.
+//
 // GRAVITY ARRIVES AS THREE SCALARS, NOT AS A BUFFER, and that is the point of
 // the shape rather than an accident of it. It is one scene-wide vector every
 // thread reads identically, held on the host beside `dt`: routing it through a
@@ -92,13 +99,14 @@ compute_target_seed(const Vec3f &current,
                         unsigned fix_index,
                         const FixPair *fix, float dt,
                         float previous_dt, float gravity_x, float gravity_y,
-                        float gravity_z, int inactive_momentum) {
+                        float gravity_z, const Vec3f &external,
+                        int inactive_momentum) {
     Vec3f gravity;
     gravity[0] = gravity_x;
     gravity[1] = gravity_y;
     gravity[2] = gravity_z;
     return compute_target<FixPair>(fix_index, current, previous, fix, dt,
-                                       previous_dt, gravity,
+                                       previous_dt, gravity, external,
                                        inactive_momentum != 0);
 }
 
@@ -124,6 +132,7 @@ compute_target_seed(const Vec3f &current,
     const unsigned *fix_index,
     const FixPair *fix, float dt,
     float previous_dt, float gravity_x, float gravity_y, float gravity_z,
+    const Vec3f *external,
     int inactive_momentum,
     Vec3f *target,
     unsigned count);

@@ -20,47 +20,80 @@ def map_cp_pins_to_sampled(obj, cp_indices):
     splines, matching the indexing produced by the pin UI op for CURVE
     objects (``ui/dynamics/pin_ops.py``). Sampled vertex indices are
     likewise global across splines, matching ``sample_curve``'s vertex
-    concatenation. For Bezier segments where both endpoints are pinned,
-    the two interior sample points are pinned too.
+    concatenation; both walks read ``_spline_param_entries``. A BEZIER or
+    POLY point is vertex ``i`` of its spline. A NURBS spline is sampled per
+    arc, so only an arc end (local index a multiple of ``order - 1``) is a
+    rod vertex; a pin on any other NURBS point, or on a spline too short to
+    sample, is refused by name, since no rod vertex sits where it was put.
     """
     pinned_cp = set(cp_indices)
     pinned_sampled = set()
-
+    per_arc = len(_NURBS_T_VALUES) - 1
     cp_offset = 0
     sampled_offset = 0
-    for s in obj.data.splines:
-        is_cyclic = s.use_cyclic_u
+    for si, s in enumerate(obj.data.splines):
         if s.type == "BEZIER":
             n_cp = len(s.bezier_points)
-            # Bezier samples at t = 0, 1 per segment (one sample per CP)
-            # so sampled-vertex i corresponds to CP i within the spline.
-            n_sampled = n_cp
-            stride = 1
         elif s.type in ("NURBS", "POLY"):
             n_cp = len(s.points)
-            # POLY: one sample per cp. NURBS: arc-sampled, but the
-            # cp-to-sample mapping is not well-defined for higher-order
-            # arcs; preserve a 1:1 fallback so single-spline POLY/NURBS
-            # callers behave at least as well as before.
-            n_sampled = n_cp
-            stride = 1
         else:
             continue
-
-        n_segs = n_cp if is_cyclic else max(1, n_cp - 1)
-        for k in range(n_segs):
-            k1 = (k + 1) % n_cp
-            cp_k_pinned = (cp_offset + k) in pinned_cp
-            cp_k1_pinned = (cp_offset + k1) in pinned_cp
-            if cp_k_pinned:
-                pinned_sampled.add(sampled_offset + k * stride)
-            if cp_k1_pinned:
-                pinned_sampled.add(sampled_offset + k1 * stride)
-
+        local = sorted(i - cp_offset for i in pinned_cp
+                       if cp_offset <= i < cp_offset + n_cp)
+        meta = _spline_param_entries(s)
+        if meta is None:
+            if local:
+                raise ValueError(
+                    f"Curve '{obj.name}': spline {si} has {n_cp} point, so it "
+                    "is not simulated and a pin on it holds nothing; unpin it "
+                    "or give the spline a second point"
+                )
+        elif meta["type"] == "NURBS":
+            degree = meta["order"] - 1
+            n_vert = len(meta["params"])
+            for li in local:
+                arc, rem = divmod(li, degree)
+                if rem or per_arc * arc >= n_vert:
+                    raise ValueError(
+                        f"Curve '{obj.name}': NURBS spline {si} control point "
+                        f"{li} is not a vertex of the simulated rod; pin a "
+                        f"point whose index is a multiple of {degree} "
+                        "(order - 1), or convert the spline to Bezier or Poly"
+                    )
+                pinned_sampled.add(sampled_offset + per_arc * arc)
+        else:
+            pinned_sampled.update(sampled_offset + li for li in local)
         cp_offset += n_cp
-        sampled_offset += n_sampled
-
+        if meta is not None:
+            sampled_offset += len(meta["params"])
+    beyond = sorted(i for i in pinned_cp if not 0 <= i < cp_offset)
+    if beyond:
+        raise ValueError(
+            f"Curve '{obj.name}': pinned control point {beyond[0]} does not "
+            f"exist; the curve has {cp_offset}"
+        )
     return sorted(pinned_sampled)
+
+
+def nurbs_points_off_the_rod(obj):
+    """Every NURBS spline of *obj* whose trailing points the rod never samples.
+
+    The rod follows a NURBS spline arc by arc, ``order - 1`` points per arc,
+    as the rational Bezier over each run of ``order`` points. Points past the
+    last whole arc belong to no arc: they are not simulated, and the fit that
+    carries the result back onto the curve has nothing to place them by.
+    Returns ``[(spline index, point count, order, unsampled count), ...]``.
+    """
+    out = []
+    for si, s in enumerate(obj.data.splines):
+        meta = _spline_param_entries(s)
+        if meta is None or meta["type"] != "NURBS":
+            continue
+        n_cp, degree = meta["n_cp"], meta["order"] - 1
+        covered = n_cp if meta["cyclic"] else n_cp - 1
+        if covered % degree:
+            out.append((si, n_cp, meta["order"], covered % degree))
+    return out
 
 
 def _eval_bezier(p0, h0, h1, p1, t):

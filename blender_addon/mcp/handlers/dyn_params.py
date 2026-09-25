@@ -310,9 +310,14 @@ def add_collider_keyframe(
 ):
     """Add a keyframe to an invisible collider.
 
+    The collider's initial keyframe holds its own position (and radius) as the
+    state at the simulation's starting frame, so a keyframe added here has to
+    come after the starting frame; one at or before it is refused by name when
+    the scene is transferred.
+
     Args:
         index: Zero-based collider index
-        frame: Blender frame (>= 1)
+        frame: Blender frame (>= 1), after the starting frame
         position: [x, y, z] at this keyframe
         radius: Sphere radius at this keyframe (SPHERE only)
         use_hold: Hold the previous keyframe value (step function)
@@ -352,6 +357,9 @@ def add_collider_keyframe(
 def remove_collider_keyframe(index: int, frame: int):
     """Remove a keyframe from an invisible collider.
 
+    The initial keyframe (the first one listed) cannot be removed: it holds the
+    collider's state at the starting frame.
+
     Args:
         index: Zero-based collider index
         frame: Frame number of the keyframe to remove
@@ -359,6 +367,15 @@ def remove_collider_keyframe(index: int, frame: int):
     _, col = _get_collider(index)
     for i, kf in enumerate(col.keyframes):
         if kf.frame == frame:
+            if i == 0:
+                # Without it the next keyframe would be read as the initial
+                # one, and its own position would be replaced by the
+                # collider's base position without a word.
+                raise MCPError(
+                    f"Cannot remove the initial keyframe of collider {index} "
+                    f"(frame {frame}): it holds the collider's state at the "
+                    "starting frame"
+                )
             col.keyframes.remove(i)
             col.keyframes_index = safe_update_index(i, len(col.keyframes))
             from ...models.groups import invalidate_overlays

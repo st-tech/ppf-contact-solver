@@ -13,7 +13,7 @@
 # promoted into the dynamic all-pinned namespace because it is a stitch
 # endpoint, so the stitch index can reach its (1:1) surface. This is the
 # build/run counterpart to the snap-side bl_static_snap_guard C-case and the
-# decoder-level tests/test_cross_stitch_apply_batch.py SHELL/STATIC case.
+# decoder-level STATIC case in frontend/tests/_decoder_cross_stitch_.py.
 #
 # Subtests:
 #   A. shell_static_encoded: the cross_stitch section holds one SHELL->STATIC

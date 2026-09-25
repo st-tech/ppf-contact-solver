@@ -452,6 +452,11 @@ pub const INTERSECT_ALLOW_SELF: u8 = 1 << 0;
 pub const INTERSECT_ALLOW_INTER_OBJECT: u8 = 1 << 1;
 pub const INTERSECT_ALLOW_INTER_GROUP: u8 = 1 << 2;
 
+/// The bit that marks a COLLISION-MESH vertex in the Allow Existing
+/// Intersections link table, whose rows otherwise name dynamic vertices.
+/// Mirrored in `kernels/contact/intersect_policy.hpp`.
+pub const START_LINK_COLLISION_VERTEX: u32 = 0x8000_0000;
+
 #[repr(C)]
 #[derive(Serialize, Deserialize, Clone, Copy, Default)]
 pub struct EdgeProp {
@@ -1361,4 +1366,10 @@ pub struct DataSet {
     /// Newton assembly, atomically accumulated by contact kernels, and fetched
     /// with the output pose.
     pub statistics_contact_count: CVec<u32>,
+    /// Allow Existing Intersections' vertex links, one row per dynamic vertex
+    /// listing the vertices it is linked to; a collision-mesh vertex carries
+    /// [`START_LINK_COLLISION_VERTEX`]. Built by `builder::start_link_table`.
+    /// Empty (size 0) when nothing was linked, which the contact passes read
+    /// as "no table". Mirrors the tail of the C++ `DataSet` in `data.hpp`.
+    pub start_link: CVecVec<u32>,
 }

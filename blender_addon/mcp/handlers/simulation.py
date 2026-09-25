@@ -207,9 +207,9 @@ def resume_simulation_from(frame: int):
         raise MCPError(error)
     try:
         local_data = compute_data_hash(context)
+        local_param = compute_param_hash(context)
     except ValueError as e:
         raise MCPError(str(e))
-    local_param = compute_param_hash(context)
     if engine.state.server_data_hash and local_data != engine.state.server_data_hash:
         raise MCPError(
             "Geometry has changed; resume is not possible. Transfer and run "

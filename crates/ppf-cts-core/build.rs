@@ -195,7 +195,7 @@ fn main() {
     // This instantiates the pierce predicate for double, behind the Rust
     // build-time self-intersection check. It is not the device-parity oracle the
     // kernel shim is (that one contracts on purpose, see
-    // ppf-cts-compute/src/build/host.rs); what it owes is the same verdict on
+    // ppf-cts-compute/cpu/recipe.rs); what it owes is the same verdict on
     // every platform that builds a scene. Left to their defaults the compilers
     // disagree: GCC in ISO mode (`cc` passes -std=c++17) and cl.exe since Visual
     // Studio 2022 do not contract, clang does, and on aarch64 FMA is in the base

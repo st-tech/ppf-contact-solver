@@ -11,11 +11,10 @@
 # with the snap-time 6-wide barycentric-barycentric layout plus per-row
 # source_points / target_points (the world anchors). The PyO3 decoder
 # (cross_stitch_apply_batch) must re-project BOTH endpoints onto their own
-# tet surfaces: source -> slots 0..2, target -> slots 3..5. Before the
-# 6-slot migration the source side was left pinned to a mis-mapped tet
-# vertex and the solver generated ghost forces; the gap-correctness of the
-# projection is covered deterministically by
-# tests/test_cross_stitch_apply_batch.py.
+# tet surfaces: source -> slots 0..2, target -> slots 3..5. A side left on
+# its snap-time indices would pull on a mis-mapped tet vertex; the placement
+# of both sides is covered point for point by
+# frontend/tests/_decoder_cross_stitch_.py.
 #
 # This scenario is the integration counterpart: it drives a REAL fTetWild
 # resample through encode -> tetrahedralize -> cross_stitch_apply_batch ->

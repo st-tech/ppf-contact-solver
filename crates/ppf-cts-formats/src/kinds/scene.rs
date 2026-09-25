@@ -10,7 +10,7 @@
 // and an `object` array, where each object carries either a canonical
 // mesh (vert + face/edge + optional uv/stitch) OR a `mesh_ref` UUID
 // pointing at an earlier object in the same payload that holds the
-// canonical mesh, plus a 4x4 world transform. Object types: STATIC |
+// canonical mesh, plus a 4x4 world transform. Object types: STATIC | SAND |
 // SOLID | SHELL | ROD.
 //
 // The Python consumer at frontend/_decoder_.py:851-1430 reads the
@@ -77,11 +77,12 @@ pub struct ObjectInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uv: Option<ciborium::Value>,
 
-    /// Detected stitch edges + weights. Producer emits the
-    /// 2-tuple `(list[(int,int)], list[float])` that
-    /// `detect_stitch_edges` returns.
+    /// Loose-edge stitch rows `(Ind, W)`, each shape (K, 4), as
+    /// `detect_stitch_edges` returns them: a source vertex `Ind[k, 0]` and a
+    /// target point `Ind[k, 1..4]` weighted by `W[k, 1..4]`. uint32 / float32
+    /// in pickle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stitch: Option<(Vec<[i32; 2]>, Vec<f32>)>,
+    pub stitch: Option<(Vec<[u32; 4]>, Vec<[f32; 4]>)>,
 
     // -- Mesh reference (emitted iff vert/face/edge are None) --
     /// UUID of the canonical mesh to reuse, set on duplicate
@@ -132,7 +133,8 @@ pub struct TransformAnimation {
     /// time base and is invariant under Time Scale / FPS changes.
     pub frame_offset: Vec<f32>,
     pub translation: Vec<[f32; 3]>,
-    /// (x, y, z, w) quaternion components.
+    /// (w, x, y, z) quaternion components, as Blender's `Quaternion` orders
+    /// them.
     pub quaternion: Vec<[f32; 4]>,
     pub scale: Vec<[f32; 3]>,
     /// Optional segment markers; producers may omit.

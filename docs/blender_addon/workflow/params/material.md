@@ -5,8 +5,8 @@ but which fields are relevant depends on the group's type:
 
 - **Shell**: density, stiffness (Young's modulus, Poisson ratio, bend),
   shrink, strain limit, inflate, stitch, and contact settings.
-- **Solid**: density, stiffness, a single shrink factor, and contact
-  settings.
+- **Solid**: density, stiffness, a single shrink factor, stitch, and
+  contact settings.
 - **Rod**: density, stiffness, bend, shrink, strain limit, and contact
   settings.
 - **PDRD**: density, friction, and contact settings only. PDRD is an
@@ -61,7 +61,21 @@ Blender's own keyframe control; the toggles and dropdowns between them
 (**Model**, **Enable Strain Limit**, and so on) carry neither. A
 keyframe is offered only on the properties the encoder samples, so the
 densities, the shrink factors, **Particle Mass**, **Sand Friction** and
-**Stitch Stiffness** are lockable but refuse an F-curve.
+**Stitch Stiffness** are lockable but refuse an F-curve. Every group
+setting outside those sampled sliders is read once, at the solve's
+**Starting Frame**. A keyframe that a saved file still carries on one of
+them, and a driver or an NLA strip on any group setting, sampled sliders
+included, stops **Transfer** with a message naming its data path rather
+than being read once in silence; see
+[Dynamic Parameters](dynamic.md#supported-parameters).
+
+On a **Solid** group a keyframe reaches the solve only on **Friction**,
+**Contact Gap** and **Contact Offset** (or their ratio forms), which live
+on the solid's surface. Its elastic values, such as **Young's Modulus**,
+**Poisson's Ratio**, **Plasticity** and **Deformation Damping**, live on
+its tetrahedra, which hold one value for the whole solve, so **Transfer**
+refuses a keyframe on any of them and names the property. Remove the
+keyframes, or split the change into separate solves.
 
 The parameter rows, in roughly the order they are drawn (the exact
 sequence varies by type — a **Shell** group draws its contact box before
@@ -70,10 +84,13 @@ Bend and Shrink, for instance):
 1. **Model** (when applicable): dropdown to pick the material model.
    **Shell** groups can choose Baraff-Witkin or ARAP; **Solid** groups
    pick between Stable NeoHookean and ARAP; **Rod** groups are locked
-   to ARAP; **Static** groups have no model row. Older `.blend` files
-   that stored Stable NeoHookean on a **Shell** group still load: the
-   `shell_model` enum keeps the slot for `.blend` index stability and
-   the transfer step coerces that selection to ARAP at encode time.
+   to ARAP; **Static** groups have no model row. The **Shell** picker
+   does not offer Stable NeoHookean, but a `.blend` or material profile
+   saved with it on a **Shell** group still loads it. The **Model** row
+   then draws blank, with *Stable NeoHookean is not offered for shells;
+   Transfer will refuse* under it, and **Transfer** refuses the group
+   until you choose ARAP or Baraff-Witkin. A **Solid** group still
+   offers Stable NeoHookean.
 2. **Density**: the material's density in type-appropriate units (kg/m²
    for **Shell**, kg/m³ for **Solid**, kg/m for **Rod**).
 3. **Young's Modulus**: stiffness. See the note below for how the solver
@@ -84,7 +101,8 @@ Bend and Shrink, for instance):
    directional rows **Bending Stiffness (Warp)** and **Bending Stiffness
    (Weft)** right below it, Shrink X/Y, a **Strain Limit** toggle, an
    **Inflate** toggle, and a **Stitch Stiffness** field. **Solid**
-   collapses down to a single Shrink slider. **Rod** draws its
+   collapses down to a single Shrink slider and keeps a **Stitch
+   Stiffness** field near the bottom of the box. **Rod** draws its
    **Shrink** row just under **Friction** and its **Bend Stiffness**
    field in a separate **Bend** box below the contact rows.
 7. **Contact Gap**: on **Solid**, **Shell**, **PDRD** and **Static**
@@ -429,8 +447,8 @@ a message rather than simulating something else. The refusals are:
   on a group whose **Enable Strain Limit** is unticked. A map cannot
   reintroduce a value that is zero for the whole solve, and the message
   names the condition, which is not always a checkbox: a **Shell** with a
-  shrink factor other than `1` and a group with a captured pull-pin rest
-  shape each close a gate of their own;
+  shrink factor other than `1` closes the **Strain Limit** gate of its
+  own;
 - a time sample at or before the start frame, two samples on one frame, a
   sample with no source name, or any sample at all on a group that is not
   a **Shell**;
@@ -542,7 +560,12 @@ since a tet has no bending energy.
 | **Stitch Stiffness**     | `stitch_stiffness`     | 1.0              | Stiffness of loose-edge stitches detected in the mesh.         |
 
 Loose edges (edges not belonging to any face) are automatically treated as
-stitch constraints, with stiffness set by **Stitch Stiffness**.
+stitch constraints, with stiffness set by **Stitch Stiffness**. The field
+is drawn on **Shell** and **Solid** groups, and grayed out with *No
+loose-edge stitches in this group* when no assigned mesh has a loose edge.
+A **Rod** group has no **Stitch Stiffness** field, because its edges are
+the rod itself. A seam between two objects is a merge pair, which carries
+its own stiffness; see [Snap and Merge](../constraints/snap_merge.md).
 
 ### Shrink X / Shrink Y
 
@@ -639,6 +662,14 @@ When to enable: materials that remember their deformation, such as crushed foil,
 wrinkled paper, dented metal sheets, or sagging fabric. Keep off for
 perfectly elastic cloth.
 
+On a **Solid** group, **Plasticity** cannot be on while one of the
+group's pins drives the rest shape from its captured deformation through
+[Track Rest-Pose Deformation](../constraints/pins.md#pin-properties-reference),
+because both rewrite the rest shape. The pin's panel shows
+*Plasticity and rest-pose tracking cannot both be on; Transfer will
+refuse*, and **Transfer** stops naming the group and the pin until one
+of the two is turned off.
+
 Example values:
 - **Theta** = 0.0: disabled even if the checkbox is on.
 - **Theta** = 0.5: default; ~40%/s creep once over threshold.
@@ -672,6 +703,21 @@ drops), matching reference motion on hero shots, or giving the solver a
 strong initial push that no constant velocity could time. Leave empty
 for fully passive simulations.
 
+The **Direction** and a **Custom Axis** are normalized, so only their
+direction matters. With its box ticked, a keyframe whose **Direction**
+is `(0, 0, 0)` while its **Speed** is not zero, or whose **Custom Axis**
+is `(0, 0, 0)` while its **Angular Speed** is not zero, names no
+direction to move or turn in, and **Transfer** refuses it, naming the
+object and the frame.
+
+**Speed** and **Angular Speed** are measured against the Blender
+animation's own time, so **Time Scale** (see
+[Scene Parameters](scene.md)) applies to them like any other keyed
+motion: at `0.5` every keyframe's speed is halved, the keyframe that
+sets the object's velocity at the **Starting Frame** included. A
+**Speed** is a length per second, so it also scales with
+[World Scaling](scene.md#world-scaling); an **Angular Speed** does not.
+
 ```{figure} ../../images/material_params/velocity_overwrite.png
 :alt: Velocity Overwrite section with four keyframes listed and one selected
 :width: 500px
@@ -701,6 +747,14 @@ one.
 | **Young's Modulus (Pa/ρ)** | `solid_young_modulus` | 500.0                | Young's modulus (see note below). Min 0.01, soft max 10 M (hard max 1e9). |
 | **Poisson's Ratio**        | `solid_poisson_ratio` | 0.35                 | Poisson ratio, 0 – 0.4999.                                |
 | **Shrink**                 | `shrink`              | 1.0                  | Uniform rest-shape scale (min 0.1).                       |
+| **Stitch Stiffness**       | `stitch_stiffness`    | 1.0                  | Stiffness of loose-edge stitches detected in the mesh.    |
+
+A **Solid** mesh's loose edges become stitches the same way a **Shell**'s
+do. The solid is rebuilt as tetrahedra from its faces, so each end of such
+an edge is placed on the tetrahedralized surface at the point it marks,
+and the stitch joins those two surface points. Each end therefore has to
+be a vertex of a face: a vertex that sits partway along a loose edge and
+belongs to no face is refused at **Transfer**, pinned or not.
 
 ### Shrink
 
@@ -984,6 +1038,13 @@ cloud is seeded, so the two have to agree: a larger radius on the same
 cloud would put grains inside each other's contact skin, and the solver
 refuses an overlapping cloud at startup. To work at a different radius,
 convert the source mesh again.
+
+A Sand group is solved at one grain radius, so every object in it has to
+have been converted at the same **Grain Radius**. When two were converted
+at different radii, the group box shows *Grains were converted at
+different radii; Transfer will refuse*, and **Transfer** stops, naming
+one object at each radius. Convert them at one radius, or put them in
+separate Sand groups.
 
 The grain radius is also the **contact offset**: the sphere it describes
 is the grain's physical skin, so there is no separate **Contact Offset**
@@ -1270,10 +1331,10 @@ because its grain radius already is the contact offset.
 
 By default the solver keeps every pair of surfaces apart: nothing passes
 through anything, and a scene whose geometry already overlaps is refused
-before the first frame is solved. Every group carries three settings that let
+before the first frame is solved. Every group carries four settings that let
 chosen objects pass through each other instead. They sit in an **Allow
 Intersections** box at the bottom of the group's **Material Params**, and all
-three are off by default.
+four are off by default.
 
 - **Allow Self-Intersections**: an object in this group may pass through
   itself. A falling cloth crosses its own folds instead of piling up on them.
@@ -1284,11 +1345,20 @@ three are off by default.
   through every object assigned to a different group, including **Static**
   colliders, which are always in a group of their own because a group holds
   one type. Objects of this same group still collide with each other.
+- **Allow Existing Intersections**: the places where an object in this group
+  starts the simulation already overlapping itself, another object, or a
+  **Static** collider pass through each other for the whole simulation,
+  instead of stopping it before the first frame. Everywhere else keeps full
+  contact. See [Allow Existing Intersections](#allow-existing-intersections)
+  below.
 
-Each is drawn for every group type, **Static** included, though on a
-**Static** group whether its own boxes take effect depends on how the
-collider is driven (see below). With any of them on, the panel adds the line
-"Allowed pairs pass through, with no contact" beneath the checkboxes.
+Each is drawn for every group type, **Static** included, except that a
+**Sand** group has no **Allow Existing Intersections** box. On a **Static**
+group whether its own boxes take effect depends on how the collider is
+driven (see below). With any of the first three on, the panel adds the line
+"Allowed pairs pass through, with no contact" beneath the checkboxes; with
+**Allow Existing Intersections** on, it adds "Only pairs tangled at the start
+pass through".
 
 :::{important}
 An allowed pair has no contact at all. The solver applies no contact force
@@ -1318,7 +1388,7 @@ objects get the setting. An empty list reaches no object, and the panel says
 reach the solver, for example an object whose **Include** checkbox is off,
 the panel shows how many do, as "2 of 3 entries reach the solver".
 
-The three lists are independent, so one garment can pass through itself
+The four lists are independent, so one garment can pass through itself
 while another only passes through the body.
 
 ### Only One Side Has to Allow It
@@ -1357,6 +1427,10 @@ two say nothing about an object folding through itself. A group with only the
 first still collides with every other object; a group with only one of the
 other two still collides with itself. Turn on each one you need.
 
+**Allow Existing Intersections** has no column here because it names no kind
+of pair. It covers whichever pairs start the simulation overlapping, of any
+kind in the first three rows, and never the invisible walls and spheres.
+
 "Self" here means one mesh object, not one group. A group holding two meshes
 holds two objects, so the pair those two form is an inter-object pair, which
 only **Allow Inter-Object Intersections** covers. When a group holds more
@@ -1375,7 +1449,9 @@ Use them for geometry that should not collide:
 
 - A mesh that arrives tangled in its pose and should stay that way, such as a
   sleeve folded through its own cuff, or a collar that passes into the
-  shoulder. Without an allowance the start pose is refused.
+  shoulder. Without an allowance the start pose is refused. When only a few
+  places are tangled and the rest of the garment should keep colliding,
+  **Allow Existing Intersections** is the narrower choice.
 - A cloth whose self-collision is not wanted, where folds may cross each
   other.
 - Layers that should pass through a body or a prop rather than rest on it.
@@ -1384,7 +1460,7 @@ An allowance does not separate an overlap. The allowed pair has no contact,
 so nothing pushes the two surfaces apart: they stay crossed until the
 object's own motion carries them out, if it does. Where the geometry should
 end up apart, separate it before the run instead: see
-[Mesh Cleaning](../scene/mesh_cleaning.md). With all three settings off, the
+[Mesh Cleaning](../scene/mesh_cleaning.md). With all four settings off, the
 solver keeps every pair apart and never lets anything intersect.
 
 Where only a region you have pinned should pass through, the per-pin
@@ -1413,6 +1489,65 @@ skips allowed pairs as well, since an allowed pair has no contact offset to
 keep. Every other pair is still checked. The other geometry checks, such as a
 rod segment shorter than its own contact offset, are unrelated to these
 settings and still apply.
+:::
+
+(allow-existing-intersections-settings)=
+### Allow Existing Intersections
+
+A garment posed by a rig often arrives with a fold that passes through itself,
+such as an armpit, or with a sleeve that dips into the body. The scene is then
+refused before the first frame. The three settings above let it run only by
+giving up contact for the whole object, everywhere. **Allow Existing
+Intersections** gives up contact only where the overlap already is.
+
+When it is on, the build finds every place where an object of this group
+starts the simulation overlapping something, or sitting closer to it than the
+[contact offset](#contact-gap-and-contact-offset) allows, and lets exactly those
+places pass through each other for the whole simulation, together with the
+faces right next to them. Everything else keeps full contact: the rest of the
+garment still collides with itself, with the body, and with every other
+object. As with the other settings, only one of the two sides needs it on,
+and it covers an object with itself, two objects, and an object against a
+**Static** collider. It does not affect the invisible walls and spheres, and it
+is not available on **Sand**.
+
+:::{important}
+This setting tolerates a tangle, it does not untangle one. The overlapping
+places are left alone for the whole run, so a fold that starts crossed stays
+crossed unless the motion carries it out. Nothing new is allowed to pass
+through: a pair that did not start overlapping never intersects, and if one
+ever would, the run stops with an intersection error. Where the start pose
+can be fixed, fixing it is still the better choice.
+:::
+
+After a build with this setting on, the viewport shows what was let through.
+On the frame the simulation starts from, the overlapping places are tinted
+light blue, with a label such as "19 Existing Intersections Allowed". The
+highlight is drawn on the starting frame only, because it marks where the
+geometry was at the start. When nothing overlaps, nothing is drawn.
+
+**Apply to All Objects** narrows it to named objects in the same way as the
+other settings. Leaving the list empty reaches no object, so the tangled
+start pose is refused again.
+
+:::{admonition} Under the hood
+:class: toggle
+
+The overlapping places are found once, by the same check that would
+otherwise refuse the scene, on the start pose. For every pair of elements that
+check finds, and where either side's object has the setting on, every vertex
+of one element is linked to every vertex of the other. During the solve, two
+elements whose vertices are linked are treated like two faces that share a
+corner: no contact force, no limit on the step from the collision test, and no
+intersection report. Because the link is on vertices, a face sharing a corner
+with an overlapping face is covered too. The links are fixed when the scene is
+built and last for the whole run.
+
+The solver never adds a link of its own. The start-pose check and the solver's
+own check measure positions at slightly different precision, so a pair that
+barely touches can pass one and fail the other. The run then stops before the
+first frame with an error that names the pair; moving the two apart, or
+further into each other, makes both checks agree.
 :::
 
 ## Material Profiles
@@ -1537,10 +1672,14 @@ Python.
 
 **Loose-edge stitch encoding**
 
-At transfer time, edges on **Shell** meshes that are not adjacent to
-any face are automatically emitted as stitch constraints with stiffness
-set by `stitch_stiffness`. There is no UI surface for this; it happens
-on every transfer.
+At transfer time, edges on **Shell** and **Solid** meshes that are not
+adjacent to any face are automatically emitted as stitch constraints
+with stiffness set by `stitch_stiffness`. On a **Solid**, each end of
+such an edge is projected onto the tetrahedralized surface as a
+barycentric point on a surface triangle, and the row becomes a
+point-to-point stitch; an end that finds no triangle stops the build,
+naming the object. There is no UI surface for this; it happens on every
+transfer.
 
 ```{figure} ../../images/material_params/loose_edge_stitch.png
 :alt: Two subdivided square Shell patches stacked with a gap, connected by vertical red edges. Each edge has no adjacent face and is automatically emitted as a stitch constraint

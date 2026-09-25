@@ -26,8 +26,9 @@
 #   F. ``curve_joins_a_rod_group`` -- the finalized curve assigns to a ROD
 #      group, which is the object type a curve is authored for.
 #   G. ``checkpoint_frames_are_normalized`` -- set_save_checkpoint_frames
-#      sorts, de-duplicates and lifts a frame below 1, and the listing reports
-#      the normalized set; clear empties it.
+#      sorts and de-duplicates, refuses a frame at or before the starting
+#      frame (naming it) rather than moving it, and the listing reports the
+#      normalized set; clear empties it.
 #   H. ``remote_checkpoint_list_is_separate`` -- list_checkpoint_frames asks a
 #      different question (what a run has saved) and answers empty here,
 #      rather than reporting the frames the scene merely requested.
@@ -150,17 +151,20 @@ try:
               {"joined": joined, "members": members})
 
     # ----- G --------------------------------------------------------
-    # 5 twice, 2 out of order, and 0 below the floor.
-    setf = call("set_save_checkpoint_frames", {"frames": [5, 2, 5, 0]})
+    # 5 twice and 2 out of order; then 0, at or before the starting frame.
+    setf = call("set_save_checkpoint_frames", {"frames": [5, 2, 5]})
+    early = call("set_save_checkpoint_frames", {"frames": [4, 0]})
     listed = call("list_save_checkpoint_frames")
     cleared = call("clear_save_checkpoint_frames")
     after = call("list_save_checkpoint_frames")
     mcp_check(result, "G_checkpoint_frames_are_normalized",
-              setf.get("status") == "success" and setf.get("frames") == [1, 2, 5]
-              and listed.get("frames") == [1, 2, 5] and listed.get("count") == 3
+              setf.get("status") == "success" and setf.get("frames") == [2, 5]
+              and early.get("status") == "error"
+              and "Checkpoint frame 0" in early.get("message", "")
+              and listed.get("frames") == [2, 5] and listed.get("count") == 2
               and cleared.get("status") == "success"
               and after.get("frames") == [] and after.get("count") == 0,
-              {"set": setf, "listed": listed, "after_clear": after})
+              {"set": setf, "early": early, "listed": listed, "after_clear": after})
 
     # ----- H --------------------------------------------------------
     call("set_save_checkpoint_frames", {"frames": [3, 7]})

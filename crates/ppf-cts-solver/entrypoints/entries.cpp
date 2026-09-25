@@ -149,6 +149,7 @@
 // the body wants the pin at `fix_index - 1`, and gravity is three scalars
 // rather than a buffer because every thread reads the same vector.
 #include "main/target.entry.cpp"
+#include "energy/external_field.entry.cpp"
 
 // The LBVH's Morton codes, from centroids already in SoA form. Three element
 // gathers, the scene box as six scalars, one element scatter. A Morton code

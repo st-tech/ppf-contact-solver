@@ -17,11 +17,12 @@ from ...models.groups import (
     group_missing_uv_object,
     has_addon_data,
     pair_supports_cross_stitch,
+    withdrawn_shell_model_refusal,
 )
 from ..state import iterate_active_object_groups
 from .utils import get_assigned_by_selection_uuid
 from ...models.material_locks import is_locked, lock_name
-from ...models.material_maps import wants_anisotropic_bending
+from ...models.material_maps import pin_tracks_rest_shape, wants_anisotropic_bending
 
 
 # Cache `os.path.isfile(bpy.path.abspath(path))` per unique path string.
@@ -297,16 +298,28 @@ def _draw_intersection_allowances(param_box, group, actual_index):
     difference decides the outcome: the group holds more than one object and
     enables one of those two without the inter-object allowance.
     """
-    from ...models.intersection_allowances import INTERSECTION_ALLOWANCES
+    from ...models.intersection_allowances import (
+        EXISTING_ALLOWANCE,
+        INTERSECTION_ALLOWANCES,
+        allowance_offered,
+    )
 
     box = param_box.box()
     box.label(text="Allow Intersections")
     for spec in INTERSECTION_ALLOWANCES:
-        _draw_intersection_allowance(box, group, spec, actual_index)
+        if allowance_offered(group, spec):
+            _draw_intersection_allowance(box, group, spec, actual_index)
     if any(getattr(group, spec.enable_prop)
-           for spec in INTERSECTION_ALLOWANCES):
+           for spec in INTERSECTION_ALLOWANCES
+           if spec is not EXISTING_ALLOWANCE):
         box.label(
             text="Allowed pairs pass through, with no contact",
+            icon="INFO",
+        )
+    if allowance_offered(group, EXISTING_ALLOWANCE) and getattr(
+            group, EXISTING_ALLOWANCE.enable_prop):
+        box.label(
+            text="Only pairs tangled at the start pass through",
             icon="INFO",
         )
     if ((group.allow_self_intersection
@@ -317,6 +330,140 @@ def _draw_intersection_allowances(param_box, group, actual_index):
             text="Two objects in one group are an inter-object pair",
             icon="INFO",
         )
+
+
+def _draw_force_field_targets(layout, context, params, source, source_name):
+    """Apply to All Groups, or the list of groups the source is narrowed to.
+
+    A field object with no target entry reaches every group; its checkbox is
+    then an operator that creates the entry, since a draw may not write.
+    """
+    from ...models import force_field_targets as targets
+
+    apply_all, groups, owner, index_attr = targets.source_view(params, source)
+    row = layout.row()
+    if source == targets.SCRIPT:
+        row.prop(params, "force_field_script_all")
+        owner, groups, index_attr = params, params.force_field_script_groups, (
+            "force_field_script_groups_index")
+    elif groups is None:
+        # Drawn like the checkbox it stands in for: left-aligned, no emboss.
+        row.alignment = "LEFT"
+        op = row.operator("scene.force_field_choose_groups",
+                          text="Apply to All Groups", icon="CHECKBOX_HLT", emboss=False)
+        op.source = source_name
+    else:
+        row.prop(owner, "apply_all")
+    if apply_all or groups is None:
+        return
+    list_row = layout.row()
+    list_attr = "force_field_script_groups" if source == targets.SCRIPT else "groups"
+    list_row.template_list("SCENE_UL_ForceFieldGroups", f"ff_{source_name}",
+                           owner, list_attr, owner, index_attr, rows=2)
+    col = list_row.column(align=True)
+    op = col.operator_menu_enum("scene.force_field_add_group", "group", text="", icon="ADD")
+    op.source = source_name
+    op = col.operator("scene.force_field_remove_group", text="", icon="REMOVE")
+    op.source = source_name
+    if len(groups) == 0:
+        layout.label(text="Choose at least one group", icon="ERROR")
+
+
+def _draw_force_fields(layout, context, params):
+    """The scene's force fields: which ones, where and how finely they are
+    sampled for the solver, the exact script, and the Visualize overlay.
+
+    The Compile and Check button is drawn ALWAYS and disabled with a status
+    line when it cannot run, from the same predicate the
+    operator polls.
+    """
+    from ...core import force_field as ff
+    from .force_field_ops import check_unavailable_reason
+
+    box = layout.box()
+    row = box.row()
+    row.prop(
+        params,
+        "show_force_field",
+        icon="TRIA_DOWN" if params.show_force_field else "TRIA_RIGHT",
+        emboss=False,
+        icon_only=True,
+    )
+    row.label(text="Force Fields", icon="FORCE_TURBULENCE")
+    if not params.show_force_field:
+        return
+
+    box.prop(params, "force_field_collection")
+    objs = ff.field_objects(context.scene, params)
+    if objs:
+        for obj in objs:
+            why = ff.refusal(obj)
+            field_box = box.box()
+            field_box.label(
+                text=f"{obj.name}: {obj.field.type.title()}"
+                + (f" ({why})" if why else ""),
+                icon="ERROR" if why else "CHECKMARK",
+            )
+            if not why:
+                _draw_force_field_targets(field_box, context, params, obj, obj.name)
+    else:
+        box.label(text="No force field objects", icon="INFO")
+
+    sample_box = box.box()
+    sample_box.label(text="Sampling")
+    sample_box.prop(params, "force_field_padding")
+    sample_box.prop(params, "force_field_spacing")
+    sample_box.prop(params, "force_field_time_samples")
+    try:
+        shapes = ff.plan_shapes(ff.grid_plan(context.scene, params))
+    except ValueError as e:
+        sample_box.label(text=str(e), icon="ERROR")
+    else:
+        if shapes:
+            sample_box.label(
+                text=ff.estimate_line(shapes, params.force_field_time_samples),
+                icon="INFO",
+            )
+    sample_box.prop(params, "force_field_max_mb")
+
+    script_box = box.box()
+    script_box.label(text="Script")
+    row = script_box.row(align=True)
+    row.prop(params, "force_field_script", text="")
+    row.operator("scene.force_field_new_script", text="", icon="ADD")
+    script_box.operator("scene.force_field_builtins", icon="HELP")
+    if params.force_field_script is not None:
+        from ...models.force_field_targets import SCRIPT
+
+        _draw_force_field_targets(script_box, context, params, SCRIPT, SCRIPT)
+    reason = check_unavailable_reason(context)
+    check_row = script_box.row()
+    check_row.enabled = reason == ""
+    check_row.operator("solver.force_field_check", icon="CHECKMARK")
+    text = params.force_field_script
+    if reason:
+        script_box.label(text=reason, icon="INFO")
+    elif text is not None:
+        state = ff.check_state()
+        result = ff.check_result_for(text.as_string())
+        if state["running"]:
+            script_box.label(text="Checking...", icon="TIME")
+        elif result is None:
+            script_box.label(text="Not checked since the last edit", icon="INFO")
+        elif result.get("ok"):
+            script_box.label(text=f"OK: {result.get('summary', '')}", icon="CHECKMARK")
+        else:
+            line = result.get("line")
+            where = f"Line {line}: " if line else ""
+            script_box.label(text=f"{where}{result.get('error', '')}", icon="ERROR")
+
+    viz_box = box.box()
+    viz_box.prop(params, "force_field_visualize")
+    if params.force_field_visualize:
+        viz_box.row().prop(params, "force_field_preview_resolution")
+        pw, ph, pd = params.force_field_preview_resolution
+        viz_box.label(text=f"{pw * ph * pd} arrows at the current frame, drawing only",
+                      icon="INFO")
 
 
 def _material_prop(layout, group, prop_name, text=None):
@@ -801,7 +948,9 @@ def _group_has_stitch(group) -> bool:
 
 
 def _draw_stitch_stiffness(layout, group):
-    """Draw the per-group stitch stiffness for SOLID/SHELL/ROD groups.
+    """Draw the per-group stitch stiffness for SOLID and SHELL groups.
+
+    A ROD group has none to draw: its edges are the rod, not stitches.
 
     The control is always drawn so it stays discoverable; it is disabled
     with a status label when the group has no loose-edge (intra-object)
@@ -1065,6 +1214,8 @@ class MAIN_PT_SceneConfiguration(Panel):
             wind_box.prop(params, "preview_wind_direction")
             wind_box.prop(params, "wind_strength")
 
+        _draw_force_fields(layout, context, params)
+
         # The addon's own scene-parameter keyframe list is gone. Those settings
         # are keyframed on their own sliders now, the same gesture that drives
         # a material parameter, so the curves live on the timeline with every
@@ -1295,12 +1446,12 @@ class DYNAMICS_PT_Groups(Panel):
                         object_deformation_frame_count as _df_count,
                         object_has_deformation_cache as _has_df,
                         object_needs_deformation_capture as _needs_df,
+                        static_capture_hint as _static_capture_hint,
                     )
                     from .pin_capture_ops import (
                         is_pin_capture_running as _is_pin_capture_running,
                     )
                     from ...core.uuid_registry import resolve_assigned as _resolve_sd
-                    from ...core.utils import has_transform_fcurves as _has_xform_fcurves
                     _sd_obj = (
                         _resolve_sd(group.assigned_objects[group.assigned_objects_index])
                         if has_selection
@@ -1339,20 +1490,13 @@ class DYNAMICS_PT_Groups(Panel):
                             text=iface_("Deform cache: {count} frame(s)").format(count=n),
                             icon="FILE_CACHE",
                         )
-                    elif _deforms:
+                    elif _static_capture_hint(_sd_obj, context) is not None:
+                        # Capture stays available for any motion it can
+                        # record, but only a mesh that changes SHAPE needs one
+                        # to encode; say which case this object is, or a
+                        # greyed-out or optional button reads as broken.
                         box.label(
-                            text="Deforming modifier detected; capture to encode",
-                            icon="INFO",
-                        )
-                    elif _sd_obj is not None and _has_xform_fcurves(_sd_obj):
-                        # Rigid loc/rot/scale keyframes: the encoder samples
-                        # them via the transform-animation path, so Capture
-                        # Deformation is intentionally disabled. Say so, or the
-                        # greyed-out button reads as broken for a keyframed
-                        # collider (capture is only for vertex deformers).
-                        box.label(
-                            text="Keyframe animation transfers automatically; "
-                                 "capture is for deformers",
+                            text=_static_capture_hint(_sd_obj, context),
                             icon="INFO",
                         )
                     elif not has_selection:
@@ -1627,22 +1771,16 @@ class DYNAMICS_PT_Groups(Panel):
                                     icon="INFO",
                                 )
 
-                        # A captured pull-pin deformation drives a time-varying
-                        # rest shape, which cannot coexist with plasticity (it
-                        # would clobber the plastic creep each frame). Warn that
-                        # plasticity is ignored for this group so the behavior
-                        # is not silently surprising.
+                        # A tracked rest shape and plasticity both rewrite the
+                        # rest shape, so the transfer refuses the pair; say so
+                        # here, from the predicate the encoder asks.
                         if (
-                            getattr(pin_item, "track_rest_pose_deformation", False)
-                            and getattr(pin_item, "has_captured_anim", False)
-                            and group.object_type == "SOLID"
-                            and (
-                                getattr(group, "enable_plasticity", False)
-                                or getattr(group, "enable_bend_plasticity", False)
-                            )
+                            pin_tracks_rest_shape(group, pin_item)
+                            and getattr(group, "enable_plasticity", False)
                         ):
                             col.label(
-                                text="Plasticity ignored: captured rest shape takes over",
+                                text="Plasticity and rest-pose tracking cannot "
+                                "both be on; Transfer will refuse",
                                 icon="ERROR",
                             )
 
@@ -1948,6 +2086,16 @@ class DYNAMICS_PT_Groups(Panel):
                         _draw_stitch_stiffness(param_box, group)
                     elif group.object_type == "SHELL":
                         param_box.prop(group, "shell_model")
+                        # A .blend or profile can still load a model the
+                        # picker withdrew, which draws as a blank row; say
+                        # what the transfer will do, from the predicate the
+                        # encoder asks.
+                        if withdrawn_shell_model_refusal(group) is not None:
+                            param_box.label(
+                                text="Stable NeoHookean is not offered for "
+                                "shells; Transfer will refuse",
+                                icon="ERROR",
+                            )
                         _material_prop(param_box, group, "shell_density")
                         ym_box = param_box.box()
                         _material_prop(
@@ -2053,7 +2201,6 @@ class DYNAMICS_PT_Groups(Panel):
                         _draw_velocity_keyframes(param_box, group, actual_index)
                         _draw_lock_translation(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=True)
-                        _draw_stitch_stiffness(param_box, group)
                     elif group.object_type == "PDRD":
                         # PDRD bodies move exactly rigidly via a single
                         # best-fit rigid transform shared by the whole
@@ -2110,7 +2257,10 @@ class DYNAMICS_PT_Groups(Panel):
                         # non-overlapping seed spacing is derived from it, so it
                         # is shown read-only here: editing it after seeding could
                         # push grains inside each other's contact skin.
-                        from ...models.groups import sand_radius_source_object
+                        from ...models.groups import (
+                            sand_radius_conflict,
+                            sand_radius_source_object,
+                        )
 
                         # Draw the locked grain radius as a read-only (disabled)
                         # field, mirroring the editable Particle Mass field
@@ -2132,6 +2282,15 @@ class DYNAMICS_PT_Groups(Panel):
                         param_box.label(
                             text="Grain radius is locked at convert", icon="INFO"
                         )
+                        # The group is solved at one radius, so the transfer
+                        # refuses grains converted at several; say so here,
+                        # from the predicate the encoder asks.
+                        if sand_radius_conflict(group) is not None:
+                            param_box.label(
+                                text="Grains were converted at different "
+                                "radii; Transfer will refuse",
+                                icon="ERROR",
+                            )
                         _material_prop(param_box, group, "sand_particle_mass")
                         _material_prop(param_box, group, "sand_friction")
                         # The grain radius doubles as the contact offset (the
@@ -2166,6 +2325,13 @@ class DYNAMICS_PT_Groups(Panel):
                     # Outside the type chain on purpose: both tolerances apply
                     # to every group type.
                     _draw_intersection_allowances(param_box, group, actual_index)
+
+                    # The scene's force fields reach every simulated type; a
+                    # STATIC collider follows its authored motion and ignores
+                    # them, so it has no weight to set.
+                    if group.object_type != "STATIC":
+                        ff_row = param_box.row()
+                        ff_row.prop(group, "force_field_weight", icon="FORCE_FORCE")
 
                     # The map list is drawn by the SOLID and SHELL branches
                     # above. A group whose type was changed afterwards keeps
@@ -2253,15 +2419,12 @@ class SNAPMERGE_PT_SnapAndMerge(Panel):
                             type_b = group.object_type
                 if pair_supports_cross_stitch(type_a, type_b):
                     merge_box.prop(pair, "stitch_stiffness")
-                # A pair with no captured stitch anchors is dropped by the
-                # encoder, so the stitch never forms at solve time. Warn the
-                # artist and point them at Re-snap.
-                from ...mesh_ops.merge_ops import pair_has_stitch
-                if not pair_has_stitch(pair):
-                    merge_box.label(
-                        text=iface_("No stitch points found. Try Re-snap."),
-                        icon="INFO",
-                    )
+                # Why this pair's stitch cannot reach the solver, from the
+                # function the Transfer check and the encoder refuse with.
+                from ...mesh_ops.merge_ops import merge_pair_problem
+                problem = merge_pair_problem(context.scene, pair)
+                if problem is not None:
+                    merge_box.label(text=problem, icon="ERROR")
 
         # Global (not per-pair): post-snap exact join applied on fetch.
         # Drawn outside the Merge Pairs box because it governs every stitch.

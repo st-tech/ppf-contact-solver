@@ -11,6 +11,7 @@ import gpu  # pyright: ignore
 from gpu_extras.batch import batch_for_shader  # pyright: ignore
 from mathutils import Vector  # pyright: ignore
 
+from ....core.encoder import resolve_start_frame
 from ....models.groups import get_addon_data
 
 from .primitives import (
@@ -26,11 +27,20 @@ from .primitives import (
 def _resolve_scene_dyn_params(state, current_frame):
     """Resolve gravity and wind at the given frame, considering dynamic parameter keyframes.
 
+    The first keyframe of a legacy entry is the scene setting itself, in
+    effect at the starting frame (``resolve_start_frame``), whatever frame
+    the entry stores; that is simulated time zero, where the encoder places
+    it too. Anchoring it at its stored frame instead would draw a ramp from a
+    frame the solve never visits.
+
     Returns (gravity_vec, wind_direction_vec, wind_strength).
     """
+    from ....core.encoder import resolve_start_frame
+
     gravity = list(state.gravity_3d)
     wind_dir = list(state.wind_direction)
     wind_strength = state.wind_strength
+    start_frame = resolve_start_frame(state)
 
     for dyn_item in state.dyn_params:
         if len(dyn_item.keyframes) < 2:
@@ -41,9 +51,9 @@ def _resolve_scene_dyn_params(state, current_frame):
         for i, kf in enumerate(dyn_item.keyframes):
             if i == 0:
                 if dyn_item.param_type == "GRAVITY":
-                    resolved.append((kf.frame, list(state.gravity_3d), 0.0))
+                    resolved.append((start_frame, list(state.gravity_3d), 0.0))
                 elif dyn_item.param_type == "WIND":
-                    resolved.append((kf.frame, list(state.wind_direction), state.wind_strength))
+                    resolved.append((start_frame, list(state.wind_direction), state.wind_strength))
                 else:
                     continue
             elif kf.use_hold and resolved:
@@ -86,11 +96,17 @@ def _resolve_scene_dyn_params(state, current_frame):
     return gravity, wind_dir, wind_strength
 
 
-def _resolve_collider_state(item, current_frame):
+def _resolve_collider_state(item, current_frame, start_frame):
     """Resolve collider position and radius at the given frame by interpolating keyframes.
 
-    Frame 0 (index 0) uses base properties. Subsequent keyframes override.
-    Interpolates linearly between keyframes; hold keyframes repeat previous value.
+    The initial keyframe (index 0) uses the collider's base properties and sits
+    at ``start_frame``, the starting frame, whatever frame it is stored at:
+    the encoder ships it as the state at simulated time zero
+    (``encoder.dyn._keyframe_times``), so an overlay that placed it at its
+    stored frame 1 would draw a different motion than the solver runs whenever
+    the simulation starts later. Subsequent keyframes override at their own
+    frames. Interpolates linearly between keyframes; hold keyframes repeat the
+    previous value.
 
     Returns (position: Vector, radius: float).
     """
@@ -104,7 +120,7 @@ def _resolve_collider_state(item, current_frame):
     resolved = []
     for i, kf in enumerate(item.keyframes):
         if i == 0:
-            resolved.append((kf.frame, base_pos.copy(), base_radius))
+            resolved.append((start_frame, base_pos.copy(), base_radius))
         elif kf.use_hold and resolved:
             prev = resolved[-1]
             resolved.append((kf.frame, prev[1].copy(), prev[2]))
@@ -162,6 +178,7 @@ def _build_collider_batches(view_distance):
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
 
     current_frame = bpy.context.scene.frame_current
+    start_frame = resolve_start_frame(state)
     wall_idx = 0
     sphere_idx = 0
 
@@ -177,7 +194,7 @@ def _build_collider_batches(view_distance):
         ):
             continue
 
-        pos, radius = _resolve_collider_state(item, current_frame)
+        pos, radius = _resolve_collider_state(item, current_frame, start_frame)
         if item.collider_type == "WALL":
             base_r, base_g, base_b, _ = _collider_hue_color(wall_idx, "WALL")
             wall_idx += 1

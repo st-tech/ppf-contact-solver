@@ -27,6 +27,7 @@ from bpy.types import Operator  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.pc2 import (
+    display_only_modifier_names,
     has_pin_anim_pc2,
     remove_pin_anim_pc2,
     resume_mesh_cache_display,
@@ -34,7 +35,11 @@ from ...core.pc2 import (
     write_pin_anim_pc2,
 )
 from ...core.transform import zup_to_yup
-from ...core.utils import has_deforming_modifier_stack, redraw_all_areas
+from ...core.utils import (
+    eval_deform_local_positions,
+    has_deforming_modifier_stack,
+    redraw_all_areas,
+)
 from .utils import get_group_from_index
 
 
@@ -97,7 +102,7 @@ def pin_capture_progress_snapshot() -> tuple[int, int, str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _sample_pin_frame_world(eval_obj, pin_indices) -> np.ndarray:
+def _sample_pin_frame_world(eval_obj, co) -> np.ndarray:
     """Sample one frame's world-space positions for the pin's vertices.
 
     Returns ``(n_pin_verts, 3)`` float32 in solver world space
@@ -107,22 +112,15 @@ def _sample_pin_frame_world(eval_obj, pin_indices) -> np.ndarray:
     between consecutive frames, so the absolute frame is irrelevant
     beyond that alignment.
     """
-    eval_mesh = eval_obj.to_mesh()
-    try:
-        n_total = len(eval_mesh.vertices)
-        all_co = np.empty((n_total, 3), dtype=np.float64)
-        eval_mesh.vertices.foreach_get("co", all_co.ravel())
-        co = all_co[pin_indices]
-        mw = np.array(eval_obj.matrix_world, dtype=np.float64).reshape(4, 4)
-        z2y = np.array(zup_to_yup(), dtype=np.float64).reshape(4, 4)
-        m = z2y @ mw
-        homog = np.concatenate(
-            [co, np.ones((co.shape[0], 1), dtype=np.float64)], axis=1,
-        )
-        world = (homog @ m.T)[:, :3]
-        return world.astype(np.float32, copy=False)
-    finally:
-        eval_obj.to_mesh_clear()
+    co = np.asarray(co, dtype=np.float64)
+    mw = np.array(eval_obj.matrix_world, dtype=np.float64).reshape(4, 4)
+    z2y = np.array(zup_to_yup(), dtype=np.float64).reshape(4, 4)
+    m = z2y @ mw
+    homog = np.concatenate(
+        [co, np.ones((co.shape[0], 1), dtype=np.float64)], axis=1,
+    )
+    world = (homog @ m.T)[:, :3]
+    return world.astype(np.float32, copy=False)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +208,7 @@ def _build_entry(scene, group_index, pin_index, error_collector: list):
         "group_index": group_index,
         "pin_index": pin_index,
         "pin_indices": np.asarray(pin_indices, dtype=np.int64),
+        "object_type": group.object_type,
         "frame_start": frame_start,
         "frame_end": frame_end,
         "range_source": range_source,
@@ -243,8 +242,32 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
                 max_index=int(pin_idx.max()),
             )
         )
-    eval_obj = obj.evaluated_get(depsgraph)
-    world = _sample_pin_frame_world(eval_obj, pin_idx)
+    # The SAME evaluation the encoder ships the object at (display-only
+    # modifiers hidden, a count-changing stack cut where the output cache
+    # sits), so row 0 of the cache is the shipped pose by construction.
+    # Indexing a mesh whose count a modifier changed would read other
+    # vertices, or none at all.
+    local = eval_deform_local_positions(
+        obj, bpy.context,
+        exclude_modifier_names=display_only_modifier_names(
+            obj, entry["object_type"],
+        ),
+    )
+    if local is None:
+        return False, (
+            iface_(
+                "Pin '{pin}' on '{object}': a modifier changes the vertex "
+                "count at frame {frame} in front of the cache, where only a "
+                "modifier the add-on does not count as topology-changing can "
+                "sit (a Fluid domain, an Ocean in Generate mode, or a Mesh "
+                "Sequence Cache of different topology), so the pinned "
+                "vertices cannot be read. Remove or disable it and capture "
+                "again."
+            ).format(pin=entry['vg_name'], object=entry['obj_name'], frame=frame)
+        )
+    world = _sample_pin_frame_world(
+        obj.evaluated_get(depsgraph), local[pin_idx],
+    )
     if world.shape != (len(pin_idx), 3):
         return False, (
             iface_(

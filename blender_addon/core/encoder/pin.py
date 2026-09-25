@@ -10,7 +10,9 @@ import numpy as np
 from mathutils import Vector  # pyright: ignore
 
 from ...models.groups import decode_vertex_group_identifier
+from ...models.material_maps import pin_tracks_rest_shape
 from ..utils import (
+    get_id_fcurves,
     get_vertices_in_group,
     pin_covers_all_vertices,
     world_matrix,
@@ -18,7 +20,9 @@ from ..utils import (
 from . import (
     _swap_axes,
     _to_solver,
+    check_frame_window,
     frame_to_time,
+    op_type_label,
     resolve_solver_fps,
     resolve_start_frame,
     resolve_time_scale,
@@ -67,6 +71,45 @@ def _get_pin_indices(obj, vg_name):
     return []
 
 
+def pin_vertex_indices(obj, vg_name, pin_label, group_name):
+    """The vertices (control points, on a CURVE) the pin *vg_name* holds on
+    *obj*, refused by name when it holds none.
+
+    A MESH pin reads its vertex group, a CURVE pin its ``_pin_<vg_name>``
+    record. A pin whose group is gone (deleted, or renamed and then edited so
+    its contents no longer identify it) and a pin whose group is empty both
+    hold nothing, and skipping either would transfer the object without a pin
+    the artist sees in the pin list. The data encoder and the param encoder
+    both read a transferred object's pins through this, so they refuse the
+    same pins in the same words. *pin_label* names the pin when *vg_name* is
+    empty.
+    """
+    if obj.type == "CURVE":
+        raw = obj.get(f"_pin_{vg_name}") if vg_name else None
+        present = raw is not None
+        indices = json.loads(raw) if raw else []
+        held = "control points"
+    else:
+        vg = obj.vertex_groups.get(vg_name) if vg_name else None
+        present = vg is not None
+        indices = get_vertices_in_group(obj, vg) if present else []
+        held = "vertices"
+    where = (
+        f"Pin '{vg_name or pin_label}' on '{obj.name}' in group '{group_name}'"
+    )
+    if not present:
+        raise ValueError(
+            f"{where}: its vertex group no longer exists (deleted, or renamed "
+            "and then edited). Pin the group you mean again, or remove the pin."
+        )
+    if not indices:
+        raise ValueError(
+            f"{where}: its vertex group holds no {held}, so the pin holds "
+            f"nothing. Assign {held} to the group, or remove the pin."
+        )
+    return list(indices)
+
+
 def _max_towards_center(obj, vg_name, state, direction, frame=None, eps=1e-3):
     """Compute center from pin vertices furthest towards a direction (grab-style).
 
@@ -75,23 +118,30 @@ def _max_towards_center(obj, vg_name, state, direction, frame=None, eps=1e-3):
     via world_matrix (axis swap only).
 
     If frame is given, evaluates vertex positions at that frame.
+
+    A zero-length direction selects no vertex as furthest, so it is refused by
+    name. Answering with some other point instead would spin or scale the pin
+    about a center the artist never picked, and one the viewport overlay does
+    not draw either: it falls back to the centroid of the whole pin.
     """
     pin_indices = _get_pin_indices(obj, vg_name)
     if not pin_indices:
         return [0.0, 0.0, 0.0]
+    d = np.array(direction, dtype=np.float64)
+    d_norm = np.linalg.norm(d)
+    if not d_norm >= 1e-12:
+        raise ValueError(
+            f"Pin '{vg_name}' on '{obj.name}': the Max Towards center has a "
+            "zero-length direction, which picks no vertex as furthest; give "
+            "it a direction"
+        )
+    d = d / d_norm
     saved_frame = bpy.context.scene.frame_current
     if frame is not None:
         bpy.context.scene.frame_set(frame)
     # Select vertices in Blender world space (direction is Blender space)
     blender_mat = obj.matrix_world
     positions = np.array([list(blender_mat @ _get_point_co(obj, i)) for i in pin_indices])
-    d = np.array(direction, dtype=np.float64)
-    d_norm = np.linalg.norm(d)
-    if d_norm < 1e-12:
-        if frame is not None:
-            bpy.context.scene.frame_set(saved_frame)
-        return [0.0, 0.0, 0.0]
-    d = d / d_norm
     projections = positions @ d
     max_val = projections.max()
     mask = projections > max_val - eps
@@ -110,12 +160,14 @@ _PIN_VERTEX_CO_RGX = None  # lazy-initialized in the collector below
 
 
 def _collect_pin_vertex_fcurve_frames(obj, vg_name):
-    """Walk ``obj.data.animation_data.action`` for vertex-co fcurves on
-    pinned vertices. Returns ``(sorted_unique_frames, lookup)`` where
-    ``lookup`` is ``{(vertex_index, axis_index): fcurve}``. Both
-    Blender 5.x layered actions and the legacy flat layout are
-    supported. Returns ``([], {})`` when no animation data or no
-    matching fcurves exist.
+    """Read the vertex-co fcurves on pinned vertices from the action slot
+    that animates ``obj.data``. Returns ``(sorted_unique_frames, lookup)``
+    where ``lookup`` is ``{(vertex_index, axis_index): fcurve}``, or
+    ``([], {})`` when no animation data or no matching fcurves exist.
+
+    Only the mesh's own slot counts (``get_id_fcurves``): another slot of a
+    shared action animates another datablock, and a mesh with no slot
+    assigned is animated by none, as Blender plays it.
     """
     import re
 
@@ -148,22 +200,10 @@ def _collect_pin_vertex_fcurve_frames(obj, vg_name):
             return
         lookup[(vi, ai)] = fc
         for kp in fc.keyframe_points:
-            f = int(round(kp.co[0]))
-            if f >= 1:
-                frames.add(f)
+            frames.add(int(round(kp.co[0])))
 
-    if hasattr(action, "layers") and len(action.layers) > 0:
-        for layer in action.layers:
-            for strip in layer.strips:
-                for slot in action.slots:
-                    cb = strip.channelbag(slot)
-                    if cb is None:
-                        continue
-                    for fc in cb.fcurves:
-                        consume(fc)
-    elif hasattr(action, "fcurves"):
-        for fc in action.fcurves:
-            consume(fc)
+    for fc in get_id_fcurves(obj.data):
+        consume(fc)
 
     return sorted(frames), lookup
 
@@ -187,6 +227,8 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
     for group in groups:
         if group.object_type == "STATIC":
             continue
+        # The objects the data encoder transfers, whose pins it reads.
+        shipped = {a.uuid for a in group.assigned_objects if a.included}
         for pin_item in group.pin_vertex_groups:
             has_operations = len(pin_item.operations) > 0
             # EMBEDDED_MOVE (the fcurve-keyframed-pin sentinel) lives
@@ -213,9 +255,16 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                 continue
             # Re-read after resolve_pin (handles object + VG renames)
             obj_name, vg_name = decode_vertex_group_identifier(pin_item.name)
-            if not obj_name or not vg_name:
-                continue
-            if not _get_pin_indices(obj, vg_name):
+            if pin_item.object_uuid in shipped:
+                # A pin that holds nothing is refused by name, as the data
+                # encoder refuses it, so an Update Params that never sends
+                # geometry still cannot drop it.
+                pin_vertex_indices(obj, vg_name, pin_item.name, group.name)
+            elif not obj_name or not vg_name or not _get_pin_indices(
+                obj, vg_name
+            ):
+                # The object is excluded from its group, so neither payload
+                # carries it or its pins.
                 continue
             obj_uuid = get_or_create_object_uuid(obj)
             has_embedded_move = any(
@@ -253,10 +302,14 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
             # rest pose is the captured deformation itself (every sim vertex is
             # driven), so there is no partial-pin reconstruction and no boundary
             # tear. SOLID only.
-            if (getattr(pin_item, "track_rest_pose_deformation", False)
-                    and getattr(pin_item, "has_captured_anim", False)
-                    and group.object_type == "SOLID"
-                    and pin_covers_all_vertices(obj, vg_name)):
+            if pin_tracks_rest_shape(group, pin_item):
+                if not pin_covers_all_vertices(obj, vg_name):
+                    raise ValueError(
+                        f"Pin '{vg_name}' on '{obj_name}': Track Rest-Pose "
+                        "Deformation needs the pin to hold every vertex of the "
+                        "object, and this one holds only some. Pin every "
+                        "vertex, or turn the tracking off."
+                    )
                 cfg["rest_shape_track"] = True
             # Per-pin intersection allowance (issue #138). Unlike
             # rest_shape_track it is gated on nothing here: it applies to every
@@ -303,6 +356,13 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                     # the solver actually consumes.
                     if op.op_type == "EMBEDDED_MOVE":
                         continue
+                    # Checked before anything else is read off the op, so a
+                    # window the solve cannot honor is what gets reported.
+                    check_frame_window(
+                        f"Pin '{vg_name}' on '{obj_name}': its "
+                        f"{op_type_label(op)} operation",
+                        op.frame_start, op.frame_end, start_frame,
+                    )
                     op_dict = {"type": op.op_type.lower()}
                     if op.op_type == "MOVE_BY":
                         op_dict["delta"] = _to_solver(op.delta)
@@ -332,12 +392,22 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                         # Normalize the spin axis so the frontend's rotation
                         # formula (which takes it as a unit vector) gets the
                         # angular velocity the user asked for, regardless of
-                        # the magnitude they typed in the UI.
+                        # the magnitude they typed in the UI. A zero-length
+                        # axis names no rotation, and the solver's rotation
+                        # formula turns it into a collapse toward the center,
+                        # so a spin that moves at all needs one.
                         axis = _swap_axes(op.spin_axis)
                         axis_arr = np.asarray(axis, dtype=np.float64)
                         axis_norm = float(np.linalg.norm(axis_arr))
-                        if axis_norm > 1e-9:
+                        if axis_norm > 0.0:
                             axis_arr = axis_arr / axis_norm
+                        elif float(op.spin_angular_velocity) != 0.0:
+                            raise ValueError(
+                                f"Pin '{vg_name}' on '{obj_name}': Spin has a "
+                                "zero-length axis but an angular velocity of "
+                                f"{float(op.spin_angular_velocity)} deg/s; "
+                                "give it an axis"
+                            )
                         if op.spin_flip:
                             axis_arr = -axis_arr
                         op_dict["axis"] = axis_arr.tolist()
@@ -411,15 +481,14 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                             op_dict["hint_vertex"] = int(pin_indices_hint[np.argmin(projections)])
                         else:
                             op_dict["hint_vertex"] = int(pin_indices_hint[np.argmax(projections)])
-                    # Clamp inverted ranges to zero duration instead of
-                    # emitting a negative interval the solver would reject.
-                    op_start = op.frame_start
-                    op_end = max(op.frame_end, op_start)
-                    op_dict["t_start"] = max(
-                        0.0, frame_to_time(op_start, fps, start_frame),
+                    # check_frame_window above holds the window at or after
+                    # the starting frame and ending after it starts, so both
+                    # times are at or after zero and t_end > t_start.
+                    op_dict["t_start"] = frame_to_time(
+                        op.frame_start, fps, start_frame,
                     )
-                    op_dict["t_end"] = max(
-                        0.0, frame_to_time(op_end, fps, start_frame),
+                    op_dict["t_end"] = frame_to_time(
+                        op.frame_end, fps, start_frame,
                     )
                     op_dict["transition"] = op.transition.lower()
                     ops_list.append(op_dict)
@@ -488,9 +557,11 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                 # capture at the same resolved starting frame.
                 cache_times = [k / fps for k in range(n_frames_cache)]
                 # Cache stores positions in world solver space
-                # (zup_to_yup @ matrix_world @ co_local). The decoder
-                # only uses consecutive deltas, so absolute frame and
-                # translation cancel; any consistent space works.
+                # (zup_to_yup @ matrix_world @ co_local), the space the
+                # decoder holds the shipped mesh in. Most decoder paths use
+                # only consecutive deltas, but a partial SOLID pin's rigid fit
+                # pairs the track with the shipped rest pose, so the space is
+                # not free.
                 pin_idx_array = np.asarray(live_pin_indices, dtype=np.int64)
                 for j, vi in enumerate(pin_idx_array):
                     vert_tracks[int(vi)] = {
@@ -511,31 +582,49 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                     if has_embedded_move_fcurves else ([], {})
                 )
             if fcurve_frames:
-                mat = world_matrix(obj).to_3x3()
+                wm = world_matrix(obj)
                 rot = np.array(
-                    [[mat[r][c] for c in range(3)] for r in range(3)],
+                    [[wm[r][c] for c in range(3)] for r in range(3)],
                     dtype=np.float32,
                 )
-                # One (time, position) sample per authored fcurve
-                # keyframe frame, indexed by vertex. Axes the fcurve
-                # doesn't cover sit at the mesh's rest position,
-                # mirroring native Blender playback.
+                # The translation too, so the track is in the solver world
+                # space the captured cache above and the shipped mesh are in.
+                offset = np.array(
+                    [wm[r][3] for r in range(3)], dtype=np.float32,
+                )
+                # One (time, position) sample per frame below, indexed by
+                # vertex. Axes the fcurve doesn't cover sit at the mesh's
+                # rest position, mirroring native Blender playback.
+                #
+                # Sample 0 is the pose at the starting frame, which is
+                # simulated time zero and the pose ``encode_obj`` ships each
+                # vertex at. The decoder integrates the track as deltas from
+                # that shipped position, as it does the captured cache above
+                # (whose row 0 is the same pose), so the first sample has to
+                # be that pose. Every later sample is an authored key after
+                # the starting frame. A key at or before the starting frame
+                # reaches the track through the curve's value there; placed
+                # at time zero itself, it would offset the whole track by the
+                # motion between that key and the starting frame, and a pin
+                # keyed across a lead-in would end away from its last key.
+                sample_frames = [start_frame] + [
+                    f for f in fcurve_frames if f > start_frame
+                ]
                 n_verts_total = len(obj.data.vertices)
                 rest_co = np.empty(n_verts_total * 3, dtype=np.float32)
                 obj.data.vertices.foreach_get("co", rest_co)
                 rest_pose = rest_co.reshape(n_verts_total, 3)
                 times = [
-                    max(0.0, frame_to_time(f, fps, start_frame))
-                    for f in fcurve_frames
+                    frame_to_time(f, fps, start_frame) for f in sample_frames
                 ]
                 pose_stack = np.broadcast_to(
-                    rest_pose, (len(fcurve_frames), n_verts_total, 3),
+                    rest_pose, (len(sample_frames), n_verts_total, 3),
                 ).copy()
                 for (vi, ai), fc in fcurve_lookup.items():
                     if 0 <= vi < n_verts_total:
-                        for k, fr in enumerate(fcurve_frames):
+                        for k, fr in enumerate(sample_frames):
                             pose_stack[k, vi, ai] = fc.evaluate(fr)
-                transformed = pose_stack @ rot.T
+                transformed = pose_stack @ rot.T + offset
                 for vi in _get_pin_indices(obj, vg_name):
                     if 0 <= vi < n_verts_total:
                         vert_tracks[vi] = {
@@ -551,7 +640,6 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                 cfg["embedded_move_index"] = 0
             # Tag with group identity so solver can merge torque vertices
             cfg["pin_group_id"] = f"{obj_uuid}:{vg_name}"
-            cfg["obj_uuid"] = obj_uuid
             # SOLID hard-pin surface/soft split threshold (per pin). The
             # decoder splits a hard-intent partial-pin SOLID holder into a hard
             # surface shell and a soft-pulled interior; this scalar sets how much

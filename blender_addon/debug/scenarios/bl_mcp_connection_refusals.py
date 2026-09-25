@@ -59,6 +59,12 @@
 #      connection with the settings it was handed. These run LAST because they
 #      move the session out of the disconnected state every check above
 #      depends on.
+#   L. ``connect_refusal_names_the_reason`` -- from a session observed
+#      offline, connect_ssh refuses a missing transport module (paramiko,
+#      simulated) and a remote path holding a space, and each refusal names
+#      the reason and the module's installer instead of Blender's "context is
+#      incorrect"; the session stays offline. It runs before J, which moves
+#      the session out of that state.
 #   K. ``connect_refuses_while_a_connection_is_up`` -- with a connection
 #      established, both the specific and the generic connect entry point
 #      refuse and name the state, rather than reporting an initiation the
@@ -279,6 +285,40 @@ try:
             if status.get("connected") or time.time() > deadline:
                 return status
             time.sleep(0.1)
+
+    # ----- L --------------------------------------------------------
+    # A connect the panel's Connect button would refuse is refused by the
+    # tool WITH the reason. The two answer from one function,
+    # `connect_refusal`, so a missing transport module and a path a shell
+    # cannot hold are named here rather than surfacing as Blender's "context
+    # is incorrect". The missing module is simulated by answering the
+    # operator module's own lookup, so the check does not depend on whether
+    # this host's Blender has paramiko.
+    conn_ops = __import__(pkg + ".ui.connection_ops",
+                          fromlist=["connect_refusal"])
+    real_module_exists = conn_ops.module_exists
+    ssh_args = {"host": "rig.invalid", "username": "nobody",
+                "key_path": "/nonexistent/key", "remote_path": "/tmp"}
+    offline_before = settle_offline()
+    try:
+        conn_ops.module_exists = lambda packages: False
+        no_module = call("connect_ssh", ssh_args)
+    finally:
+        conn_ops.module_exists = real_module_exists
+    bad_path = call("connect_ssh", dict(ssh_args, remote_path="/tmp/a b"))
+    offline_after = connection_status()
+    mcp_check(result, "L_connect_refusal_names_the_reason",
+              is_offline(offline_before)
+              and no_module.get("status") == "error"
+              and "paramiko" in no_module.get("message", "")
+              and "ssh.install_paramiko" in no_module.get("message", "")
+              and "context is incorrect" not in no_module.get("message", "")
+              and bad_path.get("status") == "error"
+              and "' '" in bad_path.get("message", "")
+              and is_offline(offline_after),
+              {"no_module": no_module.get("message"),
+               "bad_path": bad_path.get("message"),
+               "after": offline_after})
 
     # The native connect reads the panel's shared port field, which is where
     # the worker's solver server has to be named for it to reach it. The rig

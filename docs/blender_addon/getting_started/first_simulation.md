@@ -89,13 +89,12 @@ a static collider for it to drape over.
    [linux](../connections/linux.md)).
 
    ```{figure} ../images/getting_started/step1_pick_connection.png
-   :alt: Backend Communicator panel with a co-located connection type selected and Connect highlighted
+   :alt: Backend Communicator panel with Linux Native selected, a valid Solver Path, Compute Device on GPU, and Connect highlighted
    :width: 500px
 
-   Step 1: pick the connection type from the **Type** dropdown, fill the
-   path and **Project Name** fields, then click the highlighted
-   **Connect** button. This screenshot predates the current **Type**
-   list and the **Compute Device** row.
+   Step 1: pick your platform's native type from the **Type** dropdown,
+   fill **Solver Path** and **Project Name**, leave **Compute Device** on
+   `GPU`, then click the highlighted **Connect** button.
    ```
 
 2. **Connect, then start the server.** Click **Connect**. The status

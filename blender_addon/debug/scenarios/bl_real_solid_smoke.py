@@ -10,10 +10,8 @@
 # build -> solve -> fetch cycle for a SOLID whose top face is pinned and
 # the rest is free. That partial pin is exactly what triggers the
 # frontend's two-stage Poisson pin-field diffusion in _decoder_.py
-# (_build_solid_pin_fields), the code path where the Windows regression
-# lived: warmup.bat had shipped a bundle without scipy, so the diffusion
-# silently fell back to a surface-only pin set and Windows diverged from
-# Linux (see fix a8fe7e93). Running this on the real Windows-native and
+# (_build_solid_pin_fields), which refuses the build, naming scipy, on a
+# bundle that does not carry it. Running this on the real Windows-native and
 # real-Linux builds proves the whole dependency chain (fTetWild/pytetwild
 # + tetgen + scipy) is present and the pipeline runs end-to-end on the
 # real CUDA solver.

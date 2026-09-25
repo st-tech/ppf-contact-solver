@@ -95,6 +95,12 @@ enum : unsigned { NO_OBJECT_INDEX = 0xFFFFFFFFu };
 // object.
 enum : unsigned { NO_GROUP_INDEX = 0xFFFFFFFFu };
 
+// Allow Existing Intersections' link table names two pools in one index: a
+// dynamic vertex as itself, and a collision-mesh vertex with this bit set.
+// `builder.rs` refuses a scene whose dynamic vertex count reaches it, so no
+// dynamic index can carry the bit. Mirrored in data.rs.
+enum : unsigned { START_LINK_COLLISION_VERTEX = 0x80000000u };
+
 // VertexProp::intersect_policy bits. Mirrored in data.rs and in
 // frontend/_scene_.py.
 enum : unsigned char {

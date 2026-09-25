@@ -19,8 +19,9 @@ persisted as part of the scene profile.
 4. A new entry appears in the list above the Add / Remove row, named
    `Wall 1`, `Sphere 1`, `Wall 2`, `Sphere 2`, … by number of existing
    entries of that type.
-5. Every new collider gets a fixed frame-1 keyframe automatically; it
-   reads from the base properties and cannot be deleted.
+5. Every new collider gets an *Initial* keyframe automatically. It
+   holds the collider's state at the solve's **Starting Frame**, reads
+   from the base properties, and cannot be deleted.
 
 Selecting a collider in the list opens a **properties box** just below
 it with inline fields for the current collider. What you see depends on
@@ -30,7 +31,9 @@ the collider type:
   **Friction**, **Thickness**, and an **Active Duration** toggle. When
   on, it expands to an **Active Until (frame)** field: the collider acts
   on frames before that number and stops at it, so the value is a
-  Blender frame, not a frame count.
+  Blender frame, not a frame count. An **Active Until** at or before
+  the solve's **Starting Frame** would never act, and **Transfer**
+  refuses it, naming the collider.
 - **Sphere**: **Name**, **Position**, **Radius**, side-by-side
   **Invert** and **Hemisphere** checkboxes, then the same **Contact
   Gap**, **Friction**, **Thickness**, **Active Duration** rows as Wall.
@@ -146,10 +149,18 @@ To animate the selected collider:
 4. Adjust values inline. To delete, select the keyframe and click
    **Remove**.
 
-The **first** keyframe in the list is badged *Initial*. It is frozen
-to frame 1 and shows the message *"Uses base properties above"*
-instead of value rows. It reads whatever is currently in the properties
-box and cannot be removed; its Remove button stays disabled.
+The **first** keyframe in the list is badged *Initial*. It holds the
+collider's state at the solve's **Starting Frame**, so the list labels
+it with that frame (`Frame 1 (Initial)` at the default Starting Frame
+of 1) and the viewport preview places it there. It shows the message
+*"Uses base properties above"* instead of value rows, reads whatever is
+currently in the properties box, and cannot be removed; its **Remove**
+button stays disabled.
+
+Every later keyframe has to come after the **Starting Frame** and after
+the keyframe listed before it. **Transfer** refuses a keyframe at or
+before the **Starting Frame**, or one out of order with its predecessor,
+naming the collider and the frame.
 
 Turning **Hold** on for any later keyframe makes that frame hold the
 *previous* keyframe's value, producing a step function. Useful for "stay
@@ -231,6 +242,12 @@ Both collider types also carry the usual contact settings:
 | --------------- | ----------------- | ------------------------------------------------------------------ |
 | **Contact Gap** | `contact_gap`     | Barrier gap maintained between the collider and dynamic geometry.  |
 | **Friction**    | `friction`        | Tangential friction coefficient.                                   |
+
+**Contact Gap** is a distance in scene units, and it scales with
+[World Scaling](../params/scene.md#world-scaling) like the collider's
+position, radius, and thickness, so a gap that holds cloth just off a
+wall at a **World Scaling** of `1.0` holds it at the same place relative
+to the geometry at any other setting.
 
 ## Saving with a Scene Profile
 

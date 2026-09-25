@@ -40,6 +40,10 @@ def _build_violation_batches(scene, depsgraph, violations):
         "wall": (1.0, 0.1, 0.1, 0.5),
         "sphere": (0.8, 0.1, 1.0, 0.5),
         "runtime_intersection": (1.0, 0.05, 0.05, 0.5),
+        # Not a violation: what Allow Existing Intersections exempted. A
+        # cool color and a lighter tint, so it reads as information about a
+        # scene that builds rather than as a refusal.
+        "existing_intersection": (0.1, 0.8, 1.0, 0.35),
     }
     LABELS = {
         "self_intersection": "Self-Intersections",
@@ -47,6 +51,7 @@ def _build_violation_batches(scene, depsgraph, violations):
         "wall": "Wall Violations",
         "sphere": "Sphere Violations",
         "runtime_intersection": "Runtime Intersection(s)",
+        "existing_intersection": "Existing Intersections Allowed",
     }
     EDGE_THICKNESS = 0.006
 
@@ -116,6 +121,33 @@ def _build_violation_batches(scene, depsgraph, violations):
                         tri_verts.extend([bv[0], bv[1], bv[2]])
                         if not centers:
                             centers.append((bv[0] + bv[1] + bv[2]) / 3.0)
+            if tri_verts:
+                batch = batch_for_shader(tri_shader, "TRIS", {"pos": tri_verts})
+                batches.append((batch, "TRIS", color))
+                if centers:
+                    labels.append({
+                        "pos_3d": centers[0] + Vector((0, 0, 0.05)),
+                        "text": f"{count} {label_text}",
+                        "color": color[:3] + (1.0,),
+                    })
+
+        elif vtype == "existing_intersection":
+            # Each pair is two elements, each a list of positions: three for a
+            # triangle, two for a rod edge.
+            tri_verts = []
+            centers = []
+            for pair in violation.get("pairs", []):
+                for key in ("a", "b"):
+                    pos_list = pair.get(key, [])
+                    bv = [_solver_to_blender(p) for p in pos_list]
+                    if len(bv) >= 3:
+                        tri_verts.extend([bv[0], bv[1], bv[2]])
+                        if not centers:
+                            centers.append((bv[0] + bv[1] + bv[2]) / 3.0)
+                    elif len(bv) == 2:
+                        tri_verts.extend(_line_to_tris(bv[0], bv[1], EDGE_THICKNESS))
+                        if not centers:
+                            centers.append((bv[0] + bv[1]) / 2.0)
             if tri_verts:
                 batch = batch_for_shader(tri_shader, "TRIS", {"pos": tri_verts})
                 batches.append((batch, "TRIS", color))

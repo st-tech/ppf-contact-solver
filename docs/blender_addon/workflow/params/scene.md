@@ -95,8 +95,9 @@ triangle on its header row and toggles open/closed independently:
 
 With the **Wind** disclosure triangle open, the sub-section reveals a
 **Direction** XYZ field, a **Preview Direction** viewport toggle, and a
-**Strength (m/s)** scalar. Encoding combines direction × strength, so a
-zero-direction vector disables wind regardless of the strength value.
+**Strength (m/s)** scalar. Encoding combines the normalized direction
+with the strength, so a direction of `(0, 0, 0)` is accepted only with a
+**Strength** of `0`.
 ```
 
 - **Invisible Colliders**: walls and spheres with their own keyframe
@@ -120,9 +121,8 @@ preconditioner choice are one box up in **Linear System Solver**, and
 **Auto Save** is in [Save and Checkpoints](#save-and-checkpoints).
 ```
 
-Keyframed gravity, wind, air density, air friction, vertex air damp,
-step size and inactive-momentum frames are no longer a sub-section of
-their own: each is keyframed on its own slider. See
+Gravity, wind, air density, air friction, vertex air damp and step size
+are keyframed on their own sliders rather than in a sub-section. See
 [Dynamic Parameters](dynamic.md).
 
 Only the sub-section headers are visible when collapsed; click the
@@ -142,13 +142,16 @@ triangle on any of them to expand.
 | **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
 | **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
 | **Air Friction**             | `air_friction`             | 0.2           | Tangential-to-normal air drag ratio, 0 – 1 (see below).             |
-| **World Scaling**            | `world_scaling`            | 1.0           | Uniform scale applied to all geometry before simulating; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000 (see below). |
+| **World Scaling**            | `world_scaling`            | 1.0           | Physical size the scene is simulated at, as a uniform scale; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000 (see below). |
 | **Gravity (m/s²)**           | `gravity_3d`               | (0, 0, -9.8)  | Gravity vector, m/s² (Z-up Blender frame).                          |
 | **Preview Direction** (gravity) | `preview_gravity_direction` | `False`    | Draw the gravity-direction arrow overlay in the viewport. Overlay-only. |
 | **Inactive Momentum Frames** | `inactive_momentum_frames` | 0             | Frames over which shell momentum is ignored at startup (0 – 600).   |
 
 **Inactive Momentum Frames** is only honored when the scene contains at
-least one **Shell** group; otherwise the UI disables the row.
+least one **Shell** group; otherwise the UI disables the row. It counts
+frames from the start of the solve, so it takes no keyframe, and a
+keyframe that a saved file still carries on it stops **Transfer** with a
+message naming it; delete that keyframe.
 
 ### Air Friction
 
@@ -188,20 +191,29 @@ see [Dynamic Parameters](dynamic.md).
 
 ### World Scaling
 
-**World Scaling** multiplies all geometry by this factor on the way into
-the solver and divides the simulated result back out on the way home, so
-the scene keeps the size you authored it at. Use it when a scene is
-modeled at a size it does not represent: at `0.1` a 15 m mesh is
-simulated as if it were 1.5 m.
+**World Scaling** changes the physical size the scene is simulated at.
+The solver multiplies the scene by this factor on the way in and divides
+the simulated result back out on the way home, so the scene keeps the
+size you authored it at. Use it when a scene is modeled at a size it
+does not represent: at `0.1` a 15 m mesh is simulated as a 1.5 m one
+under the same gravity, and the result comes back at 15 m.
 
-Everything with units of length scales with the geometry: initial
-velocities, keyframed translations, invisible-sphere radii, and each
-group's **Contact Gap** and **Contact Offset**. So a contact that just
-touches at `1.0` still just touches at any other setting. Gravity and the
-scene-level **Constraint Gap** are absolute and are left alone, which is
-what the control is for: holding gravity fixed while the geometry moves
-to another scale is what makes the scene behave as the size it
-represents.
+Every length you author in scene units scales with the geometry:
+positions (the meshes, the invisible walls and spheres with their radii
+and thicknesses, and pin operations' moves and centers), velocities
+(initial ones and velocity keyframes), each group's **Contact Gap** and
+**Contact Offset** whether absolute or a ratio of the bounding box, the
+**Contact Gap** of every invisible wall and sphere, and the scene-level
+**Constraint Gap**. Keyframed contact distances scale the same way as
+their static values. So a contact that just
+touches at `1.0` still just touches at any other setting.
+
+Physical constants are left alone, because they describe the world the
+resized scene is simulated in: **Gravity**, **Wind**, the material
+parameters (**Air Density** included), and a pin's **Torque**. Settings
+with no length in them, such as an angular velocity, **Friction**, or a
+time, do not change either. Holding gravity fixed while the geometry
+changes size is what makes the scene behave as the size it represents.
 
 A **Rod** group's **Bend Stiffness** is measured against a 1 cm reference
 segment in solver units, that is, after **World Scaling** has been
@@ -217,9 +229,12 @@ as drawn in Blender. See [Material Parameters](material.md).
 | **Preview Direction**  | `preview_wind_direction`| `False`   | Draw the wind-direction arrow overlay in the viewport. Overlay-only. |
 | **Strength (m/s)**     | `wind_strength`         | 0.0       | Wind speed, m/s. Range 0 – 1000.                |
 
-The encoder combines the two into a single `direction × strength` vector
-before sending. If **Direction** is `(0, 0, 0)`, no wind is applied
-regardless of **Strength (m/s)**.
+The encoder normalizes **Direction** and multiplies it by **Strength
+(m/s)** into a single vector before sending, so only the direction of
+**Direction** matters, and a **Strength** of `0` means no wind whatever
+the direction. A **Direction** of `(0, 0, 0)` with a nonzero
+**Strength** names no direction to blow in, and **Transfer** refuses
+it; the same holds for every keyframe of the wind.
 
 ```{figure} ../../images/scene_params/wind_preview.png
 :alt: Scene Configuration with Wind expanded. Direction (0, 1, 0), Strength 5.0 m/s, Preview Direction on, and a green wind arrow plus sphere overlay drawn in the 3D viewport
@@ -246,7 +261,7 @@ The panel splits these across two boxes. **Linear System Solver** holds
 | **Max Contact**           | `contact_nnz`        | 100 000 000 | Capacity of the contact sparse matrix (non-zero entries).        |
 | **Vertex Air Damping**    | `vertex_air_damp`    | 0.0         | Per-vertex isotropic air damping, 0 – 1.                         |
 | **Line Search Max T**     | `line_search_max_t`  | 1.25        | CCD line-search maximum step factor. Range 0.1 – 10.             |
-| **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance. Range 0.0001 – 0.1.                        |
+| **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance, in scene units; scales with **World Scaling**. Range 0.0001 – 0.1. |
 | **PCG Max Iterations**    | `cg_max_iter`        | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
 | **PCG Tolerance**         | `cg_tol`             | 0.001       | PCG relative tolerance. 0.00001 – 0.1.                           |
 | **Preconditioner**        | `precond`            | `BLOCK_JACOBI` | Preconditioner used by the PCG linear solver. Choices: `BLOCK_JACOBI` (default), `SCHWARZ`. See [Preconditioner](#preconditioner). |
@@ -319,7 +334,10 @@ to resume from earlier frames.
 **Save Checkpoints** lets you pick specific frames to save, in addition
 to (or instead of) the regular **Auto Save** schedule. Add the frames
 you care about to the list and the solver writes a resumable state at
-each one. The list is empty by default.
+each one. The list is empty by default. The frames are Blender frames,
+and each has to come after the **Starting Frame**, where nothing has
+been simulated yet: **Transfer** refuses a checkpoint at or before it,
+naming the frame.
 
 The **Resume** dialog offers exactly the frames that have been saved.
 Auto-saved frames, the on-finish save, and your explicit **Save

@@ -5,33 +5,25 @@
 #
 # MCP resources surface, against a real Blender.
 #
-# The add-on serves two families of resource from one namespace: the live
-# scene at ``blender://scene/current``, which is read through the main-thread
-# task queue, and the ``llm://`` documentation bundle, which is read straight
-# off the add-on tree. Only a real Blender can show both: with ``bpy`` stubbed
-# the scene branch has no scene to enumerate, and the doc branch has no
-# installed tree to resolve a URI against.
+# The add-on serves one resource: the live scene at
+# ``blender://scene/current``, read through the main-thread task queue. It
+# ships no documentation bundle: a tool's description and input schema are its
+# reference. Only a real Blender can show the scene branch: with ``bpy``
+# stubbed there is no scene to enumerate.
 #
 # Assertions:
 #   A. ``A_list_is_cacheable`` -- resources/list is a complete result carrying
 #      the ttlMs and cacheScope hints a cacheable operation must attach.
-#   B. ``B_list_names_scene_and_every_shipped_doc`` -- the list names
-#      blender://scene/current as application/json, and the llm:// entries are
-#      exactly the markdown files on the installed tree, each with a name.
-#   C. ``C_index_reads_as_public_markdown`` -- resources/read of llm://index
-#      returns one text/markdown content block with non-empty text, scoped
-#      public because the bundle is identical for every caller.
+#   B. ``B_list_names_the_scene_alone`` -- the list is exactly
+#      blender://scene/current, as application/json, with a name.
 #   D. ``D_scene_resource_returns_real_scene_data`` -- resources/read of
 #      blender://scene/current succeeds and its JSON body carries the scene
 #      enumeration keys, not a handler error rendered as content.
-#   E. ``E_unknown_and_escaping_uris_are_refused`` -- a doc URI that names no
-#      file, and one that tries to climb out of the bundle, are both -32602.
+#   E. ``E_unknown_uris_are_refused`` -- a URI the server does not serve (a
+#      documentation URI included) is -32602, naming the URI.
 #   F. ``F_templates_list_is_empty_and_cacheable`` -- this server templates no
 #      URI, so resources/templates/list answers with an empty list rather than
 #      an error, and carries the caching hints too.
-#   G. ``G_every_advertised_doc_reads_non_empty`` -- every llm:// URI the list
-#      advertises reads back as non-empty markdown, so a doc file that was
-#      moved, emptied or left unreadable cannot ship.
 
 from __future__ import annotations
 
@@ -59,8 +51,6 @@ result.setdefault("errors", [])
 result.setdefault("checks", {})
 
 try:
-    import pathlib
-
     SCENE_URI = "blender://scene/current"
 
     port = mcp_alloc_free_port()
@@ -90,87 +80,21 @@ try:
         },
     )
 
-    # ----- B. both families are advertised ------------------------
+    # ----- B. the scene is the one resource -----------------------
     by_uri = {}
     for entry in listed:
         if isinstance(entry, dict) and isinstance(entry.get("uri"), str):
             by_uri[entry["uri"]] = entry
     scene_entry = by_uri.get(SCENE_URI) or {}
-    doc_uris = sorted(uri for uri in by_uri if uri.startswith("llm://"))
-
-    # Derive the shipped doc set from the installed tree rather than from the
-    # enumerator under test, so a file that is present but never advertised is
-    # a failure instead of an agreement between the code and itself.
-    llm_mod = __import__(
-        pkg + ".mcp.llm_resources", fromlist=["list_llm_resources"]
-    )
-    addon_root = pathlib.Path(llm_mod.__file__).resolve().parent.parent
-    llm_dir = addon_root / "LLM"
-    on_disk = set()
-    if (addon_root / "LLM.md").is_file():
-        on_disk.add("llm://index")
-    if llm_dir.is_dir():
-        for path in sorted(llm_dir.rglob("*.md")):
-            parts = path.relative_to(llm_dir).with_suffix("").parts
-            if parts and parts[0] == "blender_addon":
-                parts = parts[1:]
-            on_disk.add("llm://" + "/".join(parts))
-    doc_meta_faults = sorted(
-        uri for uri in doc_uris
-        if by_uri[uri].get("mimeType") != "text/markdown"
-        or not by_uri[uri].get("name")
-    )
     mcp_check(
-        result, "B_list_names_scene_and_every_shipped_doc",
-        scene_entry.get("mimeType") == "application/json"
-        and bool(scene_entry.get("name"))
-        and "llm://index" in by_uri
-        and len(on_disk) > 1
-        and set(doc_uris) == on_disk
-        and not doc_meta_faults,
+        result, "B_list_names_the_scene_alone",
+        sorted(by_uri) == [SCENE_URI]
+        and scene_entry.get("mimeType") == "application/json"
+        and bool(scene_entry.get("name")),
         {
-            "scene_entry": {
-                "present": bool(scene_entry),
-                "mimeType": scene_entry.get("mimeType"),
-                "name": scene_entry.get("name"),
-            },
-            "doc_count": len(doc_uris),
-            "advertised_not_on_disk": sorted(set(doc_uris) - on_disk),
-            "on_disk_not_advertised": sorted(on_disk - set(doc_uris)),
-            "doc_meta_faults": doc_meta_faults,
-        },
-    )
-
-    # ----- C. the doc index reads back as public markdown ---------
-    env, resp = mcp_call(
-        pkg, url, "resources/read", {"uri": "llm://index"}, request_id=2
-    )
-    res = env.get("result") or {}
-    contents = res.get("contents") or []
-    first = contents[0] if contents and isinstance(contents[0], dict) else {}
-    index_text = first.get("text") or ""
-    ok, why = mcp_envelope_ok(env, 2)
-    mcp_check(
-        result, "C_index_reads_as_public_markdown",
-        ok
-        and len(contents) == 1
-        and first.get("uri") == "llm://index"
-        and first.get("mimeType") == "text/markdown"
-        and bool(index_text.strip())
-        and res.get("cacheScope") == "public"
-        and isinstance(res.get("ttlMs"), int)
-        and res.get("ttlMs") >= 0,
-        {
-            "status": resp["status"],
-            "envelope_ok": ok,
-            "why": why,
-            "content_blocks": len(contents),
-            "uri": first.get("uri"),
-            "mimeType": first.get("mimeType"),
-            "chars": len(index_text.strip()),
-            "first_line": index_text.splitlines()[0][:80] if index_text else "",
-            "cacheScope": res.get("cacheScope"),
-            "ttlMs": res.get("ttlMs"),
+            "uris": sorted(by_uri),
+            "mimeType": scene_entry.get("mimeType"),
+            "name": scene_entry.get("name"),
         },
     )
 
@@ -226,9 +150,9 @@ try:
         },
     )
 
-    # ----- E. a URI naming nothing, and one climbing out ----------
+    # ----- E. a URI the server does not serve --------------------
     refusals = {}
-    for request_id, bad_uri in ((4, "llm://no-such-topic"), (5, "llm://../../etc/passwd")):
+    for request_id, bad_uri in ((4, "llm://index"), (5, "blender://scene/other")):
         env, resp = mcp_call(
             pkg, url, "resources/read", {"uri": bad_uri}, request_id=request_id
         )
@@ -240,7 +164,7 @@ try:
             "names_uri": bad_uri in (err.get("message") or ""),
         }
     mcp_check(
-        result, "E_unknown_and_escaping_uris_are_refused",
+        result, "E_unknown_uris_are_refused",
         all(
             info["status"] == 400 and info["code"] == -32602 and info["names_uri"]
             for info in refusals.values()
@@ -266,48 +190,6 @@ try:
             "resourceTemplates": res.get("resourceTemplates"),
             "ttlMs": res.get("ttlMs"),
             "cacheScope": res.get("cacheScope"),
-        },
-    )
-
-    # ----- G. every advertised doc reads back non-empty -----------
-    doc_reports = {}
-    request_id = 100
-    for uri in doc_uris:
-        request_id += 1
-        env, resp = mcp_call(
-            pkg, url, "resources/read", {"uri": uri}, request_id=request_id
-        )
-        res = env.get("result") or {}
-        contents = res.get("contents") or []
-        first = contents[0] if contents and isinstance(contents[0], dict) else {}
-        text = first.get("text") or ""
-        ok, why = mcp_envelope_ok(env, request_id)
-        doc_reports[uri] = {
-            "ok": bool(
-                ok
-                and first.get("uri") == uri
-                and first.get("mimeType") == "text/markdown"
-                and bool(text.strip())
-                and res.get("cacheScope") == "public"
-            ),
-            "status": resp["status"],
-            "chars": len(text.strip()),
-            "mimeType": first.get("mimeType"),
-            "cacheScope": res.get("cacheScope"),
-            "why": why or None,
-        }
-    doc_faults = {
-        uri: info for uri, info in doc_reports.items() if not info["ok"]
-    }
-    mcp_check(
-        result, "G_every_advertised_doc_reads_non_empty",
-        bool(doc_uris) and not doc_faults,
-        {
-            "doc_count": len(doc_uris),
-            "faults": doc_faults,
-            "chars_by_uri": {
-                uri: info["chars"] for uri, info in sorted(doc_reports.items())
-            },
         },
     )
 

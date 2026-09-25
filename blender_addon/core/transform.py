@@ -35,12 +35,23 @@ def _to_blender(v) -> list[float]:
     return [float(v[0]), float(-v[2]), float(v[1])]
 
 
-def _normalize_and_scale(direction, strength) -> list[float]:
-    """Normalize a direction vector and multiply by strength."""
+def _normalize_and_scale(direction, strength, what: str) -> list[float]:
+    """Normalize a direction vector and multiply by strength.
+
+    A zero-length direction has no normal, so it can carry only a zero
+    strength. With a nonzero one it is refused, naming ``what``: dropping the
+    magnitude would ship a wind, a velocity or a spin the artist set to
+    nothing, with no sign anything was lost.
+    """
     d = np.array([float(direction[i]) for i in range(3)], dtype=np.float64)
     norm = np.linalg.norm(d)
     if norm > 0:
         d = d / norm
+    elif float(strength) != 0.0:
+        raise ValueError(
+            f"{what} has a zero-length direction but a magnitude of "
+            f"{float(strength)}; give it a direction"
+        )
     return (d * float(strength)).tolist()
 
 

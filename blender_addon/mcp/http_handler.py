@@ -33,7 +33,6 @@ from urllib.parse import urlparse, urlsplit
 
 from . import prompts as prompt_registry
 from .integration import get_integrated_handlers
-from .llm_resources import list_llm_resources, read_llm_resource
 from .protocol import (
     ERA_LEGACY,
     ERA_MODERN,
@@ -100,7 +99,7 @@ _TTL_TOOLS_MS = 600_000
 _TTL_PROMPTS_MS = 600_000
 _TTL_RESOURCE_LIST_MS = 30_000
 _TTL_SCENE_MS = 0
-_TTL_DOC_MS = 3_600_000
+_TTL_TEMPLATES_MS = 3_600_000
 _TTL_DISCOVER_MS = 3_600_000
 
 _SCENE_RESOURCE_URI = "blender://scene/current"
@@ -112,10 +111,9 @@ _CAPABILITIES = {
 }
 
 _INSTRUCTIONS = (
-    "Drives ZOZO's Contact Solver add-on inside a running Blender. Read "
-    "llm://index with resources/read first: it routes to the topic documents "
-    "that every tool description points at, and the scene-setup rules there "
-    "are prerequisites, not background. Scene construction has a required "
+    "Drives ZOZO's Contact Solver add-on inside a running Blender. Each "
+    "tool's description and input schema state what it needs and what it "
+    "refuses; read them before calling it. Scene construction has a required "
     "order: connect, group, assign objects, constrain, set parameters, "
     "build, solve, fetch."
 )
@@ -703,7 +701,6 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 "mimeType": "application/json",
             }
         ]
-        resources.extend(list_llm_resources())
         return cacheable(
             complete({"resources": resources}, era=era),
             era=era,
@@ -722,7 +719,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         return cacheable(
             complete({"resourceTemplates": []}, era=era),
             era=era,
-            ttl_ms=_TTL_DOC_MS,
+            ttl_ms=_TTL_TEMPLATES_MS,
             scope="public",
         )
 
@@ -761,24 +758,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 scope="private",
             )
 
-        try:
-            text = read_llm_resource(uri)
-        except OSError as exc:
-            # The resource exists but could not be read: an internal failure,
-            # which is a different fact from the URI naming nothing.
-            raise ProtocolError(INTERNAL_ERROR, f"Could not read {uri}: {exc}") from exc
-        if text is None:
-            raise ProtocolError(INVALID_PARAMS, f"Unknown resource: {uri}")
-
-        return cacheable(
-            complete(
-                {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]},
-                era=era,
-            ),
-            era=era,
-            ttl_ms=_TTL_DOC_MS,
-            scope="public",
-        )
+        raise ProtocolError(INVALID_PARAMS, f"Unknown resource: {uri}")
 
     def _prompts_list(self, params: dict, era: str) -> dict:
         reject_unknown_cursor(params)

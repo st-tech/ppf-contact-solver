@@ -825,6 +825,13 @@ def _interpret_response(
     # Console shows always describe the same failure.
     crash_kind = str(r.get("crash_kind", "") or "")
     violations = r.get("violations", [])
+    # Allow Existing Intersections: the server holds what its latest build
+    # exempted and sends it on every response, so the client mirrors it. An
+    # unchanged list keeps its previous object, which is what the overlay keys
+    # its cached batches on, so a poll does not rebuild them.
+    exemptions = r.get("exemptions", []) or []
+    if exemptions == state.exemptions:
+        exemptions = state.exemptions
     info_msg = r.get("info", "")
     root = r.get("root", state.remote_root)
     frame = int(r.get("frame", 0))
@@ -1065,6 +1072,7 @@ def _interpret_response(
             server_error=error_msg,
             crash_kind=crash_kind,
             violations=violations,
+            exemptions=exemptions,
             message="",
             progress=0.0,
             frame=frame,
@@ -1083,6 +1091,7 @@ def _interpret_response(
         server_error=error_msg,
         crash_kind=crash_kind,
         violations=violations if violations else ([] if not error_msg else state.violations),
+        exemptions=exemptions,
         message=info_msg if info_msg else (
             state.message if (is_sim_running or is_building) else ""
         ),

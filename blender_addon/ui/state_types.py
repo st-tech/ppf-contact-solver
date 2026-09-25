@@ -18,6 +18,29 @@ from ..models.enum_props import EnumProperty
 from ..models.material_maps import SOURCE_TYPE_ITEMS
 
 
+# Blender makes every property keyframable unless `options` says otherwise, and
+# whatever is passed REPLACES the default `{'ANIMATABLE'}` rather than adding to
+# it, so an empty set is how a property refuses an F-curve.
+#
+# Carry this on every property the encoder does not sample over time. The
+# encoder samples a few scene settings (`SCENE_ANIM_KEYS` in
+# core/encoder/scene_anim.py) and a group's material sliders
+# (`ANIMATABLE_MATERIAL_PROPS` in models/material_locks.py) across the frame
+# range and ships a schedule; every other value is read once, at the starting
+# frame, and never revisited. Leaving the default on one of those puts a
+# working keyframe button in front of the artist, records their curve in the
+# .blend, and then ignores it for the whole solve, which is indistinguishable
+# from the feature being broken. Display toggles and list indices carry it
+# too: nothing samples them either, so the rule stays one sentence.
+#
+# The properties WITHOUT this are the animatable set, and they are exactly the
+# list the encoder samples. Adding a sampled parameter to one and not the other
+# is what makes a keyframe silently do nothing, so change them together. A
+# curve a saved file still carries on any other add-on property is refused at
+# encode, by path (core/encoder/curve_refusal.py).
+NOT_ANIMATABLE: set = set()
+
+
 def _material_map_items():
     """Enum items for the parameter a spatial map drives.
 
@@ -39,13 +62,13 @@ def _invalidate_overlay(self=None, ctx=None):
 
 
 class FetchedFrameItem(PropertyGroup):
-    value: IntProperty(name="Frame", default=0)  # pyright: ignore
+    value: IntProperty(name="Frame", default=0, options=NOT_ANIMATABLE)  # pyright: ignore
 
 
 class CheckpointFrameItem(PropertyGroup):
     """A single saved-checkpoint frame for the Resume-From dialog UIList."""
 
-    frame: IntProperty(name="Frame", default=0)  # pyright: ignore
+    frame: IntProperty(name="Frame", default=0, options=NOT_ANIMATABLE)  # pyright: ignore
 
 
 class SaveCheckpointFrameItem(PropertyGroup):
@@ -56,7 +79,7 @@ class SaveCheckpointFrameItem(PropertyGroup):
     frame index before it ships to the backend.
     """
 
-    frame: IntProperty(name="Frame", default=1, min=1)  # pyright: ignore
+    frame: IntProperty(name="Frame", default=1, min=1, options=NOT_ANIMATABLE)  # pyright: ignore
 
 
 class MergePairItem(PropertyGroup):
@@ -80,12 +103,14 @@ class MergePairItem(PropertyGroup):
         soft_max=10000.0,
         precision=2,
         description="Stiffness for generated cross-object stitch constraints",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_stitch: BoolProperty(
         name="Show Stitch",
         default=True,
         description="Show stitch visualization for this merge pair",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -98,6 +123,7 @@ class DynParamKeyframe(PropertyGroup):
         min=1,
         description="Frame number for this keyframe",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     gravity_value: FloatVectorProperty(
         name="Gravity (m/s\u00b2)",
@@ -107,6 +133,7 @@ class DynParamKeyframe(PropertyGroup):
         precision=2,
         description="Gravity acceleration vector",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     wind_direction_value: FloatVectorProperty(
         name="Direction",
@@ -115,6 +142,7 @@ class DynParamKeyframe(PropertyGroup):
         default=(0.0, 0.0, 0.0),
         description="Wind direction vector",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     wind_strength_value: FloatProperty(
         name="Strength (m/s)",
@@ -124,6 +152,7 @@ class DynParamKeyframe(PropertyGroup):
         precision=2,
         description="Wind strength",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     scalar_value: FloatProperty(
         name="Value",
@@ -132,12 +161,14 @@ class DynParamKeyframe(PropertyGroup):
         precision=4,
         description="Scalar parameter value",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_hold: BoolProperty(
         name="Hold",
         default=False,
         description="Hold the previous keyframe value (step function)",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -154,9 +185,10 @@ class DynParamItem(PropertyGroup):
             ("VERTEX_AIR_DAMP", "Vertex Air Damping", "Dynamic vertex air damping"),
         ],
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     keyframes: CollectionProperty(type=DynParamKeyframe)  # pyright: ignore
-    keyframes_index: IntProperty(default=0)  # pyright: ignore
+    keyframes_index: IntProperty(default=0, options=NOT_ANIMATABLE)  # pyright: ignore
 
 
 class InvisibleColliderKeyframe(PropertyGroup):
@@ -168,6 +200,7 @@ class InvisibleColliderKeyframe(PropertyGroup):
         min=1,
         description="Frame number for this keyframe",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     position: FloatVectorProperty(
         name="Position",
@@ -177,6 +210,7 @@ class InvisibleColliderKeyframe(PropertyGroup):
         precision=3,
         description="Collider position at this keyframe",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     radius: FloatProperty(
         name="Radius",
@@ -185,12 +219,14 @@ class InvisibleColliderKeyframe(PropertyGroup):
         precision=3,
         description="Sphere radius at this keyframe",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_hold: BoolProperty(
         name="Hold",
         default=False,
         description="Hold the previous keyframe value (step function)",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -224,6 +260,7 @@ class InvisibleColliderItem(PropertyGroup):
             ("SPHERE", "Sphere", "Sphere collider"),
         ],
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     name: StringProperty(
         name="Name",
@@ -238,6 +275,7 @@ class InvisibleColliderItem(PropertyGroup):
         precision=3,
         description="Point on plane (wall) or center (sphere)",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     normal: FloatVectorProperty(
         name="Normal",
@@ -247,6 +285,7 @@ class InvisibleColliderItem(PropertyGroup):
         precision=3,
         description="Outer normal direction (wall only)",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     radius: FloatProperty(
         name="Radius",
@@ -255,25 +294,29 @@ class InvisibleColliderItem(PropertyGroup):
         precision=3,
         description="Sphere radius",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     hemisphere: BoolProperty(
         name="Hemisphere",
         default=False,
         description="Bowl shape (top half open)",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     invert: BoolProperty(
         name="Invert",
         default=False,
         description="Collision on inside of sphere",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     contact_gap: FloatProperty(
         name="Contact Gap",
         default=0.001,
         min=0.0,
         precision=4,
-        description="Contact gap tolerance",
+        description="Contact gap tolerance (scaled by World Scale before use)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     friction: FloatProperty(
         name="Friction",
@@ -282,6 +325,7 @@ class InvisibleColliderItem(PropertyGroup):
         max=1.0,
         precision=2,
         description="Friction coefficient",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     thickness: FloatProperty(
         name="Thickness",
@@ -295,12 +339,14 @@ class InvisibleColliderItem(PropertyGroup):
             "this inside the collider, it passes through — contact and CCD "
             "are both ignored. Must be > 0."
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     enable_active_duration: BoolProperty(
         name="Active Duration",
         default=False,
         description="If set, collider stops acting at the specified Blender frame",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     active_duration: IntProperty(
         name="Active Until (frame)",
@@ -308,15 +354,17 @@ class InvisibleColliderItem(PropertyGroup):
         min=1,
         description="First Blender frame at which this collider is no longer active. The cutoff is exclusive: frame < END_FRAME is active, frame >= END_FRAME is not. Substeps of the transition TO END_FRAME already run without the collider, so the displayed state carries no residual effect",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_preview: BoolProperty(
         name="Preview",
         default=False,
         description="Show collider preview in viewport",
         update=lambda self, ctx: _invalidate_collider_overlay(),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     keyframes: CollectionProperty(type=InvisibleColliderKeyframe)  # pyright: ignore
-    keyframes_index: IntProperty(default=0)  # pyright: ignore
+    keyframes_index: IntProperty(default=0, options=NOT_ANIMATABLE)  # pyright: ignore
 
 
 class VelocityKeyframe(PropertyGroup):
@@ -324,6 +372,7 @@ class VelocityKeyframe(PropertyGroup):
         name="Frame", default=1, min=1,
         description="Frame at which this velocity is applied",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Per-component overwrite gates. A keyframe overwrites the translational
     # velocity only when enable_translational is on, and the angular velocity
@@ -335,17 +384,20 @@ class VelocityKeyframe(PropertyGroup):
         default=True,
         description="Overwrite the object's translational velocity at this frame",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     direction: FloatVectorProperty(
         name="Direction", subtype="XYZ", size=3,
         default=(0.0, 0.0, 0.0),
         description="Velocity direction (normalized before use)",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     speed: FloatProperty(
         name="Speed (m/s)", default=0.0, min=0.0, precision=2,
         description="Velocity magnitude",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Angular (spin) component, shown only for solid / shell / PDRD. The axis
     # is one of the body's principal axes (like the PDRD hinge axle); the
@@ -356,6 +408,7 @@ class VelocityKeyframe(PropertyGroup):
         default=False,
         description="Overwrite the object's angular (spin) velocity at this frame",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     angular_axis: EnumProperty(
         name="Spin Axis",
@@ -374,23 +427,27 @@ class VelocityKeyframe(PropertyGroup):
             "geometry; World X/Y/Z and Custom are fixed world-space directions"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     angular_axis_custom: FloatVectorProperty(
         name="Custom Axis", subtype="XYZ", size=3,
         default=(0.0, 0.0, 1.0),
         description="Custom world-space spin axis (normalized before use); used when Spin Axis is Custom",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     angular_speed: FloatProperty(
         name="Angular Speed (°/s)", default=0.0, precision=2,
         description="Signed spin speed in degrees per second about the chosen axis (0 = no spin)",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     preview: BoolProperty(
         name="Preview Direction",
         default=False,
         description="Show velocity direction in viewport",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -398,10 +455,12 @@ class CollisionWindowEntry(PropertyGroup):
     frame_start: IntProperty(
         name="Start Frame", default=1, min=1,
         description="Frame when collision becomes active",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     frame_end: IntProperty(
         name="End Frame", default=60, min=1,
         description="Frame when collision becomes inactive",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -422,6 +481,7 @@ class StaticOpItem(PropertyGroup):
         default=False,
         description="Show this op's preview in the 3D viewport",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     op_type: EnumProperty(
         name="Type",
@@ -432,16 +492,19 @@ class StaticOpItem(PropertyGroup):
         ],
         default="MOVE_BY",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Move By
     delta: FloatVectorProperty(
         name="Delta (m)", subtype="XYZ", default=(0.0, 0.0, 0.0),
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Spin, always around the object origin
     spin_axis: FloatVectorProperty(
         name="Axis", subtype="XYZ", default=(0.0, 0.0, 1.0),
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     spin_angular_velocity: FloatProperty(
         name="Angular Velocity (\u00b0/s)",
@@ -451,12 +514,13 @@ class StaticOpItem(PropertyGroup):
         # the Param payload; pin ops apply Time Scale at encode.
         description="Degrees per second",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Scale, always around the object origin
-    scale_factor: FloatProperty(name="Factor", default=1.0, min=0.01, update=_on_overlay_changed)  # pyright: ignore
+    scale_factor: FloatProperty(name="Factor", default=1.0, min=0.01, update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     # Common time range (in frames; converted to seconds at encode time)
-    frame_start: IntProperty(name="Start", default=1, min=1)  # pyright: ignore
-    frame_end: IntProperty(name="End", default=60, min=1)  # pyright: ignore
+    frame_start: IntProperty(name="Start", default=1, min=1, options=NOT_ANIMATABLE)  # pyright: ignore
+    frame_end: IntProperty(name="End", default=60, min=1, options=NOT_ANIMATABLE)  # pyright: ignore
     transition: EnumProperty(
         name="Transition",
         items=[
@@ -464,6 +528,7 @@ class StaticOpItem(PropertyGroup):
             ("SMOOTH", "Smooth", "Smoothstep interpolation"),
         ],
         default="LINEAR",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -490,6 +555,39 @@ class IntersectionAllowanceObject(PropertyGroup):
     uuid: StringProperty()  # pyright: ignore
 
 
+class ForceFieldGroupRef(PropertyGroup):
+    """One object group a force field source is narrowed to.
+
+    A REFERENCE by the group's uuid, with the name kept only for display. A
+    reference whose group was deleted, or became Static, is not dropped
+    silently: the panel marks it and Transfer refuses it by name.
+    """
+
+    name: StringProperty()  # pyright: ignore
+    uuid: StringProperty()  # pyright: ignore
+
+
+class ForceFieldTarget(PropertyGroup):
+    """Which object groups one force field object reaches.
+
+    Keyed by the field object's uuid. A field object with no entry reaches
+    every group; an entry exists once the artist narrows it, and keeps its
+    list while "Apply to All Groups" is toggled back on, so turning the box
+    off again restores the choice.
+    """
+
+    source_uuid: StringProperty()  # pyright: ignore
+    source_name: StringProperty()  # pyright: ignore
+    apply_all: BoolProperty(
+        name="Apply to All Groups",
+        default=True,
+        description="Push every simulated group; turn off to choose the groups",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    groups: CollectionProperty(type=ForceFieldGroupRef, options=NOT_ANIMATABLE)  # pyright: ignore
+    groups_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
+
+
 class AssignedObject(PropertyGroup):
     name: StringProperty()  # pyright: ignore
     uuid: StringProperty()  # pyright: ignore
@@ -505,11 +603,12 @@ class AssignedObject(PropertyGroup):
         default=True,
         description="Include this object in the simulation",
         update=update_included,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     velocity_keyframes: CollectionProperty(type=VelocityKeyframe)  # pyright: ignore
-    velocity_keyframes_index: IntProperty(default=0)  # pyright: ignore
+    velocity_keyframes_index: IntProperty(default=0, options=NOT_ANIMATABLE)  # pyright: ignore
     collision_windows: CollectionProperty(type=CollisionWindowEntry)  # pyright: ignore
-    collision_windows_index: IntProperty(default=0)  # pyright: ignore
+    collision_windows_index: IntProperty(default=0, options=NOT_ANIMATABLE)  # pyright: ignore
     # PDRD hinge joint (per object): pin the body and lock its rotation to a
     # single principal (PCA) axis. Per-object because one PDRD group can hold
     # several bodies (e.g. a gear train), each on its own axle.
@@ -522,6 +621,7 @@ class AssignedObject(PropertyGroup):
             "its axle and letting tooth contact transmit the torque"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     pdrd_hinge_axis: EnumProperty(
         name="Axle",
@@ -533,6 +633,7 @@ class AssignedObject(PropertyGroup):
         default="2",
         description="Which principal (PCA) axis of the rest shape is the free hinge axle, like Blender's torque-axis dropdown",
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Lock Translation (per object): restricts this object's mass-weighted
     # center of mass to the fixed world-space line through its initial
@@ -551,6 +652,7 @@ class AssignedObject(PropertyGroup):
             "and deformation stay free"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Lock Translation "all axes" mode: with `lock_translation_enable` set,
     # this pins the center of mass to its initial POINT instead of letting it
@@ -570,6 +672,7 @@ class AssignedObject(PropertyGroup):
             "deformation stay free"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     lock_translation_axis: FloatVectorProperty(
         name="Translation Axis",
@@ -581,6 +684,7 @@ class AssignedObject(PropertyGroup):
             "direction matters, not the magnitude. Must be non-zero"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Lock Rotation (per object): restricts this object's mass-weighted
     # best-fit rigid rotation to rotation about `lock_rotation_axis` only;
@@ -600,6 +704,7 @@ class AssignedObject(PropertyGroup):
             "deformation stay free"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Lock Rotation "all axes" mode: with `lock_rotation_enable` set, this
     # forbids net rotation about EVERY axis, three constraint rows, so
@@ -619,6 +724,7 @@ class AssignedObject(PropertyGroup):
             "is on. Translation and deformation stay free"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     lock_rotation_axis: FloatVectorProperty(
         name="Rotation Axis",
@@ -632,6 +738,7 @@ class AssignedObject(PropertyGroup):
             "Must be non-zero"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Lock Rotation mode switch: unchecked (default) keeps the axis a
     # WHITELIST (only rotation about `lock_rotation_axis` is allowed, the
@@ -652,6 +759,7 @@ class AssignedObject(PropertyGroup):
             "perpendicular rotation plane stays free"
         ),
         update=_invalidate_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Per-object bending reference rest angle (SHELL). When enabled with a
     # valid reference object set, this object's bending rest angle is computed
@@ -668,6 +776,7 @@ class AssignedObject(PropertyGroup):
             "object's geometry instead of its own initial pose. Overrides the "
             "group's Rest Angle source for this object"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     bend_ref_uuid: StringProperty(default="")  # pyright: ignore
     bend_ref_name: StringProperty(default="")  # pyright: ignore
@@ -700,52 +809,60 @@ class AssignedObject(PropertyGroup):
             ),
         ],
         default="FTETWILD",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # fTetWild per-field overrides. Each value is forwarded to pytetwild
     # only when its override flag is on; with none set, fTetWild defaults
     # apply.
-    ftetwild_override_edge_length_fac: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_edge_length_fac: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_edge_length_fac: FloatProperty(
         name="Edge Length Factor",
         default=0.05, min=1e-4, max=1.0, precision=4,
         description="Ideal tet edge length as fraction of bbox diagonal (fTetWild -l)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_epsilon: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_epsilon: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_epsilon: FloatProperty(
         name="Epsilon",
         default=1e-3, min=1e-6, max=1.0, precision=6,
         description="Envelope size as fraction of bbox diagonal (fTetWild -e)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_stop_energy: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_stop_energy: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_stop_energy: FloatProperty(
         name="Stop Energy",
         default=10.0, min=3.0, max=1000.0,
         description="AMIPS energy threshold; larger = faster, lower quality",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_num_opt_iter: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_num_opt_iter: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_num_opt_iter: IntProperty(
         name="Max Opt Iterations",
         default=80, min=1, max=1000,
         description="Maximum fTetWild optimization passes",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_optimize: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_optimize: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_optimize: BoolProperty(
         name="Optimize", default=True,
         description="Improve cell quality (slower)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_simplify: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_simplify: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_simplify: BoolProperty(
         name="Simplify Input", default=True,
         description="Simplify the input surface before tetrahedralization",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    ftetwild_override_coarsen: BoolProperty(name="Override", default=False)  # pyright: ignore
+    ftetwild_override_coarsen: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     ftetwild_coarsen: BoolProperty(
         name="Coarsen Output", default=False,
         description="Coarsen output while preserving quality",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # TetGen per-field overrides. The surface is always preserved (nobisect
     # / -Y); these only tune the interior refinement.
-    tetgen_override_min_ratio: BoolProperty(name="Override", default=False)  # pyright: ignore
+    tetgen_override_min_ratio: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     tetgen_min_ratio: FloatProperty(
         name="Min Radius-Edge Ratio",
         default=2.0, min=1.0, soft_max=5.0, precision=2,
@@ -754,8 +871,9 @@ class AssignedObject(PropertyGroup):
             "more interior Steiner points. The input surface is never "
             "touched"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    tetgen_override_max_volume: BoolProperty(name="Override", default=False)  # pyright: ignore
+    tetgen_override_max_volume: BoolProperty(name="Override", default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     tetgen_max_volume: FloatProperty(
         name="Max Tet Volume",
         default=0.0, min=0.0, precision=6,
@@ -763,6 +881,7 @@ class AssignedObject(PropertyGroup):
             "TetGen maximum tetrahedron volume (-a), in object units; caps "
             "interior cell size for a finer mesh. 0 leaves it uncapped"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -777,6 +896,7 @@ class PinOperation(PropertyGroup):
         default=False,
         description="Show operation preview in viewport",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Numeric IDs are explicit because Blender's EnumProperty stores values
     # as integers when no number is given; auto-numbering by list order means
@@ -796,90 +916,101 @@ class PinOperation(PropertyGroup):
         ],
         default="MOVE_BY",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Move By params
-    delta: FloatVectorProperty(name="Delta (m)", subtype="XYZ", default=(0, 0, 0), update=_on_overlay_changed)  # pyright: ignore
+    delta: FloatVectorProperty(name="Delta (m)", subtype="XYZ", default=(0, 0, 0), update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     # Spin params
-    spin_axis: FloatVectorProperty(name="Axis", subtype="XYZ", default=(1, 0, 0), update=_on_overlay_changed)  # pyright: ignore
-    spin_angular_velocity: FloatProperty(name="Angular Velocity (\u00b0/s)", default=360.0, description="Degrees per second", update=_on_overlay_changed)  # pyright: ignore
-    spin_flip: BoolProperty(name="Flip Direction", default=False, description="Reverse the spin rotation direction", update=_on_overlay_changed)  # pyright: ignore
+    spin_axis: FloatVectorProperty(name="Axis", subtype="XYZ", default=(1, 0, 0), update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
+    spin_angular_velocity: FloatProperty(name="Angular Velocity (\u00b0/s)", default=360.0, description="Degrees per second", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
+    spin_flip: BoolProperty(name="Flip Direction", default=False, description="Reverse the spin rotation direction", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     spin_center: FloatVectorProperty(
         name="Center", subtype="XYZ", default=(0, 0, 0),
         description=(
-            "Spin center in the op's local frame (object-rotated, "
-            "pre-translation). Matches world coords only when the "
-            "object transform is identity."
+            "Spin center as a world position, used when Center is Fixed. "
+            "Pick from Selected writes the world-space centroid of the "
+            "selected vertices here"
         ),
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     spin_center_mode: EnumProperty(
         name="Center",
         items=[
             ("CENTROID", "Centroid", "Compute center from vertex positions at runtime"),
-            ("ABSOLUTE", "Fixed", "User-entered center in the op's local frame (object-rotated, before the world translation is applied — equals world coords only when the object transform is identity)"),
+            ("ABSOLUTE", "Fixed", "Rotate about a fixed world position, entered in Center"),
             ("MAX_TOWARDS", "Max Towards", "Centroid of vertices furthest in a direction"),
             ("VERTEX", "Vertex", "Use a single vertex picked in Edit Mode"),
         ],
         default="CENTROID",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    spin_center_vertex: IntProperty(name="Vertex Index", default=-1, description="Vertex index for center", update=_on_overlay_changed)  # pyright: ignore
+    spin_center_vertex: IntProperty(name="Vertex Index", default=-1, description="Vertex index for center", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     show_vertex_spin: BoolProperty(
         name="Show Vertex",
         default=False,
         description="Highlight the center vertex in the viewport",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     spin_center_direction: FloatVectorProperty(
         name="Direction", subtype="XYZ", default=(0, 0, -1),
         description="Direction to select vertices furthest towards",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_max_towards_spin: BoolProperty(
         name="Show Max Towards",
         default=False,
         description="Visualize selected vertices and direction",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Scale params
-    scale_factor: FloatProperty(name="Factor", default=1.0, min=0.01, update=_on_overlay_changed)  # pyright: ignore
+    scale_factor: FloatProperty(name="Factor", default=1.0, min=0.01, update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     scale_center: FloatVectorProperty(
         name="Center", subtype="XYZ", default=(0, 0, 0),
         description=(
-            "Scale center in the op's local frame (object-rotated, "
-            "pre-translation). Matches world coords only when the "
-            "object transform is identity."
+            "Scale center as a world position, used when Center is Fixed. "
+            "Pick from Selected writes the world-space centroid of the "
+            "selected vertices here"
         ),
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     scale_center_mode: EnumProperty(
         name="Center",
         items=[
             ("CENTROID", "Centroid", "Compute center from vertex positions at runtime"),
-            ("ABSOLUTE", "Fixed", "User-entered center in the op's local frame (object-rotated, before the world translation is applied — equals world coords only when the object transform is identity)"),
+            ("ABSOLUTE", "Fixed", "Scale about a fixed world position, entered in Center"),
             ("MAX_TOWARDS", "Max Towards", "Centroid of vertices furthest in a direction"),
             ("VERTEX", "Vertex", "Use a single vertex picked in Edit Mode"),
         ],
         default="CENTROID",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    scale_center_vertex: IntProperty(name="Vertex Index", default=-1, description="Vertex index for center", update=_on_overlay_changed)  # pyright: ignore
+    scale_center_vertex: IntProperty(name="Vertex Index", default=-1, description="Vertex index for center", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     show_vertex_scale: BoolProperty(
         name="Show Vertex",
         default=False,
         description="Highlight the center vertex in the viewport",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     scale_center_direction: FloatVectorProperty(
         name="Direction", subtype="XYZ", default=(0, 0, -1),
         description="Direction to select vertices furthest towards",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     show_max_towards_scale: BoolProperty(
         name="Show Max Towards",
         default=False,
         description="Visualize selected vertices and direction",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Torque params
     torque_axis_component: EnumProperty(
@@ -891,12 +1022,13 @@ class PinOperation(PropertyGroup):
         ],
         default="PC3",
         update=_on_overlay_changed,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    torque_magnitude: FloatProperty(name="Magnitude (N\u00b7m)", default=1.0, description="Torque in Newton-metres", update=_on_overlay_changed)  # pyright: ignore
-    torque_flip: BoolProperty(name="Flip Direction", default=False, description="Reverse the torque rotation direction", update=_on_overlay_changed)  # pyright: ignore
+    torque_magnitude: FloatProperty(name="Magnitude (N\u00b7m)", default=1.0, description="Torque in Newton-metres", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
+    torque_flip: BoolProperty(name="Flip Direction", default=False, description="Reverse the torque rotation direction", update=_on_overlay_changed, options=NOT_ANIMATABLE)  # pyright: ignore
     # Common time range (in frames)
-    frame_start: IntProperty(name="Start", default=1, min=1)  # pyright: ignore
-    frame_end: IntProperty(name="End", default=60, min=1)  # pyright: ignore
+    frame_start: IntProperty(name="Start", default=1, min=1, options=NOT_ANIMATABLE)  # pyright: ignore
+    frame_end: IntProperty(name="End", default=60, min=1, options=NOT_ANIMATABLE)  # pyright: ignore
     transition: EnumProperty(
         name="Transition",
         items=[
@@ -904,6 +1036,7 @@ class PinOperation(PropertyGroup):
             ("SMOOTH", "Smooth", "Smoothstep interpolation"),
         ],
         default="LINEAR",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
 
 
@@ -1011,23 +1144,19 @@ class PinVertexGroupItem(PropertyGroup):
     name: StringProperty()  # pyright: ignore  # [ObjectName][VertexGroupName]
     object_uuid: StringProperty()  # pyright: ignore
     vg_hash: StringProperty()  # pyright: ignore  # 64-bit content hash of VG vertex indices
-    included: BoolProperty(
-        name="Include",
-        default=True,
-        description="Include this pin in the simulation",
-        update=_invalidate_pin_overlay,
-    )  # pyright: ignore
     show_overlay: BoolProperty(
         name="Show",
         default=True,
         description="Show this pin's vertices as overlay circles in the viewport",
         update=_invalidate_pin_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_pin_duration: BoolProperty(
         name="Duration",
         default=False,
         description="Limit how long this pin is active",
         update=_invalidate_pin_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     pin_duration: IntProperty(
         name="Active For",
@@ -1035,11 +1164,13 @@ class PinVertexGroupItem(PropertyGroup):
         min=1,
         description="Number of frames this pin is active for",
         update=_invalidate_pin_overlay,
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     use_pull: BoolProperty(
         name="Pull",
         default=False,
         description="Use pull force instead of hard constraint",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     pull_strength: FloatProperty(
         name="Strength",
@@ -1048,6 +1179,7 @@ class PinVertexGroupItem(PropertyGroup):
         soft_max=1000.0,
         precision=2,
         description="Pull force strength (0=no pull, 1=default)",
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     fix_weight_threshold: FloatProperty(
         name="Fix Weight Threshold",
@@ -1066,15 +1198,16 @@ class PinVertexGroupItem(PropertyGroup):
             "body a rigid shell and a compliant core. No effect on pull pins "
             "or non-SOLID groups"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     operations: CollectionProperty(type=PinOperation)  # pyright: ignore
-    operations_index: IntProperty(default=-1)  # pyright: ignore
+    operations_index: IntProperty(default=-1, options=NOT_ANIMATABLE)  # pyright: ignore
     # True after Capture Deformation has written a ``_pindeform.pc2``
     # cache for this pin. Source of truth for the UIList label
     # ("(Captured)" suffix), the Capture/Clear button enabled state,
     # and the encoder's PC2-wins branch. Reconciled against on-disk
     # cache presence on file load via a load_post handler.
-    has_captured_anim: BoolProperty(default=False)  # pyright: ignore
+    has_captured_anim: BoolProperty(default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     # Cached result of the O(N) full-pin coverage check
     # (``pin_covers_all_vertices``), refreshed on demand by the Refresh button
     # next to the rest-pose toggle rather than recomputed on every panel
@@ -1084,8 +1217,8 @@ class PinVertexGroupItem(PropertyGroup):
     # edited afterward (re-click Refresh to update it); the encoder
     # independently re-verifies coverage at encode time, so a stale UI cache
     # only gates the toggle's editability and never changes sim behavior.
-    full_pin_checked: BoolProperty(default=False)  # pyright: ignore
-    full_pin_cached: BoolProperty(default=False)  # pyright: ignore
+    full_pin_checked: BoolProperty(default=False, options=NOT_ANIMATABLE)  # pyright: ignore
+    full_pin_cached: BoolProperty(default=False, options=NOT_ANIMATABLE)  # pyright: ignore
     # User opt-in, drawn under "Capture Deformation" for SOLID pins. When
     # checked, a captured deformation also drives a time-varying rest pose (the
     # encoder sets ``rest_shape_track``) so the dynamic body settles into the
@@ -1105,6 +1238,7 @@ class PinVertexGroupItem(PropertyGroup):
             "disabled otherwise. When unchecked, the capture only pulls or "
             "fixes the pinned vertices and the rest pose is unchanged"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     # Per-pin opt-in, drawn next to Duration / Pull. Off by default, so a
     # scene that never touches it reports overlaps exactly as it does with no
@@ -1127,4 +1261,5 @@ class PinVertexGroupItem(PropertyGroup):
             "where it holds both ends. One side is enough, so a partly pinned "
             "face also passes through geometry that is fully held"
         ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore

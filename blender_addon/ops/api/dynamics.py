@@ -222,6 +222,12 @@ class _SceneProxy:
         return _DynParamBuilder(key)
 
     def __setattr__(self, key, value):
+        # A datablock (the force field's Collection, Domain or script Text)
+        # travels by name, and None clears the pointer.
+        if isinstance(value, bpy.types.ID):
+            value = value.name
+        elif value is None:
+            value = ""
         bpy.ops.zozo_contact_solver.set(key=str(key), value=str(value))
 
     def __getattr__(self, key):

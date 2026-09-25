@@ -401,23 +401,17 @@ def _apply_cleanup():
         return None
     changed = False
 
-    assigned_uuids = set()
     for group in iterate_active_object_groups(scene):
         indices_to_remove = []
         for i in range(len(group.assigned_objects)):
             assigned = group.assigned_objects[i]
-            obj = resolve_assigned(assigned)
-            if obj is None:
+            # resolve_assigned() also calls _sync_all_names() when
+            # assigned.name drifts from obj.name, so every downstream
+            # reference (pin_items, merge_pairs, saved keyframes) is kept
+            # coherent through the single reconciler in core/uuid_registry.
+            # Do NOT write assigned.name directly here: it would skip siblings.
+            if resolve_assigned(assigned) is None:
                 indices_to_remove.append(i)
-            else:
-                # resolve_assigned() already calls _sync_all_names()
-                # when assigned.name drifts from obj.name, so every
-                # downstream reference (pin_items, merge_pairs, saved
-                # keyframes) is kept coherent through the single
-                # reconciler in core/uuid_registry. Do NOT write
-                # assigned.name directly here — it would skip siblings.
-                if assigned.uuid:
-                    assigned_uuids.add(assigned.uuid)
         for i in reversed(indices_to_remove):
             obj_uuid = group.assigned_objects[i].uuid
             group.assigned_objects.remove(i)
@@ -445,14 +439,12 @@ def _apply_cleanup():
     # stale color on an object the add-on does not own, which is the side
     # to err on.
 
-    state = get_addon_data(scene).state
-    for i in range(len(state.merge_pairs) - 1, -1, -1):
-        pair = state.merge_pairs[i]
-        if pair.object_a_uuid not in assigned_uuids or pair.object_b_uuid not in assigned_uuids:
-            state.merge_pairs.remove(i)
-            changed = True
-    if state.merge_pairs_index >= len(state.merge_pairs):
-        state.merge_pairs_index = max(0, len(state.merge_pairs) - 1)
+    # Merge pairs are not scanned here. A pair ends with its object's
+    # membership, which the loop above ends through
+    # ``cleanup_group_references_for_object`` for a deleted object. A pair
+    # whose object sits in a DEACTIVATED group is the artist's, kept for when
+    # the group is switched back on, and Transfer refuses it by name meanwhile
+    # (``merge_pair_problem``).
 
     if changed:
         apply_object_overlays()

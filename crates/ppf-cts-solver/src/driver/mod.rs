@@ -121,6 +121,7 @@ pub(crate) mod phase;
 mod generated_entries;
 mod collider;
 mod collision_window;
+pub(crate) mod force_field;
 pub mod contact;
 mod constraint;
 mod dirichlet;
@@ -763,7 +764,7 @@ pub unsafe extern "C" fn initialize(data: *const DataSet, param: *const ParamSet
                      no intersecting pair"
                 );
             } else {
-                let message = format!(
+                let mut message = format!(
                     "### intersection detected: the scene's {which} positions carry {} \
                      intersecting pair(s). A run cannot start from a tangled state: no step \
                      can separate geometry that already crosses, so the solver would either \
@@ -771,6 +772,31 @@ pub unsafe extern "C" fn initialize(data: *const DataSet, param: *const ParamSet
                      mark the pairs with an intersection allowance if the tangle is authored",
                     report.found
                 );
+                // ALLOW EXISTING INTERSECTIONS DOES NOT REACH THIS PAIR, and
+                // the solver will not extend it. The links are exactly what the
+                // scene-build check found, and that check measures the start pose
+                // in double precision on float positions while this scan measures
+                // it in the solver's own arithmetic, so a pair at the edge of
+                // crossing can read clean to one and crossing to the other. Adding the pair
+                // here would give the allowance a second source the host gate
+                // never saw, so the run stops and names it instead.
+                if (*data).start_link.size > 0 {
+                    let named: Vec<String> = report
+                        .records
+                        .iter()
+                        .take(4)
+                        .map(intersection::describe_record)
+                        .collect();
+                    message.push_str(&format!(
+                        ". This scene uses Allow Existing Intersections, which exempts only \
+                         the pairs the scene-build check found; these are not among them \
+                         (first: {}). The build check and this scan measure the start pose \
+                         at different precision, so a pair at the edge of crossing can pass \
+                         one and fail the other. Move the pair clear of each other or further \
+                         into each other, so both checks agree",
+                        named.join(", ")
+                    ));
+                }
                 ::log::error!("{message}");
                 set_fatal(
                     ppf_cts_formats::status::error_code::INIT_INTERSECTION,
@@ -1413,6 +1439,47 @@ pub unsafe extern "C" fn override_angular_velocity(
     }) {
         drop(guard);
         fatal_exit(fatal);
+    }
+}
+
+/// Install a verified external force field on the device.
+///
+/// Called once after `initialize()`, and again by a held run whose caller
+/// updated the field between frames. SOLVER THEN DEVICE, the order `advance`
+/// and `update_rest_shape` already take.
+pub(crate) fn install_force_field(field: &crate::force_field::ForceFieldData, world_scaling: f32) {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: install_force_field was called before initialize()",
+        ));
+    };
+    if let Err(fatal) = with_device(|device| state.field.install(device, field, world_scaling)) {
+        drop(guard);
+        fatal_exit(fatal);
+    }
+}
+
+/// How many free vertices the last step found outside every force-field grid,
+/// or `None` when the scene carries no grid.
+pub(crate) fn force_field_outside_count() -> Option<usize> {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let state = guard.as_mut()?;
+    match with_device(|device| state.field.outside_count(device)) {
+        Ok(count) => count,
+        Err(fatal) => {
+            drop(guard);
+            fatal_exit(fatal);
+        }
     }
 }
 

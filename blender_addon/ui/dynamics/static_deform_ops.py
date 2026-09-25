@@ -10,7 +10,7 @@
 #
 # Surfaced as a per-object button on STATIC group rows: deformation is
 # only meaningful for STATIC colliders, so there's no top-level
-# "Capture All" button — the per-group placement is the source of truth.
+# "Capture All" button: the per-group placement is the source of truth.
 #
 # The operator runs modally on a timer (matches the bake_ops modal
 # pattern so Blender's main thread stays responsive across long
@@ -27,6 +27,7 @@ from bpy.types import Operator  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.pc2 import (
+    display_only_modifier_names,
     remove_static_deform_pc2,
     resume_mesh_cache_display,
     static_deform_pc2_key,
@@ -34,7 +35,11 @@ from ...core.pc2 import (
     write_static_deform_pc2,
 )
 from ...core.transform import zup_to_yup
-from ...core.utils import is_deforming_static_object, redraw_all_areas
+from ...core.utils import (
+    eval_deform_local_positions,
+    is_deforming_static_object,
+    redraw_all_areas,
+)
 from .utils import get_group_from_index
 
 
@@ -97,27 +102,21 @@ def capture_progress_snapshot() -> tuple[int, int, str, int]:
 # ---------------------------------------------------------------------------
 
 
-def _frame_to_world_solver(eval_obj) -> np.ndarray:
-    """Sample one frame's world-space vertex positions in solver space.
+def _frame_to_world_solver(eval_obj, local: np.ndarray) -> np.ndarray:
+    """Place one frame's object-local vertex positions in solver world space.
 
-    Composes ``zup_to_yup * eval_obj.matrix_world * eval_mesh.vertices[i].co``
-    in one numpy matmul, so per-frame cost is O(n_verts) with no Python
-    loop. Returns ``(n_verts, 3)`` float32 in solver coordinates.
+    Composes ``zup_to_yup * eval_obj.matrix_world * local[i]`` in one numpy
+    matmul, so per-frame cost is O(n_verts) with no Python loop. Returns
+    ``(n_verts, 3)`` float32 in solver coordinates.
     """
-    eval_mesh = eval_obj.to_mesh()
-    try:
-        n = len(eval_mesh.vertices)
-        co = np.empty((n, 3), dtype=np.float64)
-        eval_mesh.vertices.foreach_get("co", co.ravel())
-        # Compose world matrix in solver space once per frame.
-        mw = np.array(eval_obj.matrix_world, dtype=np.float64).reshape(4, 4)
-        z2y = np.array(zup_to_yup(), dtype=np.float64).reshape(4, 4)
-        m = z2y @ mw
-        homog = np.concatenate([co, np.ones((n, 1), dtype=np.float64)], axis=1)
-        world = (homog @ m.T)[:, :3]
-        return world.astype(np.float32, copy=False)
-    finally:
-        eval_obj.to_mesh_clear()
+    co = np.asarray(local, dtype=np.float64)
+    n = co.shape[0]
+    mw = np.array(eval_obj.matrix_world, dtype=np.float64).reshape(4, 4)
+    z2y = np.array(zup_to_yup(), dtype=np.float64).reshape(4, 4)
+    m = z2y @ mw
+    homog = np.concatenate([co, np.ones((n, 1), dtype=np.float64)], axis=1)
+    world = (homog @ m.T)[:, :3]
+    return world.astype(np.float32, copy=False)
 
 
 def _max_keyframe_in_action(action) -> int | None:
@@ -294,7 +293,7 @@ def _build_entries(scene, objects: list, error_collector: list) -> list:
     return entries
 
 
-def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
+def _process_one_frame(context, depsgraph, entry, frame: int) -> tuple[bool, str]:
     """Capture one frame of one object's deformed mesh into ``entry``.
 
     Returns ``(ok, reason)``. ``ok == False`` aborts the whole job: a
@@ -306,16 +305,33 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
     obj = get_object_by_uuid(entry["obj_uuid"])
     if obj is None:
         return False, iface_("'{name}' disappeared during capture").format(name=entry['obj_name'])
-    eval_obj = obj.evaluated_get(depsgraph)
-    world = _frame_to_world_solver(eval_obj)
+    # The SAME evaluation the encoder and the pin capture read (display-only
+    # modifiers hidden, a count-changing stack cut where the output cache
+    # sits), so an Armature or Lattice in front of a Subdivision is captured
+    # on the base cage the solver builds the collider from, and the modifiers
+    # after the cut run on top of the cache on display.
+    local = eval_deform_local_positions(
+        obj, context,
+        exclude_modifier_names=display_only_modifier_names(obj, "STATIC"),
+    )
+    if local is None:
+        return False, (
+            iface_(
+                "'{name}': a modifier changes the vertex count at frame "
+                "{frame} in front of the cache, where only a modifier the "
+                "add-on does not count as topology-changing can sit (a Fluid "
+                "domain, an Ocean in Generate mode, or a Mesh Sequence Cache "
+                "of different topology), so the collider cannot be captured. "
+                "Remove or disable it and capture again."
+            ).format(name=entry['obj_name'], frame=frame)
+        )
+    world = _frame_to_world_solver(obj.evaluated_get(depsgraph), local)
     if world.shape[0] != entry["n_verts"]:
         return False, (
             iface_(
-                "'{name}' vertex count changed at frame {frame}: "
-                "{actual} vs {expected} at frame_start. "
-                "Move any topology-changing modifiers (Subdivision Surface, "
-                "Remesh, Decimate) ABOVE the deformer, or apply them, then "
-                "retry."
+                "'{name}' vertex count changed at frame {frame}: {actual} "
+                "vs {expected} when the capture started. Edit the mesh "
+                "only between captures, then retry."
             ).format(
                 name=entry['obj_name'],
                 frame=frame,
@@ -386,7 +402,7 @@ def _tick_job(context, *, budget_ms: int = 40) -> bool:
         frame = entry["frame_start"] + entry["frames_done"]
         scene.frame_set(frame)
         depsgraph = context.evaluated_depsgraph_get()
-        ok, reason = _process_one_frame(scene, depsgraph, entry, frame)
+        ok, reason = _process_one_frame(context, depsgraph, entry, frame)
         if not ok:
             _capture_job["error"] = reason
             _capture_job["aborted"] = True
@@ -407,7 +423,7 @@ def _finalize_job(context) -> tuple[int, int]:
     """Write completed entries to PC2 and restore the saved frame.
 
     Returns ``(objects_written, total_frames_written)``. Entries with
-    a partial buffer (job aborted mid-object) are skipped — Capture
+    a partial buffer (job aborted mid-object) are skipped, since Capture
     Deformation is atomic per object.
     """
     from ...core.uuid_registry import get_object_by_uuid
@@ -510,7 +526,7 @@ class _ModalCaptureBase:
                 )
                 return {"FINISHED"}
             return {"RUNNING_MODAL"}
-        except Exception as exc:  # noqa: BLE001 — must restore state
+        except Exception as exc:  # noqa: BLE001 - must restore state
             self._teardown(context)
             redraw_all_areas(context)
             self.report({"ERROR"}, iface_("Capture failed: {error}").format(error=exc))
@@ -653,6 +669,32 @@ def object_needs_deformation_capture(obj, context) -> bool:
         is_deforming_static_object(obj, context, allow_eval=False)
         or _has_nonfcurve_motion_source(obj)
     )
+
+
+def static_capture_hint(obj, context) -> str | None:
+    """The line the STATIC panel shows under Capture Deformation, or None.
+
+    Draw-safe (declarative checks only). A mesh that changes SHAPE needs a
+    capture to encode; motion from a parent, constraint, driver or NLA strip
+    ships as sampled world transforms, so a capture of it is optional; the
+    object's own transform keyframes ship the same way and capture does not
+    apply to them. An object with a cache shows the cache instead, so this is
+    asked only without one.
+    """
+    from ...core.utils import has_transform_fcurves, static_mesh_deforms
+
+    if obj is None:
+        return None
+    if static_mesh_deforms(obj, context, allow_eval=False):
+        return "Deforming modifier detected; capture to encode"
+    if object_needs_deformation_capture(obj, context):
+        return (
+            "Parent or constraint motion transfers automatically; capture is "
+            "optional"
+        )
+    if has_transform_fcurves(obj):
+        return "Keyframe animation transfers automatically; capture is for deformers"
+    return None
 
 
 def object_has_deformation_cache(obj) -> bool:

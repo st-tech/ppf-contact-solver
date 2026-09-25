@@ -6,91 +6,14 @@ from typing import Any
 from .decorators import get_handler_registry
 
 
-# Each handler source module maps to the LLM resource(s) a client should read
-# for usage context. The key matches the module basename (``handlers/<name>.py``
-# -> ``<name>``; ``blender_handlers.py`` -> ``blender``).
-_LLM_REFS_BY_MODULE: dict[str, tuple[str, ...]] = {
-    "connection": ("connections",),
-    "group": ("scene",),
-    "mesh_cleaning": ("scene",),
-    "object_ops": ("constraints", "scene"),
-    "simulation": ("simulation",),
-    "scene": ("constraints",),
-    "dyn_params": ("parameters",),
-    "remote": ("connections",),
-    "console": ("debug",),
-    "debug": ("debug",),
-    "statistics": ("simulation",),
-    "material_maps": ("parameters",),
-    "presets": ("parameters", "connections"),
-    "blender": ("integrations",),
-}
-_DEFAULT_REFS: tuple[str, ...] = ("integrations",)
-
-# Per-tool overrides for handlers whose natural doc lives outside their
-# module's default. Keeps the common case declarative.
-_LLM_REFS_BY_TOOL: dict[str, tuple[str, ...]] = {
-    # run_python_script and execute_shell_command live on the Blender
-    # escape-hatch surface; `integrations` has the scope table and the
-    # "use MCP tools, not raw Python" rules.
-    "run_python_script": ("integrations", "scene"),
-    "execute_shell_command": ("connections", "debug"),
-    # Mesh-resolution helpers are explained in the MCP scene-setup section
-    # of integrations (1-3% edge-length window).
-    "get_average_edge_length": ("integrations",),
-    "get_object_bounding_box_diagonal": ("integrations",),
-    # Material / scene parameters belong to the parameters doc.
-    "set_group_material_properties": ("parameters",),
-    "add_pin_vertex_group": ("constraints",),
-    "remove_pin_vertex_group": ("constraints",),
-    "set_scene_parameters": ("parameters",),
-    "get_scene_parameters": ("parameters",),
-    # Locks are per-object state, so the handler lives on the object surface,
-    # but what they mean is documented with the other solver parameters.
-    "set_object_locks": ("parameters", "constraints"),
-    "clear_solver": ("integrations", "scene", "parameters"),
-    "list_pins": ("constraints",),
-    "create_curve": ("integrations", "scene", "constraints"),
-    "add_curve_spline": ("integrations", "scene", "constraints"),
-    "set_curve_material": ("integrations", "scene"),
-    "finalize_curve": ("integrations", "scene", "constraints"),
-}
-
-
-def _infer_module_key(func: Callable) -> str:
-    module = getattr(func, "__module__", "") or ""
-    if ".handlers." in module:
-        return module.rsplit(".", 1)[-1]
-    if module.endswith(".blender_handlers"):
-        return "blender"
-    return "default"
-
-
-def _enrich_description(tool_name: str, description: str, func: Callable) -> str:
-    refs = _LLM_REFS_BY_TOOL.get(tool_name)
-    if refs is None:
-        refs = _LLM_REFS_BY_MODULE.get(_infer_module_key(func), _DEFAULT_REFS)
-    uris = ", ".join(f"llm://{r}" for r in refs)
-    base = (description or "").rstrip()
-    if base and not base.endswith((".", "!", "?")):
-        base += "."
-    return f"{base}\n\nDocs: read {uris} with resources/read for usage and examples."
-
-
 def get_integrated_tools_list() -> list[dict[str, Any]]:
-    """Return every registered tool schema with an `llm://` docs pointer appended.
+    """Return every registered tool schema, as each handler declares it.
 
-    The pointer tells MCP clients which `resources/read` URI to fetch for
-    usage context when they scan tool descriptions.
+    A tool's description and input schema are its whole reference: they come
+    from the handler that implements the tool, so they cannot describe a tool
+    other than the one that runs.
     """
-    enriched: list[dict[str, Any]] = []
-    for name, info in get_handler_registry().items():
-        schema = dict(info["schema"])
-        schema["description"] = _enrich_description(
-            name, schema.get("description", ""), info["func"]
-        )
-        enriched.append(schema)
-    return enriched
+    return [dict(info["schema"]) for info in get_handler_registry().values()]
 
 
 def get_integrated_handlers() -> dict[str, Callable]:

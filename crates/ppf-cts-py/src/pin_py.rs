@@ -286,6 +286,21 @@ impl PinHolder {
         Ok(slf)
     }
 
+    /// Name the pin group this holder belongs to. The solver gathers the
+    /// vertices of every holder sharing an id into one torque group, and it
+    /// reads an absent id as the empty string, so an empty id here would put
+    /// this holder in the same group as every other holder that has none.
+    fn set_pin_group_id<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        pin_group_id: String,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        if pin_group_id.is_empty() {
+            return Err(PyValueError::new_err("pin_group_id must not be empty"));
+        }
+        slf.inner.pin_group_id = pin_group_id;
+        Ok(slf)
+    }
+
     /// Append a `MoveBy` operation. `delta_pos` may be a length-3
     /// sequence or an (N, 3) array, where N matches the pin's vertex
     /// count.

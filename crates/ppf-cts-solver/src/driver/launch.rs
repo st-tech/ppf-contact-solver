@@ -410,6 +410,7 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_face_spectral_hessian,
     launch_tet_spectral_force,
     launch_tet_spectral_hessian,
+    launch_external_field,
     launch_face_elastic_embed_from_records,
     launch_face_baraffwitkin,
     launch_face_pressure_embed,

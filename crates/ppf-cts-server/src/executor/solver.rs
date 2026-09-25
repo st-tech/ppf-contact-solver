@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use ppf_cts_core::events::Event;
 use ppf_cts_formats::files::{
     session_dir as session_dir_for, session_output_dir, CRASH_SIGNAL, ERROR_LOG, FINISHED,
-    SAVE_AND_QUIT, STATUS_RECORD, STDOUT_LOG, TERMINATE_REQUEST,
+    HELD, HOLD_AT_FRAME, INPUTS_UPDATED, SAVE_AND_QUIT, STATUS_RECORD, STDOUT_LOG,
+    TERMINATE_REQUEST,
 };
 
 use super::{dispatch_re_entrant, solver_busy_for_check, terminate_solver_for_kill};
@@ -222,6 +223,11 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
         STATUS_RECORD,
         TERMINATE_REQUEST,
         CRASH_SIGNAL,
+        // A frame-step hold left by a frontend caller would stop a run the
+        // add-on launched at that frame and wait an hour for a release.
+        HOLD_AT_FRAME,
+        HELD,
+        INPUTS_UPDATED,
     ] {
         let p = output_dir.join(sentinel);
         if p.exists() {

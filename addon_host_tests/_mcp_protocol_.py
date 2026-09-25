@@ -390,7 +390,7 @@ def test_name_header_required_for_resources_read(server):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "resources/read",
-            "params": {"uri": "llm://index", "_meta": _meta()},
+            "params": {"uri": "blender://scene/current", "_meta": _meta()},
         },
         extra={"Mcp-Name": None},
     )
@@ -399,8 +399,13 @@ def test_name_header_required_for_resources_read(server):
 
 
 def test_name_header_accepts_the_base64_sentinel(server):
-    """A name that cannot travel as ASCII arrives Base64-wrapped."""
-    uri = "llm://index"
+    """A name that cannot travel as ASCII arrives Base64-wrapped.
+
+    The URI names no resource, so the request gets past the header check only
+    to be refused as an unknown resource: that refusal, rather than a header
+    mismatch, is what shows the wrapped name was accepted.
+    """
+    uri = "blender://scene/\u00e9"
     encoded = base64.b64encode(uri.encode()).decode()
     reply = post_modern(
         server,
@@ -412,8 +417,9 @@ def test_name_header_accepts_the_base64_sentinel(server):
         },
         extra={"Mcp-Name": f"=?base64?{encoded}?="},
     )
-    assert reply.status == 200
-    assert reply.result["contents"][0]["uri"] == uri
+    assert reply.status == 400
+    assert reply.error["code"] == INVALID_PARAMS
+    assert uri in reply.error["message"]
 
 
 # ------------------------------------------------------- envelope handling
@@ -607,14 +613,16 @@ def test_prompts_get_refuses_an_unknown_name(server):
 # ------------------------------------------------------------ resources
 
 
-def test_unknown_resource_uri_is_invalid_params(server):
+@pytest.mark.parametrize("uri", ["llm://index", "blender://scene/other"])
+def test_unknown_resource_uri_is_invalid_params(server, uri):
+    # The add-on ships no documentation, so a documentation URI names nothing.
     reply = post_modern(
         server,
         {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "resources/read",
-            "params": {"uri": "llm://nothing-here", "_meta": _meta()},
+            "params": {"uri": uri, "_meta": _meta()},
         },
     )
     assert reply.status == 400
@@ -634,21 +642,6 @@ def test_non_string_resource_uri_does_not_crash_the_connection(server):
     )
     assert reply.status == 400
     assert reply.error["code"] in (INVALID_PARAMS, HEADER_MISMATCH)
-
-
-def test_documentation_resources_are_publicly_cacheable(server):
-    reply = post_modern(
-        server,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "resources/read",
-            "params": {"uri": "llm://index", "_meta": _meta()},
-        },
-    )
-    result = reply.result
-    assert result["cacheScope"] == "public"
-    assert result["contents"][0]["mimeType"] == "text/markdown"
 
 
 # ---------------------------------------------------------------- tools
@@ -1008,34 +1001,3 @@ def test_boolean_request_id_is_refused(server):
     assert reply.error["code"] == INVALID_REQUEST
 
 
-def test_unreadable_resource_is_an_internal_error_not_unknown(server, mcp_module):
-    """A resource that exists but cannot be read is a different fact.
-
-    Reporting an I/O failure as "unknown resource" sends the caller looking
-    for a URI typo instead of at the unreadable file. Swallowing the OSError
-    back into a None return would report it as -32602, an invalid-params claim
-    about a URI that is in fact valid.
-    """
-    original = mcp_module.read_llm_resource
-
-    def explode(uri):
-        raise OSError(13, "Permission denied")
-
-    mcp_module.read_llm_resource = explode
-    try:
-        reply = post_modern(
-            server,
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "resources/read",
-                "params": {"uri": "llm://index", "_meta": _meta()},
-            },
-        )
-    finally:
-        mcp_module.read_llm_resource = original
-
-    assert reply.status == 500
-    error = reply.error
-    assert error["code"] == -32603, f"expected INTERNAL_ERROR, got {error}"
-    assert "llm://index" in error["message"]

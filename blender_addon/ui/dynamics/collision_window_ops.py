@@ -44,6 +44,9 @@ class OBJECT_OT_AddCollisionWindow(Operator):
         item = assigned.collision_windows.add()
         item.frame_start = 1
         item.frame_end = 60
+        from ...core.encoder import seed_window_at_start
+        from ...models.groups import get_addon_data
+        seed_window_at_start(item, get_addon_data(context.scene).state)
         # Select the newly added window. Window order does not matter: the
         # encoder emits (start, end) pairs in storage order and the solver
         # treats them as an unordered set (active if the time falls in ANY

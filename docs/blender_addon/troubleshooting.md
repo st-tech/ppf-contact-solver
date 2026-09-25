@@ -395,8 +395,12 @@ It does not work the other way around: a clean scan is not a promise that
 **Transfer** will pass. **Transfer** also checks things that are not
 geometry, such as an object assigned to two active groups at once, an
 assigned object that no longer resolves, a **Reference Rest Angle**
-object that has gone missing, and a captured deformation whose vertex
-count no longer matches its mesh. The solver then runs its own
+object that has gone missing, a captured deformation whose vertex
+count no longer matches its mesh, a pin whose vertex group is gone or
+empty, and
+a merge pair that cannot stitch (see
+[Snap and Merge](workflow/constraints/snap_merge.md#merge-pairs-without-snapping)).
+The solver then runs its own
 intersection test when it builds the scene. None of those are visible to
 the scan, and each is reported by name in the panel's error line.
 
@@ -427,6 +431,15 @@ detected`.
 The fix is to separate the geometry: move the collider or the character to a
 pose the garment sits outside of, or edit the mesh so the fold is gone.
 
+When the overlap comes from the pose and cannot easily be fixed, such as a
+garment whose armpit a rig folds through itself, turn on
+[Allow Existing Intersections](workflow/params/material.md#allow-existing-intersections)
+on the garment's group. Only the places that overlap at the start pass
+through each other, and the rest of the garment keeps colliding. After the
+build the viewport tints those places on the starting frame, so you can see
+what was let through. The same setting covers a start pose refused with
+*N element pairs too close*.
+
 When the overlapping pieces should pass through each other rather than
 collide (a mesh tangled in its pose that should stay tangled, or a cloth
 whose self-collision is not wanted), the group settings under
@@ -439,6 +452,19 @@ rest pose ignores the boxes on its own group. For geometry confined to a
 pinned region, the narrower per-pin
 [Allow Intersections Here](workflow/constraints/pins.md#allow-intersections-here)
 does the same for the elements that pin holds completely.
+
+### "This scene uses Allow Existing Intersections, which exempts only the pairs the scene-build check found"
+
+The build accepted the start pose, but the solver's own check, run just
+before the first frame, found an overlapping pair that the build did not.
+The two checks measure positions at slightly different precision, so a pair
+that barely touches can pass one and fail the other. The message names the
+first few pairs.
+
+Move the named pieces a little apart, or a little further into each other,
+so both checks see the same thing, and build again. The solver does not add
+such a pair to the allowed places by itself, so that only what the build
+found and showed you is ever let through.
 
 ### Run button is disabled
 

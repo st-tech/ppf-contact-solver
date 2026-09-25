@@ -193,7 +193,9 @@ class TorqueOperation(Operation):
 
     axis_component: int  # 0=PC1, 1=PC2, 2=PC3
     magnitude: float
-    hint_vertex: int = -1  # Blender vertex index for axis orientation hint
+    # The vertex the axis is oriented toward, in its object's own numbering;
+    # the scene builder maps it to the solver's global index.
+    hint_vertex: int
     t_start: float = 0.0
     t_end: float = float("inf")
 
@@ -226,12 +228,12 @@ class PinData:
     # never asked for these pins, so the preview should not render them
     # as pin markers.
     hide_in_preview: bool = False
-    # Set on a PULL holder whose move ops were built from a captured
-    # deformation (Capture Deformation). When true, the scene builder also
-    # emits a time-varying rest shape: the captured target trajectory is
-    # blended (per-vertex by pull weight) into the rest pose per frame, so
-    # the dynamic body's stress-free shape follows the deformation instead of
-    # fighting it. Only meaningful for pull pins on SOLID/SHELL groups.
+    # Set by PinHolder.track_rest_shape. When true, the scene builder also
+    # emits a time-varying rest shape: this holder's operations are applied to
+    # the rest pose at each of their start and end times, so the body's
+    # stress-free shape follows the prescribed motion instead of fighting it.
+    # Either pin mode can track; Scene.build refuses tracking pins that do not
+    # together hold their whole object, and tracking beside plasticity.
     rest_shape_track: bool = False
     # This pin asks for the intersections of the elements it FULLY covers to
     # be tolerated rather than reported (issue #138). An element qualifies
@@ -703,6 +705,108 @@ class PinHolder:
         self._data.pull_weights = w
         return self
 
+    def set_allow_intersection(self, allow: bool = True) -> "PinHolder":
+        """Let the elements this pin fully covers pass through what they meet.
+
+        The same setting as ``allow_intersection`` on :meth:`Object.pin`, for
+        a holder that already exists. Such an element gets no contact force,
+        is not held apart by the line search, and is not reported as an
+        intersection. An element qualifies only when every one of its
+        vertices is pinned and every pin covering those vertices set this, so
+        a partially pinned band still collides. Both a fixed pin and a
+        :meth:`pull` pin carry it.
+
+        Args:
+            allow (bool, optional): True to let the covered elements pass
+                through, False to make them collide again. Defaults to True.
+
+        Returns:
+            PinHolder: The pinholder, for chaining.
+
+        Example:
+            Pin a garment band captured from a rig-deformed pose, where the
+            prescribed placement overlaps the body::
+
+                band = shirt.pin(band_indices)
+                band.set_allow_intersection(True)
+        """
+        self._data.allow_intersection = bool(allow)
+        return self
+
+    def set_pin_group_id(self, pin_group_id: str) -> "PinHolder":
+        """Put this holder in a named pin group.
+
+        Every holder starts in a group of its own. Holders that share an id
+        and each carry a :meth:`torque` operation are one torque group: the
+        solver applies the torque about the centroid and principal axes of
+        all their vertices together, rather than of each holder's own, and
+        takes its magnitude, axis component and hint vertex from the first
+        holder of the group. A holder with no torque operation adds nothing
+        to its group, and nothing else reads the group.
+
+        Args:
+            pin_group_id (str): The group's name. Must not be empty: the
+                solver reads a missing id as the empty string, so an empty
+                one would join every holder that has none.
+
+        Returns:
+            PinHolder: The pinholder, for chaining.
+
+        Raises:
+            TypeError: If ``pin_group_id`` is not a string.
+            ValueError: If ``pin_group_id`` is empty.
+
+        Example:
+            Turn the two halves of a wheel's rim about one shared axis,
+            with ``top``, a vertex of the wheel, fixing the axis's sign::
+
+                for rim in (left_rim, right_rim):
+                    wheel.pin(rim).torque(
+                        magnitude=5.0, axis_component=2, hint_vertex=top,
+                    ).set_pin_group_id("rim")
+        """
+        if not isinstance(pin_group_id, str):
+            raise TypeError(
+                f"pin_group_id must be a str, got {type(pin_group_id).__name__}"
+            )
+        self._rust.set_pin_group_id(pin_group_id)
+        self._data.pin_group_id = pin_group_id
+        return self
+
+    def track_rest_shape(self, enabled: bool = True) -> "PinHolder":
+        """Make the object's rest shape follow this pin's prescribed motion.
+
+        At every start and end time of this holder's operations, the scene
+        builder applies those operations to the object's rest shape, and the
+        solver moves the rest shape through the resulting keyframes. The body
+        then settles into the prescribed deformation instead of resisting it
+        as elastic strain, while the pins keep guiding it and contact still
+        resolves. Both a fixed pin and a :meth:`pull` pin can track.
+
+        The tracking pins of one object must together hold EVERY vertex of
+        it, and each must carry at least one operation. A rest shape moved
+        over only part of an object would tear at the edge of the moved
+        region, so :meth:`Scene.build` refuses one that does not.
+
+        Args:
+            enabled (bool, optional): True to track, False to keep the rest
+                shape fixed. Defaults to True.
+
+        Returns:
+            PinHolder: The pinholder, for chaining.
+
+        Example:
+            Bend a bar along a captured deformation and let it rest there::
+
+                bar = scene.add("bar")
+                pin = bar.pin()
+                for k in range(len(frames) - 1):
+                    pin.move_by(frames[k + 1] - frames[k], times[k], times[k + 1])
+                pin.pull(1.0).track_rest_shape()
+        """
+        self._data.rest_shape_track = bool(enabled)
+        return self
+
     def spin(
         self,
         center: Optional[list[float]] = None,
@@ -724,11 +828,24 @@ class PinHolder:
 
         Returns:
             PinHolder: The pinholder with the spin operation added.
+
+        Raises:
+            ValueError: If ``axis`` has no length while ``angular_velocity``
+                is not zero. The rotation normalizes its axis, and a
+                zero-length one leaves it nothing to turn about: the pinned
+                vertices would contract toward ``center`` instead of turning.
         """
         if axis is None:
             axis = [0.0, 1.0, 0.0]
         if center is None:
             center = [0.0, 0.0, 0.0]
+        axis_length = float(np.linalg.norm(np.asarray(axis, dtype=np.float64)))
+        if not axis_length > 0.0 and float(angular_velocity) != 0.0:
+            raise ValueError(
+                f"spin axis {[float(c) for c in axis]} has no length but the "
+                f"angular velocity is {float(angular_velocity)} deg/s; give "
+                "the spin an axis"
+            )
 
         self._rust.spin(
             np.array(center, dtype=np.float64),
@@ -751,7 +868,7 @@ class PinHolder:
         self,
         magnitude: float = 1.0,
         axis_component: int = 2,
-        hint_vertex: int = -1,
+        hint_vertex: Optional[int] = None,
         t_start: float = 0.0,
         t_end: float = float("inf"),
     ) -> "PinHolder":
@@ -760,16 +877,43 @@ class PinHolder:
         Applies a constant rotational force around a PCA-computed axis.
         The center is always the centroid of the pin vertices.
 
+        A principal axis has no sign of its own, so the solver orients it to
+        point from the centroid toward ``hint_vertex`` at every step, and
+        that orientation is what decides which way ``magnitude`` turns the
+        object. The hint is therefore required.
+
         Args:
             magnitude: Torque in N·m.
             axis_component: 0=PC1 (major), 1=PC2 (middle), 2=PC3 (minor).
-            hint_vertex: Vertex index for axis orientation hint.
+            hint_vertex: A vertex of this pin's object, in its own
+                numbering, on the side the axis should point toward.
             t_start: Start time in seconds.
             t_end: End time in seconds.
 
         Returns:
             PinHolder: The pinholder with the torque operation added.
+
+        Raises:
+            ValueError: If ``hint_vertex`` is missing or is not a vertex of
+                the object.
+
+        Example:
+            Twist a post about its long axis, which is its major principal
+            axis, oriented toward its topmost vertex::
+
+                post = scene.add("post")
+                top = int(post.vertex(False)[:, 1].argmax())
+                post.pin().torque(magnitude=0.5, axis_component=0,
+                                  hint_vertex=top)
         """
+        n_vert = len(self._obj.get("V"))
+        if hint_vertex is None or not 0 <= int(hint_vertex) < n_vert:
+            raise ValueError(
+                f"torque needs a hint_vertex of '{self._obj.name}', one of its "
+                f"{n_vert} vertices, got {hint_vertex!r}: the torque axis is a "
+                "principal axis whose sign only the hint vertex fixes"
+            )
+        hint_vertex = int(hint_vertex)
         self._rust.torque(
             magnitude, axis_component, hint_vertex, t_start, t_end,
         )

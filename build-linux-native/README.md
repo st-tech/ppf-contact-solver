@@ -27,7 +27,7 @@ Every script builds for the host it runs on, and nothing cross-compiles.
 A distribution carries every backend it was built with, each in its own
 `target/<backend>/release`, and which one a run uses is resolved when the run
 starts: the one GPU build present, or the first whose solver reports a usable
-device (`frontend.get_backend`). `rocm` on aarch64 is refused because AMD
+device (`App.get_backend`). `rocm` on aarch64 is refused because AMD
 publishes ROCm for x86_64 hosts only, and a set without `cpu` is refused because
 every distribution ships the CPU backend. Per-architecture downloads carry an
 `_X86_64` or `_AARCH64` suffix in `scripts/downloads.txt`, and a host has no

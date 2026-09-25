@@ -7,8 +7,7 @@
 #
 # ``bl_mcp_transport_conformance`` covers the envelope a ``tools/list`` reply
 # travels in. This scenario covers the payload. Every tool schema is generated
-# by ``mcp/decorators.py`` out of a handler's signature and docstring, then
-# enriched by ``mcp/integration.py`` with the ``llm://`` docs pointer, so a
+# by ``mcp/decorators.py`` out of a handler's signature and docstring, so a
 # handler ships a malformed schema without anyone writing one: an empty
 # docstring gives a tool with no description, a parameter renamed in the
 # signature alone leaves a ``required`` entry naming nothing, and a name in the
@@ -18,8 +17,8 @@
 # only place it can be caught.
 #
 # The assertions read the list as it arrives over the wire rather than the
-# in-process registry, because both the name ordering and the docs enrichment
-# are applied on the way out and neither is visible in the registry.
+# in-process registry, because the name ordering is applied on the way out
+# and is not visible in the registry.
 #
 # Assertions:
 #   A. ``names_are_present_and_unique`` -- every entry is an object with a
@@ -27,11 +26,11 @@
 #      losing handler unreachable, since a call resolves by name.
 #   B. ``titles_are_present`` -- every tool carries a non-empty title, which is
 #      what a client shows in place of the identifier.
-#   C. ``descriptions_name_their_llm_docs`` -- every description is non-empty
-#      and carries at least one ``llm://`` pointer naming a resource.
-#   D. ``docs_pointers_resolve_to_served_resources`` -- every ``llm://`` target
-#      in a description is a URI ``resources/list`` actually serves, so the
-#      pointer a client follows cannot dangle.
+#   C. ``descriptions_are_present`` -- every description is non-empty: the
+#      description and the input schema are a tool's whole reference.
+#   D. ``descriptions_point_at_no_document`` -- no description sends a client
+#      to an ``llm://`` document: the add-on ships none, and
+#      ``resources/list`` serves none, so such a pointer would dangle.
 #   E. ``input_schemas_are_object_schemas`` -- every ``inputSchema`` is an
 #      object schema whose ``properties`` is an object.
 #   F. ``required_is_backed_by_properties`` -- ``required``, where present, is
@@ -81,33 +80,10 @@ READ_ONLY_PREFIXES = ("get_", "list_")
 DESTRUCTIVE_PREFIXES = ("remove_", "delete_", "clear_")
 ESCAPE_HATCHES = ("execute_shell_command", "run_python_script")
 
-# The characters an llm:// resource name is built from. A period is excluded
-# so the sentence punctuation after a pointer is not read as part of the name.
-_URI_NAME_CHARS = "_-/"
-
-
 def offenders(items):
     # Report how many failed and enough of them to recognize the pattern.
     items = list(items)
     return {"count": len(items), "sample": items[:MAX_REPORTED]}
-
-
-def llm_targets(text):
-    # The resource names a description points at: "read llm://scene with
-    # resources/read" yields ["scene"].
-    marker = "llm://"
-    found = []
-    idx = text.find(marker)
-    while idx != -1:
-        token = ""
-        for ch in text[idx + len(marker):]:
-            if ch.isalnum() or ch in _URI_NAME_CHARS:
-                token += ch
-            else:
-                break
-        found.append(token)
-        idx = text.find(marker, idx + len(marker))
-    return found
 
 
 try:
@@ -166,51 +142,42 @@ try:
         {"tool_count": len(entries), "untitled": offenders(untitled)},
     )
 
-    # ----- C. a description, carrying its docs pointer ------------
+    # ----- C. a description on every tool --------------------------
     undescribed = []
-    unpointed = []
     for name, tool in zip(names, entries):
         text = tool.get("description")
         if not isinstance(text, str) or not text.strip():
             undescribed.append(name)
-            continue
-        targets = llm_targets(text)
-        if not targets or not all(targets):
-            unpointed.append(name)
     mcp_check(
-        result, "C_descriptions_name_their_llm_docs",
-        listed and not undescribed and not unpointed,
+        result, "C_descriptions_are_present",
+        listed and not undescribed,
         {
             "tool_count": len(entries),
             "empty_description": offenders(undescribed),
-            "no_llm_pointer": offenders(unpointed),
         },
     )
 
-    # ----- D. the pointer resolves to a served resource -----------
+    # ----- D. no pointer to a document the add-on does not ship ---
     env_res, resp_res = mcp_call(pkg, url, "resources/list", request_id=2)
     res_ok, res_why = mcp_envelope_ok(env_res, 2)
-    served = set()
-    for entry in (env_res.get("result") or {}).get("resources") or []:
-        if isinstance(entry, dict) and isinstance(entry.get("uri"), str):
-            served.add(entry["uri"])
-    dangling = []
-    for name, tool in zip(names, entries):
-        text = tool.get("description")
-        if not isinstance(text, str):
-            continue
-        for target in llm_targets(text):
-            uri = "llm://" + target
-            if uri not in served and [name, uri] not in dangling:
-                dangling.append([name, uri])
+    served = sorted(
+        entry["uri"]
+        for entry in (env_res.get("result") or {}).get("resources") or []
+        if isinstance(entry, dict) and isinstance(entry.get("uri"), str)
+    )
+    pointing = [
+        name for name, tool in zip(names, entries)
+        if "llm://" in (tool.get("description") or "")
+    ]
     mcp_check(
-        result, "D_docs_pointers_resolve_to_served_resources",
-        listed and res_ok and bool(served) and not dangling,
+        result, "D_descriptions_point_at_no_document",
+        listed and res_ok and not pointing
+        and not any(uri.startswith("llm://") for uri in served),
         {
-            "resource_count": len(served),
+            "served": served,
             "resources_envelope_ok": res_ok,
             "why": res_why,
-            "dangling": offenders(dangling),
+            "pointing": offenders(pointing),
         },
     )
 

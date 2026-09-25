@@ -34,6 +34,12 @@
 #   C. seeded_velocity_unscaled   - frame-1 vel.bin stays fixed (the
 #                                   solver, not the encoder, scales it).
 #   D. velocity_schedule_scales   - frame>1 schedule velocity goes 10x.
+#   E. collider_gap_scales        - an invisible wall's and sphere's contact
+#                                   gap goes 10x like a group's absolute gap,
+#                                   while their position, radius and
+#                                   thickness stay as authored (the solver
+#                                   scales those on ingest, so pre-scaling
+#                                   them would double-scale).
 
 from __future__ import annotations
 
@@ -173,6 +179,41 @@ try:
         and abs(a10 - 10.0 * a1) <= 1e-4 * max(a10, 1.0),
         {"gap_ws1": a1, "gap_ws10": a10, "authored": abs_authored,
          "ratio": (a10 / a1) if a1 else None},
+    )
+
+    # ---- invisible colliders: the gap is a world-space distance like the
+    # group's, so the encoder scales it; the solver scales the rest.
+    wall = dh.api.solver.add_wall(position=(0.0, 0.0, -1.0),
+                                  normal=(0.0, 0.0, 1.0))
+    wall.param.contact_gap = 0.002
+    sphere = dh.api.solver.add_sphere(position=(0.0, 0.0, 2.0), radius=0.5)
+    sphere.param.contact_gap = 0.003
+
+    def _colliders_at(ws):
+        root.state.world_scaling = float(ws)
+        data = dh.decode_addon_blob(dh.encoder_param.encode_param(bpy.context))
+        ic = data.get("invisible_colliders") or {}
+        return (ic.get("walls") or [{}])[0], (ic.get("spheres") or [{}])[0]
+
+    w1, s1 = _colliders_at(1.0)
+    w10, s10 = _colliders_at(10.0)
+
+    def _close(a, b):
+        return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+
+    dh.record(
+        "E_collider_gap_scales",
+        _close(w1.get("contact_gap", 0.0), 0.002)
+        and _close(s1.get("contact_gap", 0.0), 0.003)
+        and _close(w10.get("contact_gap", 0.0), 0.02)
+        and _close(s10.get("contact_gap", 0.0), 0.03)
+        and list(w1.get("position", [])) == list(w10.get("position", [None]))
+        and list(s1.get("position", [])) == list(s10.get("position", [None]))
+        and _close(s1.get("radius", 0.0), s10.get("radius", 1.0))
+        and _close(w1.get("thickness", 0.0), w10.get("thickness", 1.0))
+        and _close(s1.get("thickness", 0.0), s10.get("thickness", 1.0)),
+        {"wall_ws1": w1, "wall_ws10": w10, "sphere_ws1": s1,
+         "sphere_ws10": s10},
     )
 
 except Exception as exc:

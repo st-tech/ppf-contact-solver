@@ -256,6 +256,9 @@ template <unsigned N>
 [[seam::device_fn]] inline bool collision_point_face_m2c_at(
     const Vec3f *x0, const Vec3f *x,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const Vec3f *static_x,
     const Vec3u *static_face,
@@ -285,10 +288,13 @@ template <unsigned N>
     if (vprop.fix_index != 0u || !(vprop.mass > 0.0f)) {
         return false;
     }
-    if (collider_intersection_allowed(pair_side_of_vertex(vprop))) {
+    const Vec3u fc = static_face[face_index];
+    if (!collider_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                                pair_side_of_collision_face(fc),
+                                start_link_index, start_link_offset,
+                                has_start_link)) {
         return false;
     }
-    const Vec3u fc = static_face[face_index];
     const Vec3f p = x[vertex_index];
     const Vec3f t0 = static_x[fc[0]];
     const Vec3f t1 = static_x[fc[1]];
@@ -348,6 +354,9 @@ template <unsigned N>
 [[seam::device_fn]] inline void collision_point_face_m2c(
     const Vec3f *x0, const Vec3f *x,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const Vec3f *static_x,
     const Vec3u *static_face,
@@ -382,7 +391,7 @@ template <unsigned N>
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
     const bool accepted = collision_point_face_m2c_at(
-        x0, x, vertex_prop, vertex_param, static_x, static_face,
+        x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face,
         static_face_prop, static_face_param, fixed_index, fixed_offset,
         fixed_value, row_count, friction_mode, friction_eps, residual, dt,
         pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
@@ -414,6 +423,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const FaceParam *face_param,
     const Vec3f *static_x,
@@ -441,7 +453,10 @@ template <unsigned N>
     }
     const Vec3u fc = face[face_index];
     const VertexProp fanchor = vertex_prop[fc[0]];
-    if (collider_intersection_allowed(pair_side_of_face(fanchor, fprop))) {
+    if (!collider_pair_admitted(pair_side_of_face(fanchor, fprop, fc),
+                                pair_side_of_collision_vertex(vertex_index),
+                                start_link_index, start_link_offset,
+                                has_start_link)) {
         return false;
     }
     const Vec3f y = static_x[vertex_index];
@@ -504,6 +519,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const FaceParam *face_param,
     const Vec3f *static_x,
@@ -538,7 +556,7 @@ template <unsigned N>
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
     const bool accepted = collision_point_face_c2m_at(
-        x0, x, face, vertex_prop, face_prop, face_param, static_x,
+        x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x,
         static_vertex_prop, static_vertex_param, fixed_index, fixed_offset,
         fixed_value, row_count, friction_mode, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
         statistics_contact_count, statistics_contact_count_size,
@@ -569,6 +587,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const Vec3f *static_x,
@@ -597,10 +618,13 @@ template <unsigned N>
     }
     const Vec2u me = edge[edge_index];
     const VertexProp eanchor = vertex_prop[me[0]];
-    if (collider_intersection_allowed(pair_side_of_edge(eanchor, eprop))) {
+    const Vec2u ce = static_edge[other_index];
+    if (!collider_pair_admitted(pair_side_of_edge(eanchor, eprop, me),
+                                pair_side_of_collision_edge(ce),
+                                start_link_index, start_link_offset,
+                                has_start_link)) {
         return false;
     }
-    const Vec2u ce = static_edge[other_index];
     const Vec3f q0 = static_x[ce[0]];
     const Vec3f q1 = static_x[ce[1]];
     // Centering on the collider edge makes every coordinate below a
@@ -671,6 +695,9 @@ template <unsigned N>
     const Vec3f *x0, const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const Vec3f *static_x,
@@ -706,7 +733,7 @@ template <unsigned N>
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
     const bool accepted = collision_edge_edge_at(
-        x0, x, edge, vertex_prop, edge_prop, edge_param, static_x,
+        x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x,
         static_edge, static_edge_prop, static_edge_param, fixed_index,
         fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
         statistics_contact_count, statistics_contact_count_size,
@@ -750,6 +777,9 @@ struct CollisionPointFaceM2cEmbed {
     const Vec3f *x0;
     const Vec3f *x;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const VertexParam *vertex_param;
     const Vec3f *static_x;
     const Vec3u *static_face;
@@ -810,7 +840,7 @@ struct CollisionPointFaceM2cEmbed {
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
         if (collision_point_face_m2c_at(
-                x0, x, vertex_prop, vertex_param, static_x, static_face,
+                x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face,
                 static_face_prop, static_face_param, fixed_index, fixed_offset,
                 fixed_value, row_count, friction_mode, friction_eps, residual, dt, query_index, primitive, slot, local_force,
                 local_hessian, statistics_contact_count, statistics_contact_count_size,
@@ -841,6 +871,9 @@ struct CollisionPointFaceC2mEmbed {
     const Vec3f *x;
     const Vec3u *face;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *face_prop;
     const FaceParam *face_param;
     const Vec3f *static_x;
@@ -901,7 +934,7 @@ struct CollisionPointFaceC2mEmbed {
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
         if (collision_point_face_c2m_at(
-                x0, x, face, vertex_prop, face_prop, face_param, static_x,
+                x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x,
                 static_vertex_prop, static_vertex_param, fixed_index,
                 fixed_offset, fixed_value, row_count, friction_mode,
                 friction_eps, residual, dt, query_index, primitive, slot,
@@ -934,6 +967,9 @@ struct CollisionEdgeEdgeEmbed {
     const Vec3f *x;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeParam *edge_param;
     const Vec3f *static_x;
@@ -995,7 +1031,7 @@ struct CollisionEdgeEdgeEmbed {
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
         if (collision_edge_edge_at(
-                x0, x, edge, vertex_prop, edge_prop, edge_param, static_x,
+                x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x,
                 static_edge, static_edge_prop, static_edge_param, fixed_index,
                 fixed_offset, fixed_value, row_count, friction_mode,
                 friction_eps, residual, dt, query_index, primitive, slot,
@@ -1021,6 +1057,9 @@ struct CollisionEdgeEdgeEmbed {
 [[seam::device_fn]] inline void collision_point_face_m2c_traverse(
     const Vec3f *x0, const Vec3f *x,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const Vec3f *static_x,
     const Vec3u *static_face,
@@ -1052,7 +1091,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionPointFaceM2cEmbed embed{x0, x, vertex_prop, vertex_param, static_x, static_face, static_face_prop, static_face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionPointFaceM2cEmbed embed{x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face, static_face_prop, static_face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1069,6 +1108,9 @@ struct CollisionEdgeEdgeEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec3u *face,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const FaceParam *face_param,
     const Vec3f *static_x,
@@ -1100,7 +1142,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionPointFaceC2mEmbed embed{x0, x, face, vertex_prop, face_prop, face_param, static_x, static_vertex_prop, static_vertex_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionPointFaceC2mEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x, static_vertex_prop, static_vertex_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1117,6 +1159,9 @@ struct CollisionEdgeEdgeEmbed {
     const Vec3f *x0, const Vec3f *x,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const Vec3f *static_x,
@@ -1149,7 +1194,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, edge_prop, edge_param, static_x, static_edge, static_edge_prop, static_edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x, static_edge, static_edge_prop, static_edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);

@@ -179,6 +179,7 @@ class CommunicatorInfo:
     error: str = ""
     server_error: str = ""
     violations: list = field(default_factory=list)
+    exemptions: list = field(default_factory=list)
     response: dict = field(default_factory=dict)
     progress: float = 0.0
     traffic: str = ""

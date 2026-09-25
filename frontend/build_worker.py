@@ -27,6 +27,11 @@
 # carries a flat ERROR string, so geometry travels via this file; the
 # server reads it back on failure and forwards it to the add-on.
 #
+# A second side channel runs on SUCCESS: when Allow Existing Intersections
+# exempted the pairs a scene starts tangled with, their geometry is written to
+# ``<root>/build_exemptions.json`` in the same record shape, and the server
+# reads it back on completion so the add-on can draw what was exempted.
+#
 # Cancellation: the parent sends SIGTERM. The handler raises
 # ``KeyboardInterrupt``, BlenderApp.populate().make() unwinds, and we
 # exit with code 130 so the parent can distinguish cancel from crash.
@@ -708,6 +713,19 @@ def main(argv: list[str]) -> int:
                 json.dump(info, fp)
         except Exception as exc:
             _warn(f"scene_info write failed: {exc}\n")
+        # Allow Existing Intersections: what the build exempted, for the
+        # overlay. Written only when something was exempted; the server
+        # clears any previous file before every build, so absence is the
+        # "nothing exempted" answer. Best-effort like scene_info: the build
+        # has already succeeded, and a lost overlay must not undo that.
+        try:
+            fs = app._fixed_scene
+            exemptions = fs.start_link_exemptions() if fs is not None else []
+            if exemptions:
+                with open(os.path.join(root, "build_exemptions.json"), "w") as fp:
+                    json.dump({"exemptions": exemptions}, fp)
+        except Exception as exc:
+            _warn(f"build_exemptions write failed: {exc}\n")
         # Final progress beat so the parent sees 100% before EOF.
         _progress(1.0, "Build complete.")
         return 0

@@ -209,6 +209,12 @@ __host__ __device__ inline float acos(float x) {
 __host__ __device__ inline float atan2(float y, float x) {
     return ::atan2f(y, x);
 }
+// A real exponent. powf stays in single precision on the device; the release
+// build's FP64 guard reads the SASS of every kernel that calls it, so that is
+// checked rather than assumed.
+__host__ __device__ inline float pow(float x, float y) {
+    return ::powf(x, y);
+}
 __host__ __device__ inline bool isnan(float x) {
     return ::isnan(x);
 }

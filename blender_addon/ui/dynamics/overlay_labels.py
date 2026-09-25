@@ -15,7 +15,8 @@ def draw_overlay_labels(overlay_cache):
     dir_labels = overlay_cache.get("direction_labels", [])
     op_labels = overlay_cache.get("op_labels", [])
     vel_labels = overlay_cache.get("velocity_labels", [])
-    violation_labels = overlay_cache.get("violation_labels", [])
+    violation_labels = (overlay_cache.get("violation_labels", [])
+                        + overlay_cache.get("exemption_labels", []))
     if not dir_labels and not op_labels and not vel_labels and not violation_labels:
         return
 

@@ -232,6 +232,9 @@ struct IntersectFaceEdgeVisitor {
     const Vec3u *face;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const FaceProp *face_prop;
     const EdgeProp *edge_prop;
     IntersectionRecord *records;
@@ -262,9 +265,10 @@ struct IntersectFaceEdgeVisitor {
         const EdgeProp eprop = edge_prop[edge_index];
         const VertexProp fanchor = vertex_prop[f[0]];
         const VertexProp eanchor = vertex_prop[e[0]];
-        const PairSide a = pair_side_of_face(fanchor, fprop);
-        const PairSide b = pair_side_of_edge(eanchor, eprop);
-        if (!intersect_pair_reported(a, b)) {
+        const PairSide a = pair_side_of_face(fanchor, fprop, f);
+        const PairSide b = pair_side_of_edge(eanchor, eprop, e);
+        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
+                                     has_start_link)) {
             return false;
         }
         // A face and an edge that share a vertex meet by construction, and
@@ -297,6 +301,9 @@ struct IntersectEdgeEdgeVisitor {
     const Vec3f *vert;
     const Vec2u *edge;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeParam *edge_param;
     IntersectionRecord *records;
@@ -329,9 +336,10 @@ struct IntersectEdgeEdgeVisitor {
         const EdgeProp pb = edge_prop[index];
         const VertexProp anchor_a = vertex_prop[e0[0]];
         const VertexProp anchor_b = vertex_prop[e1[0]];
-        const PairSide a = pair_side_of_edge(anchor_a, pa);
-        const PairSide b = pair_side_of_edge(anchor_b, pb);
-        if (!intersect_pair_reported(a, b)) {
+        const PairSide a = pair_side_of_edge(anchor_a, pa, e0);
+        const PairSide b = pair_side_of_edge(anchor_b, pb, e1);
+        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
+                                     has_start_link)) {
             return false;
         }
         const EdgeParam param_a = edge_param[pa.param_index];
@@ -359,6 +367,9 @@ struct IntersectEdgeEdgeVisitor {
 struct IntersectPointPointVisitor {
     const Vec3f *vert;
     const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
     const VertexParam *vertex_param;
     IntersectionRecord *records;
     compute::atomic_uint_t *counter;
@@ -384,9 +395,10 @@ struct IntersectPointPointVisitor {
         }
         const VertexProp pa = vertex_prop[vertex_index];
         const VertexProp pb = vertex_prop[index];
-        const PairSide a = pair_side_of_vertex(pa);
-        const PairSide b = pair_side_of_vertex(pb);
-        if (!intersect_pair_reported(a, b)) {
+        const PairSide a = pair_side_of_vertex(pa, vertex_index);
+        const PairSide b = pair_side_of_vertex(pb, index);
+        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
+                                     has_start_link)) {
             return false;
         }
         const VertexParam param_a = vertex_param[pa.param_index];
@@ -412,10 +424,15 @@ struct IntersectPointPointVisitor {
 // so the pair is inter-object by construction and carries no self-intersection
 // case. It has no material and no pins of its own, so the whole verdict rests
 // on the dynamic edge and the caller settles it ONCE per edge rather than per
-// leaf.
+// leaf. The start link is the exception: it is a property of the PAIR, so it
+// is asked per leaf, from the dynamic edge's side the caller built.
 struct IntersectCollisionMeshVisitor {
     const Vec3f *collider_vertex;
     const Vec3u *collider_face;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
+    PairSide dynamic;
     IntersectionRecord *records;
     compute::atomic_uint_t *counter;
     unsigned capacity;
@@ -443,6 +460,11 @@ struct IntersectCollisionMeshVisitor {
             return false;
         }
         const Vec3u f = collider_face[index];
+        if (pair_linked_at_start(dynamic, pair_side_of_collision_face(f),
+                                 start_link_index, start_link_offset,
+                                 has_start_link)) {
+            return false;
+        }
         const Vec3f x0 = collider_vertex[f[0]];
         const Vec3f x1 = collider_vertex[f[1]];
         const Vec3f x2 = collider_vertex[f[2]];
@@ -483,6 +505,9 @@ struct IntersectCollisionMeshVisitor {
     const Vec3u *face, unsigned face_count,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const FaceProp *face_prop,
     const EdgeProp *edge_prop,
     const unsigned *node, unsigned node_count,
@@ -500,6 +525,9 @@ struct IntersectCollisionMeshVisitor {
     op.face = face;
     op.edge = edge;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.face_prop = face_prop;
     op.edge_prop = edge_prop;
     op.records = records;
@@ -518,6 +546,9 @@ struct IntersectCollisionMeshVisitor {
     const Vec3f *vert,
     const Vec2u *edge, unsigned edge_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
     const unsigned *node, unsigned node_count,
@@ -534,6 +565,9 @@ struct IntersectCollisionMeshVisitor {
     op.vert = vert;
     op.edge = edge;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.edge_prop = edge_prop;
     op.edge_param = edge_param;
     op.records = records;
@@ -551,6 +585,9 @@ struct IntersectCollisionMeshVisitor {
 [[seam::device_fn]] inline void intersect_scan_point_point(
     const Vec3f *vert, unsigned vertex_count,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const VertexParam *vertex_param,
     const unsigned *node, unsigned node_count,
     const AABB *aabb, unsigned root,
@@ -565,6 +602,9 @@ struct IntersectCollisionMeshVisitor {
     IntersectPointPointVisitor op;
     op.vert = vert;
     op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
     op.vertex_param = vertex_param;
     op.records = records;
     op.counter = counter;
@@ -588,6 +628,9 @@ struct IntersectCollisionMeshVisitor {
     const Vec3f *vert,
     const Vec2u *edge,
     const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
     const EdgeProp *edge_prop,
     const Vec3f *collider_vertex,
     const Vec3u *collider_face, unsigned collider_face_count,
@@ -607,12 +650,17 @@ struct IntersectCollisionMeshVisitor {
     }
     const Vec2u e = edge[element];
     const VertexProp anchor = vertex_prop[e[0]];
-    if (collider_intersection_allowed(pair_side_of_edge(anchor, eprop))) {
+    const PairSide dynamic = pair_side_of_edge(anchor, eprop, e);
+    if (collider_intersection_allowed(dynamic)) {
         return;
     }
     IntersectCollisionMeshVisitor op;
     op.collider_vertex = collider_vertex;
     op.collider_face = collider_face;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
+    op.dynamic = dynamic;
     op.records = records;
     op.counter = counter;
     op.capacity = capacity;

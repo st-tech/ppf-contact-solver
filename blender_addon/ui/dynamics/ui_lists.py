@@ -351,7 +351,12 @@ class SCENE_UL_ColliderKeyframesList(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_property, index):
         if self.layout_type in {"DEFAULT", "COMPACT"}:
             if index == 0:
-                layout.label(text=iface_("Frame {frame} (Initial)").format(frame=item.frame), icon="DECORATE_KEYFRAME")
+                # The initial keyframe is the collider's state at the starting
+                # frame, which is where the encoder and the viewport overlay
+                # both place it, so that is the frame it is labeled with.
+                from ...core.encoder import resolve_start_frame_or_default
+                start = resolve_start_frame_or_default(context.scene)
+                layout.label(text=iface_("Frame {frame} (Initial)").format(frame=start), icon="DECORATE_KEYFRAME")
             else:
                 layout.label(text=iface_("Frame {frame}").format(frame=item.frame), icon="KEYFRAME")
         elif self.layout_type == "GRID":

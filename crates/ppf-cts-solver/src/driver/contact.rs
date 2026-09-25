@@ -162,6 +162,8 @@ pub struct MeshRefs {
     pub edge_face_index: ppf_cts_compute::Handle,
     pub edge_face_offset: ppf_cts_compute::Handle,
     pub has_edge_face: u32,
+    /// Allow Existing Intersections' link table; see [`StartLinkRefs`].
+    pub start_link: StartLinkRefs,
 }
 
 pub struct Contact {
@@ -1047,6 +1049,9 @@ impl Contact {
             x: a.x,
             face: a.face,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             face_prop: a.face_prop,
             vertex_param: a.vertex_param,
             face_param: a.face_param,
@@ -1139,6 +1144,9 @@ impl Contact {
             face: a.face,
             edge: a.edge,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             edge_prop: a.edge_prop,
             vertex_param: a.vertex_param,
             edge_param: a.edge_param,
@@ -1228,6 +1236,9 @@ impl Contact {
             x: a.x,
             edge: a.edge,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             edge_prop: a.edge_prop,
             edge_param: a.edge_param,
             fixed_index: a.fixed_index,
@@ -1303,6 +1314,9 @@ impl Contact {
             face: a.face,
             edge: a.edge,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             vertex_param: a.vertex_param,
             vertex_edge_index: a.vertex_edge_index,
             vertex_edge_offset: a.vertex_edge_offset,
@@ -1485,6 +1499,9 @@ impl Contact {
                 face: mesh.face,
                 face_count: self.faces as u32,
                 vertex_prop: mesh.vertex_prop,
+                start_link_index: mesh.start_link.index,
+                start_link_offset: mesh.start_link.offset,
+                has_start_link: mesh.start_link.present,
                 face_prop: mesh.face_prop,
                 vertex_param: mesh.vertex_param,
                 face_param: mesh.face_param,
@@ -1521,6 +1538,9 @@ impl Contact {
                 x0,
                 x1,
                 vertex_prop: mesh.vertex_prop,
+                start_link_index: mesh.start_link.index,
+                start_link_offset: mesh.start_link.offset,
+                has_start_link: mesh.start_link.present,
                 vertex_param: mesh.vertex_param,
                 node: self.vertex_tree.node.handle(),
                 node_count: self.vertex_tree.node_count,
@@ -1555,6 +1575,9 @@ impl Contact {
                     collider_face: self.collider_face.handle(),
                     collider_face_count: self.collider_faces as u32,
                     vertex_prop: mesh.vertex_prop,
+                    start_link_index: mesh.start_link.index,
+                    start_link_offset: mesh.start_link.offset,
+                    has_start_link: mesh.start_link.present,
                     collider_face_prop: self.collider_face_prop.handle(),
                     vertex_param: mesh.vertex_param,
                     collider_face_param: self.collider_face_param.handle(),
@@ -1582,6 +1605,9 @@ impl Contact {
                     face: mesh.face,
                     face_count: self.faces as u32,
                     vertex_prop: mesh.vertex_prop,
+                    start_link_index: mesh.start_link.index,
+                    start_link_offset: mesh.start_link.offset,
+                    has_start_link: mesh.start_link.present,
                     face_prop: mesh.face_prop,
                     collider_vertex_prop: self.collider_prop.handle(),
                     face_param: mesh.face_param,
@@ -1629,6 +1655,9 @@ impl Contact {
                 x1,
                 edge: mesh.edge,
                 vertex_prop: mesh.vertex_prop,
+                start_link_index: mesh.start_link.index,
+                start_link_offset: mesh.start_link.offset,
+                has_start_link: mesh.start_link.present,
                 edge_prop: mesh.edge_prop,
                 edge_param: mesh.edge_param,
                 node: self.edge_tree.node.handle(),
@@ -1657,6 +1686,9 @@ impl Contact {
                     collider_edge: self.collider_edge.handle(),
                     collider_edge_count: self.collider_edges as u32,
                     vertex_prop: mesh.vertex_prop,
+                    start_link_index: mesh.start_link.index,
+                    start_link_offset: mesh.start_link.offset,
+                    has_start_link: mesh.start_link.present,
                     edge_prop: mesh.edge_prop,
                     collider_edge_prop: self.collider_edge_prop.handle(),
                     edge_param: mesh.edge_param,
@@ -1834,6 +1866,7 @@ impl Contact {
             vert_prop: mesh.vertex_prop,
             edge_param: mesh.edge_param,
             vertex_param: mesh.vertex_param,
+            start_link: mesh.start_link,
             faces: self.faces,
             edges: self.edges,
             surface_vertices: self.surface_vertices,
@@ -2105,6 +2138,9 @@ impl Contact {
             x0: a.x0,
             x: a.x,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             vertex_param: a.vertex_param,
             static_x: a.static_x,
             static_face: a.static_face,
@@ -2197,6 +2233,9 @@ impl Contact {
             x: a.x,
             face: a.face,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             face_prop: a.face_prop,
             face_param: a.face_param,
             static_x: a.static_x,
@@ -2289,6 +2328,9 @@ impl Contact {
             x: a.x,
             edge: a.edge,
             vertex_prop: a.vertex_prop,
+            start_link_index: a.start_link.index,
+            start_link_offset: a.start_link.offset,
+            has_start_link: a.start_link.present,
             edge_prop: a.edge_prop,
             edge_param: a.edge_param,
             static_x: a.static_x,
@@ -2373,6 +2415,7 @@ impl Contact {
             vertex_param: mesh.vertex_param,
             face_param: mesh.face_param,
             edge_param: mesh.edge_param,
+            start_link: mesh.start_link,
             static_x: self.collider_vertex.handle(),
             static_face: self.collider_face.handle(),
             static_edge: self.collider_edge.handle(),
@@ -2609,6 +2652,24 @@ fn set_leaf_active<D: Device>(
 /// A scene that configures no statistics objects leaves all three zero-length,
 /// `statistics_enabled` reads false on the device, and every recorder call is
 /// an early return.
+/// Allow Existing Intersections' vertex link table, as the contact, CCD and
+/// intersection-scan passes read it through `pair_filter.kernel.cpp`'s
+/// `pair_linked_at_start`.
+///
+/// A CSR over the dynamic vertices, built once by `builder.rs` and staged once
+/// by `SolverState::allocate`: row `v` lists the vertices `v` is linked to, a
+/// collision-mesh vertex carrying `START_LINK_COLLISION_VERTEX`. `present` is
+/// zero for a scene that linked nothing, which is every scene that does not use
+/// the option, and the body returns on it before reading either array. The two
+/// handles are then REAL zero-length allocations, never `Handle::NONE`, for
+/// the arena reason [`StatisticsRefs::none`] states.
+#[derive(Clone, Copy)]
+pub struct StartLinkRefs {
+    pub index: ppf_cts_compute::Handle,
+    pub offset: ppf_cts_compute::Handle,
+    pub present: u32,
+}
+
 #[derive(Clone, Copy)]
 pub struct StatisticsRefs {
     pub contact_count: ppf_cts_compute::Handle,
@@ -2691,6 +2752,7 @@ struct NarrowPhaseInputs {
     edge_face_index: ppf_cts_compute::Handle,
     edge_face_offset: ppf_cts_compute::Handle,
     has_edge_face: u32,
+    start_link: StartLinkRefs,
     /// The ELASTIC SNAPSHOT the dynamic stiffness reads, which is `tmp_fixed`
     /// and never the matrix being assembled into.
     fixed_index: ppf_cts_compute::Handle,
@@ -2728,6 +2790,7 @@ struct CollisionInputs {
     vertex_param: ppf_cts_compute::Handle,
     face_param: ppf_cts_compute::Handle,
     edge_param: ppf_cts_compute::Handle,
+    start_link: StartLinkRefs,
     /// The static side, at ONE POSE: it has no start and no end.
     static_x: ppf_cts_compute::Handle,
     static_face: ppf_cts_compute::Handle,
@@ -2801,6 +2864,7 @@ impl Contact {
             edge_face_index: mesh.edge_face_index,
             edge_face_offset: mesh.edge_face_offset,
             has_edge_face: mesh.has_edge_face,
+            start_link: mesh.start_link,
             fixed_index: mesh.fixed_index,
             fixed_offset: mesh.fixed_offset,
             fixed_value: reference.value_handle(),
@@ -3501,7 +3565,15 @@ mod tests {
 
     /// Drive the free vertex from `height` to `end_height` over the triangle.
     fn sweep_over_a_dynamic_face(height: f32, end_height: f32) -> f32 {
-        let data = scene_over_a_dynamic_face(height);
+        sweep_scene_over_a_dynamic_face(scene_over_a_dynamic_face(height), end_height)
+    }
+
+    /// The same sweep over a scene the caller has already built, so a test can
+    /// install Allow Existing Intersections' links on it first.
+    fn sweep_scene_over_a_dynamic_face(
+        data: Box<crate::data::DataSet>,
+        end_height: f32,
+    ) -> f32 {
         let param = collision_param();
         // Safety: the boxed scene outlives every borrow below.
         unsafe {
@@ -3569,6 +3641,35 @@ mod tests {
     fn a_vertex_moving_away_from_a_dynamic_face_keeps_the_whole_step() {
         let toi = sweep_over_a_dynamic_face(0.5, 1.5);
         assert_eq!(toi, 1.0, "a vertex moving AWAY had its step cut to {toi}");
+    }
+
+    #[test]
+    fn a_vertex_linked_at_start_to_the_face_is_not_stopped_by_it() {
+        // Allow Existing Intersections: the vertex is linked to ONE vertex of
+        // the face, which is enough, so the pair is a neighbor and the sweep
+        // does not filter the step against it. The unlinked twin above stops
+        // at ~0.5, which is what makes this a result rather than a no-op.
+        let mut data = scene_over_a_dynamic_face(0.5);
+        data.start_link = crate::cvecvec::CVecVec::from(
+            &crate::builder::start_link_table(&[0, 3], 4, 0)[..],
+        );
+        let toi = sweep_scene_over_a_dynamic_face(data, -0.5);
+        assert_eq!(
+            toi, 1.0,
+            "a vertex linked at start to the face it crosses had its step cut to {toi}"
+        );
+    }
+
+    #[test]
+    fn a_link_elsewhere_does_not_free_the_vertex() {
+        // The negative control: a table is present, but it links two vertices
+        // of the face to each other and nothing to the swept vertex.
+        let mut data = scene_over_a_dynamic_face(0.5);
+        data.start_link = crate::cvecvec::CVecVec::from(
+            &crate::builder::start_link_table(&[0, 1], 4, 0)[..],
+        );
+        let toi = sweep_scene_over_a_dynamic_face(data, -0.5);
+        assert!(toi > 0.49 && toi < 0.5, "the sweep returned {toi}");
     }
 
     /// One dynamic edge `height` above a collider edge crossing it, and no faces.
@@ -3821,7 +3922,13 @@ mod tests {
     }
 
     fn assemble_against_collider(height: f32) -> (Vec<f32>, [f32; 9], u64) {
-        let data = scene_over_a_collider(height);
+        assemble_scene_against_collider(scene_over_a_collider(height))
+    }
+
+    /// The same assembly over a scene the caller has already built.
+    fn assemble_scene_against_collider(
+        data: Box<crate::data::DataSet>,
+    ) -> (Vec<f32>, [f32; 9], u64) {
         let param = collision_param();
         // Safety: the boxed scene outlives every borrow below.
         unsafe {
@@ -3960,7 +4067,16 @@ mod tests {
         to: f32,
         window: Option<&[u32]>,
     ) -> (f32, bool) {
-        let data = scene_over_a_collider(from);
+        sweep_scene_against_collider(scene_over_a_collider(from), to, window)
+    }
+
+    /// The same sweep over a scene the caller has already built, so a test can
+    /// install Allow Existing Intersections' links on it first.
+    fn sweep_scene_against_collider(
+        data: Box<crate::data::DataSet>,
+        to: f32,
+        window: Option<&[u32]>,
+    ) -> (f32, bool) {
         let param = collision_param();
         // Safety: the boxed scene outlives every borrow below.
         unsafe {
@@ -4102,6 +4218,43 @@ mod tests {
             "the barrier's curvature landed as {} rather than 1.8e6",
             block[4]
         );
+    }
+
+    /// The collider fixture with its one dynamic vertex linked at start to the
+    /// collider's first vertex, which is combined index 1: the dynamic pool
+    /// holds one vertex and the collision mesh follows it.
+    fn scene_over_a_collider_linked(height: f32) -> Box<crate::data::DataSet> {
+        let mut data = scene_over_a_collider(height);
+        data.start_link = crate::cvecvec::CVecVec::from(
+            &crate::builder::start_link_table(&[0, 1], 1, 3)[..],
+        );
+        data
+    }
+
+    #[test]
+    fn a_vertex_linked_at_start_to_the_collider_is_not_pushed() {
+        // The twin of `a_vertex_over_a_collider_triangle_is_pushed_off_it`,
+        // which assembles -8100 at this gap: a pair linked at start is a
+        // neighbor, so the barrier assembles nothing for it.
+        let (force, block, count) =
+            assemble_scene_against_collider(scene_over_a_collider_linked(0.001));
+        assert_eq!(count, 0, "a linked collider pair was assembled");
+        assert!(force.iter().all(|&f| f == 0.0), "got {force:?}");
+        assert!(block.iter().all(|&h| h == 0.0), "got {block:?}");
+    }
+
+    #[test]
+    fn a_vertex_linked_at_start_to_the_collider_is_not_stopped_by_it() {
+        // The sweep half of the same pair, which must agree with the assembly
+        // above: a pair the barrier does not assemble and the sweep still
+        // filtered would stall the vertex at a surface nothing pushes it off.
+        let (toi, overlapping) =
+            sweep_scene_against_collider(scene_over_a_collider_linked(0.5), -0.5, None);
+        assert_eq!(toi, 1.0, "a linked vertex had its step cut to {toi}");
+        assert!(!overlapping);
+        // And unlinked, the same motion stops at the collider.
+        let (toi, _) = sweep_against_collider(0.5, -0.5);
+        assert!(toi < 0.5, "the unlinked control returned {toi}");
     }
 
     #[test]

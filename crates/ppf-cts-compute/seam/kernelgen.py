@@ -404,7 +404,7 @@ HANDLE_SIZE = 16
 HANDLE_ALIGN = 4
 
 # The STRONGEST alignment an arena will serve a pointee, and it is the HOST
-# arena's that is binding: `ARENA_ALIGN` in `ppf-cts-compute/src/host.rs` is 64
+# arena's that is binding: `ARENA_ALIGN` in `ppf-cts-compute/cpu/host.rs` is 64
 # and `allocate_span` refuses a larger request outright, while the CUDA arena
 # takes the alignment as an argument with no upper bound of its own. So 64 is
 # the tightest of the three and is what a pointee is held to here.

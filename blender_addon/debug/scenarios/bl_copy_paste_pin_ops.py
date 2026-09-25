@@ -151,7 +151,6 @@ try:
     # Pin item scalars NOT in the clipboard payload. Pin the ones we
     # care about to sentinel values so we can detect any leak from the
     # paste path.
-    pin_item.included = False
     pin_item.use_pin_duration = True
     pin_item.pin_duration = 73
     pin_item.use_pull = True
@@ -160,7 +159,6 @@ try:
         "name": pin_item.name,
         "object_uuid": pin_item.object_uuid,
         "vg_hash": pin_item.vg_hash,
-        "included": pin_item.included,
         "use_pin_duration": pin_item.use_pin_duration,
         "pin_duration": pin_item.pin_duration,
         "use_pull": pin_item.use_pull,
@@ -258,7 +256,6 @@ try:
         "name": pin_item.name,
         "object_uuid": pin_item.object_uuid,
         "vg_hash": pin_item.vg_hash,
-        "included": pin_item.included,
         "use_pin_duration": pin_item.use_pin_duration,
         "pin_duration": pin_item.pin_duration,
         "use_pull": pin_item.use_pull,

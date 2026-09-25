@@ -256,8 +256,8 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 **`encode_obj(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Per active group, per included object:
 - ROD: edges array only
 - Others: extract to NumPy, apply world transform, triangulate (faces + UV)
-- Detects stitch edges (loose edges not in any face) -> `(Ind[#,4], W[#,2])` format
-- STATIC objects: extracts per-frame animation (positions at each keyframe)
+- Detects stitch edges (loose edges not in any face) -> `(Ind[#,4], W[#,4])` format: a source vertex and a target point weighted over three vertices
+- STATIC objects: samples the world transform at every solve frame (`transform_animation`), or ships a captured deformation cache
 - Other objects: collects pin vertex indices
 
 **`encode_param(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Dict with keys:

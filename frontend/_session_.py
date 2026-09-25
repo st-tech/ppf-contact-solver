@@ -690,6 +690,16 @@ class FixedSession:
 
         if os.path.exists(self.save_and_quit_file_path()):
             os.remove(self.save_and_quit_file_path())
+        # Frame-step control files from an earlier run. A hold this call's
+        # own `run_until_frame` just wrote is kept; any other would stop the
+        # run at a frame nobody asked for.
+        for stale in ("held", "inputs_updated") + (
+            () if getattr(self, "_hold_pending", False) else ("hold_at_frame",)
+        ):
+            stale_path = os.path.join(self.output.path, stale)
+            if os.path.exists(stale_path):
+                os.remove(stale_path)
+        self._hold_pending = False
         self._check_ready()
         if self.is_running():
             if force:
@@ -943,6 +953,226 @@ class FixedSession:
                     time.sleep(1)
         """
         _rust.touch_save_and_quit(self.info.path)
+
+    # --- frame stepping ------------------------------------------------
+    #
+    # A HELD run keeps its process, its device and every buffer alive and
+    # waits between two steps; nothing is checkpointed. The solver stops once
+    # it has written the frame asked for, writes `output/held`, and continues
+    # when the hold grows, is released, or is saved and quit. While it is held
+    # the caller may rewrite the force field and the scene-wide `dyn()`
+    # schedule, and the solver takes both before its next step.
+
+    def held_frame(self) -> Optional[int]:
+        """The frame the solver is held at, or ``None`` when it is not held.
+
+        Example:
+            ::
+
+                session.run_until_frame(10)
+                assert session.held_frame() == 10
+        """
+        path = os.path.join(self.output.path, "held")
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read().strip()
+        except OSError:
+            return None
+        return int(text) if text else None
+
+    def _write_hold(self, frame: int, timeout: float) -> None:
+        os.makedirs(self.output.path, exist_ok=True)
+        path = os.path.join(self.output.path, "hold_at_frame")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(f"{int(frame)} {float(timeout)}\n")
+        os.replace(tmp, path)
+
+    def run_until_frame(
+        self, frame: int, timeout: float = 3600.0, poll: float = 0.05
+    ) -> "FixedSession":
+        """Run until frame ``frame`` is written, then hold the solver there.
+
+        Starts the solver when it is not running, and continues a held one.
+        Returns once the solver is held at ``frame``, or once the run has
+        finished when ``frame`` is at or past its last frame.
+
+        Args:
+            frame (int): The frame to stop after.
+            timeout (float): Seconds the solver waits while held before it
+                saves and quits on its own, so an abandoned hold costs a
+                checkpoint rather than a GPU held forever. Defaults to one hour.
+            poll (float): Seconds between checks of the solver's state.
+
+        Raises:
+            RuntimeError: If the solver exits, or ends without reaching
+                ``frame``, instead of holding.
+
+        Example:
+            Drive a run frame by frame and steer its force field::
+
+                session = app.session.create(fixed).build()
+                session.run_until_frame(0)
+                for f in range(1, 60):
+                    x = session.get.vertex(session.held_frame())[0]
+                    scene.force_field.clear().script(make_script(x))
+                    session.update_force_field(scene.force_field)
+                    session.step_frame()
+                session.release()
+        """
+        frame = int(frame)
+        held = self.held_frame()
+        if held is not None and frame <= held:
+            raise ValueError(
+                f"the solver is held at frame {held}; run_until_frame needs a later frame"
+            )
+        self._write_hold(frame, timeout)
+        if not self.is_running():
+            self._hold_pending = True
+            self.start(blocking=False)
+        while True:
+            held = self.held_frame()
+            if held is not None and held >= frame:
+                return self
+            if self.finished():
+                return self
+            if not self.is_running():
+                # The marker can land between the two checks above.
+                held = self.held_frame()
+                if held is not None and held >= frame:
+                    return self
+                if self.finished():
+                    return self
+                log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
+                tail = ""
+                for p in (err_path, log_path):
+                    if os.path.exists(p):
+                        with open(p, encoding="utf-8", errors="replace") as f:
+                            tail += "".join(f.readlines()[-20:])
+                raise RuntimeError(
+                    f"the solver exited before holding at frame {frame}:\n{tail}"
+                )
+            time.sleep(poll)
+
+    def step_frame(self, count: int = 1, timeout: float = 3600.0) -> "FixedSession":
+        """Advance a held run by ``count`` frames and hold it again.
+
+        Starts the run and holds it at frame ``count`` when it is not running.
+
+        Example:
+            ::
+
+                session.run_until_frame(0)
+                session.step_frame()     # held at 1
+                session.step_frame(5)    # held at 6
+        """
+        held = self.held_frame()
+        base = held if held is not None else max(self.get.latest_frame(), 0)
+        return self.run_until_frame(base + int(count), timeout=timeout)
+
+    def release(self, blocking: Optional[bool] = None) -> "FixedSession":
+        """Let a held run continue to its last frame.
+
+        Like :meth:`start`, it returns at once inside a Jupyter notebook (the
+        run continues in the background, for ``preview`` and ``stream``) and
+        otherwise waits for the run to end. Pass ``blocking`` to choose.
+
+        Raises:
+            RuntimeError: If a waited-for run ends without finishing.
+
+        Example:
+            ::
+
+                session.run_until_frame(30)
+                session.release()   # a script waits here for the last frame
+        """
+        path = os.path.join(self.output.path, "hold_at_frame")
+        if os.path.exists(path):
+            os.remove(path)
+        if blocking is None:
+            blocking = not Utils.in_jupyter_notebook()
+        if blocking:
+            while self.is_running():
+                time.sleep(0.2)
+            if not self.finished():
+                log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
+                tail = ""
+                for p in (err_path, log_path):
+                    if os.path.exists(p):
+                        with open(p, encoding="utf-8", errors="replace") as f:
+                            tail += "".join(f.readlines()[-20:])
+                raise RuntimeError(f"the released run ended without finishing:\n{tail}")
+        return self
+
+    def _require_held(self, what: str) -> int:
+        held = self.held_frame()
+        if held is None or not self.is_running():
+            raise RuntimeError(
+                f"{what} needs a held run; call run_until_frame() or step_frame() first"
+            )
+        return held
+
+    def _mark_inputs_updated(self) -> None:
+        with open(os.path.join(self.output.path, "inputs_updated"), "w") as f:
+            f.write("")
+
+    def update_force_field(self, field) -> "FixedSession":
+        """Replace the force field of a held run from the next step on.
+
+        Args:
+            field (ForceField): The field to use, typically ``scene.force_field``
+                after editing it. The per-object weights stay as built.
+
+        Example:
+            ::
+
+                scene.force_field.clear().script('''
+                def eval(x, y, z, t):
+                    return (0.0, 5.0, 0.0)
+                ''')
+                session.update_force_field(scene.force_field)
+                session.step_frame()
+        """
+        from ._force_field_ import FIELD_DIR, resolve_targets
+        from ._force_field_ import write_session as _write_force_field
+
+        self._require_held("update_force_field")
+        fixed = self._session.fixed_scene
+        n_vert = len(fixed._vert[1])
+        # The weights and the group map are the built scene's: the update
+        # replaces the sources, and they target the groups the scene was built
+        # with.
+        context = fixed._force_field_context
+        grids, scripts, mask = resolve_targets(field, context["group_vertices"], n_vert)
+        weight = context["weight"]
+        directory = os.path.join(self.info.path, FIELD_DIR)
+        if os.path.isdir(directory):
+            shutil.rmtree(directory)
+        _write_force_field(self.info.path, grids, scripts, weight, mask)
+        self._mark_inputs_updated()
+        return self
+
+    def update_params(self) -> "FixedSession":
+        """Re-export ``session.param`` for a held run, from the next step on.
+
+        Only the ``dyn()`` schedules of the scene-wide keys the solver can
+        animate (``gravity``, ``wind``, ``air-density``, ``air-friction``,
+        ``isotropic-air-friction``, ``dt``, ``playback``) and the per-object
+        velocity schedules take effect; a schedule is a function of absolute
+        simulation time, so keys written for times already past change
+        nothing. Collision windows cannot change mid-run and are refused.
+
+        Example:
+            ::
+
+                session.session.param.dyn("gravity").time(2.0).change([0, 9.8, 0])
+                session.update_params()
+                session.step_frame()
+        """
+        self._require_held("update_params")
+        self._session.param.export(self.info.path)
+        self._mark_inputs_updated()
+        return self
 
     def _save_and_quit_button(self, description: str = "Save and Quit"):
         """Create a save-and-quit button.

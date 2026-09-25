@@ -140,6 +140,11 @@ pub(crate) struct TestMesh {
     /// one. `Handle::NONE` is not resolvable, which is the whole reason this
     /// field exists.
     pub empty_adjacency: Buffer<u32>,
+    /// Allow Existing Intersections' table, staged from `DataSet::start_link`
+    /// by the production staging, so a fixture installs links the way a scene
+    /// does: by filling the dataset's field.
+    pub start_link_index: Buffer<u32>,
+    pub start_link_offset: Buffer<u32>,
 }
 
 /// One device block from a host slice of any record, for tests.
@@ -247,6 +252,11 @@ impl TestMesh {
             edge_face_index: self.empty_adjacency.span(0, 0),
             edge_face_offset: self.empty_adjacency.span(0, 0),
             has_edge_face: 0,
+            start_link: crate::driver::contact::StartLinkRefs {
+                index: adjacency_handle(&self.start_link_index),
+                offset: adjacency_handle(&self.start_link_offset),
+                present: u32::from(self.start_link_offset.len() != 0),
+            },
         }
     }
 }
@@ -309,8 +319,16 @@ pub(crate) unsafe fn test_mesh_of(
         .size(device, 0, AllocLabel("test.mesh.empty_adjacency"))
         .expect("a zero-length allocation succeeds");
 
+    let mut start_link_index = Buffer::<u32>::none();
+    let mut start_link_offset = Buffer::<u32>::none();
+    stage_adjacency(device, &data.start_link, &mut start_link_index,
+                    &mut start_link_offset, "test.mesh.start_link")
+        .expect("the fixture stages its link table");
+
     TestMesh {
         empty_adjacency,
+        start_link_index,
+        start_link_offset,
         face,
         edge,
         prop,
@@ -713,6 +731,10 @@ pub struct SolverState {
     /// pass that forms it is the only code that touches it, so nothing reads it
     /// back and nothing seeds it.
     pub velocity: Buffer<f32>,
+    /// The external force field: its installed inputs and its two per-vertex
+    /// outputs, the acceleration the target adds beside gravity and the air
+    /// velocity the drag adds to the scene wind.
+    pub field: super::force_field::ForceField,
     /// The Newton right-hand side, `3 * vertices` floats.
     pub force: ReadbackBuffer<f32>,
     /// THE RESIDUAL EVERY CONTACT'S FRICTION ANCHOR IS READ OFF, `3 * vertices`
@@ -1128,6 +1150,12 @@ pub struct SolverState {
     pub neighbor_vertex_face_offset: Buffer<u32>,
     pub neighbor_edge_face_index: Buffer<u32>,
     pub neighbor_edge_face_offset: Buffer<u32>,
+    /// Allow Existing Intersections' vertex link table, staged once like the
+    /// adjacencies above and for the same reason: `builder.rs` builds it at
+    /// scene build and nothing rewrites it. A scene that linked nothing stages
+    /// real zero-length arrays and reports the table absent.
+    pub start_link_index: Buffer<u32>,
+    pub start_link_offset: Buffer<u32>,
     /// Staging for the index lists the pin API hands in, and for the positions
     /// it reads back.
     ///
@@ -2064,6 +2092,11 @@ impl SolverState {
             edge_face_index: adjacency_handle(&self.neighbor_edge_face_index),
             edge_face_offset: adjacency_handle(&self.neighbor_edge_face_offset),
             has_edge_face: u32::from(self.neighbor_edge_face_offset.len() != 0),
+            start_link: super::contact::StartLinkRefs {
+                index: adjacency_handle(&self.start_link_index),
+                offset: adjacency_handle(&self.start_link_offset),
+                present: u32::from(self.start_link_offset.len() != 0),
+            },
         }
     }
 
@@ -2189,6 +2222,10 @@ impl SolverState {
                             &mut self.neighbor_vertex_face_offset, "neighbor.vertex_face")?;
             stage_adjacency(device, &n.edge.face, &mut self.neighbor_edge_face_index,
                             &mut self.neighbor_edge_face_offset, "neighbor.edge_face")?;
+            // Allow Existing Intersections' table, on the same terms: a
+            // scene that linked nothing leaves it unsized and reads absent.
+            stage_adjacency(device, &data.start_link, &mut self.start_link_index,
+                            &mut self.start_link_offset, "start_link")?;
         }
         // Safety: the two arrays hold one matrix per shell face and per tet,
         // four and nine floats wide.
@@ -2516,6 +2553,7 @@ impl SolverState {
         self.eval_x.seed(device, curr_seed)?;
         self.velocity
             .size(device, 3 * vertices, AllocLabel("step.velocity"))?;
+        self.field.allocate(device, vertices)?;
         self.force
             .size(device, 3 * vertices, AllocLabel("step.force"))?;
         self.residual

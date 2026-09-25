@@ -6,8 +6,8 @@
 # world_scaling with INVISIBLE COLLIDERS present (an invisible wall and
 # an invisible sphere), contact enabled. A pinned sheet drapes under
 # gravity above a wall and a sphere; every collider length (wall
-# position, sphere position + radius, and the sphere/wall thickness) is
-# authored at the cycle's scale. We run the scene at base size
+# position, sphere position + radius, the sphere/wall thickness and their
+# contact gap) is authored at the cycle's scale. We run the scene at base size
 # (world_scaling=1) and at 10x size (world_scaling=0.1) and assert the
 # 10x run reproduces 10x the base run's per-frame positions.
 #
@@ -17,8 +17,9 @@
 # breaks the 10x correspondence rather than merely moving the cloth. The
 # assertion is that correspondence and not a particular deflection, which is
 # what makes it a check of the scaling and not of the contact response. The
-# encoder-side relative-vs-absolute gap scaling is checked separately, in
-# bl_world_scaling_encoder_scales.
+# contact gap is the one collider length the ADD-ON scales rather than the
+# solver, which bl_world_scaling_encoder_scales checks on the payload (its
+# check E); authoring it at scale here keeps the two runs the same scene.
 
 from __future__ import annotations
 
@@ -65,11 +66,15 @@ def build(scale):
     cloth.add(sheet.name)
     cloth.create_pin(sheet.name, "TopEdge")
 
-    # A floor wall and a sphere obstacle, both authored at the scene scale.
-    dh.api.solver.add_wall(position=(0.0, 0.0, -1.0 * scale),
-                           normal=(0.0, 0.0, 1.0))
-    dh.api.solver.add_sphere(position=(0.0, 0.0, -0.5 * scale),
-                             radius=0.4 * scale)
+    # A floor wall and a sphere obstacle, both authored at the scene scale:
+    # position, radius, thickness and contact gap alike.
+    wall = dh.api.solver.add_wall(position=(0.0, 0.0, -1.0 * scale),
+                                  normal=(0.0, 0.0, 1.0))
+    sphere = dh.api.solver.add_sphere(position=(0.0, 0.0, -0.5 * scale),
+                                      radius=0.4 * scale)
+    for collider in (wall, sphere):
+        collider.param.contact_gap = 0.001 * scale
+        collider.param.thickness = 0.1 * scale
     return sheet.name
 
 

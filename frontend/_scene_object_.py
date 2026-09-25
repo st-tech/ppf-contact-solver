@@ -35,6 +35,12 @@ from ._scene_transform_ import (
 
 EPS = 1e-3
 
+# The parameters a tetrahedral object can animate with `set_param_anim`. Its
+# animated values reach only its surface triangles, which carry its contact
+# material; its elastic material lives on its tetrahedra, which have no
+# per-frame table, so an elastic key would be written where nothing reads it.
+_TET_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset"})
+
 
 def _interp_samples(samples: list, times: list, time: float):
     """`samples` linearly interpolated at `time`, holding at both ends.
@@ -325,11 +331,25 @@ class Object:
 
         Returns:
             Object: This object, for chaining.
+
+        Raises:
+            KeyError: If ``key`` is not a parameter of this object.
+            ValueError: If ``values`` is empty, or this is a tetrahedral
+                object and ``key`` is not ``friction``, ``contact-gap`` or
+                ``contact-offset``, the only keys its surface carries.
         """
         if key not in self._param.key_list():
             raise KeyError(
                 f"Parameter '{key}' not found on a '{self.obj_type}' object, "
                 "so it cannot be animated"
+            )
+        if self.obj_type == "tet" and key not in _TET_ANIMATED_KEYS:
+            raise ValueError(
+                f"'{key}' cannot be animated on a tetrahedral object: its "
+                "elastic material lives on its tetrahedra, which carry no "
+                "per-frame table. Only "
+                f"{', '.join(sorted(_TET_ANIMATED_KEYS))}, which it keeps on "
+                "its surface triangles, animate."
             )
         if not values:
             raise ValueError(f"Animated parameter '{key}' needs at least one value")
@@ -1732,12 +1752,22 @@ class Object:
         self._collision_windows = windows
         return self
 
-    def update_static(self):
+    def update_static(self, stitched: bool = False):
         """Recompute whether the object is static.
 
         When every vertex is pinned and no pin carries operations, a pull
         strength, or an unpin time, the object is treated as static. The
         result is cached on ``self._static``.
+
+        Args:
+            stitched (bool, optional): True when a cross-stitch of the scene
+                names this object (:meth:`Scene.cross_stitch`). Such an
+                object is never static. A static object becomes a
+                contact-only collision mesh outside the solved vertices, and
+                a stitch can join only solved vertices, so a fully pinned
+                object with no operations stays solved instead, every vertex
+                held at rest by its pins. :meth:`Scene.build` passes this.
+                Defaults to False.
 
         Example:
             Typically invoked internally by :meth:`Scene.build` after pins
@@ -1749,13 +1779,7 @@ class Object:
                 obj.update_static()
                 assert obj.static
         """
-        # A STATIC promoted into the dynamic namespace to be a cross-stitch
-        # endpoint is fully pinned with no operations, which would otherwise
-        # classify it static (and route it to the unreachable collision-mesh
-        # pool). The _force_dynamic marker keeps it in dyn_objects so the
-        # stitch index can address it; its immovable fixed pins still freeze
-        # it at rest. Set by the frontend decoder's _populate_static.
-        if getattr(self, "_force_dynamic", False):
+        if stitched:
             self._static = False
             return
 
@@ -1816,8 +1840,7 @@ class Object:
             vert: np.ndarray = self.vertex(False)
             ind = list(range(len(vert)))
 
-        holder = PinHolder(self, ind)
-        holder._data.allow_intersection = bool(allow_intersection)
+        holder = PinHolder(self, ind).set_allow_intersection(allow_intersection)
         self._pin.append(holder)
         return holder
 

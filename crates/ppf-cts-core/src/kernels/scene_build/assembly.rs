@@ -31,6 +31,15 @@ pub enum SceneAssemblyError {
         ind_rows: usize,
         w_rows: usize,
     },
+    #[error(
+        "stitch of {name:?} names vertex {index}, but the object has {n_verts} \
+         vertices"
+    )]
+    StitchIndexOutOfRange {
+        name: String,
+        index: i64,
+        n_verts: usize,
+    },
     #[error("cross-stitch missing source map: {name:?}")]
     CrossStitchMissingSource { name: String },
     #[error("cross-stitch missing target map: {name:?}")]
@@ -82,6 +91,11 @@ pub enum RodTriOffsetViolation {
 /// `allowed(rod, tri)` answers whether an intersection allowance covers that
 /// rod segment and triangle. Such a pair is not a contact pair, so its
 /// clearance is nothing the solver has to keep and it is skipped.
+///
+/// `exempt(rod, tri)` is asked about a pair that DOES violate its clearance,
+/// and answers true when Allow Existing Intersections took that pair out of
+/// contact for the run (it links the pair as a side effect). Only a pair it
+/// declines is an error.
 pub fn rod_tri_contact_offset_check(
     verts: &[f64],
     rods: &[[u32; 2]],
@@ -89,6 +103,7 @@ pub fn rod_tri_contact_offset_check(
     tri_offset: &[f64],
     rod_offset: &[f64],
     allowed: impl Fn(usize, usize) -> bool,
+    mut exempt: impl FnMut(usize, usize) -> bool,
 ) -> Result<(), RodTriOffsetViolation> {
     let n_rods = rods.len();
     if rod_offset.is_empty() || n_rods == 0 {
@@ -144,7 +159,7 @@ pub fn rod_tri_contact_offset_check(
                 // 1e-30 degeneracy gate above so the shared helper only
                 // runs the convex-projection tail.
                 let (_bary, _proj, dist) = barycentric_clamp_project(a, b, c, p, v0, v1, v2);
-                if dist < required {
+                if dist < required && !exempt(ri, ti) {
                     return Err(RodTriOffsetViolation::VertexInsideOffset {
                         rod_idx: ri,
                         tri_idx: ti,
@@ -527,7 +542,17 @@ pub fn assemble_dyn_scene(
         for r in 0..m {
             // ind row -> 6-wide [s, s, s, t0, t1, t2]
             let row_ind = &ind[r * obj.stitch_ind_cols..(r + 1) * obj.stitch_ind_cols];
-            let mapped: Vec<i64> = row_ind.iter().map(|&v| map[v as usize]).collect();
+            let mut mapped: Vec<i64> = Vec::with_capacity(row_ind.len());
+            for &v in row_ind {
+                if v < 0 || v as usize >= map.len() {
+                    return Err(SceneAssemblyError::StitchIndexOutOfRange {
+                        name: obj.name.to_string(),
+                        index: v,
+                        n_verts: map.len(),
+                    });
+                }
+                mapped.push(map[v as usize]);
+            }
             let padded: [i64; 6] = if obj.stitch_ind_cols == 6 {
                 [mapped[0], mapped[1], mapped[2], mapped[3], mapped[4], mapped[5]]
             } else if obj.stitch_ind_cols == 3 {

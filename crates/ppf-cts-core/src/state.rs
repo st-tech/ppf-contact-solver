@@ -117,6 +117,14 @@ pub struct ServerState {
     /// Opaque per-event violation payload, inspected by the response
     /// generator only, not by transitions.
     pub violations: Vec<String>,
+
+    /// Allow Existing Intersections: the pairs the latest successful build
+    /// exempted from contact because the scene started tangled there, in the
+    /// same opaque record shape as `violations`. Set by `BuildCompleted`,
+    /// cleared when a build starts, fails or is canceled, and read back from
+    /// disk when a built project is re-selected, so the add-on can keep
+    /// drawing what was exempted across a reconnect.
+    pub exemptions: Vec<String>,
 }
 
 impl ServerState {

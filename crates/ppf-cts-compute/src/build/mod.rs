@@ -30,4 +30,8 @@
 //! which translation units, where they live. None of them is a decision about
 //! how to compile, which is why none of them is made here.
 
+// The CPU target's recipe, kept with the rest of that target in `cpu/` the way
+// `cuda/Makefile` is kept in `cuda/`. The module name is the target's name at
+// the seam; `src/lib.rs` says why that is `host`.
+#[path = "../../cpu/recipe.rs"]
 pub mod host;

@@ -13,13 +13,21 @@
 # so only the AUTHORING moved.
 #
 # Every value goes through the same transform the static encoder applies, per
-# sample. Gravity and wind are swapped into solver axes, wind is a direction
-# times a strength, and inactive-momentum is a frame count divided by fps.
-# Sampling the raw slider and skipping that would ship a plausible number that
-# means something else.
+# sample (`solver_gravity`, `solver_wind`). Gravity and wind are swapped into
+# solver axes (they are physical, so World Scaling does not scale them), and
+# wind is a direction times a strength. Sampling the raw slider and skipping that would ship a plausible
+# number that means something else.
+#
+# Only the properties named in `SCENE_ANIM_KEYS` are sampled, and they are the
+# only animatable State properties. Every other State property is read once,
+# at the starting frame (Inactive Momentum Frames, for one, counts frames from
+# the start of the solve and the solver reads its key as an on/off flag). A
+# curve on any of them is refused before this sampler runs, by
+# `curve_refusal.refuse_unsampled_curves`.
 
-from . import _normalize_and_scale, _swap_axes, frame_to_time
-from .param_anim import _drop_collinear, _fcurves_for
+from ..utils import get_id_fcurves
+from . import frame_to_time, solver_gravity, solver_wind
+from .param_anim import _drop_collinear
 
 
 _STATE_PATH = "zozo_contact_solver.state."
@@ -36,10 +44,6 @@ SCENE_ANIM_KEYS = {
     "air-friction": {"props": ("air_friction",), "kind": "scalar"},
     "isotropic-air-friction": {"props": ("vertex_air_damp",), "kind": "scalar"},
     "dt": {"props": ("step_size",), "kind": "scalar"},
-    "inactive-momentum": {
-        "props": ("inactive_momentum_frames",),
-        "kind": "per_fps",
-    },
 }
 
 
@@ -70,18 +74,19 @@ def encode_scene_param_anim(state, fps, start_frame, frame_count):
     nothing to hold.
 
     Empty when no scene setting is keyframed, which leaves the run on its
-    static values exactly as before.
+    static values.
     """
     import bpy  # pyright: ignore
 
-    curves = _fcurves_for(bpy.context.scene)
+    curves = get_id_fcurves(bpy.context.scene)
     if not curves:
         return {}
     by_prop = {}
     for fc in curves:
         if not fc.data_path.startswith(_STATE_PATH):
             continue
-        by_prop[(fc.data_path[len(_STATE_PATH):], fc.array_index)] = fc
+        prop = fc.data_path[len(_STATE_PATH):]
+        by_prop[(prop, fc.array_index)] = fc
     if not by_prop:
         return {}
 
@@ -102,12 +107,11 @@ def encode_scene_param_anim(state, fps, start_frame, frame_count):
             read = {p: _sample(by_prop, state, p, frame, lengths[p]) for p in watched}
             kind = spec["kind"]
             if kind == "gravity":
-                values.append(list(_swap_axes(read["gravity_3d"])))
+                values.append(solver_gravity(read["gravity_3d"]))
             elif kind == "wind":
-                values.append(list(_swap_axes(_normalize_and_scale(
-                    read["wind_direction"], read["wind_strength"]))))
-            elif kind == "per_fps":
-                values.append([read[watched[0]] / float(fps)])
+                values.append(solver_wind(
+                    read["wind_direction"], read["wind_strength"],
+                    f"The keyframed wind at frame {frame}"))
             else:
                 values.append([read[watched[0]]])
         series[key] = values

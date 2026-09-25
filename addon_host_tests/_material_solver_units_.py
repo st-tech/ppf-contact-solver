@@ -94,15 +94,51 @@ def test_pressure_is_closed_by_its_own_checkbox(mm):
     assert mm.to_solver_value(make_group("SHELL"), "pressure", 300.0) == 300.0
 
 
+def tracking_pin(**overrides):
+    pin = types.SimpleNamespace(
+        name="Rig", use_pull=False, has_captured_anim=True,
+        track_rest_pose_deformation=True,
+    )
+    for key, value in overrides.items():
+        setattr(pin, key, value)
+    return pin
+
+
 @pytest.mark.parametrize("object_type", ["SOLID", "SHELL"])
 @pytest.mark.parametrize(
     "key", ["plasticity", "plasticity-threshold", "bend-plasticity",
             "bend-plasticity-threshold"]
 )
-def test_plasticity_is_closed_by_a_captured_rest_shape(mm, object_type, key):
+def test_a_capture_alone_leaves_plasticity_open(mm, object_type, key):
+    # A captured pin that does not track the rest shape streams nothing into
+    # it, so plasticity is the artist's own setting and reaches the solver.
     group = make_group(object_type, pin_vertex_groups=[captured_pull_pin()])
-    assert mm.to_solver_value(group, key, 0.5) is None
-    assert "rest shape" in mm.gate_reason(group, key)
+    assert mm.to_solver_value(group, key, 0.5) == pytest.approx(0.5)
+    assert mm.gate_reason(group, key) is None
+    assert mm.rest_shape_plasticity_conflict(group) is None
+
+
+@pytest.mark.parametrize("use_pull", [False, True])
+def test_a_tracked_rest_shape_conflicts_with_plasticity(mm, use_pull):
+    pin = tracking_pin(use_pull=use_pull)
+    group = make_group("SOLID", pin_vertex_groups=[pin])
+    assert mm.pin_tracks_rest_shape(group, pin)
+    assert mm.rest_shape_plasticity_conflict(group) is pin
+    assert mm.rest_shape_plasticity_conflict(
+        make_group("SOLID", enable_plasticity=False, pin_vertex_groups=[pin])
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "object_type,overrides",
+    [("SHELL", {}), ("SOLID", {"track_rest_pose_deformation": False}),
+     ("SOLID", {"has_captured_anim": False})],
+)
+def test_only_a_tracking_solid_pin_tracks(mm, object_type, overrides):
+    pin = tracking_pin(**overrides)
+    group = make_group(object_type, pin_vertex_groups=[pin])
+    assert not mm.pin_tracks_rest_shape(group, pin)
+    assert mm.rest_shape_plasticity_conflict(group) is None
 
 
 def test_an_uncaptured_pull_pin_leaves_plasticity_open(mm):

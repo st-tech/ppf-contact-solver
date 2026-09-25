@@ -8,7 +8,7 @@
 // (`_area`, `_face_to_vert_weights`). Mirrors
 // `frontend/_scene_.py:FixedScene.__init__` lines 1594-1819.
 
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -87,6 +87,14 @@ fn fsa_read_f64_2d_flat(
 ///     when validation failed).
 ///   * `face_to_vert_weights`: `(N,)` float64 ndarray, or `None` when
 ///     `has_dyn_color == False`.
+///   * `start_links`: `(L, 2)` uint32 ndarray of the Allow Existing
+///     Intersections vertex links, in the combined namespace (the dynamic
+///     vertices, then the static collision vertices). Empty when nothing was
+///     linked.
+///   * `n_start_link_pairs`: how many element pairs those links came from.
+///   * `start_link_pairs`: `list[dict]`, the first of those element pairs as
+///     `{"a": [[x, y, z], ...], "b": [[x, y, z], ...]}`, world-space vertex
+///     positions of each element, for drawing what was exempted.
 #[pyfunction]
 #[pyo3(signature = (
     vert_dmap,
@@ -109,6 +117,7 @@ fn fsa_read_f64_2d_flat(
     vert_policy=None,
     vert_pin_allow=None,
     vert_group_id=None,
+    vert_allow_existing=None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn scene_fixed_scene_assemble<'py>(
@@ -140,6 +149,10 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
     // Per DYNAMIC vertex source-group identity, read only by the inter-group
     // allowance; last so every existing caller is unchanged.
     vert_group_id: Option<&Bound<'py, PyAny>>,
+    // Allow Existing Intersections, per DYNAMIC vertex: true where the
+    // vertex's object opted in. A pair the checks find with either side opted
+    // in is linked rather than reported.
+    vert_allow_existing: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let vl_shape = vert_local.shape();
     if vl_shape.len() != 2 || vl_shape[1] != 3 {
@@ -196,6 +209,20 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
         Some(arr) => Some(fsa_read_i32_1d(arr, "vert_group_id")?),
         None => None,
     };
+    let vert_allow_existing_vec: Option<Vec<bool>> = match vert_allow_existing {
+        Some(arr) => {
+            let v = fsa_read_bool_1d(arr, "vert_allow_existing")?;
+            if v.len() != dmap.len() {
+                return Err(PyValueError::new_err(format!(
+                    "vert_allow_existing has {} entries but the scene has {} dynamic vertices",
+                    v.len(),
+                    dmap.len()
+                )));
+            }
+            Some(v)
+        }
+        None => None,
+    };
 
     let walls_rs: Vec<fsa::WallEntry> = walls
         .into_iter()
@@ -233,6 +260,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
             vert_group_id: vert_group_id_vec.as_deref(),
             vert_policy: vert_policy_vec.as_deref(),
             vert_pin_allow: vert_pin_allow_vec.as_deref(),
+            vert_allow_existing: vert_allow_existing_vec.as_deref(),
         })
     });
 
@@ -343,6 +371,18 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
     result_dict.set_item("has_wall_violation", out.has_wall_violation)?;
     result_dict.set_item("has_sphere_violation", out.has_sphere_violation)?;
     result_dict.set_item("combined_message", out.combined_message)?;
+    let links = PyArray1::<u32>::from_slice(py, &out.start_links)
+        .reshape([out.start_links.len() / 2, 2])?;
+    result_dict.set_item("start_links", links)?;
+    result_dict.set_item("n_start_link_pairs", out.n_start_link_pairs)?;
+    let pairs = PyList::empty(py);
+    for (a, b) in &out.start_link_pairs {
+        let d = PyDict::new(py);
+        d.set_item("a", a.iter().map(|p| p.to_vec()).collect::<Vec<_>>())?;
+        d.set_item("b", b.iter().map(|p| p.to_vec()).collect::<Vec<_>>())?;
+        pairs.append(d)?;
+    }
+    result_dict.set_item("start_link_pairs", pairs)?;
     result_dict.set_item("violations", violations)?;
     let area_arr = PyArray1::<f64>::from_slice(py, &out.area);
     result_dict.set_item("area", area_arr)?;

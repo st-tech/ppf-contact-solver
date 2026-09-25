@@ -44,6 +44,7 @@
     const unsigned *face, float dt, unsigned inactive_momentum,
     float time_f32, float wind_x, float wind_y, float wind_z, float air_density,
     float air_friction, float isotropic_air_friction, float fix_xz,
+    const float *field_air_velocity, unsigned has_field_air,
     float *force, Mat3x3f *diagonal,
     DiagHandle diag, unsigned i) {
     const Vec3f wind_vector(wind_x, wind_y, wind_z);
@@ -93,6 +94,15 @@
     // crosses this seam as an unsigned, so the comparison is written out.
     if (inactive_momentum == 0u) {
         wind = air_damper::wind_weight(time_f32) * wind_vector;
+        // THE FORCE FIELD'S AIR VELOCITY ADDS TO THE SCENE WIND WITHOUT THE
+        // GUST RAMP. The ramp is a property of the one scene-wide wind; a
+        // field's flow is authored per point and per instant already, so
+        // ramping it again would change what the author sampled.
+        if (has_field_air != 0u) {
+            wind[0] += field_air_velocity[3u * i + 0u];
+            wind[1] += field_air_velocity[3u * i + 1u];
+            wind[2] += field_air_velocity[3u * i + 2u];
+        }
     }
 
     Vec3f f = Vec3f::Zero();

@@ -6,9 +6,10 @@
 # Prompt templates served over MCP.
 #
 # A prompt here is a short, user-selected starting point for a workflow the
-# add-on supports end to end. Each one names the ordered steps and points at
-# the `llm://` resource that carries the detail, so the body stays a router
-# rather than a second copy of the documentation that can drift from it.
+# add-on supports end to end. Each one names the ordered steps and leaves the
+# detail to the tools: every tool's description and input schema come from the
+# handler that implements it, so the prompt carries no second copy of them
+# that could drift.
 #
 # The `prompts` capability is only advertised because these exist: a server
 # that declares the capability must answer `prompts/list` and `prompts/get`.
@@ -122,10 +123,10 @@ def _run_simulation(args: dict[str, str]) -> list[dict[str, Any]]:
             "4. Set scene parameters, then per-group material parameters.\n"
             "5. Build the scene, start the solve, and poll its status.\n"
             "6. Fetch the results back into Blender.\n\n"
-            "Read llm://integrations for the tool-driven scene setup rules "
-            "including the mesh resolution window, llm://connections for the "
-            "backend you picked, llm://parameters before choosing any value, "
-            "and llm://simulation for the run and fetch steps.",
+            "Read each tool's description and input schema before calling "
+            "it: they state its preconditions, units and refusals. Check the "
+            "mesh resolution with the edge-length and bounding-box tools "
+            "before building.",
         )
     ]
 
@@ -141,10 +142,10 @@ def _pin_and_constrain(args: dict[str, str]) -> list[dict[str, Any]]:
             "spring and is the only compliant hold; a fix pin is an exact "
             "boundary condition whose degree of freedom is eliminated. There "
             "is no stiffness scalar to tune between them.\n\n"
-            "Read llm://constraints first: it covers pins, invisible "
-            "colliders, and snap and merge, and it states which constraint "
-            "suits which intent. Confirm the vertex group a pin names "
-            "already exists on the mesh before adding the pin.",
+            "Read the descriptions of the pin, invisible-collider and "
+            "merge-pair tools before choosing one: they state which intent "
+            "each serves. Confirm the vertex group a pin names already "
+            "exists on the mesh before adding the pin.",
         )
     ]
 
@@ -155,7 +156,8 @@ def _tune_parameters(args: dict[str, str]) -> list[dict[str, Any]]:
             "user",
             f"Adjust this scene's solver parameters for the goal: "
             f"{args['goal']}.\n\n"
-            "Read llm://parameters before choosing any value. Change one "
+            "Read the parameter tools' input schemas for units and ranges "
+            "before choosing any value. Change one "
             "group of parameters at a time, then read the parameters back "
             "and report what the solver actually received, since a scene "
             "parameter and a per-group material parameter are set through "
@@ -174,8 +176,8 @@ def _diagnose_failure(args: dict[str, str]) -> list[dict[str, Any]]:
             "were written, what the solver's own output says, and whether "
             "the run reported a crash kind or simply stopped making "
             "progress.\n\n"
-            "Read llm://troubleshooting for the symptom table and "
-            "llm://simulation for what a healthy run writes. Several "
+            "Read the solver status and console tools' output for what the "
+            "run wrote and why it stopped. Several "
             "failures are authoring problems rather than solver problems, so "
             "check the scene's geometry and constraints before changing any "
             "parameter.",

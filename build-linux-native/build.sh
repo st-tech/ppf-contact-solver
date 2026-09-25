@@ -17,7 +17,7 @@
 # target/<backend>/release, the layout `backend_target_dir` names. Every backend
 # links the same executable name and crates/ppf-cts-solver/build.rs refuses to
 # put two in one directory, so the directories are what keep them apart, and
-# `frontend.get_backend` is what chooses among them when a run starts.
+# `App.get_backend` is what chooses among them when a run starts.
 #
 # A BUILD WITHOUT THE CUDA BACKEND NEEDS NO TOOLKIT AND CHECKS NONE. Everything
 # below about the toolkit applies when CUDA is among the backends.
@@ -363,9 +363,9 @@ fi
 # NO TARGET DIRECTORY IS PINNED FOR THE DEVELOPER LAUNCHER. Every backend builds
 # into its own directory, so there is no `target/release` to default to, and
 # `frontend/__init__.py` searches the named ones and resolves which backend a run
-# uses (`frontend.get_backend`): the one GPU build present, or the first of them
+# uses (`App.get_backend`): the one GPU build present, or the first of them
 # whose solver reports a usable device. A caller who wants one names it, with
-# CARGO_TARGET_DIR or `frontend.set_backend`, and that choice is honored.
+# CARGO_TARGET_DIR or `App.set_backend`, and that choice is honored.
 START="$BUILD_LINUX/start.sh"
 cat > "$START" <<EOF
 #!/usr/bin/env bash
