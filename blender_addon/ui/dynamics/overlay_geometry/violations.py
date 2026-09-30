@@ -165,8 +165,9 @@ def _build_violation_batches(scene, depsgraph, violations):
                 itype = entry.get("itype", "")
                 pos0 = entry.get("positions0", [])
                 pos1 = entry.get("positions1", [])
-                if itype in ("face_edge", "collision_mesh"):
-                    # pos0 = face (3 verts), pos1 = edge (2 verts)
+                if itype in ("face_edge", "collision_mesh", "collision_edge"):
+                    # pos0 = face (3 verts), pos1 = edge (2 verts). The three
+                    # differ in which side is the collider's, not in layout.
                     if len(pos0) >= 3:
                         bv = [_solver_to_blender(p) for p in pos0]
                         tri_verts.extend([bv[0], bv[1], bv[2]])

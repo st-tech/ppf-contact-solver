@@ -60,10 +60,12 @@ class _ParamProxy:
       ``contact_gap``, ``contact_gap_rat``, ``contact_offset``,
       ``contact_offset_rat``.  When
       ``use_group_bounding_box_diagonal`` is ``True`` (the default),
-      the solver consumes ``contact_gap_rat`` * bbox-diagonal and
-      ``contact_offset_rat`` * bbox-diagonal; set it to ``False`` to
-      consume the absolute ``contact_gap`` / ``contact_offset`` values
-      directly.
+      each assigned object is solved at ``contact_gap_rat`` and
+      ``contact_offset_rat`` times ITS OWN bounding-box diagonal, so the
+      objects of one group get distances in proportion to their own
+      sizes; the box around the group is never measured. Set it to
+      ``False`` to give every object the absolute ``contact_gap`` /
+      ``contact_offset`` values directly.
     - **Strain limit**: ``enable_strain_limit``, ``strain_limit_percent``
     - **Inflation**: ``enable_inflate``, ``inflate_pressure``
     - **Force fields**: ``force_field_weight`` (every type but Static): the

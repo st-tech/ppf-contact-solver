@@ -312,9 +312,9 @@ velocity overwrite) is hidden.
 | **Friction**                         | `friction`                        | 0.5     | Coulomb friction coefficient between this mesh and other groups.      |
 | **Contact Gap**                      | `contact_gap`                     | 0.001   | Absolute contact gap distance, in Blender units.                      |
 | **Contact Offset**                   | `contact_offset`                  | 0.0     | Absolute contact offset, in Blender units.                            |
-| **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal. |
-| **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.       |
-| **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.    |
+| **Use Object Bounding Box Diagonal** | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of each object's own bbox diagonal. |
+| **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of each object's own bounding-box diagonal.       |
+| **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of each object's own bounding-box diagonal.    |
 | **Apply Soft Constraints**           | `enable_soft_constraint`          | `False` | Hold the collider with springs instead of locking it to its animation. |
 | **Stiffness**                        | `soft_constraint_stiffness`       | 10.0    | How firmly those springs hold. Shown only when the box above is ticked. |
 | **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Let an object pass through itself, with no contact between its parts. |

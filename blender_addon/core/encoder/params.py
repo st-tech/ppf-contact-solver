@@ -37,7 +37,7 @@ from .dyn import _encode_dyn_params, _encode_invisible_colliders
 from .scene_anim import encode_scene_param_anim
 from .param_anim import encode_param_anim
 from .material_maps import encode_material_maps
-from .mesh import compute_group_bounding_box_diagonal, evaluate_at_start_frame
+from .mesh import compute_object_bounding_box_diagonal, evaluate_at_start_frame
 from .pin import _encode_pin_config
 
 
@@ -375,8 +375,24 @@ def _encode_intersection_allowance(group, spec, object_uuids):
     }
 
 
-def group_contact_lengths(group, scale: float = 1.0) -> tuple[float, float]:
-    """``(contact gap, contact offset)`` of ``group``, times ``scale``.
+def contact_lengths_follow_object_size(group) -> bool:
+    """Whether ``group`` sizes its contact gap and offset from each object.
+
+    True for a group in relative mode, where both lengths are fractions of an
+    object's own bounding-box diagonal and so differ from one object of the
+    group to the next. False for a group that authors one absolute distance,
+    and for SAND, whose offset is its grain radius whatever the switch says.
+
+    The switch is ``use_group_bounding_box_diagonal``. The identifier is saved
+    in every ``.blend`` and is a public MCP name, so it keeps its spelling; the
+    box it selects is the object's.
+    """
+    return (group.object_type != "SAND"
+            and bool(group.use_group_bounding_box_diagonal))
+
+
+def object_contact_lengths(group, assigned, scale: float = 1.0) -> tuple[float, float]:
+    """``(contact gap, contact offset)`` of one object of ``group``, times ``scale``.
 
     The one resolver for these two lengths: the encoder asks with the world
     scaling (the solver shrinks the mesh by it on ingest, so every branch here
@@ -384,19 +400,52 @@ def group_contact_lengths(group, scale: float = 1.0) -> tuple[float, float]:
     and the fetch-time stitch closure ask with 1.0, in Blender units. Nothing
     stores a copy, so no reader can see a value an earlier encode left behind.
 
-    A SAND grain's physical radius IS its contact skin, so its offset is the
-    locked seeding radius (``sand_seeded_radius``); a group sized by its
-    bounding box takes both as fractions of the diagonal.
+    ``assigned`` is the group's ``AssignedObject`` entry. It decides the answer
+    only in relative mode, where both lengths are fractions of THAT object's
+    bounding-box diagonal (``compute_object_bounding_box_diagonal``); a group
+    that authors an absolute distance gives every object the same one. A SAND
+    grain's physical radius IS its contact skin, so its offset is the locked
+    seeding radius (``sand_seeded_radius``).
     """
     if group.object_type == "SAND":
         from ...models.groups import sand_seeded_radius
 
         return group.contact_gap * scale, sand_seeded_radius(group) * scale
-    if group.use_group_bounding_box_diagonal:
-        bbox_diagonal = compute_group_bounding_box_diagonal(group) * scale
-        return (bbox_diagonal * group.contact_gap_rat,
-                bbox_diagonal * group.contact_offset_rat)
+    if contact_lengths_follow_object_size(group):
+        from ..uuid_registry import resolve_assigned
+
+        diagonal = compute_object_bounding_box_diagonal(
+            resolve_assigned(assigned)) * scale
+        return (diagonal * group.contact_gap_rat,
+                diagonal * group.contact_offset_rat)
     return group.contact_gap * scale, group.contact_offset * scale
+
+
+def _encode_contact_lengths(group, scale: float):
+    """A group's ``contact-gap`` and ``contact-offset``, as the decoder takes them.
+
+    Both are per OBJECT in the solver, so a per-uuid dict needs no new
+    mechanism below this line, only a value the decoder applies per object.
+
+    A plain float each while the group authors one distance for all its
+    objects, and ``{uuid: length}`` over every INCLUDED object once the lengths
+    follow each object's size. The dict names every object rather than leaving
+    one to a default, because a contact distance has no default that is right
+    for an object of unknown size.
+    """
+    if not contact_lengths_follow_object_size(group):
+        # One distance for the whole group, which does not depend on the
+        # object: the resolver never reads its `assigned` on this branch.
+        gap, offset = object_contact_lengths(group, None, scale)
+        return np.float32(gap), np.float32(offset)
+    gaps, offsets = {}, {}
+    for assigned in group.assigned_objects:
+        if not assigned.included:
+            continue
+        gap, offset = object_contact_lengths(group, assigned, scale)
+        gaps[assigned.uuid] = np.float32(gap)
+        offsets[assigned.uuid] = np.float32(offset)
+    return gaps, offsets
 
 
 def _encode_group_params(context, groups, state, fps, start_frame):
@@ -650,7 +699,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             )
         if group.object_type == "SAND":
             # The group ships one grain radius as its contact offset
-            # (`group_contact_lengths`), so every grain must share it.
+            # (`object_contact_lengths`), so every grain must share it.
             from ...models.groups import sand_radius_conflict
 
             radii = sand_radius_conflict(group)
@@ -664,7 +713,9 @@ def _encode_group_params(context, groups, state, fps, start_frame):
 
         # World-space lengths, scaled like the geometry: the solver shrinks
         # the mesh by world_scaling on ingest (and collider thickness with it).
-        contact_gap_value, contact_offset_value = group_contact_lengths(
+        # A float each, or a per-uuid dict when the lengths follow each
+        # object size. See `_encode_contact_lengths`.
+        contact_gap_value, contact_offset_value = _encode_contact_lengths(
             group, state.world_scaling,
         )
 
@@ -695,8 +746,8 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "stitch-stiffness": np.float32(group.stitch_stiffness),
             "deformation-damping": np.float32(group.deformation_damping),
             "bending-damping": np.float32(group.bending_damping),
-            "contact-gap": np.float32(contact_gap_value),
-            "contact-offset": np.float32(contact_offset_value),
+            "contact-gap": contact_gap_value,
+            "contact-offset": contact_offset_value,
             "bend": np.float32(group.bend),
             # Directional bending stiffnesses added on top of `bend`. Both
             # default to 0.0, which adds nothing, so a group that leaves them
@@ -991,7 +1042,7 @@ def _build_param_dict(context) -> dict:
 
     # Evaluate the whole param tree at the starting frame, matching the data
     # encoder (_build_obj_data). EVERYTHING the payload reads belongs inside
-    # this block, not only the geometry-derived encodings (the per-group
+    # this block, not only the geometry-derived encodings (the per-object
     # bounding-box diagonal that scales contact-gap / contact-offset, a
     # material map's ATTRIBUTE source read off the evaluated mesh): the frame
     # rate, the starting frame, Time Scale, the invisible colliders and every

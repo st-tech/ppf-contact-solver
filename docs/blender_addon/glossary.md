@@ -14,7 +14,7 @@ documentation, grouped by subject and alphabetized within each group.
 **Contact gap**
 : Separation distance the solver enforces between surfaces, specified per
   group or per collider as an absolute Blender-unit value or as a ratio of
-  the group's bounding-box diagonal. See
+  each object's own bounding-box diagonal. See
   [Material Parameters](workflow/params/material.md).
 
 **Cross-stitch anchor**

@@ -94,7 +94,7 @@ def curve(name, splines):
 try:
     dh = DriverHelpers(pkg, result)
     params_mod = __import__(pkg + ".core.encoder.params",
-                            fromlist=["encode_param", "group_contact_lengths"])
+                            fromlist=["encode_param", "object_contact_lengths"])
     pin_mod = __import__(pkg + ".core.encoder.pin",
                          fromlist=["_collect_pin_vertex_fcurve_frames"])
     utils = __import__(pkg + ".core.utils", fromlist=["get_id_fcurves"])

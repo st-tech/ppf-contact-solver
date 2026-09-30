@@ -70,8 +70,12 @@ def _get_pair_contact_gaps(scene, obj_a, obj_b):
     both gates, and beyond ``(ghat_a+ghat_b)+(offset_a+offset_b)`` to start
     OUTSIDE the barrier's activation band. Returning ``gap+offset`` per object
     and summing the pair gives that safe separation. The value also seeds the
-    cross-stitch search radius."""
-    from ..core.encoder.params import group_contact_lengths
+    cross-stitch search radius.
+
+    Each object is asked for ITS OWN distances, which is what the solver will
+    hold it to: in relative mode they follow the object's own size, so two
+    objects of one group need not agree."""
+    from ..core.encoder.params import object_contact_lengths
     from ..core.uuid_registry import get_object_uuid
     uid_a = get_object_uuid(obj_a)
     uid_b = get_object_uuid(obj_b)
@@ -79,9 +83,9 @@ def _get_pair_contact_gaps(scene, obj_a, obj_b):
     for group in iterate_active_object_groups(scene):
         for assigned in group.assigned_objects:
             if uid_a and assigned.uuid == uid_a:
-                gap_a = sum(group_contact_lengths(group))
+                gap_a = sum(object_contact_lengths(group, assigned))
             elif uid_b and assigned.uuid == uid_b:
-                gap_b = sum(group_contact_lengths(group))
+                gap_b = sum(object_contact_lengths(group, assigned))
     return gap_a, gap_b
 
 

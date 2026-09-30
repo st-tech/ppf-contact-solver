@@ -61,7 +61,13 @@ struct PairSide {
     unsigned char intersect_policy;
     // Nonzero for a vertex inside a PDRD rigid body; 0 for everything else.
     unsigned pdrd_body_index;
-    float mass;
+    // NO MASS IS CARRIED HERE, on purpose. An element record holds a mass of
+    // its own for some kinds of element and zero for others (a rod edge and a
+    // shell face have one, a shell edge and a rigid body face do not), so a
+    // copy of that field would answer a different question on each side of a
+    // pair. A pass that needs to know whether a side can move asks
+    // `edge_has_mass` or `face_has_mass` with the vertices in hand.
+    //
     // Prescribed: an element no solve can move.
     bool fixed;
     // A driven collider, whose shape is authored rather than solved.
@@ -93,7 +99,6 @@ struct PairSide {
     side.group_index = anchor.group_index;
     side.intersect_policy = anchor.intersect_policy;
     side.pdrd_body_index = anchor.pdrd_body_index;
-    side.mass = prop.mass;
     side.fixed = prop.fixed;
     side.collider = anchor.collider;
     side.pin_allow_intersection = prop.pin_allow_intersection;
@@ -113,7 +118,6 @@ struct PairSide {
     side.group_index = anchor.group_index;
     side.intersect_policy = anchor.intersect_policy;
     side.pdrd_body_index = anchor.pdrd_body_index;
-    side.mass = prop.mass;
     side.fixed = prop.fixed;
     side.collider = anchor.collider;
     side.pin_allow_intersection = prop.pin_allow_intersection;
@@ -134,11 +138,54 @@ struct PairSide {
     side.group_index = prop.group_index;
     side.intersect_policy = prop.intersect_policy;
     side.pdrd_body_index = prop.pdrd_body_index;
-    side.mass = prop.mass;
     side.fixed = prop.fix_index != 0u;
     side.collider = prop.collider;
     side.pin_allow_intersection = prop.pin_allow_intersection;
     return side;
+}
+
+// WHETHER AN EDGE CARRIES INERTIA, which decides whether it can be the dynamic
+// side of a collision-mesh pair.
+//
+// `EdgeProp::mass` IS NOT THE ANSWER FOR MOST EDGES. It is a ROD's own mass,
+// density times length, and only a rod edge has one: the edge of a shell or of
+// a solid's surface is built with zero there, because its inertia belongs to
+// its faces or its tets and reaches the solve through its two vertices. Read
+// alone, the field calls every shell and solid edge a static solid, and the
+// three passes that ask would skip it: the collision edge-edge sweep, the
+// collision edge-edge contact and the collision-mesh scan of
+// `check_intersection`. Nothing would then stop such an edge crossing a
+// collider edge and nothing would report that it had. A collider's BOUNDARY
+// edge is where that shows, because an edge wrapping a rim meets no collider
+// face and no collider vertex on the way, so no other pass covers the pair.
+//
+// So the verdict reads the vertices, which is where every element's mass ends
+// up. An edge is massless only when the rod field and both endpoints are zero,
+// which is what a static solid looks like. Both vertex props are thread-space
+// copies the caller made, as the anchor of `pair_side_of_edge` is.
+[[seam::device_fn]] inline bool edge_has_mass(
+    const EdgeProp &prop,
+    const VertexProp &v0,
+    const VertexProp &v1) {
+    return prop.mass > 0.0f || v0.mass > 0.0f || v1.mass > 0.0f;
+}
+
+// THE SAME QUESTION OF A FACE, for the same reason and one kind of face.
+//
+// `FaceProp::mass` is density times area on a shell face and on a solid's
+// surface face, and ZERO on every face of a PDRD rigid body: a body's mass is
+// volumetric and is handed to its vertices directly, so the build zeroes the
+// per-face figure to keep the face aggregation from counting it twice. Read
+// alone, the field calls a rigid body's faces a static solid, and the collider
+// vertex against dynamic face sweep and contact would skip them, which leaves
+// nothing between a collider's vertex and the face of a body landing on it.
+[[seam::device_fn]] inline bool face_has_mass(
+    const FaceProp &prop,
+    const VertexProp &v0,
+    const VertexProp &v1,
+    const VertexProp &v2) {
+    return prop.mass > 0.0f || v0.mass > 0.0f || v1.mass > 0.0f ||
+           v2.mass > 0.0f;
 }
 
 // A COLLISION-MESH element, for the one question its side answers: whether a
@@ -154,7 +201,6 @@ struct PairSide {
     side.group_index = NO_GROUP_INDEX;
     side.intersect_policy = 0u;
     side.pdrd_body_index = 0u;
-    side.mass = 0.0f;
     side.fixed = true;
     side.collider = true;
     side.pin_allow_intersection = false;
@@ -335,8 +381,11 @@ collider_intersection_allowed(const PairSide &dynamic) {
 // Whether an intersection between these two elements is worth reporting: every
 // pair contact acts on, less one case.
 //
-//   `either_nonzero`  at least one side has mass. Two zero-mass elements (two
-//                     static solids, two pin-shell vertices) never intersect.
+//   `either_has_mass`  at least one side has mass. Two massless elements
+//                      (two static solids, two pin-shell vertices) never
+//                      intersect. The CALLER states it, because what an
+//                      element weighs is read off its vertices and only the
+//                      caller holds them: see `edge_has_mass`.
 //
 // The `either_dyn` half of `contact_pair_admitted` carries more weight here
 // than in contact. An intersection between two fully PRESCRIBED elements
@@ -354,11 +403,11 @@ collider_intersection_allowed(const PairSide &dynamic) {
 [[seam::device_fn]] inline bool
 intersect_pair_reported(const PairSide &a,
                         const PairSide &b,
+                        bool either_has_mass,
                         const unsigned *start_link_index,
                         const unsigned *start_link_offset,
                         unsigned has_start_link) {
-    const bool either_nonzero = a.mass > 0.0f || b.mass > 0.0f;
-    return either_nonzero &&
+    return either_has_mass &&
            contact_pair_admitted(a, b, start_link_index, start_link_offset,
                                  has_start_link);
 }

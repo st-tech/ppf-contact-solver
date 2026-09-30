@@ -386,6 +386,7 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_intersect_scan_edge_edge,
     launch_intersect_scan_point_point,
     launch_intersect_scan_collision_mesh,
+    launch_intersect_scan_collision_edge,
     launch_pair_cache_record,
     launch_pair_cache_record_interleaved,
     launch_vertex_constraint,

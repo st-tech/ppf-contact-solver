@@ -26,7 +26,7 @@
 // host learns the true demand rather than the array's capacity. Read it as a
 // demand count and clamp before indexing.
 
-// The four record kinds, as `IntersectionRecord::type` encodes them and as the
+// The five record kinds, as `IntersectionRecord::type` encodes them and as the
 // driver's `Report` reads them back. They are stated here, beside the writer,
 // because a number written at the claim and read at the report is one fact and
 // two spellings of it can disagree with nothing to notice.
@@ -34,7 +34,13 @@ enum : unsigned {
     INTERSECT_RECORD_FACE_EDGE = 0u,
     INTERSECT_RECORD_EDGE_EDGE = 1u,
     INTERSECT_RECORD_COLLISION_MESH = 2u,
-    INTERSECT_RECORD_POINT_POINT = 3u
+    INTERSECT_RECORD_POINT_POINT = 3u,
+    // A dynamic FACE and a collision-mesh EDGE, in that order. Kind 2 is the
+    // other pairing, a collision-mesh face and a dynamic edge, and the two are
+    // separate kinds because each side indexes a different vertex array: a
+    // reader that took one for the other would resolve both elements against
+    // the wrong pool.
+    INTERSECT_RECORD_COLLISION_EDGE = 4u
 };
 
 // THE ONE PLACE IN THE INTERSECTION PATH THAT STORES AN ABSOLUTE POSITION, and

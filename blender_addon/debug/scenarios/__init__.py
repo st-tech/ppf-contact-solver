@@ -50,6 +50,8 @@ from . import bl_existing_intersection_draws
 from . import bl_server_stop_is_real
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
+from . import rig_collider_free_edge
+from . import rig_collider_vertex_rigid_body
 from . import rig_degenerate_rest_shape
 from . import bl_fetch_frame_discovery
 from . import rig_degenerate_tet_rest_shape
@@ -237,6 +239,7 @@ from . import bl_world_scaling_sand
 from . import bl_world_scaling_multi_group
 from . import bl_world_scaling_colliders
 from . import bl_world_scaling_encoder_scales
+from . import bl_contact_gap_per_object
 from . import bl_world_scaling_resume
 from . import bl_world_scaling_pdrd
 
@@ -410,6 +413,14 @@ REGISTRY = {
     # state, which is the one state Stop Server cannot reach.
     "bl_force_terminate_port": bl_force_terminate_port,
     "rig_collider_coincident_pair": rig_collider_coincident_pair,
+    # A cloth dropped astride the FREE EDGE of a static collision mesh hangs on
+    # it. Only the dynamic edge against collider edge pass can see that rim, and
+    # the edges it has to act on carry no mass of their own.
+    "rig_collider_free_edge": rig_collider_free_edge,
+    # The same contract for the collider vertex against dynamic face pass: a
+    # rigid body dropped onto the APEX of a collision mesh rests on it, and a
+    # rigid body FACE is the kind that carries no mass of its own.
+    "rig_collider_vertex_rigid_body": rig_collider_vertex_rigid_body,
     "rig_degenerate_rest_shape": rig_degenerate_rest_shape,
     "bl_fetch_frame_discovery": bl_fetch_frame_discovery,
     "rig_degenerate_tet_rest_shape": rig_degenerate_tet_rest_shape,
@@ -634,6 +645,10 @@ REGISTRY = {
     "bl_world_scaling_multi_group": bl_world_scaling_multi_group,
     "bl_world_scaling_colliders": bl_world_scaling_colliders,
     "bl_world_scaling_encoder_scales": bl_world_scaling_encoder_scales,
+    # A relative contact gap is a fraction of each object's own bounding-box
+    # diagonal, never of the box around the group, and each object is solved
+    # at its own.
+    "bl_contact_gap_per_object": bl_contact_gap_per_object,
     "bl_world_scaling_resume": bl_world_scaling_resume,
     "bl_world_scaling_pdrd": bl_world_scaling_pdrd,
 

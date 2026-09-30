@@ -79,7 +79,7 @@ All addon data lives under `scene.zozo_contact_solver`, accessed via `get_addon_
 Up to 32 groups (`object_group_0` through `object_group_31`, constant `N_MAX_GROUPS = 32`). Each group has:
 - Object type and material model selection
 - Material parameters: density, Young's modulus, Poisson ratio, friction, bend stiffness, anisotropic shrink (X/Y) for shells, uniform shrink for solids, strain limit, inflate pressure, stitch stiffness, initial velocity
-- Contact parameters: contact_gap, contact_offset (absolute or ratio of bounding box diagonal)
+- Contact parameters: contact_gap, contact_offset (absolute, or a ratio of each assigned object's own bounding box diagonal)
 - Assigned Blender mesh objects (with per-object inclusion toggle)
 - Pin vertex groups, each with a list of operations (MOVE_BY, SPIN, SCALE, TORQUE, EMBEDDED_MOVE)
 - Overlay visualization: color, wireframe, pin spheres, operation previews
@@ -271,7 +271,7 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 **Other functions:**
 - `compute_mesh_hash(context) -> dict` - topology hash per group for validation
 - `compute_average_edge_length(group) -> float`
-- `compute_group_bounding_box_diagonal(group) -> float`
+- `compute_object_bounding_box_diagonal(obj) -> float`
 - `detect_stitch_edges(mesh) -> (Ind, W) | None`
 
 #### `connection.py` - Connection Backends
@@ -416,9 +416,9 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `friction` | FloatProperty | 0.5 | 0-1 |
 | `contact_gap` | FloatProperty | 0.001 | Absolute gap |
 | `contact_offset` | FloatProperty | 0.0 | Absolute offset |
-| `use_group_bounding_box_diagonal` | BoolProperty | True | Use ratio-based contact |
-| `contact_gap_rat` | FloatProperty | 0.001 | Ratio of bbox diagonal |
-| `contact_offset_rat` | FloatProperty | 0.0 | Ratio of bbox diagonal |
+| `use_group_bounding_box_diagonal` | BoolProperty | True | Use ratio-based contact, sized per object |
+| `contact_gap_rat` | FloatProperty | 0.001 | Ratio of each object's own bbox diagonal |
+| `contact_offset_rat` | FloatProperty | 0.0 | Ratio of each object's own bbox diagonal |
 | `enable_strain_limit` | BoolProperty | False | Shell strain limit |
 | `strain_limit_percent` | FloatProperty | 5.0 | Shell strain limit, percent of stretch (5.0 = 5%) |
 | `enable_inflate` | BoolProperty | False | Shell inflation pressure |

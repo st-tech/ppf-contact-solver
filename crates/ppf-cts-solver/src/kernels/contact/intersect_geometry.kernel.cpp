@@ -14,15 +14,15 @@
 // reference parameter.
 //
 // THE INTERSECTION SCAN, which is the final penetration gate: the geometry
-// predicates first, then the four per-hit visitors and the four entry points
+// predicates first, then the five per-hit visitors and the five entry points
 // that walk a BVH with them.
 //
 // The GEOMETRY half comes first because it is the part that answers "given two
 // elements already admitted by `intersect_pair_reported`, do they actually
 // intersect?". The pair filter, these predicates and the record write are three
-// separate bodies because the four testers combine them differently: the
-// collision-mesh tester has its verdict precomputed by its caller and reaches
-// only the pierce, and the two proximity forms have no pierce at all.
+// separate bodies because the five testers combine them differently: the two
+// collision-mesh testers have their verdict precomputed by their caller and
+// reach only the pierce, and the two proximity forms have no pierce at all.
 //
 // EVERY POSITION ARRIVES AS A THREAD-SPACE VALUE, and that is a requirement
 // rather than a style. A position must be loaded out of device memory before
@@ -267,8 +267,20 @@ struct IntersectFaceEdgeVisitor {
         const VertexProp eanchor = vertex_prop[e[0]];
         const PairSide a = pair_side_of_face(fanchor, fprop, f);
         const PairSide b = pair_side_of_edge(eanchor, eprop, e);
-        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
-                                     has_start_link)) {
+        // A PIERCE IS A PIERCE WHATEVER THE TWO ELEMENTS ARE, so the mass asked
+        // about is the mass on each side's vertices. The element records alone
+        // would leave this blind to a whole family of pairs: a shell or solid
+        // edge carries no mass of its own and neither does the face of a rigid
+        // body, so a cloth edge through a rigid body, or one rigid body through
+        // another, would show two massless sides and go unreported.
+        const VertexProp fsecond = vertex_prop[f[1]];
+        const VertexProp fthird = vertex_prop[f[2]];
+        const VertexProp eother = vertex_prop[e[1]];
+        const bool either_has_mass =
+            face_has_mass(fprop, fanchor, fsecond, fthird) ||
+            edge_has_mass(eprop, eanchor, eother);
+        if (!intersect_pair_reported(a, b, either_has_mass, start_link_index,
+                                     start_link_offset, has_start_link)) {
             return false;
         }
         // A face and an edge that share a vertex meet by construction, and
@@ -338,8 +350,18 @@ struct IntersectEdgeEdgeVisitor {
         const VertexProp anchor_b = vertex_prop[e1[0]];
         const PairSide a = pair_side_of_edge(anchor_a, pa, e0);
         const PairSide b = pair_side_of_edge(anchor_b, pb, e1);
-        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
-                                     has_start_link)) {
+        // THIS SCAN IS ABOUT RODS, AND THE MASS AN EDGE CARRIES ITSELF IS WHAT
+        // SAYS SO. It measures PROXIMITY against the contact offset rather than
+        // a crossing, which is the rule a rod obeys against another edge; two
+        // edges of shells or solids are held apart by their faces, and a
+        // crossing there is the face-edge scan above. Only a rod edge carries a
+        // mass of its own, so asking for one on either side selects exactly
+        // the pairs a rod is part of. It is NOT the question `edge_has_mass`
+        // answers: reading the vertices here would measure every pair of shell
+        // edges against their offset, neighbors across one triangle included.
+        const bool either_is_rod = pa.mass > 0.0f || pb.mass > 0.0f;
+        if (!intersect_pair_reported(a, b, either_is_rod, start_link_index,
+                                     start_link_offset, has_start_link)) {
             return false;
         }
         const EdgeParam param_a = edge_param[pa.param_index];
@@ -397,8 +419,10 @@ struct IntersectPointPointVisitor {
         const VertexProp pb = vertex_prop[index];
         const PairSide a = pair_side_of_vertex(pa, vertex_index);
         const PairSide b = pair_side_of_vertex(pb, index);
-        if (!intersect_pair_reported(a, b, start_link_index, start_link_offset,
-                                     has_start_link)) {
+        // A vertex is its own element, so its record IS where its mass lives.
+        const bool either_has_mass = pa.mass > 0.0f || pb.mass > 0.0f;
+        if (!intersect_pair_reported(a, b, either_has_mass, start_link_index,
+                                     start_link_offset, has_start_link)) {
             return false;
         }
         const VertexParam param_a = vertex_param[pa.param_index];
@@ -482,8 +506,85 @@ struct IntersectCollisionMeshVisitor {
     }
 };
 
+// A collider EDGE against a dynamic FACE, which is the other half of the same
+// question and needs its own walk.
+//
+// The visitor above asks whether a dynamic edge runs through a collider face.
+// A collider edge through a dynamic face is a different crossing and neither
+// implies the other: a collider's rim pressed into the middle of a broad face
+// pierces that face while every edge of the face stays clear of every collider
+// face, and the same holds for a collider's sharp vertex, whose incident edges
+// enter the face with it. So a pose can be crossed and leave the visitor above
+// nothing to find.
+//
+// The static side has no material and no pins, so the verdict rests on the
+// dynamic FACE, and it is the verdict the collider vertex against dynamic face
+// sweep takes: a fully pinned face is prescribed and a massless one is a
+// static solid, neither can yield, and the collision mesh cannot either. The
+// mass asked about is the vertices', see `face_has_mass`.
+struct IntersectCollisionEdgeVisitor {
+    const Vec3f *vert;
+    const Vec3u *face;
+    const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
+    const FaceProp *face_prop;
+    IntersectionRecord *records;
+    compute::atomic_uint_t *counter;
+    unsigned capacity;
+    unsigned collider_edge_index;
+    unsigned face_count;
+    Vec2u collider_edge;
+    Vec3f y0;
+    Vec3f y1;
+    DiagHandle diag;
+
+    [[seam::device_fn]] bool test(const AABB &box,
+                                  const AABB &q) const {
+        return aabb_overlap(box, q);
+    }
+
+    [[seam::device_fn]] bool operator()(unsigned index) {
+        DIAG_ASSERT4(diag, index < face_count, static_cast<float>(index),
+                     static_cast<float>(face_count),
+                     static_cast<float>(collider_edge_index), 0.0f);
+        if (index >= face_count) {
+            return false;
+        }
+        const FaceProp fprop = face_prop[index];
+        const Vec3u f = face[index];
+        const VertexProp anchor = vertex_prop[f[0]];
+        const VertexProp second = vertex_prop[f[1]];
+        const VertexProp third = vertex_prop[f[2]];
+        if (fprop.fixed || !face_has_mass(fprop, anchor, second, third)) {
+            return false;
+        }
+        if (!collider_pair_admitted(pair_side_of_face(anchor, fprop, f),
+                                    pair_side_of_collision_edge(collider_edge),
+                                    start_link_index, start_link_offset,
+                                    has_start_link)) {
+            return false;
+        }
+        const Vec3f x0 = vert[f[0]];
+        const Vec3f x1 = vert[f[1]];
+        const Vec3f x2 = vert[f[2]];
+        float first = 0.0f;
+        float second_volume = 0.0f;
+        if (edge_triangle_pierce(y0, y1, x0, x1, x2, first, second_volume)) {
+            Vec3f fv[3] = {x0, x1, x2};
+            Vec3f ev[2] = {y0, y1};
+            intersection_record_claim(records, counter, capacity,
+                                      INTERSECT_RECORD_COLLISION_EDGE, index,
+                                      collider_edge_index, fv, 3, ev, 2);
+            return true;
+        }
+        return false;
+    }
+};
+
 // ---------------------------------------------------------------------------
-// The four composition bodies.
+// The five composition bodies.
 //
 // EACH IS ONE QUERY ELEMENT'S WHOLE WORK: read its prebuilt query box, build
 // the tester on the stack, walk the tree, and set this element's flag if the
@@ -618,11 +719,19 @@ struct IntersectCollisionMeshVisitor {
 }
 
 // THE TWO PER-EDGE VERDICTS THAT ARE SETTLED OUTSIDE THE TRAVERSAL, because
-// neither depends on the leaf. A zero-mass edge is a static solid and the
-// collision mesh is one too, so the pair could never resolve; and the allowance
-// is asked of the dynamic edge alone, the static side being handed
-// `NO_OBJECT_INDEX` and an empty policy, under which "either side opts in"
-// reduces to "the dynamic side opted in".
+// neither depends on the leaf. An edge that cannot yield is not reported against
+// the collision mesh, which cannot yield either, so the pair could never
+// resolve: that is a massless edge, which is a static solid, and a fully
+// pinned one, which is prescribed. It is the verdict the collision edge-edge
+// sweep takes, so this gate reports exactly the edges that sweep protects.
+// Massless is `edge_has_mass`'s verdict over the edge AND its two vertices: a
+// shell or solid edge carries no mass of its own and is dynamic all the same,
+// so reading `EdgeProp::mass` alone would leave this gate blind to every edge
+// that is not a rod's.
+//
+// The allowance is asked of the dynamic edge alone, the static side being
+// handed `NO_OBJECT_INDEX` and an empty policy, under which "either side opts
+// in" reduces to "the dynamic side opted in".
 [[seam::entry(element)]]
 [[seam::device_fn]] inline void intersect_scan_collision_mesh(
     const Vec3f *vert,
@@ -645,11 +754,12 @@ struct IntersectCollisionMeshVisitor {
         return;
     }
     const EdgeProp eprop = edge_prop[element];
-    if (!(eprop.mass > 0.0f)) {
-        return;
-    }
     const Vec2u e = edge[element];
     const VertexProp anchor = vertex_prop[e[0]];
+    const VertexProp other = vertex_prop[e[1]];
+    if (eprop.fixed || !edge_has_mass(eprop, anchor, other)) {
+        return;
+    }
     const PairSide dynamic = pair_side_of_edge(anchor, eprop, e);
     if (collider_intersection_allowed(dynamic)) {
         return;
@@ -675,8 +785,60 @@ struct IntersectCollisionMeshVisitor {
     }
 }
 
+// THE FIFTH WALK: one thread per COLLIDER EDGE, over the DYNAMIC face tree.
+//
+// THE QUERY BOX IS FORMED HERE rather than read from a prebuilt array. A
+// collider edge has one pose for the whole run and no collision window of its
+// own, so there is no mask to apply and nothing a pass one dispatch earlier
+// would add; a dynamic face a window has switched off carries an inactive leaf
+// box, which `aabb_overlap` refuses.
+//
+// NO FLAG IS WRITTEN. The flag arrays are indexed by DYNAMIC edge and by
+// surface vertex, and this walk's element is neither. The claim counter is the
+// verdict the host reads, so a hit here is counted and recorded like any other.
+[[seam::entry(element)]]
+[[seam::device_fn]] inline void intersect_scan_collision_edge(
+    const Vec3f *vert,
+    const Vec3u *face, unsigned face_count,
+    const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
+    const FaceProp *face_prop,
+    const Vec3f *collider_vertex,
+    const Vec2u *collider_edge,
+    const unsigned *node, unsigned node_count,
+    const AABB *aabb, unsigned root,
+    IntersectionRecord *records,
+    compute::atomic_uint_t *counter, unsigned capacity,
+    DiagHandle diag, unsigned element) {
+    const Vec2u e = collider_edge[element];
+    // Thread-space copies, which is what lets the two positions be differenced.
+    const Vec3f y0 = collider_vertex[e[0]];
+    const Vec3f y1 = collider_vertex[e[1]];
+    const AABB box = aabb_make_edge(y0, y1, 0.0f);
+    IntersectCollisionEdgeVisitor op;
+    op.vert = vert;
+    op.face = face;
+    op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
+    op.face_prop = face_prop;
+    op.records = records;
+    op.counter = counter;
+    op.capacity = capacity;
+    op.collider_edge_index = element;
+    op.face_count = face_count;
+    op.collider_edge = e;
+    op.y0 = y0;
+    op.y1 = y1;
+    op.diag = diag;
+    aabb_query(node, node_count, aabb, root, op, box, diag);
+}
+
 // ---------------------------------------------------------------------------
-// The four entry points.
+// The five entry points.
 //
 // `query`, `flag` and `records` are BASE POINTERS rather than a gather and a
 // scatter, and the reason is the same for all three: `query[element]` is copied

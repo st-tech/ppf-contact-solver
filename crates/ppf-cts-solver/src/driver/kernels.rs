@@ -103,14 +103,17 @@ pub mod id {
     pub const CONTACT_POINT_POINT_TRAVERSE: KernelId = KernelId(35);
     pub const CONTACT_EDGE_EDGE: KernelId = KernelId(38);
     pub const CONTACT_EDGE_EDGE_TRAVERSE: KernelId = KernelId(37);
-    /// The final penetration gate's four fused walks, one per (query kind,
+    /// The final penetration gate's five fused walks, one per (query kind,
     /// tree) pair. Each walks a BVH with the intersection tester as a per-hit
-    /// device functor, sets this element's flag if the walk found anything, and
-    /// claims a record slot out of one shared counter.
+    /// device functor and claims a record slot out of one shared counter; the
+    /// first four also set their query element's flag.
     pub const INTERSECT_SCAN_FACE_EDGE: KernelId = KernelId(39);
     pub const INTERSECT_SCAN_EDGE_EDGE: KernelId = KernelId(40);
     pub const INTERSECT_SCAN_POINT_POINT: KernelId = KernelId(41);
     pub const INTERSECT_SCAN_COLLISION_MESH: KernelId = KernelId(42);
+    /// A collider EDGE against the dynamic face tree, the crossing the walk
+    /// above cannot see.
+    pub const INTERSECT_SCAN_COLLISION_EDGE: KernelId = KernelId(43);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -121,36 +124,36 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const PAIR_CACHE_RECORD: KernelId = KernelId(43);
-    pub const PAIR_CACHE_RECORD_INTERLEAVED: KernelId = KernelId(44);
-    pub const VERTEX_CONSTRAINT: KernelId = KernelId(45);
-    pub const VERTEX_CONSTRAINT_SWEEP: KernelId = KernelId(46);
-    pub const DYN_COUNT_TRANSPOSE_PASS: KernelId = KernelId(47);
-    pub const DYN_SCATTER_TRANSPOSE_PASS: KernelId = KernelId(48);
+    pub const PAIR_CACHE_RECORD: KernelId = KernelId(44);
+    pub const PAIR_CACHE_RECORD_INTERLEAVED: KernelId = KernelId(45);
+    pub const VERTEX_CONSTRAINT: KernelId = KernelId(46);
+    pub const VERTEX_CONSTRAINT_SWEEP: KernelId = KernelId(47);
+    pub const DYN_COUNT_TRANSPOSE_PASS: KernelId = KernelId(48);
+    pub const DYN_SCATTER_TRANSPOSE_PASS: KernelId = KernelId(49);
     /// The dynamic contact matrix, as six element-wise passes over flat device
     /// storage: order the carried pattern and open each row's reserve, count one
     /// slot per contribution the pattern does not already hold, lay the pattern
     /// into the slab, fill, compact, and hand on the merged pattern with the
     /// contiguous copy the sparse matvec reads. The two scans between those
     /// passes are `super::scan::ScanScratch::exclusive`.
-    pub const DYN_ROW_BEGIN_PASS: KernelId = KernelId(49);
-    pub const DYN_DRY_PUSH_PASS: KernelId = KernelId(50);
-    pub const DYN_ROW_SEED_PASS: KernelId = KernelId(51);
-    pub const DYN_PUSH_PASS: KernelId = KernelId(52);
-    pub const DYN_ROW_COMPACT_PASS: KernelId = KernelId(53);
-    pub const DYN_ROW_EMIT_PASS: KernelId = KernelId(54);
-    pub const FIXED_CSR_ATOMIC_PUSH: KernelId = KernelId(60);
-    pub const FIXED_PUSH_ELEMENT_BLOCKS: KernelId = KernelId(59);
-    pub const FIXED_PUSH_ELEMENT_BLOCKS_AT: KernelId = KernelId(55);
-    pub const FIXED_PUSH_ELEMENT_BLOCKS_GATED_AT: KernelId = KernelId(56);
-    pub const FIXED_PUSH_ELEMENT_BLOCKS_GATED: KernelId = KernelId(58);
-    pub const FIXED_PUSH_ELEMENT_BLOCKS_LIVE: KernelId = KernelId(57);
-    pub const PRECOND_DIAGONAL: KernelId = KernelId(61);
-    pub const PRECOND_DIAGONAL_DYNAMIC: KernelId = KernelId(62);
-    pub const FACE_SPECTRAL_FORCE: KernelId = KernelId(63);
-    pub const FACE_SPECTRAL_HESSIAN: KernelId = KernelId(64);
-    pub const TET_SPECTRAL_FORCE: KernelId = KernelId(65);
-    pub const TET_SPECTRAL_HESSIAN: KernelId = KernelId(66);
+    pub const DYN_ROW_BEGIN_PASS: KernelId = KernelId(50);
+    pub const DYN_DRY_PUSH_PASS: KernelId = KernelId(51);
+    pub const DYN_ROW_SEED_PASS: KernelId = KernelId(52);
+    pub const DYN_PUSH_PASS: KernelId = KernelId(53);
+    pub const DYN_ROW_COMPACT_PASS: KernelId = KernelId(54);
+    pub const DYN_ROW_EMIT_PASS: KernelId = KernelId(55);
+    pub const FIXED_CSR_ATOMIC_PUSH: KernelId = KernelId(61);
+    pub const FIXED_PUSH_ELEMENT_BLOCKS: KernelId = KernelId(60);
+    pub const FIXED_PUSH_ELEMENT_BLOCKS_AT: KernelId = KernelId(56);
+    pub const FIXED_PUSH_ELEMENT_BLOCKS_GATED_AT: KernelId = KernelId(57);
+    pub const FIXED_PUSH_ELEMENT_BLOCKS_GATED: KernelId = KernelId(59);
+    pub const FIXED_PUSH_ELEMENT_BLOCKS_LIVE: KernelId = KernelId(58);
+    pub const PRECOND_DIAGONAL: KernelId = KernelId(62);
+    pub const PRECOND_DIAGONAL_DYNAMIC: KernelId = KernelId(63);
+    pub const FACE_SPECTRAL_FORCE: KernelId = KernelId(64);
+    pub const FACE_SPECTRAL_HESSIAN: KernelId = KernelId(65);
+    pub const TET_SPECTRAL_FORCE: KernelId = KernelId(66);
+    pub const TET_SPECTRAL_HESSIAN: KernelId = KernelId(67);
     /// The shell membrane layer of ONE face: the deformation gradient, the
     /// SVD, the material table, the spectral force, the PSD-projected 6x6
     /// Hessian, the material-frame conversion, the Rayleigh damping block, the
@@ -158,14 +161,14 @@ pub mod id {
     /// crosses to the host zero times.
     /// The same embed reading its material off `FaceProp` and `FaceParam`
     /// rather than off six arrays the host flattened and uploaded every pass.
-    pub const FACE_ELASTIC_EMBED_FROM_RECORDS: KernelId = KernelId(68);
-    pub const FACE_BARAFFWITKIN: KernelId = KernelId(69);
+    pub const FACE_ELASTIC_EMBED_FROM_RECORDS: KernelId = KernelId(69);
+    pub const FACE_BARAFFWITKIN: KernelId = KernelId(70);
     /// The per-face inflation pressure, added to the face accumulators.
     ///
     /// DISPATCHED. It is the last term `refusal.rs` named that the elastic
     /// path did not already carry, and the body returns at once on a face whose
     /// own pressure is not positive.
-    pub const FACE_PRESSURE_EMBED: KernelId = KernelId(70);
+    pub const FACE_PRESSURE_EMBED: KernelId = KernelId(71);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -176,50 +179,50 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const FRICTION_EVALUATE: KernelId = KernelId(71);
-    pub const TET_MATERIAL_DIFF_TABLE: KernelId = KernelId(72);
-    pub const TET_MATERIAL_FROM_RECORDS: KernelId = KernelId(118);
-    pub const FACE_MATERIAL_DIFF_TABLE: KernelId = KernelId(73);
+    pub const FRICTION_EVALUATE: KernelId = KernelId(72);
+    pub const TET_MATERIAL_DIFF_TABLE: KernelId = KernelId(73);
+    pub const TET_MATERIAL_FROM_RECORDS: KernelId = KernelId(119);
+    pub const FACE_MATERIAL_DIFF_TABLE: KernelId = KernelId(74);
     /// `pdrd_project_body_dofs_row`: each body's forbidden degrees of freedom
     /// removed from a reduced vector, which every vector the reduced solve
     /// touches passes through.
-    pub const PDRD_PROJECT_BODY_DOFS_ROW: KernelId = KernelId(74);
+    pub const PDRD_PROJECT_BODY_DOFS_ROW: KernelId = KernelId(75);
     /// `pdrd_copy_state_rotation_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_COPY_STATE_ROTATION_ROW: KernelId = KernelId(75);
+    pub const PDRD_COPY_STATE_ROTATION_ROW: KernelId = KernelId(76);
     /// `pdrd_compose_running_rotation_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_COMPOSE_RUNNING_ROTATION_ROW: KernelId = KernelId(76);
+    pub const PDRD_COMPOSE_RUNNING_ROTATION_ROW: KernelId = KernelId(77);
     /// `pdrd_prolong_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_PROLONG_ROW: KernelId = KernelId(77);
+    pub const PDRD_PROLONG_ROW: KernelId = KernelId(78);
     /// `pdrd_restrict_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_RESTRICT_ROW: KernelId = KernelId(78);
+    pub const PDRD_RESTRICT_ROW: KernelId = KernelId(79);
     /// `pdrd_seed_restrict_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_SEED_RESTRICT_ROW: KernelId = KernelId(79);
+    pub const PDRD_SEED_RESTRICT_ROW: KernelId = KernelId(80);
     /// `pdrd_copy_projected_cloth_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_COPY_PROJECTED_CLOTH_ROW: KernelId = KernelId(80);
+    pub const PDRD_COPY_PROJECTED_CLOTH_ROW: KernelId = KernelId(81);
     /// `pdrd_translation_lock_particular_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_TRANSLATION_LOCK_PARTICULAR_ROW: KernelId = KernelId(81);
+    pub const PDRD_TRANSLATION_LOCK_PARTICULAR_ROW: KernelId = KernelId(82);
     /// `pdrd_extract_body_rotation_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_EXTRACT_BODY_ROTATION_ROW: KernelId = KernelId(82);
+    pub const PDRD_EXTRACT_BODY_ROTATION_ROW: KernelId = KernelId(83);
     /// `pdrd_scatter_rotated_rest_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_SCATTER_ROTATED_REST_ROW: KernelId = KernelId(83);
+    pub const PDRD_SCATTER_ROTATED_REST_ROW: KernelId = KernelId(84);
     /// `pdrd_precond_body_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_PRECOND_BODY_ROW: KernelId = KernelId(84);
+    pub const PDRD_PRECOND_BODY_ROW: KernelId = KernelId(85);
     /// `pdrd_precond_cloth_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_PRECOND_CLOTH_ROW: KernelId = KernelId(85);
+    pub const PDRD_PRECOND_CLOTH_ROW: KernelId = KernelId(86);
     /// `pdrd_rigidify_centroid_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_RIGIDIFY_CENTROID_ROW: KernelId = KernelId(86);
+    pub const PDRD_RIGIDIFY_CENTROID_ROW: KernelId = KernelId(87);
     /// `pdrd_rigidify_write_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_RIGIDIFY_WRITE_ROW: KernelId = KernelId(87);
+    pub const PDRD_RIGIDIFY_WRITE_ROW: KernelId = KernelId(88);
     /// `pdrd_fit_centroid_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_FIT_CENTROID_ROW: KernelId = KernelId(88);
+    pub const PDRD_FIT_CENTROID_ROW: KernelId = KernelId(89);
     /// `pdrd_fit_covariance_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_FIT_COVARIANCE_ROW: KernelId = KernelId(89);
+    pub const PDRD_FIT_COVARIANCE_ROW: KernelId = KernelId(90);
     /// `pdrd_fit_finish_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_FIT_FINISH_ROW: KernelId = KernelId(90);
+    pub const PDRD_FIT_FINISH_ROW: KernelId = KernelId(91);
     /// `pdrd_assemble_inertia_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_ASSEMBLE_INERTIA_ROW: KernelId = KernelId(91);
+    pub const PDRD_ASSEMBLE_INERTIA_ROW: KernelId = KernelId(92);
     /// `pdrd_assemble_sandwich_row`, one row of the PDRD reduced six-DOF solve.
-    pub const PDRD_ASSEMBLE_SANDWICH_ROW: KernelId = KernelId(92);
+    pub const PDRD_ASSEMBLE_SANDWICH_ROW: KernelId = KernelId(93);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -230,7 +233,7 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const PUSH_ENERGY: KernelId = KernelId(93);
+    pub const PUSH_ENERGY: KernelId = KernelId(94);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -241,7 +244,7 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const PUSH_CURVATURE: KernelId = KernelId(94);
+    pub const PUSH_CURVATURE: KernelId = KernelId(95);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -252,7 +255,7 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const PUSH_GRADIENT: KernelId = KernelId(95);
+    pub const PUSH_GRADIENT: KernelId = KernelId(96);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -263,38 +266,38 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const PUSH_HESSIAN: KernelId = KernelId(96);
-    pub const ROD_BEND_ANGLE: KernelId = KernelId(97);
-    pub const ROD_BEND_FORCE_HESSIAN: KernelId = KernelId(98);
-    pub const ROD_BEND_EMBED: KernelId = KernelId(99);
-    pub const ROD_BEND_STIFFNESS: KernelId = KernelId(100);
+    pub const PUSH_HESSIAN: KernelId = KernelId(97);
+    pub const ROD_BEND_ANGLE: KernelId = KernelId(98);
+    pub const ROD_BEND_FORCE_HESSIAN: KernelId = KernelId(99);
+    pub const ROD_BEND_EMBED: KernelId = KernelId(100);
+    pub const ROD_BEND_STIFFNESS: KernelId = KernelId(101);
     /// One grain's post-solve spin integrate, from the converged friction torque.
     ///
     /// DISPATCHED by `super::step`, at the three points `main.cu` dispatches
     /// them: the condense after the whole Newton system is assembled, the
     /// recover straight after the solve, and the integrate after the commit.
-    pub const SAND_GRAIN_INTEGRATE_ROW: KernelId = KernelId(101);
+    pub const SAND_GRAIN_INTEGRATE_ROW: KernelId = KernelId(102);
     /// One grain's spin condensed out of the Newton system, before the solve.
     ///
     /// DISPATCHED by `super::step`, at the three points `main.cu` dispatches
     /// them: the condense after the whole Newton system is assembled, the
     /// recover straight after the solve, and the integrate after the commit.
-    pub const SAND_GRAIN_CONDENSE_ROW: KernelId = KernelId(102);
+    pub const SAND_GRAIN_CONDENSE_ROW: KernelId = KernelId(103);
     /// One grain's angular velocity recovered from the solved translation increment.
     ///
     /// DISPATCHED by `super::step`, at the three points `main.cu` dispatches
     /// them: the condense after the whole Newton system is assembled, the
     /// recover straight after the solve, and the integrate after the commit.
-    pub const SAND_GRAIN_RECOVER_ROW: KernelId = KernelId(103);
-    pub const SHELL_BEND_FORCE_HESSIAN_CHECKED: KernelId = KernelId(104);
-    pub const SHELL_BEND_EMBED: KernelId = KernelId(105);
-    pub const SHELL_BEND_ANGLE: KernelId = KernelId(106);
-    pub const SHELL_BEND_REMAP: KernelId = KernelId(107);
-    pub const SHELL_BEND_STIFFNESS: KernelId = KernelId(109);
-    pub const SHELL_BEND_STIFFNESS_AND_DAMPING: KernelId = KernelId(108);
-    pub const SHELL_BEND_AREAL_DENSITY_GATHERED: KernelId = KernelId(111);
-    pub const SHELL_BEND_AREAL_DENSITY_FROM_RECORDS: KernelId = KernelId(110);
-    pub const STITCH_FORCE_HESSIAN_GATHERED: KernelId = KernelId(112);
+    pub const SAND_GRAIN_RECOVER_ROW: KernelId = KernelId(104);
+    pub const SHELL_BEND_FORCE_HESSIAN_CHECKED: KernelId = KernelId(105);
+    pub const SHELL_BEND_EMBED: KernelId = KernelId(106);
+    pub const SHELL_BEND_ANGLE: KernelId = KernelId(107);
+    pub const SHELL_BEND_REMAP: KernelId = KernelId(108);
+    pub const SHELL_BEND_STIFFNESS: KernelId = KernelId(110);
+    pub const SHELL_BEND_STIFFNESS_AND_DAMPING: KernelId = KernelId(109);
+    pub const SHELL_BEND_AREAL_DENSITY_GATHERED: KernelId = KernelId(112);
+    pub const SHELL_BEND_AREAL_DENSITY_FROM_RECORDS: KernelId = KernelId(111);
+    pub const STITCH_FORCE_HESSIAN_GATHERED: KernelId = KernelId(113);
     /// The number of ids [`super::TABLE`] and the backend's launch table cover.
     /// One torque group's centroid, principal axis and radius normalization.
     ///
@@ -303,14 +306,14 @@ pub mod id {
     /// member's row is assembled. It is one thread per group, and the three
     /// walks cannot be fused: the covariance is about the centroid and the
     /// perpendicular radius is about the axis the covariance produces.
-    pub const TORQUE_GROUP_FRAME: KernelId = KernelId(113);
-    pub const ROD_STRETCH_DIFF_TABLE: KernelId = KernelId(114);
-    pub const ROD_STRETCH_EMBED: KernelId = KernelId(115);
+    pub const TORQUE_GROUP_FRAME: KernelId = KernelId(114);
+    pub const ROD_STRETCH_DIFF_TABLE: KernelId = KernelId(115);
+    pub const ROD_STRETCH_EMBED: KernelId = KernelId(116);
     /// The tet elastic layer of ONE element: the deformation gradient, its
     /// factorization, the material table, the spectral force, the fused 12x12
     /// Hessian, the Rayleigh damping block and the two scatters, in one
     /// dispatch, and it crosses to the host zero times.
-    pub const TET_ELASTIC_EMBED: KernelId = KernelId(117);
+    pub const TET_ELASTIC_EMBED: KernelId = KernelId(118);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -321,15 +324,15 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const BITONIC_STEP: KernelId = KernelId(119);
-    pub const LBVH_MORTON_FROM_BOUNDS: KernelId = KernelId(120);
-    pub const LBVH_NODES: KernelId = KernelId(121);
-    pub const LBVH_NODE_DEPTH: KernelId = KernelId(122);
-    pub const FACE_CENTROID: KernelId = KernelId(123);
-    pub const EDGE_CENTROID: KernelId = KernelId(124);
-    pub const VERTEX_CENTROID: KernelId = KernelId(125);
-    pub const DIRICHLET_PRESCRIBE_GATED: KernelId = KernelId(130);
-    pub const DIRICHLET_LIFT_ROW: KernelId = KernelId(131);
+    pub const BITONIC_STEP: KernelId = KernelId(120);
+    pub const LBVH_MORTON_FROM_BOUNDS: KernelId = KernelId(121);
+    pub const LBVH_NODES: KernelId = KernelId(122);
+    pub const LBVH_NODE_DEPTH: KernelId = KernelId(123);
+    pub const FACE_CENTROID: KernelId = KernelId(124);
+    pub const EDGE_CENTROID: KernelId = KernelId(125);
+    pub const VERTEX_CENTROID: KernelId = KernelId(126);
+    pub const DIRICHLET_PRESCRIBE_GATED: KernelId = KernelId(131);
+    pub const DIRICHLET_LIFT_ROW: KernelId = KernelId(132);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -340,31 +343,31 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const DUMP_LINSYS_ROW_TO_COO: KernelId = KernelId(132);
-    pub const DX_MAGNITUDE: KernelId = KernelId(133);
-    pub const DX_SEED: KernelId = KernelId(134);
-    pub const FIX_XZ_DRAG: KernelId = KernelId(135);
-    pub const MOMENTUM_EMBED: KernelId = KernelId(136);
-    pub const GATHER_POSITION_ABSOLUTE: KernelId = KernelId(137);
-    pub const OVERRIDE_VELOCITY_SEED_LISTED: KernelId = KernelId(138);
-    pub const OVERRIDE_ANGULAR_SEED_LISTED: KernelId = KernelId(139);
-    pub const POSITION_ACCEPT: KernelId = KernelId(140);
-    pub const POSITION_STEP: KernelId = KernelId(141);
-    pub const REWIND_FIX: KernelId = KernelId(142);
-    pub const ROD_STRETCH_RATIO_GATED: KernelId = KernelId(143);
-    pub const COMPUTE_TARGET_SEED: KernelId = KernelId(144);
-    pub const EXTERNAL_FIELD: KernelId = KernelId(67);
-    pub const VELOCITY_TERMS: KernelId = KernelId(145);
-    pub const PLASTICITY_ALPHA: KernelId = KernelId(146);
-    pub const PLASTICITY_FACE_FROM_RECORDS: KernelId = KernelId(154);
-    pub const PLASTICITY_TET_FROM_RECORDS: KernelId = KernelId(156);
-    pub const PLASTICITY_HINGE_FROM_RECORDS: KernelId = KernelId(155);
-    pub const PLASTICITY_ROD_FROM_RECORDS: KernelId = KernelId(157);
-    pub const PLASTICITY_FACE_INVERSE_REST: KernelId = KernelId(147);
-    pub const PLASTICITY_TET_INVERSE_REST: KernelId = KernelId(148);
-    pub const PLASTICITY_CREEP_SINGULAR2: KernelId = KernelId(149);
-    pub const PLASTICITY_CREEP_SINGULAR3: KernelId = KernelId(150);
-    pub const PLASTICITY_CREEP_REST_ANGLE: KernelId = KernelId(151);
+    pub const DUMP_LINSYS_ROW_TO_COO: KernelId = KernelId(133);
+    pub const DX_MAGNITUDE: KernelId = KernelId(134);
+    pub const DX_SEED: KernelId = KernelId(135);
+    pub const FIX_XZ_DRAG: KernelId = KernelId(136);
+    pub const MOMENTUM_EMBED: KernelId = KernelId(137);
+    pub const GATHER_POSITION_ABSOLUTE: KernelId = KernelId(138);
+    pub const OVERRIDE_VELOCITY_SEED_LISTED: KernelId = KernelId(139);
+    pub const OVERRIDE_ANGULAR_SEED_LISTED: KernelId = KernelId(140);
+    pub const POSITION_ACCEPT: KernelId = KernelId(141);
+    pub const POSITION_STEP: KernelId = KernelId(142);
+    pub const REWIND_FIX: KernelId = KernelId(143);
+    pub const ROD_STRETCH_RATIO_GATED: KernelId = KernelId(144);
+    pub const COMPUTE_TARGET_SEED: KernelId = KernelId(145);
+    pub const EXTERNAL_FIELD: KernelId = KernelId(68);
+    pub const VELOCITY_TERMS: KernelId = KernelId(146);
+    pub const PLASTICITY_ALPHA: KernelId = KernelId(147);
+    pub const PLASTICITY_FACE_FROM_RECORDS: KernelId = KernelId(155);
+    pub const PLASTICITY_TET_FROM_RECORDS: KernelId = KernelId(157);
+    pub const PLASTICITY_HINGE_FROM_RECORDS: KernelId = KernelId(156);
+    pub const PLASTICITY_ROD_FROM_RECORDS: KernelId = KernelId(158);
+    pub const PLASTICITY_FACE_INVERSE_REST: KernelId = KernelId(148);
+    pub const PLASTICITY_TET_INVERSE_REST: KernelId = KernelId(149);
+    pub const PLASTICITY_CREEP_SINGULAR2: KernelId = KernelId(150);
+    pub const PLASTICITY_CREEP_SINGULAR3: KernelId = KernelId(151);
+    pub const PLASTICITY_CREEP_REST_ANGLE: KernelId = KernelId(152);
     /// `p = z + beta p` with `beta` read from a device scalar.
     ///
     /// DISPATCHED. It stood here undispatched for a while, with the boilerplate
@@ -378,12 +381,12 @@ pub mod id {
     /// SERIAL ASCENDING PASS, so the first dispatch of it ran a `3 * vertices`
     /// vector update single-threaded beside chunked neighbors. Check the row
     /// against the BODY when you give a kernel its first caller.
-    pub const VEC_COMBINE_INDIRECT: KernelId = KernelId(170);
+    pub const VEC_COMBINE_INDIRECT: KernelId = KernelId(171);
     /// `x += alpha p` and `r -= alpha Ap` with `alpha` still on the device.
-    pub const VEC_ADD_SCALED_INDIRECT: KernelId = KernelId(171);
-    pub const VEC_COPY: KernelId = KernelId(172);
-    pub const VEC_ADD_SCALED: KernelId = KernelId(173);
-    pub const VEC_COMBINE: KernelId = KernelId(174);
+    pub const VEC_ADD_SCALED_INDIRECT: KernelId = KernelId(172);
+    pub const VEC_COPY: KernelId = KernelId(173);
+    pub const VEC_ADD_SCALED: KernelId = KernelId(174);
+    pub const VEC_COMBINE: KernelId = KernelId(175);
     /// `vec_fill` writes one value to every element.
     ///
     /// DISPATCHED, unlike the ids below it. It is what SEEDS a device buffer the
@@ -392,7 +395,7 @@ pub mod id {
     /// the kernel, then read back. Neither staged nor readback storage covers
     /// that on its own, so the seed is a dispatch rather than a fourth buffer
     /// type. CUDA's own `fill_kernel` reaches the same body.
-    pub const VEC_FILL: KernelId = KernelId(175);
+    pub const VEC_FILL: KernelId = KernelId(176);
     /// DISPATCHED by `super::dyncsr`, at 12 call sites (dyncsr.rs:860, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -400,32 +403,32 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const VEC_FILL_U32: KernelId = KernelId(176);
-    pub const ELEMENT_ADD_SCALED: KernelId = KernelId(177);
+    pub const VEC_FILL_U32: KernelId = KernelId(177);
+    pub const ELEMENT_ADD_SCALED: KernelId = KernelId(178);
     /// One level of a blocked fold: one element sums one block of the input.
     ///
     /// A reduction reaches this backend only as a body written without a
     /// threadgroup barrier, which `crates/ppf-cts-compute/src/device.rs`
     /// states; a caller folds to a scalar by dispatching this level by level
     /// with kernel completion as the barrier.
-    pub const VEC_BLOCK_SUM: KernelId = KernelId(178);
-    pub const VEC_BLOCK_SUM_U32: KernelId = KernelId(179);
-    pub const VEC_BLOCK_SUM_COOPERATIVE: KernelId = KernelId(180);
-    pub const RADIX_HISTOGRAM: KernelId = KernelId(158);
-    pub const RADIX_SCATTER: KernelId = KernelId(159);
-    pub const VEC_BLOCK_SUM_ABS_COOPERATIVE: KernelId = KernelId(181);
-    pub const VEC_BLOCK_SUM_PAIR_COOPERATIVE: KernelId = KernelId(182);
-    pub const VEC_BLOCK_SUM_DUAL_COOPERATIVE: KernelId = KernelId(183);
+    pub const VEC_BLOCK_SUM: KernelId = KernelId(179);
+    pub const VEC_BLOCK_SUM_U32: KernelId = KernelId(180);
+    pub const VEC_BLOCK_SUM_COOPERATIVE: KernelId = KernelId(181);
+    pub const RADIX_HISTOGRAM: KernelId = KernelId(159);
+    pub const RADIX_SCATTER: KernelId = KernelId(160);
+    pub const VEC_BLOCK_SUM_ABS_COOPERATIVE: KernelId = KernelId(182);
+    pub const VEC_BLOCK_SUM_PAIR_COOPERATIVE: KernelId = KernelId(183);
+    pub const VEC_BLOCK_SUM_DUAL_COOPERATIVE: KernelId = KernelId(184);
     /// The same level over magnitudes, which only the FIRST level of an L1
     /// norm takes: every level above it folds totals that are already
     /// non-negative.
-    pub const VEC_BLOCK_SUM_ABS: KernelId = KernelId(184);
-    pub const VEC_BLOCK_SUM_PAIR: KernelId = KernelId(185);
+    pub const VEC_BLOCK_SUM_ABS: KernelId = KernelId(185);
+    pub const VEC_BLOCK_SUM_PAIR: KernelId = KernelId(186);
     /// Two folds of DIFFERENT lengths in one dispatch, which the pair cannot
     /// express: each source carries its own length and its own block count and
     /// the dispatch covers the larger. The PCG's `||r||_1` and `r . z` chains
     /// are its callers.
-    pub const VEC_BLOCK_SUM_DUAL: KernelId = KernelId(186);
+    pub const VEC_BLOCK_SUM_DUAL: KernelId = KernelId(187);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:86).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -433,7 +436,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_COUNT_MEMBERS: KernelId = KernelId(187);
+    pub const SCHWARZ_COUNT_MEMBERS: KernelId = KernelId(188);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:115).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -441,7 +444,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_SCATTER_MEMBERS: KernelId = KernelId(188);
+    pub const SCHWARZ_SCATTER_MEMBERS: KernelId = KernelId(189);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:125).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -449,7 +452,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_DOMAIN_INVERSE_SIZE: KernelId = KernelId(189);
+    pub const SCHWARZ_DOMAIN_INVERSE_SIZE: KernelId = KernelId(190);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:206, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -457,7 +460,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FINE_GRAPH_COUNT: KernelId = KernelId(190);
+    pub const SCHWARZ_FINE_GRAPH_COUNT: KernelId = KernelId(191);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:229, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -465,7 +468,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FINE_GRAPH_FILL: KernelId = KernelId(191);
+    pub const SCHWARZ_FINE_GRAPH_FILL: KernelId = KernelId(192);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:306, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -473,7 +476,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_GATHER: KernelId = KernelId(192);
+    pub const SCHWARZ_FACTOR_GATHER: KernelId = KernelId(193);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:370).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -481,7 +484,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_FLOOR: KernelId = KernelId(193);
+    pub const SCHWARZ_FACTOR_FLOOR: KernelId = KernelId(194);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:381).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -489,7 +492,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_CHOLESKY_DIAGONAL: KernelId = KernelId(194);
+    pub const SCHWARZ_FACTOR_CHOLESKY_DIAGONAL: KernelId = KernelId(195);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:398).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -497,7 +500,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_CHOLESKY_COLUMN: KernelId = KernelId(195);
+    pub const SCHWARZ_FACTOR_CHOLESKY_COLUMN: KernelId = KernelId(196);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:410).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -505,7 +508,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_INVERSE_COLUMN: KernelId = KernelId(196);
+    pub const SCHWARZ_FACTOR_INVERSE_COLUMN: KernelId = KernelId(197);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:421).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -513,7 +516,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_FACTOR_PACK: KernelId = KernelId(197);
+    pub const SCHWARZ_FACTOR_PACK: KernelId = KernelId(198);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:471, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -521,7 +524,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_APPLY_GATHER: KernelId = KernelId(198);
+    pub const SCHWARZ_APPLY_GATHER: KernelId = KernelId(199);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:482, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -529,7 +532,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_APPLY_LOWER: KernelId = KernelId(199);
+    pub const SCHWARZ_APPLY_LOWER: KernelId = KernelId(200);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:494, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -537,7 +540,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_APPLY_UPPER: KernelId = KernelId(200);
+    pub const SCHWARZ_APPLY_UPPER: KernelId = KernelId(201);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:613, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -545,7 +548,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_RESTRICT_ROW: KernelId = KernelId(201);
+    pub const SCHWARZ_RESTRICT_ROW: KernelId = KernelId(202);
     /// DISPATCHED by `super::schwarz`, at 2 call sites (schwarz.rs:643, ...).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -553,7 +556,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_PROLONG_ROW: KernelId = KernelId(202);
+    pub const SCHWARZ_PROLONG_ROW: KernelId = KernelId(203);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:670).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -561,7 +564,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_COMPOSE_MAP_ROW: KernelId = KernelId(203);
+    pub const SCHWARZ_COMPOSE_MAP_ROW: KernelId = KernelId(204);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:725).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -569,7 +572,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_LEVEL0_COUNT: KernelId = KernelId(204);
+    pub const SCHWARZ_LEVEL0_COUNT: KernelId = KernelId(205);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:749).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -577,7 +580,7 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_LEVEL0_FILL: KernelId = KernelId(205);
+    pub const SCHWARZ_LEVEL0_FILL: KernelId = KernelId(206);
     /// DISPATCHED by `super::schwarz`, at 1 call site (schwarz.rs:1132).
     ///
     /// ITS ROW BELOW IS THEREFORE LOAD-BEARING. A row for an entry nothing
@@ -585,33 +588,33 @@ pub mod id {
     /// the per-item cost can be wrong about a kernel nobody reaches; both
     /// become real the day something does. Check the row against the BODY
     /// rather than against this line.
-    pub const SCHWARZ_COARSE_GATHER: KernelId = KernelId(206);
+    pub const SCHWARZ_COARSE_GATHER: KernelId = KernelId(207);
     /// The Galerkin coarsening's four rows, all DISPATCHED by
     /// [`super::schwarz::galerkin`]: the keys and their identity permutation,
     /// the equal-key run flags, each run's head, and the segmented sum of the
     /// nine floats each run carries.
-    pub const SCHWARZ_GALERKIN_KEY: KernelId = KernelId(207);
-    pub const SCHWARZ_GALERKIN_EDGE_FLAG: KernelId = KernelId(208);
-    pub const SCHWARZ_GALERKIN_EDGE_HEAD: KernelId = KernelId(209);
-    pub const SCHWARZ_GALERKIN_SEGMENT_SUM: KernelId = KernelId(210);
+    pub const SCHWARZ_GALERKIN_KEY: KernelId = KernelId(208);
+    pub const SCHWARZ_GALERKIN_EDGE_FLAG: KernelId = KernelId(209);
+    pub const SCHWARZ_GALERKIN_EDGE_HEAD: KernelId = KernelId(210);
+    pub const SCHWARZ_GALERKIN_SEGMENT_SUM: KernelId = KernelId(211);
     /// One row of the block-Jacobi preconditioner, inverted on the device.
     ///
     /// DISPATCHED. It replaces a per-row HOST loop that called the same shared
     /// body through a C-ABI helper, which is why the neutral body predates the
     /// entry point: the physics was already single-sourced and only the walk
     /// over the rows was the driver's.
-    pub const BLOCK_JACOBI_INVERT_ROW: KernelId = KernelId(211);
-    pub const PCG_DOT_TERMS: KernelId = KernelId(212);
-    pub const PCG_UPDATE_ROW: KernelId = KernelId(213);
+    pub const BLOCK_JACOBI_INVERT_ROW: KernelId = KernelId(212);
+    pub const PCG_DOT_TERMS: KernelId = KernelId(213);
+    pub const PCG_UPDATE_ROW: KernelId = KernelId(214);
     /// One PDRD body's six reduced wrench rows, folded into an L1 norm on the
     /// DEVICE. The value is renumbered from the canonical walk by
     /// `renumber-kernel-ids.py`; what matters here is that the name exists.
-    pub const PCG_RIGID_GROUP_L1: KernelId = KernelId(221);
-    pub const PCG_UPDATE_ROW_FOLDED: KernelId = KernelId(214);
-    pub const PCG_FOLD_ALPHA: KernelId = KernelId(218);
-    pub const PCG_FOLD_BETA: KernelId = KernelId(220);
-    pub const PCG_ALPHA_TERMS: KernelId = KernelId(215);
-    pub const PCG_BETA_TERMS: KernelId = KernelId(216);
+    pub const PCG_RIGID_GROUP_L1: KernelId = KernelId(222);
+    pub const PCG_UPDATE_ROW_FOLDED: KernelId = KernelId(215);
+    pub const PCG_FOLD_ALPHA: KernelId = KernelId(219);
+    pub const PCG_FOLD_BETA: KernelId = KernelId(221);
+    pub const PCG_ALPHA_TERMS: KernelId = KernelId(216);
+    pub const PCG_BETA_TERMS: KernelId = KernelId(217);
     /// The same two coefficients over scalars that never leave the device.
     ///
     /// They call the same `pcg_alpha` and `pcg_beta` the parameter forms
@@ -619,87 +622,87 @@ pub mod id {
     /// arrive; what differs is that a fold wrote these into a device buffer
     /// and reading them back to fill a `float` field would stall the
     /// recurrence once per coefficient.
-    pub const PCG_ALPHA_RESIDENT: KernelId = KernelId(217);
-    pub const PCG_BETA_RESIDENT: KernelId = KernelId(219);
-    pub const OPERATOR_APPLY: KernelId = KernelId(222);
-    pub const OPERATOR_APPLY_DYNAMIC: KernelId = KernelId(223);
-    pub const OPERATOR_APPLY_FOLDED: KernelId = KernelId(224);
-    pub const OPERATOR_APPLY_DYNAMIC_FOLDED: KernelId = KernelId(225);
-    pub const OPERATOR_APPLY_SYMMETRIC_FOLDED: KernelId = KernelId(226);
-    pub const MAT3_MUL: KernelId = KernelId(227);
-    pub const FIXED_CSR_PRODUCT_ROW: KernelId = KernelId(228);
+    pub const PCG_ALPHA_RESIDENT: KernelId = KernelId(218);
+    pub const PCG_BETA_RESIDENT: KernelId = KernelId(220);
+    pub const OPERATOR_APPLY: KernelId = KernelId(223);
+    pub const OPERATOR_APPLY_DYNAMIC: KernelId = KernelId(224);
+    pub const OPERATOR_APPLY_FOLDED: KernelId = KernelId(225);
+    pub const OPERATOR_APPLY_DYNAMIC_FOLDED: KernelId = KernelId(226);
+    pub const OPERATOR_APPLY_SYMMETRIC_FOLDED: KernelId = KernelId(227);
+    pub const MAT3_MUL: KernelId = KernelId(228);
+    pub const FIXED_CSR_PRODUCT_ROW: KernelId = KernelId(229);
     /// One locked group's centroid drift and largest member displacement, read back to verify the lock held.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const TRANSLATION_LOCK_DRIFT_ROW: KernelId = KernelId(229);
+    pub const TRANSLATION_LOCK_DRIFT_ROW: KernelId = KernelId(230);
     /// Zero one group's frame before the two accumulation passes fill it.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_FRAME_CLEAR_ROW: KernelId = KernelId(230);
+    pub const LOCK_FRAME_CLEAR_ROW: KernelId = KernelId(231);
     /// One group's centroid, the accumulated sum divided by its total mass.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_FRAME_CENTER_OF_MASS_ROW: KernelId = KernelId(231);
+    pub const LOCK_FRAME_CENTER_OF_MASS_ROW: KernelId = KernelId(232);
     /// One member's mass-weighted position into its group's centroid sum.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_CENTER_OF_MASS_ACCUMULATE_ROW: KernelId = KernelId(232);
+    pub const LOCK_CENTER_OF_MASS_ACCUMULATE_ROW: KernelId = KernelId(233);
     /// One member's contribution to its group's inertia about that centroid.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_INERTIA_ACCUMULATE_ROW: KernelId = KernelId(233);
+    pub const LOCK_INERTIA_ACCUMULATE_ROW: KernelId = KernelId(234);
     /// One member's contribution to C v, the constraint-space image of the vector being projected.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_ROW_SUMS_ACCUMULATE_ROW: KernelId = KernelId(234);
+    pub const LOCK_ROW_SUMS_ACCUMULATE_ROW: KernelId = KernelId(235);
     /// One residual correction of the free part toward the group's right-hand side.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_REFINE_TOWARD_RHS_ROW: KernelId = KernelId(235);
+    pub const LOCK_REFINE_TOWARD_RHS_ROW: KernelId = KernelId(236);
     /// Remove the constraint-space component from one member's three rows.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_PROJECT_OUT_ROWS_ROW: KernelId = KernelId(236);
+    pub const LOCK_PROJECT_OUT_ROWS_ROW: KernelId = KernelId(237);
     /// The affine feasible correction q: exact pin increments on removed rows, the minimum-norm free part elsewhere.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_SEED_FREE_SOLUTION_ROW: KernelId = KernelId(237);
+    pub const LOCK_SEED_FREE_SOLUTION_ROW: KernelId = KernelId(238);
     /// One member's contribution to the group's best-fit angular increment, for the read-only tangent check.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_TORQUE_ACCUMULATE_ROW: KernelId = KernelId(238);
+    pub const LOCK_TORQUE_ACCUMULATE_ROW: KernelId = KernelId(239);
     /// One group's constraint rows and their Gram matrix, from the frame.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_CONSTRAINT_ASSEMBLE_ROW: KernelId = KernelId(239);
-    pub const ROD_STRAIN_FORCE_HESSIAN_GATED: KernelId = KernelId(240);
-    pub const ROD_STRAIN_STIFFNESS_GATED: KernelId = KernelId(241);
-    pub const SHELL_STRAIN_DIFF_TABLE_GATED: KernelId = KernelId(243);
-    pub const SHELL_STRAIN_DIFF_TABLE_FROM_RECORDS: KernelId = KernelId(242);
-    pub const SHELL_STRAIN_STIFFNESS_FROM_RECORDS: KernelId = KernelId(244);
-    pub const SHELL_STRAIN_EMBED: KernelId = KernelId(246);
-    pub const SHELL_STRAIN_TOI_FROM_RECORDS: KernelId = KernelId(249);
-    pub const SHELL_STRAIN_STIFFNESS_GATED: KernelId = KernelId(245);
-    pub const SHELL_MAX_STRAIN: KernelId = KernelId(247);
-    pub const ROD_STRAIN_VALUE: KernelId = KernelId(248);
-    pub const SHELL_STRAIN_TOI_GATED: KernelId = KernelId(250);
-    pub const ROD_STRAIN_TOI_GATED: KernelId = KernelId(251);
-    pub const FACE_CONVERT_FORCE: KernelId = KernelId(255);
-    pub const FACE_CONVERT_HESSIAN: KernelId = KernelId(256);
-    pub const FACE_DAMPING: KernelId = KernelId(257);
-    pub const FACE_DEFORMATION_GRADIENT: KernelId = KernelId(258);
-    pub const SHELL_STRETCH_TERMS: KernelId = KernelId(259);
+    pub const LOCK_CONSTRAINT_ASSEMBLE_ROW: KernelId = KernelId(240);
+    pub const ROD_STRAIN_FORCE_HESSIAN_GATED: KernelId = KernelId(241);
+    pub const ROD_STRAIN_STIFFNESS_GATED: KernelId = KernelId(242);
+    pub const SHELL_STRAIN_DIFF_TABLE_GATED: KernelId = KernelId(244);
+    pub const SHELL_STRAIN_DIFF_TABLE_FROM_RECORDS: KernelId = KernelId(243);
+    pub const SHELL_STRAIN_STIFFNESS_FROM_RECORDS: KernelId = KernelId(245);
+    pub const SHELL_STRAIN_EMBED: KernelId = KernelId(247);
+    pub const SHELL_STRAIN_TOI_FROM_RECORDS: KernelId = KernelId(250);
+    pub const SHELL_STRAIN_STIFFNESS_GATED: KernelId = KernelId(246);
+    pub const SHELL_MAX_STRAIN: KernelId = KernelId(248);
+    pub const ROD_STRAIN_VALUE: KernelId = KernelId(249);
+    pub const SHELL_STRAIN_TOI_GATED: KernelId = KernelId(251);
+    pub const ROD_STRAIN_TOI_GATED: KernelId = KernelId(252);
+    pub const FACE_CONVERT_FORCE: KernelId = KernelId(256);
+    pub const FACE_CONVERT_HESSIAN: KernelId = KernelId(257);
+    pub const FACE_DAMPING: KernelId = KernelId(258);
+    pub const FACE_DEFORMATION_GRADIENT: KernelId = KernelId(259);
+    pub const SHELL_STRETCH_TERMS: KernelId = KernelId(260);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -710,10 +713,10 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const FACE_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(260);
-    pub const FACE_ATOMIC_EMBED_FORCE: KernelId = KernelId(261);
-    pub const HINGE_DAMPING: KernelId = KernelId(264);
-    pub const HINGE_ATOMIC_EMBED_FORCE: KernelId = KernelId(265);
+    pub const FACE_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(261);
+    pub const FACE_ATOMIC_EMBED_FORCE: KernelId = KernelId(262);
+    pub const HINGE_DAMPING: KernelId = KernelId(265);
+    pub const HINGE_ATOMIC_EMBED_FORCE: KernelId = KernelId(266);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -724,13 +727,13 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const HINGE_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(268);
-    pub const ROD_BEND_DAMPING: KernelId = KernelId(269);
-    pub const ROD_DAMPING: KernelId = KernelId(270);
-    pub const ROD_ATOMIC_EMBED_FORCE: KernelId = KernelId(271);
-    pub const COLLISION_WINDOW_VERTEX: KernelId = KernelId(252);
-    pub const COLLISION_WINDOW_FACE: KernelId = KernelId(253);
-    pub const COLLISION_WINDOW_EDGE: KernelId = KernelId(254);
+    pub const HINGE_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(269);
+    pub const ROD_BEND_DAMPING: KernelId = KernelId(270);
+    pub const ROD_DAMPING: KernelId = KernelId(271);
+    pub const ROD_ATOMIC_EMBED_FORCE: KernelId = KernelId(272);
+    pub const COLLISION_WINDOW_VERTEX: KernelId = KernelId(253);
+    pub const COLLISION_WINDOW_FACE: KernelId = KernelId(254);
+    pub const COLLISION_WINDOW_EDGE: KernelId = KernelId(255);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -741,12 +744,12 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const ROD_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(275);
-    pub const STITCH_ATOMIC_EMBED_FORCE: KernelId = KernelId(276);
-    pub const SVD3X2: KernelId = KernelId(277);
-    pub const SVD3X2_SHIFTED: KernelId = KernelId(278);
-    pub const SHELL_STRAIN_RESTORE_SIGMA: KernelId = KernelId(279);
-    pub const SVD3X3_RV: KernelId = KernelId(280);
+    pub const ROD_ATOMIC_EMBED_HESSIAN_SLOTS: KernelId = KernelId(276);
+    pub const STITCH_ATOMIC_EMBED_FORCE: KernelId = KernelId(277);
+    pub const SVD3X2: KernelId = KernelId(278);
+    pub const SVD3X2_SHIFTED: KernelId = KernelId(279);
+    pub const SHELL_STRAIN_RESTORE_SIGMA: KernelId = KernelId(280);
+    pub const SVD3X3_RV: KernelId = KernelId(281);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -757,9 +760,9 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const SVD3X3: KernelId = KernelId(281);
-    pub const TET_CONVERT_FORCE: KernelId = KernelId(282);
-    pub const TET_CONVERT_HESSIAN: KernelId = KernelId(283);
+    pub const SVD3X3: KernelId = KernelId(282);
+    pub const TET_CONVERT_FORCE: KernelId = KernelId(283);
+    pub const TET_CONVERT_HESSIAN: KernelId = KernelId(284);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -770,9 +773,9 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const TET_SHAPE_GRADIENTS: KernelId = KernelId(284);
-    pub const TET_DEFORMATION_GRADIENT: KernelId = KernelId(285);
-    pub const TET_DAMPING: KernelId = KernelId(286);
+    pub const TET_SHAPE_GRADIENTS: KernelId = KernelId(285);
+    pub const TET_DEFORMATION_GRADIENT: KernelId = KernelId(286);
+    pub const TET_DAMPING: KernelId = KernelId(287);
     /// Declared by the neutral tree and NOT dispatched by this driver.
     ///
     /// It carries a row because a library built from this tree carries one:
@@ -783,10 +786,10 @@ pub mod id {
     /// A row is not an invitation. `KernelArgs::KERNEL` ties an id to its
     /// record TYPE, so the only way to dispatch this is to construct its own
     /// arguments, which is a deliberate act rather than a slip.
-    pub const VERTEX_NORMAL_FINALIZE: KernelId = KernelId(287);
-    pub const VERTEX_ATOMIC_EMBED_FORCE: KernelId = KernelId(288);
-    pub const VERTEX_FIX_INDEX_FROM_RECORDS: KernelId = KernelId(289);
-    pub const VERTEX_DOF_REMOVAL_MASK: KernelId = KernelId(290);
+    pub const VERTEX_NORMAL_FINALIZE: KernelId = KernelId(288);
+    pub const VERTEX_ATOMIC_EMBED_FORCE: KernelId = KernelId(289);
+    pub const VERTEX_FIX_INDEX_FROM_RECORDS: KernelId = KernelId(290);
+    pub const VERTEX_DOF_REMOVAL_MASK: KernelId = KernelId(291);
 
     /// THE ELEMENT-WISE MULTI-LEVEL SCAN, the exclusive scan every pass that
     /// needs one dispatches. Three ids because
@@ -796,37 +799,37 @@ pub mod id {
     /// each block writing its exclusive prefix from that block's own base.
     /// `scan_zero` is the recursion's base and its extent is the array's own
     /// length.
-    pub const SCAN_BLOCK_TOTAL: KernelId = KernelId(167);
-    pub const SCAN_BLOCK_APPLY: KernelId = KernelId(168);
-    pub const SCAN_ZERO: KernelId = KernelId(169);
+    pub const SCAN_BLOCK_TOTAL: KernelId = KernelId(168);
+    pub const SCAN_BLOCK_APPLY: KernelId = KernelId(169);
+    pub const SCAN_ZERO: KernelId = KernelId(170);
 
     /// THE TREE'S PARENT LINKS, ROOT AND LEVELS, as four device passes rather
     /// than a host fold over a downloaded node array.
-    pub const LBVH_SET_PARENT: KernelId = KernelId(126);
-    pub const LBVH_FIND_ROOT: KernelId = KernelId(127);
-    pub const LBVH_COUNT_LEVELS: KernelId = KernelId(128);
-    pub const LBVH_SCATTER_LEVELS: KernelId = KernelId(129);
+    pub const LBVH_SET_PARENT: KernelId = KernelId(127);
+    pub const LBVH_FIND_ROOT: KernelId = KernelId(128);
+    pub const LBVH_COUNT_LEVELS: KernelId = KernelId(129);
+    pub const LBVH_SCATTER_LEVELS: KernelId = KernelId(130);
 
     /// THE SCENE'S CENTROID BOUNDS, reduced a level at a time rather than by
     /// one cooperative kernel; `reduce_bounds.kernel.cpp` states why the
     /// cooperative layer comes out.
-    pub const BOUNDS_LEAF: KernelId = KernelId(160);
-    pub const BOUNDS_MERGE: KernelId = KernelId(161);
+    pub const BOUNDS_LEAF: KernelId = KernelId(161);
+    pub const BOUNDS_MERGE: KernelId = KernelId(162);
 
     /// THE MINIMUM AND MAXIMUM OF A FLOAT ARRAY. One entry each: the leaf pass
     /// reads a float array and writes one float per block, which is the same
     /// shape the merge level needs, so the recursion re-dispatches it rather
     /// than needing a second kernel.
-    pub const REDUCE_MIN_LEAF: KernelId = KernelId(162);
-    pub const REDUCE_MAX_LEAF: KernelId = KernelId(163);
+    pub const REDUCE_MIN_LEAF: KernelId = KernelId(163);
+    pub const REDUCE_MAX_LEAF: KernelId = KernelId(164);
 
     /// THE SMALLEST WORD AND THE UNWRAPPED TOTAL OF AN UNSIGNED ARRAY. The
     /// minimum re-dispatches its own leaf as the merge, as the float pair does;
     /// the total's leaf reads single words and writes (low, high) pairs, so its
     /// merge over pairs is a second entry.
-    pub const REDUCE_MIN_U32_LEAF: KernelId = KernelId(164);
-    pub const REDUCE_SUM_U32_LEAF: KernelId = KernelId(165);
-    pub const REDUCE_SUM_WIDE_MERGE: KernelId = KernelId(166);
+    pub const REDUCE_MIN_U32_LEAF: KernelId = KernelId(165);
+    pub const REDUCE_SUM_U32_LEAF: KernelId = KernelId(166);
+    pub const REDUCE_SUM_WIDE_MERGE: KernelId = KernelId(167);
 
     /// THE FIRST FLAGGED OVERLAP REPORT of one block, which
     /// `REDUCE_MIN_U32_LEAF` then reduces to the one slot the host reads.
@@ -834,8 +837,8 @@ pub mod id {
 
     /// THE PLASTIC COMMIT, which publishes a crept row into the rest shape the
     /// elastic kernels read. Three host scatters before this.
-    pub const PLASTICITY_COMMIT_FACE: KernelId = KernelId(152);
-    pub const PLASTICITY_COMMIT_TET: KernelId = KernelId(153);
+    pub const PLASTICITY_COMMIT_FACE: KernelId = KernelId(153);
+    pub const PLASTICITY_COMMIT_TET: KernelId = KernelId(154);
 
     /// The number of rows in [`TABLE`], which is every entry point the
     /// neutral tree declares. A library built from this tree carries the
@@ -845,15 +848,15 @@ pub mod id {
     pub const COLLISION_POINT_FACE_M2C_TRAVERSE: KernelId = KernelId(25);
     pub const COLLISION_POINT_FACE_C2M_TRAVERSE: KernelId = KernelId(26);
     pub const COLLISION_EDGE_EDGE_TRAVERSE: KernelId = KernelId(27);
-    pub const HINGE_ACTIVE_EMBED_FORCE: KernelId = KernelId(267);
-    pub const HINGE_LIVE_EMBED_FORCE: KernelId = KernelId(266);
-    pub const FACE_ACTIVE_EMBED_FORCE: KernelId = KernelId(263);
-    pub const FACE_LIVE_EMBED_FORCE: KernelId = KernelId(262);
-    pub const ROD_ACTIVE_EMBED_FORCE: KernelId = KernelId(273);
-    pub const ROD_LIVE_EMBED_FORCE: KernelId = KernelId(272);
-    pub const ROD_PACKED_EMBED_FORCE: KernelId = KernelId(274);
-    pub const TET_SPECTRAL_CONVERT_HESSIAN: KernelId = KernelId(116);
-    pub const COUNT: usize = 291;
+    pub const HINGE_ACTIVE_EMBED_FORCE: KernelId = KernelId(268);
+    pub const HINGE_LIVE_EMBED_FORCE: KernelId = KernelId(267);
+    pub const FACE_ACTIVE_EMBED_FORCE: KernelId = KernelId(264);
+    pub const FACE_LIVE_EMBED_FORCE: KernelId = KernelId(263);
+    pub const ROD_ACTIVE_EMBED_FORCE: KernelId = KernelId(274);
+    pub const ROD_LIVE_EMBED_FORCE: KernelId = KernelId(273);
+    pub const ROD_PACKED_EMBED_FORCE: KernelId = KernelId(275);
+    pub const TET_SPECTRAL_CONVERT_HESSIAN: KernelId = KernelId(117);
+    pub const COUNT: usize = 292;
 }
 
 // ===========================================================================
@@ -2074,6 +2077,17 @@ pub static TABLE: [KernelDecl; id::COUNT] = [
         2000.0,
         size_of::<IntersectScanCollisionMeshArgs>(),
         INTERSECT_SCAN_COLLISION_MESH_HOST_REF_OFFSETS,
+    ),
+    decl_generated_diag(
+        id::INTERSECT_SCAN_COLLISION_EDGE,
+        INTERSECT_SCAN_COLLISION_EDGE_NAME,
+        // THE CLAIM DECIDES IT, as it does for the four walks above: threads
+        // take numbered slots out of one counter, so a slot assignment is
+        // reproducible only in ascending order.
+        Scatter::Claim,
+        2000.0,
+        size_of::<IntersectScanCollisionEdgeArgs>(),
+        INTERSECT_SCAN_COLLISION_EDGE_HOST_REF_OFFSETS,
     ),
     decl_generated(
         id::PAIR_CACHE_RECORD,

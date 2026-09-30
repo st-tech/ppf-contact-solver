@@ -1581,6 +1581,7 @@ fn write_intersection_records(output_dir: &str, records: &[IntersectionRecord], 
         1 => "edge_edge",
         2 => "collision_mesh",
         3 => "point_point",
+        4 => "collision_edge",
         _ => "unknown",
     };
     let json_records: Vec<serde_json::Value> = records

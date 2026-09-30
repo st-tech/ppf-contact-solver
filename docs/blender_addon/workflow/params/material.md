@@ -107,7 +107,7 @@ Bend and Shrink, for instance):
    field in a separate **Bend** box below the contact rows.
 7. **Contact Gap**: on **Solid**, **Shell**, **PDRD** and **Static**
    groups a toggle picks between absolute distance (in Blender units)
-   and a fraction of the group's bounding-box diagonal, and the relevant
+   and a fraction of each object's own bounding-box diagonal, and the relevant
    pair of fields shows up below the toggle. A **Rod** group has no
    toggle and always uses the absolute pair; a **Sand** group shows
    **Contact Gap** alone, because its grain radius is the contact
@@ -222,9 +222,9 @@ These apply regardless of type.
 | **Friction**                         | `friction`                        | 0.5     | Coulomb friction coefficient at contacts (0 – 1).                        |
 | **Contact Gap**                      | `contact_gap`                     | 0.001   | Absolute contact gap distance, in Blender units.                         |
 | **Contact Offset**                   | `contact_offset`                  | 0.0     | Absolute contact offset, in Blender units.                               |
-| **Use Group Bounding Box Diagonal**  | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of the group's bbox diagonal.    |
-| **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of the group's bounding-box diagonal.          |
-| **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of the group's bounding-box diagonal.       |
+| **Use Object Bounding Box Diagonal** | `use_group_bounding_box_diagonal` | `True`  | When true, contact distances are ratios of each object's own bbox diagonal. |
+| **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Contact gap as a fraction of each object's own bounding-box diagonal.       |
+| **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Contact offset as a fraction of each object's own bounding-box diagonal.    |
 | **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | Let an object pass through itself, with no contact between its parts.    |
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | Let an object pass through every other object, with no contact.          |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | Let an object pass through objects of other groups, with no contact.     |
@@ -1292,8 +1292,10 @@ of two ways:
   literal distance in Blender units. Good when you want a hard, known
   thickness, e.g. a 1 mm skin for a body.
 - **Ratio** (the **Contact Gap Ratio** and **Contact Offset Ratio**
-  fields): a fraction of the group's bounding-box diagonal, computed at
-  transfer time. Good because it scales with the scene: rescaling a
+  fields): a fraction of each object's own bounding-box diagonal, computed
+  at transfer time, so objects of different sizes in one group get
+  different distances, and spreading a group's objects apart changes
+  none of them. Good because it scales with the scene: rescaling a
   character by 10× doesn't make the cloth penetrate.
 
 ```{figure} ../../images/material_params/contact_gap_modes.svg

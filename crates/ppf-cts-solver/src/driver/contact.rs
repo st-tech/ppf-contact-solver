@@ -1950,19 +1950,30 @@ impl Contact {
         // rest-pose pool outside the solved namespace, so the pair is
         // inter-object by construction and the dynamic edge alone decides
         // whether the crossing is tolerated.
-        if self.collider_faces > 0 {
+        if self.has_collision_mesh() {
             let collider = intersection::Collider {
                 vert: self.collider_vertex.handle(),
                 face: self.collider_face.handle(),
                 faces: self.collider_faces,
+                edge: self.collider_edge.handle(),
+                edges: self.collider_edges,
             };
-            self.scan.scan_collision_mesh(
-                device,
-                &scene,
-                &collider,
-                &mut self.collider_face_tree,
-                edge_query,
-            )?;
+            if self.collider_faces > 0 {
+                self.scan.scan_collision_mesh(
+                    device,
+                    &scene,
+                    &collider,
+                    &mut self.collider_face_tree,
+                    edge_query,
+                )?;
+            }
+            // THE SAME POSE, THE OTHER PAIRING. The dynamic face tree is the
+            // one the face-edge walk above just used, refreshed against the
+            // pose this gate is judging.
+            if self.collider_edges > 0 {
+                self.scan
+                    .scan_collision_edge(device, &scene, &collider, &mut self.face_tree)?;
+            }
         }
         let report = self.scan.finish(device)?;
         Ok(report)
@@ -1995,10 +2006,95 @@ impl ColliderPass {
     }
 }
 
+/// The slot of the last line search that holds the smallest time of impact.
+///
+/// A DIAGNOSTIC, read only when a step has already failed. The line search
+/// folds its per-slot times to one number on the device and that number is all
+/// a running step needs; which slot produced it is what a reader of a stalled
+/// run needs, and asking costs two downloads that nothing on the success path
+/// pays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clamp {
+    pub element: ClampElement,
+    /// The smallest time of impact, in the sweep's own units, where the
+    /// ceiling is `line_search_max_t`.
+    pub toi: f32,
+    /// How many slots of the same array sit below a hundredth of the ceiling.
+    /// One means a single pair holds the whole scene.
+    pub held: usize,
+}
+
+/// Which element a [`Clamp`] names, and in which index space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClampElement {
+    /// A dynamic vertex, unambiguously: the slot is past the collider's own
+    /// vertex count, so no collider sweep could have written it.
+    Vertex(usize),
+    /// A slot two sweeps share. The vertex array is indexed by DYNAMIC vertex
+    /// for three of the sweeps and by COLLIDER vertex for the collider vertex
+    /// against dynamic face sweep, and every sweep folds by minimum into it, so
+    /// a slot below both counts does not say which of the two wrote it.
+    VertexOrColliderVertex(usize),
+    /// A collider vertex, unambiguously: the slot is past the dynamic surface
+    /// vertex count.
+    ColliderVertex(usize),
+    /// A dynamic edge. Both edge sweeps index by the dynamic edge.
+    Edge(usize),
+}
+
 impl Contact {
     /// Whether this scene carries a static collision mesh at all.
     pub fn has_collision_mesh(&self) -> bool {
         self.collider_vertices > 0
+    }
+
+    /// Which slot of the LAST line search holds the step, if any does.
+    ///
+    /// `None` when no slot is below the ceiling, which is a step the contact
+    /// sweep did not cut. An edge is named only when its time is strictly
+    /// below every vertex slot, because the edge sweeps are SEEDED from the
+    /// vertex minimum: an edge slot equal to it found nothing of its own.
+    pub fn clamp<D: Device>(&mut self, device: &mut D, max_t: f32) -> FatalResult<Option<Clamp>> {
+        let vertex_slots = self.surface_vertices.max(self.collider_vertices);
+        let smallest = |values: &[f32]| -> Option<(usize, f32, usize)> {
+            let (slot, toi) = values
+                .iter()
+                .copied()
+                .enumerate()
+                .min_by(|a, b| a.1.total_cmp(&b.1))?;
+            let held = values.iter().filter(|t| **t < 1.0e-2 * max_t).count();
+            Some((slot, toi, held))
+        };
+        let mut found: Option<Clamp> = None;
+        if vertex_slots > 0 {
+            self.toi_vertex.download(device)?;
+            if let Some((slot, toi, held)) = smallest(&self.toi_vertex.host()[..vertex_slots]) {
+                if toi < max_t {
+                    let element = if slot >= self.collider_vertices {
+                        ClampElement::Vertex(slot)
+                    } else if slot >= self.surface_vertices {
+                        ClampElement::ColliderVertex(slot)
+                    } else {
+                        ClampElement::VertexOrColliderVertex(slot)
+                    };
+                    found = Some(Clamp { element, toi, held });
+                }
+            }
+        }
+        if self.edges > 0 {
+            self.toi_edge.download(device)?;
+            if let Some((slot, toi, held)) = smallest(&self.toi_edge.host()[..self.edges]) {
+                let below = found.map_or(max_t, |clamp| clamp.toi);
+                if toi < below {
+                    found = Some(Clamp {
+                        element: ClampElement::Edge(slot),
+                        toi,
+                        held,
+                    });
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// One Newton iteration's collision-mesh assembly.
@@ -3678,8 +3774,25 @@ mod tests {
     /// only its edge tree and the two point-face collision sweeps must be
     /// skipped rather than dispatched over a tree that does not exist.
     ///
+    /// THE EDGE IS BUILT THE WAY THE BUILD MAKES A SHELL OR SOLID EDGE: no mass
+    /// of its own, and its inertia on its two vertices. `EdgeProp::mass` is a
+    /// rod's, so a fixture that set it would exercise the sweep on the one kind
+    /// of edge for which the field and the vertices agree, and pass whether or
+    /// not the sweep can see any other edge.
+    ///
     /// Safety: as [`scene_over_a_collider`].
     fn scene_over_a_collider_edge(height: f32) -> Box<crate::data::DataSet> {
+        scene_over_a_collider_edge_of(height, 0.0, 1.0)
+    }
+
+    /// The same scene with the edge's own mass and its vertices' mass chosen.
+    ///
+    /// Safety: as [`scene_over_a_collider`].
+    fn scene_over_a_collider_edge_of(
+        height: f32,
+        edge_mass: f32,
+        vertex_mass: f32,
+    ) -> Box<crate::data::DataSet> {
         use crate::cvec::CVec;
         use crate::cvecvec::CVecVec;
         use crate::data::{EdgeParam, EdgeProp, Vec2u};
@@ -3690,7 +3803,7 @@ mod tests {
         data.vertex.curr = CVec::from(&positions[..]);
         data.vertex.prev = CVec::from(&positions[..]);
         let mut prop = VertexProp::default();
-        prop.mass = 1.0;
+        prop.mass = vertex_mass;
         prop.param_index = 0;
         data.prop.vertex = CVec::from(&[prop; 2][..]);
         data.param_arrays.vertex = CVec::from(
@@ -3699,7 +3812,7 @@ mod tests {
         data.surface_vert_count = 2;
         data.mesh.mesh.edge = CVec::from(&[Vec2u::new(0, 1)][..]);
         let mut edge_prop = EdgeProp::default();
-        edge_prop.mass = 1.0;
+        edge_prop.mass = edge_mass;
         edge_prop.fixed = false;
         edge_prop.param_index = 0;
         data.prop.edge = CVec::from(&[edge_prop][..]);
@@ -3728,7 +3841,22 @@ mod tests {
 
     /// Drive the dynamic edge from `height` to `end_height`.
     fn sweep_over_a_collider_edge(height: f32, end_height: f32) -> f32 {
-        let data = scene_over_a_collider_edge(height);
+        sweep_scene_over_a_collider_edge(scene_over_a_collider_edge(height), end_height)
+    }
+
+    /// Drive the dynamic edge of `data` to `end_height`.
+    fn sweep_scene_over_a_collider_edge(
+        data: Box<crate::data::DataSet>,
+        end_height: f32,
+    ) -> f32 {
+        sweep_and_clamp_over_a_collider_edge(data, end_height).0
+    }
+
+    /// The same sweep, with the slot that holds the step read back after it.
+    fn sweep_and_clamp_over_a_collider_edge(
+        data: Box<crate::data::DataSet>,
+        end_height: f32,
+    ) -> (f32, Option<Clamp>) {
         let param = collision_param();
         // Safety: the boxed scene outlives every borrow below.
         unsafe {
@@ -3767,8 +3895,32 @@ mod tests {
                 .line_search(&mut device, &data, mesh_refs, &param, x0, x1, Windows::default())
                 .expect("the line search runs");
             assert!(filter.overlapping_start().is_none());
-            filter.time_of_impact()
+            let clamp = contact
+                .clamp(&mut device, param.line_search_max_t)
+                .expect("the two per-slot arrays download");
+            (filter.time_of_impact(), clamp)
         }
+    }
+
+    #[test]
+    fn a_held_step_names_the_slot_that_holds_it() {
+        // THE REPORT A STALLED RUN PRINTS, read off the same arrays the line
+        // search folded. The scene has one dynamic edge and nothing else, and
+        // the collider is an edge with no face, so the vertex sweeps find
+        // nothing and the edge sweep alone cuts the step: the slot named has to
+        // be that edge, and a report naming a vertex would be reading the seed.
+        let data = scene_over_a_collider_edge(0.5);
+        let (toi, clamp) = sweep_and_clamp_over_a_collider_edge(data, -0.5);
+        let clamp = clamp.expect("a step cut to about half names what cut it");
+        assert_eq!(clamp.element, ClampElement::Edge(0));
+        assert_eq!(clamp.toi, toi, "the slot's time is the one the fold returned");
+        assert_eq!(clamp.held, 0, "a step cut to a half is nowhere near a stall");
+
+        // A step nothing cut names nothing.
+        let data = scene_over_a_collider_edge(0.5);
+        let (toi, clamp) = sweep_and_clamp_over_a_collider_edge(data, 1.5);
+        assert_eq!(toi, 1.0);
+        assert_eq!(clamp, None);
     }
 
     #[test]
@@ -3791,6 +3943,36 @@ mod tests {
         assert_eq!(toi, 1.0, "a dynamic edge moving AWAY had its step cut to {toi}");
     }
 
+    #[test]
+    fn the_collider_edge_sweep_reads_an_edges_mass_off_its_vertices() {
+        // THREE KINDS OF EDGE, AND THE SWEEP OWES TWO OF THEM A STOP. A shell
+        // or solid edge has no mass of its own and massive vertices, a rod
+        // edge has both, and a static solid has neither. Only the last cannot
+        // yield, so only the last keeps its whole step.
+        //
+        // The first is guarantee-class: it is every edge of every cloth and
+        // every solid, and a sweep that skipped it would let one cross a
+        // collider's boundary edge, where no collider face and no collider
+        // vertex stands in the way for another pass to catch.
+        for (kind, edge_mass, vertex_mass, stops) in [
+            ("a shell or solid edge", 0.0, 1.0, true),
+            ("a rod edge", 1.0, 1.0, true),
+            ("a static solid's edge", 0.0, 0.0, false),
+        ] {
+            let data = scene_over_a_collider_edge_of(0.5, edge_mass, vertex_mass);
+            let toi = sweep_scene_over_a_collider_edge(data, -0.5);
+            if stops {
+                assert!(
+                    toi > 0.49 && toi < 0.5,
+                    "{kind} swept through a collider edge with its step cut to \
+                     {toi}, not the ~0.4999 that stops it there"
+                );
+            } else {
+                assert_eq!(toi, 1.0, "{kind} cannot yield and had its step cut to {toi}");
+            }
+        }
+    }
+
     /// A dynamic triangle `height` above a single collider VERTEX.
     ///
     /// The collider carries one vertex and neither a face nor an edge, so the
@@ -3801,6 +3983,17 @@ mod tests {
     ///
     /// Safety: as [`scene_over_a_collider`].
     fn scene_under_a_collider_vertex(height: f32) -> Box<crate::data::DataSet> {
+        scene_under_a_collider_vertex_of(height, 1.0, 1.0)
+    }
+
+    /// The same scene with the face's own mass and its vertices' mass chosen.
+    ///
+    /// Safety: as [`scene_over_a_collider`].
+    fn scene_under_a_collider_vertex_of(
+        height: f32,
+        face_mass: f32,
+        vertex_mass: f32,
+    ) -> Box<crate::data::DataSet> {
         use crate::cvec::CVec;
         use crate::cvecvec::CVecVec;
         use crate::data::{Vec2u, Vec3u};
@@ -3815,7 +4008,7 @@ mod tests {
         data.vertex.curr = CVec::from(&positions[..]);
         data.vertex.prev = CVec::from(&positions[..]);
         let mut prop = VertexProp::default();
-        prop.mass = 1.0;
+        prop.mass = vertex_mass;
         prop.param_index = 0;
         data.prop.vertex = CVec::from(&[prop; 3][..]);
         data.param_arrays.vertex = CVec::from(
@@ -3824,7 +4017,7 @@ mod tests {
         data.surface_vert_count = 3;
         data.mesh.mesh.face = CVec::from(&[Vec3u::new(0, 1, 2)][..]);
         let mut face_prop = FaceProp::default();
-        face_prop.mass = 1.0;
+        face_prop.mass = face_mass;
         face_prop.fixed = false;
         face_prop.param_index = 0;
         data.prop.face = CVec::from(&[face_prop][..]);
@@ -3847,7 +4040,14 @@ mod tests {
 
     /// Drive the dynamic triangle from `height` to `end_height`.
     fn sweep_onto_a_collider_vertex(height: f32, end_height: f32) -> f32 {
-        let data = scene_under_a_collider_vertex(height);
+        sweep_scene_onto_a_collider_vertex(scene_under_a_collider_vertex(height), end_height)
+    }
+
+    /// Drive the dynamic triangle of `data` to `end_height`.
+    fn sweep_scene_onto_a_collider_vertex(
+        data: Box<crate::data::DataSet>,
+        end_height: f32,
+    ) -> f32 {
         let param = collision_param();
         // Safety: the boxed scene outlives every borrow below.
         unsafe {
@@ -3909,6 +4109,37 @@ mod tests {
     fn a_dynamic_face_moving_away_from_a_collider_vertex_keeps_the_whole_step() {
         let toi = sweep_onto_a_collider_vertex(0.5, 1.5);
         assert_eq!(toi, 1.0, "a triangle moving AWAY had its step cut to {toi}");
+    }
+
+    #[test]
+    fn the_collider_vertex_sweep_reads_a_faces_mass_off_its_vertices() {
+        // THREE KINDS OF FACE, AND THE SWEEP OWES TWO OF THEM A STOP. A shell
+        // face, or a solid's surface face, carries density times area and has
+        // massive vertices; a PDRD rigid body's face carries ZERO, because the
+        // build hands a body's volumetric mass to its vertices and zeroes the
+        // per-face figure so the face aggregation does not count it twice; and
+        // a static solid has no mass anywhere. Only the last cannot yield.
+        //
+        // The second is guarantee-class: a sweep that skipped it would leave
+        // nothing between a collider's vertex and the face of a rigid body
+        // landing on it.
+        for (kind, face_mass, vertex_mass, stops) in [
+            ("a shell or solid face", 1.0, 1.0, true),
+            ("a rigid body's face", 0.0, 1.0, true),
+            ("a static solid's face", 0.0, 0.0, false),
+        ] {
+            let data = scene_under_a_collider_vertex_of(0.5, face_mass, vertex_mass);
+            let toi = sweep_scene_onto_a_collider_vertex(data, -0.5);
+            if stops {
+                assert!(
+                    toi > 0.49 && toi < 0.5,
+                    "{kind} swept through a collider vertex with its step cut to \
+                     {toi}, not the ~0.4999 that stops it there"
+                );
+            } else {
+                assert_eq!(toi, 1.0, "{kind} cannot yield and had its step cut to {toi}");
+            }
+        }
     }
 
     /// A `ParamSet` with only the fields the collision-mesh pass reads set.

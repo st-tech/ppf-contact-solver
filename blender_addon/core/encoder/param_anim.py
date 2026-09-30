@@ -85,11 +85,13 @@ ANIMATABLE_MATERIAL_KEYS = {
         "prop": {"SHELL": "bend_plasticity_threshold"},
     },
     # Contact geometry. Their value is not a single slider: a group either
-    # authors an absolute distance or a fraction of its own bounding-box
-    # diagonal, and either way the result is multiplied by world scaling. The
-    # branch is resolved per group by `_contact_resolution` below, because
-    # sampling one of the two sliders blindly would ship the wrong number
-    # whenever the artist used the other.
+    # authors an absolute distance or a fraction of each object's own
+    # bounding-box diagonal, and either way the result is multiplied by world
+    # scaling. The branch is resolved per group by `_contact_resolution` below,
+    # because sampling one of the two sliders blindly would ship the wrong
+    # number whenever the artist used the other. In the second mode the
+    # schedule is one series PER OBJECT, since the same fraction is a
+    # different length on each.
     #
     # These are the parameters that can ABORT a run when tightened mid-solve:
     # raising an offset can place two already-touching surfaces inside each
@@ -109,13 +111,25 @@ def _contact_resolution(group, state, which):
     itself cannot change over the solve: `use_group_bounding_box_diagonal` is
     not animatable, and a SAND group's offset is its seeded grain radius rather
     than a slider at all.
+
+    `scale` is a float for a group that authors an absolute distance, and
+    `{uuid: scale}` over every included object for one whose distances follow
+    each object's size, where the sampled fraction multiplies that object's
+    own diagonal.
     """
+    from ..uuid_registry import resolve_assigned
+    from .mesh import compute_object_bounding_box_diagonal
+    from .params import contact_lengths_follow_object_size
+
     if group.object_type == "SAND":
         return None, 0.0
-    if group.use_group_bounding_box_diagonal:
-        from .mesh import compute_group_bounding_box_diagonal
-        diagonal = compute_group_bounding_box_diagonal(group) * state.world_scaling
-        return f"contact_{which}_rat", diagonal
+    if contact_lengths_follow_object_size(group):
+        return f"contact_{which}_rat", {
+            assigned.uuid: compute_object_bounding_box_diagonal(
+                resolve_assigned(assigned)) * float(state.world_scaling)
+            for assigned in group.assigned_objects
+            if assigned.included
+        }
     return f"contact_{which}", float(state.world_scaling)
 
 
@@ -199,6 +213,10 @@ def encode_param_anim(
     ``per_group`` maps a group's uuid to ``{solver_key: [value per time]}``.
     Both are empty when nothing in the scene varies a material over time.
 
+    A contact distance that follows each object's size is the one entry with
+    another shape, ``{solver_key: {object uuid: [value per time]}}``, because
+    the one sampled fraction is a different length on each object.
+
     `map_schedules` carries what a spatial map keyed over time needs from the
     shared time axis. Its series vote on which times survive decimation and are
     never emitted: the map itself is resolved per element by the frontend.
@@ -281,7 +299,14 @@ def encode_param_anim(
                 # A contact distance is a length. It is resolved against the
                 # group's own authoring mode and world scaling by
                 # `_contact_resolution`, not by the material conversion.
-                series[key] = [float(fcurve.evaluate(f)) * scale for f in frames]
+                sampled = [float(fcurve.evaluate(f)) for f in frames]
+                if isinstance(scale, dict):
+                    series[key] = {
+                        obj_uuid: [value * factor for value in sampled]
+                        for obj_uuid, factor in scale.items()
+                    }
+                else:
+                    series[key] = [value * scale for value in sampled]
                 continue
             if not gate_open(group, key):
                 continue
@@ -322,12 +347,23 @@ def encode_param_anim(
     merged = {}
     for uuid, series in per_group.items():
         for key, values in series.items():
-            merged[f"{uuid}:{key}"] = values
+            if isinstance(values, dict):
+                # One series per object: each votes on which times survive.
+                for obj_uuid, track in values.items():
+                    merged[f"{uuid}:{key}:{obj_uuid}"] = track
+            else:
+                merged[f"{uuid}:{key}"] = values
     merged.update(witness)
     keep = _drop_collinear(times, merged)
     times = [times[i] for i in keep]
+
+    def kept(values):
+        if isinstance(values, dict):
+            return {obj_uuid: kept(track) for obj_uuid, track in values.items()}
+        return [values[i] for i in keep]
+
     per_group = {
-        uuid: {key: [values[i] for i in keep] for key, values in series.items()}
+        uuid: {key: kept(values) for key, values in series.items()}
         for uuid, series in per_group.items()
     }
     return times, per_group

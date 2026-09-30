@@ -116,6 +116,21 @@ pub struct SceneParams {
     pub inactive_momentum: Option<f64>,
 }
 
+/// A group value the producer sends in one of two shapes: a plain number when
+/// every object of the group takes the same value, and a map keyed by object
+/// UUID when each object takes its own. The consumer sets the value per
+/// object either way, so the two shapes differ only in what was authored.
+///
+/// A contact gap or offset given as a fraction of an object's bounding-box
+/// diagonal is the second shape: the same fraction is a different length on
+/// each object of the group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PerObject {
+    Uniform(f64),
+    ByUuid(BTreeMap<String, f64>),
+}
+
 /// Per-group material + dynamics. The producer (params.py:240-292)
 /// builds a flat dict, then strips keys not in `active_entries[type]`
 /// so any single GroupParams may have only a subset of these
@@ -137,10 +152,12 @@ pub struct GroupParams {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub friction: Option<f64>,
+    /// One length for the group, or one per object when the producer sizes
+    /// it from each object's own bounding-box diagonal. See [`PerObject`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub contact_gap: Option<f64>,
+    pub contact_gap: Option<PerObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub contact_offset: Option<f64>,
+    pub contact_offset: Option<PerObject>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bend: Option<f64>,
@@ -390,6 +407,35 @@ mod tests {
         assert_eq!(back.group.len(), 1);
         assert_eq!(back.group[0].0.model.as_deref(), Some("baraff-witkin"));
         assert_eq!(back.group[0].2, vec!["uuid-1"]);
+    }
+
+    #[test]
+    fn a_contact_length_decodes_in_both_shapes() {
+        // ONE NUMBER FOR THE GROUP, OR ONE PER OBJECT. The producer sends the
+        // second whenever a group sizes its contact distances from each
+        // object's own bounding box, which is its default, so a schema that
+        // took a number alone would refuse most real payloads.
+        let mut by_uuid = BTreeMap::new();
+        by_uuid.insert("uuid-big".to_string(), 0.0566);
+        by_uuid.insert("uuid-small".to_string(), 0.0141);
+        let mut payload = ParamPayload::default();
+        payload.group.push((
+            GroupParams {
+                contact_gap: Some(PerObject::ByUuid(by_uuid.clone())),
+                contact_offset: Some(PerObject::Uniform(0.002)),
+                ..Default::default()
+            },
+            vec!["big".into(), "small".into()],
+            vec!["uuid-big".into(), "uuid-small".into()],
+        ));
+
+        let bytes = to_cbor(KIND_PARAM, &payload).unwrap();
+        let back: ParamPayload = from_cbor(KIND_PARAM, &bytes).unwrap();
+        assert_eq!(back.group[0].0.contact_gap, Some(PerObject::ByUuid(by_uuid)));
+        assert_eq!(
+            back.group[0].0.contact_offset,
+            Some(PerObject::Uniform(0.002))
+        );
     }
 
     #[test]

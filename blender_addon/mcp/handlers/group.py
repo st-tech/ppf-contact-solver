@@ -1927,7 +1927,9 @@ def get_group_material_properties(group_uuid: str):
     Contact distances in particular are stored as an absolute pair
     (contact_gap, contact_offset) and a relative pair (contact_gap_rat,
     contact_offset_rat), and both pairs are reported whichever one
-    use_group_bounding_box_diagonal currently selects.
+    use_group_bounding_box_diagonal currently selects. The relative pair is a
+    fraction of each assigned object's OWN bounding-box diagonal, so in that
+    mode the objects of one group are solved at different distances.
 
     Per-object state (inclusion, locks, hinge, bending reference,
     tetrahedralizer) is reported by get_group_objects, and a parameter driven
@@ -2046,8 +2048,14 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     Contact properties (mutually exclusive modes):
 
-    - Absolute mode: contact_gap, contact_offset (sets use_group_bounding_box_diagonal=False)
-    - Relative mode: contact_gap_rat, contact_offset_rat (sets use_group_bounding_box_diagonal=True)
+    - Absolute mode: contact_gap, contact_offset (sets use_group_bounding_box_diagonal=False).
+      One distance for every object of the group.
+    - Relative mode: contact_gap_rat, contact_offset_rat (sets use_group_bounding_box_diagonal=True).
+      Each is a fraction of an assigned object's OWN bounding-box diagonal, so
+      every object of the group gets a distance in proportion to its own size.
+      The box is the object's and never the one around the group, whatever
+      the flag's name says: how far apart the objects of a group were placed
+      does not enter.
 
     Returns:
         Dict with success message and properties set

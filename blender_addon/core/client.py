@@ -182,13 +182,11 @@ def _apply_post_snap_closure(context, world_by_uuid):
         # Intra-object loose-edge stitches. Skip ROD: every rod edge is
         # "loose", so averaging endpoints would corrupt the rod.
         from .encoder import detect_stitch_edges
-        from .encoder.params import group_contact_lengths
+        from .encoder.params import object_contact_lengths
         from .uuid_registry import get_object_uuid, resolve_assigned
         for group in iterate_active_object_groups(context.scene):
             if group.object_type == "ROD":
                 continue
-            gap, offset = group_contact_lengths(group)
-            thr = 2 * gap + offset
             for obj_ref in group.assigned_objects:
                 if not obj_ref.included:
                     continue
@@ -201,6 +199,10 @@ def _apply_post_snap_closure(context, world_by_uuid):
                 sd = detect_stitch_edges(obj.data)
                 if not sd:
                     continue
+                # The object's own distances, since a stitch is closed
+                # against the gap the solver held THIS object to.
+                gap, offset = object_contact_lengths(group, obj_ref)
+                thr = 2 * gap + offset
                 arr = world_by_uuid[uid]
                 base = snap[uid]
                 Ind, _ = sd

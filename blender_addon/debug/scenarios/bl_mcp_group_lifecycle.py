@@ -144,10 +144,15 @@ try:
               and edge.get("total_vertices", 0) > 0
               and diag.get("status") == "success"
               and diag.get("largest_diagonal_distance", 0) > 0
+              # The box around the vertices lies inside the box around the
+              # corners of the local bounding box, so its diagonal is no longer.
+              and 0 < diag.get("contact_length_diagonal", 0)
+              <= diag.get("largest_diagonal_distance", 0) * (1.0 + 1.0e-6)
               and edge_missing.get("status") == "error" and "Ghost" in edge_missing.get("message", "")
               and diag_missing.get("status") == "error" and "Ghost" in diag_missing.get("message", ""),
               {"edge": edge.get("average_edge_length"),
                "diagonal": diag.get("largest_diagonal_distance"),
+               "contact_length_diagonal": diag.get("contact_length_diagonal"),
                "edge_missing": edge_missing.get("message"),
                "diag_missing": diag_missing.get("message")})
 

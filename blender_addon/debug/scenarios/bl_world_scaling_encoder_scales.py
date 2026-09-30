@@ -84,6 +84,22 @@ def _encode_group_at(dh, root, ws):
     return groups[0][0]
 
 
+def _own_length(value):
+    # A RELATIVE contact length is encoded per object, as {uuid: length}.
+    # The group here holds one object, so its map has one entry, and a plain
+    # number in relative mode is the group-wide shape this scenario must not
+    # pass over in silence.
+    if not isinstance(value, dict):
+        raise RuntimeError(
+            "a relative contact length was encoded as {!r}, not per object"
+            .format(value))
+    if len(value) != 1:
+        raise RuntimeError(
+            "expected one object in the relative contact length, got {}"
+            .format(sorted(value)))
+    return float(next(iter(value.values())))
+
+
 def _vel_mag(gd):
     vel = gd.get("velocity") or {}
     vecs = [v for v in vel.values() if v is not None]
@@ -132,8 +148,8 @@ try:
     grp.contact_offset_rat = 0.02
     rel1 = _encode_group_at(dh, root, 1.0)
     rel10 = _encode_group_at(dh, root, 10.0)
-    g1 = float(rel1["contact-gap"])
-    g10 = float(rel10["contact-gap"])
+    g1 = _own_length(rel1["contact-gap"])
+    g10 = _own_length(rel10["contact-gap"])
     v1 = _vel_mag(rel1)
     v10 = _vel_mag(rel10)
     vs1 = _sched_mag(rel1)

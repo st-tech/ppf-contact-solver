@@ -77,8 +77,8 @@ use ppf_cts_compute::{AllocLabel, Buffer, Device, Handle, ReadbackBuffer};
 use super::lbvh::Tree;
 use crate::data::IntersectionRecord;
 use super::kernels::{
-    IntersectScanCollisionMeshArgs, IntersectScanEdgeEdgeArgs, IntersectScanFaceEdgeArgs,
-    IntersectScanPointPointArgs, VecFillU32Args,
+    IntersectScanCollisionEdgeArgs, IntersectScanCollisionMeshArgs, IntersectScanEdgeEdgeArgs,
+    IntersectScanFaceEdgeArgs, IntersectScanPointPointArgs, VecFillU32Args,
 };
 use super::scene::{Fatal, FatalResult};
 
@@ -153,6 +153,12 @@ pub const RECORD_COLLISION_MESH: u32 = 2;
 /// their combined offsets are claimed as this type, the pass a faceless SAND
 /// cloud depends on.
 pub const RECORD_POINT_POINT: u32 = 3;
+/// A dynamic FACE and a collision-mesh EDGE, in that order, which is the other
+/// pairing of the two pools: kind 2 names a collision-mesh face and a dynamic
+/// edge. `a_collider_edge_through_a_dynamic_face_is_reported` asserts that a
+/// collider edge running through the interior of a dynamic face is claimed as
+/// this type, in a pose no dynamic edge crosses any collider face.
+pub const RECORD_COLLISION_EDGE: u32 = 4;
 
 /// One record's pair, named by element kind and index, as a message can print
 /// it. The indices are the solver's own element arrays, which is what the
@@ -164,6 +170,7 @@ pub fn describe_record(record: &IntersectionRecord) -> String {
         RECORD_EDGE_EDGE => format!("edge {a} and edge {b}"),
         RECORD_COLLISION_MESH => format!("collision-mesh face {a} and edge {b}"),
         RECORD_POINT_POINT => format!("vertex {a} and vertex {b}"),
+        RECORD_COLLISION_EDGE => format!("face {a} and collision-mesh edge {b}"),
         other => format!("record kind {other}, elements {a} and {b}"),
     }
 }
@@ -308,6 +315,10 @@ pub struct Collider {
     pub vert: Handle,
     pub face: Handle,
     pub faces: usize,
+    /// The collider's own edge list, which is what the fifth walk dispatches
+    /// over. It is the same array the collision edge-edge sweep reads.
+    pub edge: Handle,
+    pub edges: usize,
 }
 
 /// The scan's own device buffers, persistent across steps.
@@ -637,6 +648,65 @@ impl ScanState {
         Ok(())
     }
 
+    /// A rest-pose collider EDGE against the DYNAMIC face tree.
+    ///
+    /// THE OTHER HALF OF THE COLLISION-MESH QUESTION, and neither half implies
+    /// the other. `scan_collision_mesh` finds a dynamic edge through a collider
+    /// face. A collider's rim pressed into the middle of a broad dynamic face,
+    /// or a collider's sharp vertex with its incident edges, pierces that face
+    /// while every edge of the face stays clear of every collider face, so a
+    /// crossed pose can leave that walk nothing to find.
+    ///
+    /// NOT IN THE REFERENCE, which has the four walks above and no fifth: its
+    /// `check_intersection` cannot report this crossing, and the collider
+    /// vertex against dynamic face sweep was the only thing preventing it.
+    ///
+    /// ONE THREAD PER COLLIDER EDGE, and the body forms its own query box: a
+    /// collider edge has one pose and no collision window, so there is no
+    /// prebuilt query to hand it. No flag is written, the flag arrays being
+    /// indexed by dynamic edge and by surface vertex; the claim counter is the
+    /// verdict.
+    ///
+    /// # Safety
+    /// the scene's and the collider's handles must name live allocations on `device`, and `face_tree` must be built and propagated against this same pose.
+    pub unsafe fn scan_collision_edge<D: Device>(
+        &mut self,
+        device: &mut D,
+        scene: &Scene,
+        collider: &Collider,
+        face_tree: &mut Tree,
+    ) -> FatalResult<()> {
+        if face_tree.is_empty() || scene.faces == 0 || collider.edges == 0 {
+            return Ok(());
+        }
+        let count = collider.edges as u32;
+        let args = IntersectScanCollisionEdgeArgs {
+            vert: scene.vert,
+            face: scene.face,
+            face_count: scene.faces as u32,
+            vertex_prop: scene.vert_prop,
+            start_link_index: scene.start_link.index,
+            start_link_offset: scene.start_link.offset,
+            has_start_link: scene.start_link.present,
+            face_prop: scene.face_prop,
+            collider_vertex: collider.vert,
+            collider_edge: collider.edge,
+            node: face_tree.node.handle(),
+            node_count: face_tree.node_count,
+            aabb: face_tree.aabb.handle(),
+            root: face_tree.root,
+            records: self.records.handle(),
+            counter: self.counter.handle(),
+            capacity: max_records() as u32,
+            count,
+            seam_arena_count: 0,
+        };
+        device
+            .launch("intersection.collision_edge", &args, count)
+            .map_err(|fault| scan_failed("collision-edge", fault))?;
+        Ok(())
+    }
+
     /// The three readbacks, and nothing else.
     ///
     /// A counter, at most `capacity` records, and the two flag arrays. The
@@ -848,6 +918,7 @@ mod tests {
         vertex_param: Buffer<VertexParam>,
         collider_vert: Buffer<f32>,
         collider_face: Buffer<u32>,
+        collider_edge: Buffer<u32>,
         link_index: Buffer<u32>,
         link_offset: Buffer<u32>,
         link_present: u32,
@@ -855,6 +926,7 @@ mod tests {
         edges: usize,
         surface_vertices: usize,
         collider_faces: usize,
+        collider_edges: usize,
     }
 
     /// One array on the device, with a real allocation even when it is empty.
@@ -903,6 +975,7 @@ mod tests {
                 vertex_param: Buffer::none(),
                 collider_vert: Buffer::none(),
                 collider_face: Buffer::none(),
+                collider_edge: Buffer::none(),
                 link_index: Buffer::none(),
                 link_offset: Buffer::none(),
                 link_present: 0,
@@ -910,6 +983,7 @@ mod tests {
                 edges: 0,
                 surface_vertices: 0,
                 collider_faces: 0,
+                collider_edges: 0,
             }
         }
 
@@ -958,6 +1032,12 @@ mod tests {
             self.collider_faces = face.len();
         }
 
+        /// The collider's own edge list, which only the fifth walk reads.
+        fn stage_collider_edges(&mut self, edge: &[[u32; 2]]) {
+            stage(&mut self.device, &mut self.collider_edge, &flat_u32(edge));
+            self.collider_edges = edge.len();
+        }
+
         fn scene(&mut self) -> Scene {
             if self.link_present == 0 {
                 // No table: real zero-length handles beside a zero flag.
@@ -985,10 +1065,16 @@ mod tests {
         }
 
         fn collider(&mut self) -> Collider {
+            if self.collider_edges == 0 {
+                // No edge list: a real zero-length handle, never `Handle::NONE`.
+                stage(&mut self.device, &mut self.collider_edge, &[]);
+            }
             Collider {
                 vert: self.collider_vert.handle(),
                 face: self.collider_face.handle(),
                 faces: self.collider_faces,
+                edge: self.collider_edge.handle(),
+                edges: self.collider_edges,
             }
         }
 
@@ -1372,13 +1458,51 @@ mod tests {
     }
 
     #[test]
-    fn two_zero_mass_elements_are_not_reported() {
+    fn two_massless_elements_are_not_reported() {
+        // MASSLESS MEANS NO MASS ANYWHERE: not on the element records and not
+        // on the vertices under them. That is two static solids, and neither
+        // can yield.
+        let massless = VertexProp {
+            mass: 0.0,
+            ..free_vertex(0)
+        };
         let report = scan_crossed(
             &[FaceProp::default(); 2],
             &[EdgeProp::default(); 6],
-            &[free_vertex(0); 6],
+            &[massless; 6],
         );
         assert!(report.is_clean());
+    }
+
+    #[test]
+    fn a_pierce_between_elements_with_no_mass_of_their_own_is_reported() {
+        // THE ELEMENT RECORDS CARRY NO MASS AND THE VERTICES DO, which is what
+        // the build makes of a rigid body's face and of any shell or solid
+        // edge: a body's mass is handed to its vertices and the per-face
+        // figure zeroed, and only a rod edge has a mass of its own. So this is
+        // a cloth edge through a rigid body, or one rigid body through
+        // another, and a gate that read the two records alone would see two
+        // massless sides and report nothing.
+        //
+        // The two triangles are two DIFFERENT bodies, because a body's own
+        // self-intersection is the one such pierce that must stay unreported.
+        let body = |index: u32| VertexProp {
+            mass: 1.0,
+            pdrd_body_index: index,
+            ..Default::default()
+        };
+        let vert_prop = [body(1), body(1), body(1), body(2), body(2), body(2)];
+        let report = scan_crossed(
+            &[FaceProp::default(); 2],
+            &[EdgeProp::default(); 6],
+            &vert_prop,
+        );
+        assert!(
+            report.found > 0,
+            "an edge of one body through a face of another was not reported, \
+             though every vertex of both carries mass"
+        );
+        assert_eq!(report.records[0].itype, RECORD_FACE_EDGE);
     }
 
     #[test]
@@ -1680,7 +1804,7 @@ mod tests {
         ];
         let collision_face = vec![[0u32, 1, 2]];
 
-        let run = |edge_prop: &[EdgeProp]| -> Report {
+        let run = |edge_prop: &[EdgeProp], vertex_prop: &[VertexProp]| -> Report {
             let mut fx = Fixture::new();
             fx.stage_scene(
                 &vertex,
@@ -1688,7 +1812,7 @@ mod tests {
                 &edge,
                 &[],
                 edge_prop,
-                &[free_vertex(0); 2],
+                vertex_prop,
                 &[EdgeParam::default()],
                 &[VertexParam::default()],
             );
@@ -1704,15 +1828,201 @@ mod tests {
             fx.finish()
         };
 
-        let report = run(&[free_edge(0)]);
+        // A ROD EDGE, which carries a mass of its own.
+        let report = run(&[free_edge(0)], &[free_vertex(0); 2]);
         assert_eq!(report.found, 1);
         assert_eq!(report.records[0].itype, RECORD_COLLISION_MESH);
         assert!(report.edge_flag[0]);
 
-        // A zero-mass edge is a static solid and the collision mesh is one too,
-        // so the pair can never resolve and must not be reported.
-        let report = run(&[EdgeProp::default()]);
+        // A SHELL OR SOLID EDGE, which carries none: the build gives such an
+        // edge a zero `mass` and puts its inertia on its two vertices. It is
+        // dynamic all the same, and it is every edge of every cloth and every
+        // solid, so a gate that read the edge's own field alone would be blind
+        // to all of them. Guarantee-class: this scan is the last thing between
+        // a crossing the sweep let through and a committed pose.
+        let report = run(&[EdgeProp::default()], &[free_vertex(0); 2]);
+        assert_eq!(
+            report.found, 1,
+            "an edge with no mass of its own and two massive vertices ran through \
+             a collision-mesh face and was not reported"
+        );
+        assert_eq!(report.records[0].itype, RECORD_COLLISION_MESH);
+        assert!(report.edge_flag[0]);
+
+        // A STATIC SOLID'S EDGE has no mass anywhere, on itself or on either
+        // vertex. The collision mesh cannot yield either, so the pair can never
+        // resolve and must not be reported.
+        let massless = VertexProp {
+            mass: 0.0,
+            ..free_vertex(0)
+        };
+        let report = run(&[EdgeProp::default()], &[massless; 2]);
         assert!(report.is_clean());
+
+        // A FULLY PINNED EDGE is prescribed, whatever it weighs: it goes where
+        // its pins put it and the collision mesh does not move, so neither side
+        // can yield and reporting the pair would only abort a run over motion
+        // the scene authored. An animated collider passing through a static one
+        // is this case. The collision edge-edge sweep skips the same edge, so
+        // the gate reports exactly what the sweep protects.
+        let pinned = EdgeProp {
+            fixed: true,
+            ..EdgeProp::default()
+        };
+        let report = run(&[pinned], &[free_vertex(0); 2]);
+        assert!(
+            report.is_clean(),
+            "a fully pinned edge through the collision mesh was reported, though \
+             neither side of that pair can yield"
+        );
+    }
+
+    /// A broad dynamic triangle lying flat, with a collider spike standing
+    /// through the middle of it.
+    ///
+    /// The spike is one triangle in the plane z = 0 with its apex above the
+    /// dynamic face and its base below, so its two slanted EDGES pass through
+    /// the face's interior. The face's own three edges are its perimeter, half
+    /// a unit and more from the spike, so NO dynamic edge crosses the collider
+    /// face: the pose is crossed and the dynamic-edge walk has nothing to find.
+    fn scan_spiked_face(
+        face_prop: FaceProp,
+        vertex_prop: VertexProp,
+        rows: Option<&[Vec<u32>]>,
+    ) -> (Report, Report) {
+        let vertex = vec![
+            point(-1.0, 0.0, -1.0),
+            point(1.0, 0.0, -1.0),
+            point(0.0, 0.0, 1.0),
+        ];
+        let face = vec![[0u32, 1, 2]];
+        let edge = vec![[0u32, 1], [1, 2], [0, 2]];
+        let collision_vertex = vec![
+            point(0.0, 0.5, 0.0),
+            point(-0.1, -0.5, 0.0),
+            point(0.1, -0.5, 0.0),
+        ];
+        let collision_face = vec![[0u32, 1, 2]];
+        let collision_edge = vec![[0u32, 1], [0, 2], [1, 2]];
+
+        let stage = |fx: &mut Fixture| {
+            fx.stage_scene(
+                &vertex,
+                &face,
+                &edge,
+                &[face_prop],
+                // A shell or solid edge, as the build makes one: no mass of
+                // its own.
+                &[EdgeProp::default(); 3],
+                &[vertex_prop; 3],
+                &[EdgeParam::default()],
+                &[VertexParam::default()],
+            );
+            fx.stage_collider(&collision_vertex, &collision_face);
+            fx.stage_collider_edges(&collision_edge);
+            if let Some(rows) = rows {
+                fx.stage_links(rows);
+            }
+        };
+
+        // THE WALK UNDER TEST: collider edges over the dynamic face tree.
+        let mut fx = Fixture::new();
+        stage(&mut fx);
+        let scene = fx.scene();
+        let collider = fx.collider();
+        let mut face_tree = fx.tree(&face_boxes_of(&vertex, &face));
+        fx.begin();
+        // Safety: every handle names an allocation this fixture staged on this
+        // device and holds for the call.
+        unsafe { fx.scan.scan_collision_edge(&mut fx.device, &scene, &collider, &mut face_tree) }
+            .unwrap();
+        let by_collider_edge = fx.finish();
+
+        // THE OTHER WALK, over the same pose: dynamic edges over the collider
+        // face tree.
+        let mut fx = Fixture::new();
+        stage(&mut fx);
+        let scene = fx.scene();
+        let collider = fx.collider();
+        let mut tree = fx.tree(&[box_of(&collision_vertex)]);
+        let query = fx.query(&edge_boxes_of(&vertex, &edge));
+        fx.begin();
+        // Safety: as above.
+        unsafe { fx.scan.scan_collision_mesh(&mut fx.device, &scene, &collider, &mut tree, query) }
+            .unwrap();
+        let by_dynamic_edge = fx.finish();
+
+        (by_collider_edge, by_dynamic_edge)
+    }
+
+    #[test]
+    fn a_collider_edge_through_a_dynamic_face_is_reported() {
+        let (report, other) = scan_spiked_face(free_face(0), free_vertex(0), None);
+        assert_eq!(
+            report.found, 2,
+            "the spike's two slanted edges both run through the interior of the              dynamic face, and the walk over collider edges claimed {} of them",
+            report.found
+        );
+        for record in &report.records {
+            assert_eq!(record.itype, RECORD_COLLISION_EDGE);
+            assert_eq!(record.elem0, 0, "the dynamic face is the pierced one");
+            assert!(record.elem1 < 2, "collider edges 0 and 1 are the slanted pair");
+            assert_eq!(record.num_verts0, 3);
+            assert_eq!(record.num_verts1, 2);
+        }
+        // WHY THE WALK EXISTS. The same pose, asked the other way round, is
+        // clean: no dynamic edge crosses the collider face, so the walk over
+        // dynamic edges cannot see this crossing at all.
+        assert!(
+            other.is_clean(),
+            "the fixture no longer isolates the collider-edge walk: a dynamic              edge crosses the collider face, so the other walk reports the pose              too and this test would pass with the new walk deleted"
+        );
+    }
+
+    #[test]
+    fn the_collider_edge_walk_reads_a_faces_mass_off_its_vertices() {
+        // A RIGID BODY FACE carries no mass of its own: the build hands a
+        // body's volumetric mass to its vertices and zeroes the per-face
+        // figure. It is dynamic all the same.
+        let (report, _) = scan_spiked_face(FaceProp::default(), free_vertex(0), None);
+        assert_eq!(
+            report.found, 2,
+            "a face with no mass of its own and three massive vertices was              pierced by a collider edge and not reported"
+        );
+
+        // A STATIC SOLID has no mass anywhere, and neither side of that pair
+        // can yield.
+        let massless = VertexProp {
+            mass: 0.0,
+            ..free_vertex(0)
+        };
+        let (report, _) = scan_spiked_face(FaceProp::default(), massless, None);
+        assert!(report.is_clean());
+
+        // A FULLY PINNED FACE is prescribed, whatever it weighs.
+        let pinned = FaceProp {
+            fixed: true,
+            ..free_face(0)
+        };
+        let (report, _) = scan_spiked_face(pinned, free_vertex(0), None);
+        assert!(
+            report.is_clean(),
+            "a fully pinned face pierced by the collision mesh was reported,              though neither side of that pair can yield"
+        );
+    }
+
+    #[test]
+    fn a_collider_edge_through_a_face_linked_at_start_is_not_reported() {
+        // Allow Existing Intersections: a vertex of the dynamic face is linked
+        // to a collision-mesh vertex of each slanted edge, which exempts both
+        // pairs. The tagged index is how the table names the collider's pool.
+        let tag = crate::data::START_LINK_COLLISION_VERTEX;
+        let rows = vec![vec![tag], Vec::new(), Vec::new()];
+        let (report, _) = scan_spiked_face(free_face(0), free_vertex(0), Some(&rows));
+        assert!(
+            report.is_clean(),
+            "a pair linked at start was reported; the apex is collision-mesh              vertex 0 and both slanted edges name it"
+        );
     }
 
     #[test]

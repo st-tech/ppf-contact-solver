@@ -780,6 +780,15 @@ def get_average_edge_length(object_name: str):
 def get_object_bounding_box_diagonal(object_name: str):
     """Compute the bounding box of an object and return the largest diagonal distance.
 
+    Two diagonals are returned, and they differ for a rotated object.
+    ``largest_diagonal_distance`` is the diagonal of the world-space box around
+    the eight corners of the object's local bounding box, which grows when the
+    object is rotated. ``contact_length_diagonal`` is the diagonal of the
+    world-space box around the object's own vertices, and it is the length a
+    group in relative mode multiplies by its Contact Gap Ratio and Contact
+    Offset Ratio to size this object's contact gap and offset. To predict
+    either distance, use ``contact_length_diagonal``.
+
     Args:
         object_name: Name of the object to analyze
     """
@@ -815,6 +824,11 @@ def get_object_bounding_box_diagonal(object_name: str):
     # Calculate the main diagonal (3D diagonal of the bounding box)
     diagonal_distance = (Vector((width, height, depth))).length
 
+    # The length the encoder sizes this object's contact distances from, asked
+    # of the encoder itself so the two cannot drift apart.
+    from ..core.encoder.mesh import compute_object_bounding_box_diagonal
+    contact_length_diagonal = compute_object_bounding_box_diagonal(obj)
+
     return {
         "object_name": object_name,
         "object_uuid": obj_uuid,
@@ -825,6 +839,7 @@ def get_object_bounding_box_diagonal(object_name: str):
             "dimensions": [width, height, depth],
         },
         "largest_diagonal_distance": diagonal_distance,
+        "contact_length_diagonal": contact_length_diagonal,
         "message": f"Bounding box diagonal computed for '{object_name}'",
     }
 

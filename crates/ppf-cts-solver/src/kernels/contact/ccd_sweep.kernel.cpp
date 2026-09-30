@@ -559,11 +559,15 @@ struct CcdCollisionPointFaceC2mVisitor {
             return false;
         }
         const FaceProp fprop = face_prop[index];
-        if (fprop.fixed || !(fprop.mass > 0.0f)) {
-            return false;
-        }
         const Vec3u f = face[index];
         const VertexProp anchor = vertex_prop[f[0]];
+        const VertexProp second = vertex_prop[f[1]];
+        const VertexProp third = vertex_prop[f[2]];
+        // A pinned face cannot yield and a massless one is a static solid. The
+        // mass asked about is the face's VERTICES', see `face_has_mass`.
+        if (fprop.fixed || !face_has_mass(fprop, anchor, second, third)) {
+            return false;
+        }
         if (!collider_pair_admitted(pair_side_of_face(anchor, fprop, f),
                                     pair_side_of_collision_vertex(vertex_index),
                                     start_link_index, start_link_offset,
@@ -637,12 +641,15 @@ struct CcdCollisionEdgeEdgeVisitor {
             return false;
         }
         const EdgeProp dyn = edge_prop[edge_index];
-        if (dyn.fixed || !(dyn.mass > 0.0f)) {
-            return false;
-        }
         const Vec2u e0 = edge[edge_index];
         const Vec2u e1 = collider_edge[index];
         const VertexProp anchor = vertex_prop[e0[0]];
+        const VertexProp other = vertex_prop[e0[1]];
+        // A pinned edge cannot yield and a massless one is a static solid. The
+        // mass asked about is the edge's VERTICES', see `edge_has_mass`.
+        if (dyn.fixed || !edge_has_mass(dyn, anchor, other)) {
+            return false;
+        }
         if (!collider_pair_admitted(pair_side_of_edge(anchor, dyn, e0),
                                     pair_side_of_collision_edge(e1),
                                     start_link_index, start_link_offset,

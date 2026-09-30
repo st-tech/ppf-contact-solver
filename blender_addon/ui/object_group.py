@@ -624,9 +624,12 @@ class ObjectGroup(PropertyGroup):
         description="Contact gap (scaled by World Scale before use)",
     )  # pyright: ignore
     use_group_bounding_box_diagonal: BoolProperty(
-        name="Use Group Bounding Box Diagonal",
+        name="Use Object Bounding Box Diagonal",
         default=OBJECT_GROUP_DEFAULTS["use_group_bounding_box_diagonal"],
-        description="Use group bounding box diagonal to calculate contact gap",
+        description=(
+            "Size the contact gap and offset of each object from its own "
+            "bounding box diagonal"
+        ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
     contact_gap_rat: FloatProperty(
@@ -635,7 +638,7 @@ class ObjectGroup(PropertyGroup):
         min=1e-5,
         max=1.0,
         precision=5,
-        description="Contact gap as ratio of group bounding box diagonal",
+        description="Contact gap as ratio of each object's own bounding box diagonal",
     )  # pyright: ignore
     contact_offset: FloatProperty(
         name="Contact Offset",
@@ -651,7 +654,7 @@ class ObjectGroup(PropertyGroup):
         min=0.0,
         max=1.0,
         precision=5,
-        description="Contact offset as ratio of group bounding box diagonal",
+        description="Contact offset as ratio of each object's own bounding box diagonal",
     )  # pyright: ignore
     enable_strain_limit: BoolProperty(
         name="Enable Strain Limit",

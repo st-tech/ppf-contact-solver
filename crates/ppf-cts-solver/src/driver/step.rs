@@ -775,11 +775,33 @@ pub unsafe fn advance<D: Device>(
                 log::c_exponential(f64::from(last_toi), 2),
                 log::c_exponential(toi_advanced, 2)
             );
-            log::message!(
-                "### an over-constrained configuration cannot be advanced: a prescribed pin \
-                 driven into geometry that cannot yield has no way to resolve. Re-author the \
-                 pin's path, or make it a soft pull pin."
-            );
+            // THE ADVICE DEPENDS ON WHETHER ANYTHING IS PRESCRIBED. The first
+            // wording is `main.cu:747`'s and names the cause that report was
+            // written for. In a scene with no fix pin it names a thing the
+            // scene does not contain, and the reader goes looking for a pin;
+            // what holds such a step is a contact, so the report says that.
+            if state.fix.is_empty() {
+                log::message!(
+                    "### no vertex of this scene is prescribed, so what cannot be advanced is \
+                     a contact: the line search keeps holding the step for a pair the solve \
+                     drives together. Look for a body wrapped around a collider's edge or \
+                     wedged between colliders, and for a contact gap wider than the geometry \
+                     it acts on."
+                );
+            } else {
+                log::message!(
+                    "### an over-constrained configuration cannot be advanced: a prescribed pin \
+                     driven into geometry that cannot yield has no way to resolve. Re-author the \
+                     pin's path, or make it a soft pull pin."
+                );
+            }
+            // WHICH ELEMENT HOLDS THE STEP, read off the last line search. Two
+            // downloads, paid once and only by a run that has already failed.
+            if let Some(contact) = state.contact.as_mut() {
+                if let Some(clamp) = contact.clamp(device, prm.line_search_max_t)? {
+                    log::message!("### {}", describe_clamp(&clamp, state.prop_vertex.host()));
+                }
+            }
             result.newton_progress = false;
             return Ok(result);
         }
@@ -2911,6 +2933,44 @@ unsafe fn assert_unsupported_absent(data: &DataSet, param: *const ParamSet) -> F
         named.join("; ")
     )))
 }
+
+/// One line naming the element a stalled step is held by.
+///
+/// The OBJECT is read off the vertex record, which is the number the frontend
+/// maps back to an object's name. A collider vertex has no object of its own.
+fn describe_clamp(
+    clamp: &super::contact::Clamp,
+    vertex_prop: &[crate::data::VertexProp],
+) -> String {
+    use super::contact::ClampElement;
+    let object = |vertex: usize| -> String {
+        match vertex_prop.get(vertex) {
+            Some(prop) if prop.object_index != crate::data::NO_OBJECT_INDEX => {
+                format!(" of object {}", prop.object_index)
+            }
+            _ => String::new(),
+        }
+    };
+    let element = match clamp.element {
+        ClampElement::Vertex(n) => format!("dynamic vertex {n}{}", object(n)),
+        ClampElement::ColliderVertex(n) => format!("collision-mesh vertex {n}"),
+        ClampElement::VertexOrColliderVertex(n) => format!(
+            "line-search slot {n}, which is dynamic vertex {n}{} or collision-mesh vertex \
+             {n}: the two index spaces share that slot",
+            object(n)
+        ),
+        ClampElement::Edge(n) => format!("dynamic edge {n}"),
+    };
+    let others = match clamp.held {
+        0 | 1 => "and no other slot is near it".to_string(),
+        n => format!("and {} other slots are near it", n - 1),
+    };
+    format!(
+        "the step is held by {element} (time of impact {}), {others}",
+        log::c_exponential(f64::from(clamp.toi), 2)
+    )
+}
+
 /// The implicit target every vertex is solved toward, for one step size.
 ///
 /// A free function rather than a closure over the step's locals, because it now
@@ -2962,6 +3022,48 @@ unsafe fn compute_target<D: Device>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_held_step_is_described_in_the_index_space_its_slot_is_in() {
+        use crate::data::{VertexProp, NO_OBJECT_INDEX};
+        use crate::driver::contact::{Clamp, ClampElement};
+        let owned = VertexProp {
+            object_index: 16,
+            ..Default::default()
+        };
+        let unowned = VertexProp {
+            object_index: NO_OBJECT_INDEX,
+            ..Default::default()
+        };
+        let props = [owned, unowned];
+        let line = |element, held| {
+            super::describe_clamp(
+                &Clamp {
+                    element,
+                    toi: 6.25e-6,
+                    held,
+                },
+                &props,
+            )
+        };
+        assert_eq!(
+            line(ClampElement::Vertex(0), 1),
+            "the step is held by dynamic vertex 0 of object 16 (time of impact 6.25e-06), \
+             and no other slot is near it"
+        );
+        // A vertex whose record names no object says so by saying nothing.
+        assert!(line(ClampElement::Vertex(1), 1).contains("dynamic vertex 1 (time"));
+        // THE SHARED SLOT NAMES BOTH READINGS. The vertex array is indexed by
+        // dynamic vertex for three sweeps and by collider vertex for one, so a
+        // slot below both counts cannot say which wrote it, and a report that
+        // picked one would send the reader to the wrong mesh half the time.
+        let shared = line(ClampElement::VertexOrColliderVertex(0), 3);
+        assert!(shared.contains("dynamic vertex 0 of object 16"), "{shared}");
+        assert!(shared.contains("collision-mesh vertex 0"), "{shared}");
+        assert!(shared.ends_with("and 2 other slots are near it"), "{shared}");
+        assert!(line(ClampElement::ColliderVertex(5), 1).contains("collision-mesh vertex 5"));
+        assert!(line(ClampElement::Edge(7), 1).contains("dynamic edge 7"));
+    }
+
     #[test]
     fn the_step_delay_defaults_to_zero_and_parses_milliseconds() {
         use std::time::Duration;

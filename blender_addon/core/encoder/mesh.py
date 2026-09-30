@@ -32,13 +32,12 @@ from . import (
 )
 from .pin import pin_vertex_indices
 
-# Minimal diagonal used for a group with no usable extent. Both the
-# empty/no-geometry fallback and the co-located-objects floor use this
-# single value so a sizeless group always yields the same minimal
-# diagonal, keeping the derived contact_gap/contact_offset consistent.
-# 1e-6 keeps co-located objects from producing a zero ratio that
-# cascades into a NaN contact_gap.
-MIN_GROUP_DIAGONAL = 1e-6
+# Minimal diagonal used for an object with no usable extent: one that does
+# not resolve, carries no geometry, or whose vertices all sit at one point.
+# A single floor for all three, so a sizeless object always yields the same
+# minimal diagonal and the contact gap and offset derived from it stay
+# positive rather than reaching the solver as zero or NaN.
+MIN_OBJECT_DIAGONAL = 1e-6
 
 
 @contextmanager
@@ -47,7 +46,7 @@ def evaluate_at_start_frame(context, state):
 
     Geometry-derived encodings must not depend on where the artist parked
     the playhead. The data payload (vertex buffers) and the param payload
-    (the per-group bounding-box diagonal that scales contact-gap /
+    (each object's bounding-box diagonal, which scales its contact-gap /
     contact-offset) both read live mesh state, which for an animated
     collider changes frame to frame. Evaluating them at the starting frame
     (simulated time zero, see ``resolve_start_frame``) is the single source
@@ -233,58 +232,41 @@ def compute_mesh_hash(context):
     return hash_data
 
 
-def compute_group_bounding_box_diagonal(group):
-    """Compute the maximal diagonal length of the bounding box that encapsulates all objects in a group."""
-    min_coord = None
-    max_coord = None
+def compute_object_bounding_box_diagonal(obj):
+    """Diagonal of the world-space axis-aligned box around ONE object.
 
-    has_valid_object = False
+    This is the length a relative contact gap or offset is a fraction of. It
+    is the object's own, never the box around the group the object is
+    assigned to: a contact distance is a property of the surface that carries
+    it, and the box around a group also measures how far apart its objects
+    were placed, which says nothing about any of them. Twenty-eight objects
+    of 8.6 stacked 290 high would otherwise each carry the gap of a 290
+    object.
 
-    from ..uuid_registry import resolve_assigned
-    for assigned_obj in group.assigned_objects:
-        if not assigned_obj.included:
-            continue
-        obj = resolve_assigned(assigned_obj)
-        if not obj or obj.type not in ("MESH", "CURVE"):
-            continue
+    A mesh is measured over its vertices and a curve over its ``bound_box``,
+    both through ``matrix_world``, so an object scaled in object mode is
+    measured at the size it has in the scene. Anything else, and an object
+    with no extent, yields ``MIN_OBJECT_DIAGONAL``.
+    """
+    if obj is None or obj.type not in ("MESH", "CURVE"):
+        return MIN_OBJECT_DIAGONAL
 
-        world_mat = obj.matrix_world
+    world_mat = obj.matrix_world
+    if obj.type == "CURVE":
+        points = [world_mat @ Vector(corner) for corner in obj.bound_box]
+    else:
+        points = [world_mat @ vert.co for vert in obj.data.vertices]
+    if not points:
+        return MIN_OBJECT_DIAGONAL
 
-        if obj.type == "CURVE":
-            # Use Blender's bound_box which works for all object types
-            for corner in obj.bound_box:
-                world_pos = world_mat @ Vector(corner)
-                if min_coord is None:
-                    min_coord = world_pos.copy()
-                    max_coord = world_pos.copy()
-                else:
-                    for i in range(3):
-                        min_coord[i] = min(min_coord[i], world_pos[i])
-                        max_coord[i] = max(max_coord[i], world_pos[i])
-                has_valid_object = True
-        elif obj.type == "MESH":
-            mesh = obj.data
+    min_coord = points[0].copy()
+    max_coord = points[0].copy()
+    for world_pos in points[1:]:
+        for i in range(3):
+            min_coord[i] = min(min_coord[i], world_pos[i])
+            max_coord[i] = max(max_coord[i], world_pos[i])
 
-            for vert in mesh.vertices:
-                world_pos = world_mat @ vert.co
-
-                if min_coord is None:
-                    min_coord = world_pos.copy()
-                    max_coord = world_pos.copy()
-                    has_valid_object = True
-                else:
-                    min_coord.x = min(min_coord.x, world_pos.x)
-                    min_coord.y = min(min_coord.y, world_pos.y)
-                    min_coord.z = min(min_coord.z, world_pos.z)
-                    max_coord.x = max(max_coord.x, world_pos.x)
-                    max_coord.y = max(max_coord.y, world_pos.y)
-                    max_coord.z = max(max_coord.z, world_pos.z)
-
-    if not has_valid_object:
-        return MIN_GROUP_DIAGONAL
-
-    diagonal_vector = max_coord - min_coord
-    return max(diagonal_vector.length, MIN_GROUP_DIAGONAL)
+    return max((max_coord - min_coord).length, MIN_OBJECT_DIAGONAL)
 
 
 def detect_stitch_edges(mesh):

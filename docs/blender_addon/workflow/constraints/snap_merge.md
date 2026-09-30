@@ -141,8 +141,8 @@ rule applies to **all supported pairs**:
 The gap is in scene units and is read from the two groups' current
 settings at the moment you click **Snap A to B**: the absolute
 **Contact Gap** and **Contact Offset**, or, on a group that uses
-**Use Group Bounding Box Diagonal**, the two ratios times that group's
-bounding-box diagonal. **World Scaling** does not change it, and
+**Use Object Bounding Box Diagonal**, the two ratios times that object's
+own bounding-box diagonal. **World Scaling** does not change it, and
 neither does anything transferred earlier.
 
 ### Cross-Stitch Anchors

@@ -448,11 +448,16 @@ template <unsigned N>
     unsigned statistics_static_object_index_size,
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
     const FaceProp fprop = face_prop[face_index];
-    if (fprop.fixed || !(fprop.mass > 0.0f)) {
-        return false;
-    }
     const Vec3u fc = face[face_index];
     const VertexProp fanchor = vertex_prop[fc[0]];
+    const VertexProp fsecond = vertex_prop[fc[1]];
+    const VertexProp fthird = vertex_prop[fc[2]];
+    // The verdict the collider vertex against dynamic face sweep takes, so the
+    // barrier acts on exactly the faces the line search stops. The mass asked
+    // about is the face's VERTICES', see `face_has_mass`.
+    if (fprop.fixed || !face_has_mass(fprop, fanchor, fsecond, fthird)) {
+        return false;
+    }
     if (!collider_pair_admitted(pair_side_of_face(fanchor, fprop, fc),
                                 pair_side_of_collision_vertex(vertex_index),
                                 start_link_index, start_link_offset,
@@ -613,11 +618,15 @@ template <unsigned N>
     unsigned statistics_static_object_index_size,
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
     const EdgeProp eprop = edge_prop[edge_index];
-    if (eprop.fixed || !(eprop.mass > 0.0f)) {
-        return false;
-    }
     const Vec2u me = edge[edge_index];
     const VertexProp eanchor = vertex_prop[me[0]];
+    const VertexProp eother = vertex_prop[me[1]];
+    // The verdict the collision edge-edge sweep takes, so the barrier acts on
+    // exactly the edges the line search stops. The mass asked about is the
+    // edge's VERTICES', see `edge_has_mass`.
+    if (eprop.fixed || !edge_has_mass(eprop, eanchor, eother)) {
+        return false;
+    }
     const Vec2u ce = static_edge[other_index];
     if (!collider_pair_admitted(pair_side_of_edge(eanchor, eprop, me),
                                 pair_side_of_collision_edge(ce),

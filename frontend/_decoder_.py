@@ -599,9 +599,11 @@ class ParamDecoder:
 
         Call :meth:`set_path` first. Per-object dicts (velocity,
         velocity-schedule, collision-windows) are keyed by UUID; other
-        keys are forwarded to ``obj.param.set``. The two intersection
+        keys are forwarded to ``obj.param.set``. The intersection
         allowances take either shape, a dict when the objects of one group
-        were given different answers and a plain value when they were not.
+        were given different answers and a plain value when they were not,
+        and so do ``contact-gap`` and ``contact-offset``, static or animated,
+        which are a dict when each object's distance follows its own size.
         fTetWild overrides are consumed at populate-time and skipped here.
 
         Args:
@@ -823,6 +825,26 @@ class ParamDecoder:
                                 obj.param.set(key, v)
                         else:
                             obj.param.set(key, val)
+                    elif key in ("contact-gap", "contact-offset"):
+                        # Contact distances are per OBJECT. A sender that
+                        # sizes them from each object's own extent sends a
+                        # per-uuid dict, and one that authors a single
+                        # distance for the group sends a plain float. Unlike
+                        # an allowance, a uuid the dict does not name is
+                        # refused: a contact distance has no default that is
+                        # right for an object of unknown size, and keeping the
+                        # holder's would run this object at a gap nobody
+                        # authored.
+                        if isinstance(val, dict):
+                            if obj_uuid not in val:
+                                raise ValueError(
+                                    f"'{key}' is given per object and names "
+                                    f"no value for '{obj_name}' ({obj_uuid}), "
+                                    "which is assigned to the group"
+                                )
+                            obj.param.set(key, val[obj_uuid])
+                        else:
+                            obj.param.set(key, val)
                     elif key in ("ftetwild", "soft-constraint"):
                         # Consumed at populate-time via the param.pickle peek;
                         # no per-object ParamHolder slot by design (would
@@ -845,7 +867,20 @@ class ParamDecoder:
                         # one value per entry in the scene-wide
                         # `param_anim_times`. Set on every object in the group,
                         # matching how the group's static params are applied.
+                        # A series is a list the whole group shares, or a
+                        # per-uuid dict of lists for a contact distance sized
+                        # from each object's own extent, which is refused when
+                        # it does not name this object, as the static value is.
                         for anim_key, values in val.items():
+                            if isinstance(values, dict):
+                                if obj_uuid not in values:
+                                    raise ValueError(
+                                        f"the animated '{anim_key}' is given "
+                                        "per object and names no series for "
+                                        f"'{obj_name}' ({obj_uuid}), which is "
+                                        "assigned to the group"
+                                    )
+                                values = values[obj_uuid]
                             obj.set_param_anim(anim_key, values)
                     else:
                         obj.param.set(key, val)
