@@ -892,6 +892,14 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 <td valign="top"><a href="https://www.youtube.com/watch?v=ivDtWRFewVM"><em>Houdini Level Cloth Simulation in Blender?</em></a> by <a href="https://www.youtube.com/@InspirationTuts">InspirationTuts</a>.</td>
 <td valign="top"><a href="https://www.youtube.com/watch?v=R-5sL80WKoc"><em>This Blender Addon Makes Cloth Simulation SO Much Better</em></a> by <a href="https://www.youtube.com/@Megani21">Megani</a>.</td>
 </tr>
+<tr>
+<td width="50%" valign="top"><a href="https://youtu.be/ZagGwtRO3Ss?si=vbAPHeBAPhbqdemM&t=684"><img src="https://img.youtube.com/vi/ZagGwtRO3Ss/maxresdefault.jpg" alt="Blender 5.2 Cloth Simulation + The Secret to Better Collisions"></a></td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://youtu.be/ZagGwtRO3Ss?si=vbAPHeBAPhbqdemM&t=684"><em>Blender 5.2 Cloth Simulation + The Secret to Better Collisions</em></a> by <a href="https://www.youtube.com/@styliz3d">Styliz 3D</a>.</td>
+<td valign="top"></td>
+</tr>
 </table>
 
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
