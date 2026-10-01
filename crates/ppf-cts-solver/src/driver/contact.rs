@@ -72,7 +72,7 @@ use super::kernels::{
     AabbLeafActiveArgs, AabbPointContactQueryArgs, AabbPointContactQueryMaskedArgs,
     AabbVertexScanQueryMaskedArgs,
     AabbVertexScanQueryArgs, CcdCollisionEdgeEdgeArgs, CcdCollisionPointFaceC2mArgs,
-    CcdCollisionPointFaceM2cArgs, CcdEdgeEdgeArgs, CcdPointFaceArgs, CcdPointPointArgs,
+    CcdCollisionPointFaceM2cArgs, CcdEdgeEdgeArgs, CcdPointEdgeArgs, CcdPointFaceArgs, CcdPointPointArgs,
     CollisionEdgeEdgeTraverseArgs,
     CollisionPointFaceC2mTraverseArgs,
     CollisionPointFaceM2cTraverseArgs,
@@ -247,6 +247,12 @@ pub struct Contact {
     /// `u32::MAX` as its arena. The `has_active` flag beside it is what the
     /// body reads; this only has to be resolvable.
     empty_mask: ppf_cts_compute::Buffer<u32>,
+    /// The surface vertices that belong to no edge, which the line search's
+    /// point-edge sweep queries (`ccd_point_edge`). Listed once at
+    /// `initialize()` because the topology never changes; a scene with no
+    /// such vertex holds a real zero-length allocation and dispatches nothing.
+    edgeless_vertex: ppf_cts_compute::Buffer<u32>,
+    edgeless_vertices: usize,
     vertices: usize,
     surface_vertices: usize,
     faces: usize,
@@ -371,6 +377,8 @@ impl Contact {
             overlap_vertex: ReadbackBuffer::default(),
             overlap_edge: ReadbackBuffer::default(),
             empty_mask: ppf_cts_compute::Buffer::none(),
+            edgeless_vertex: ppf_cts_compute::Buffer::none(),
+            edgeless_vertices: 0,
             vertices,
             surface_vertices,
             faces,
@@ -446,6 +454,29 @@ impl Contact {
         )?;
         live.empty_mask
             .size(device, 0, AllocLabel("contact.empty_mask"))?;
+        // THE EDGELESS VERTICES, a SAND grain being the one that occurs. Every
+        // edge of the mesh is in `mesh.edge`, face edges included, so a vertex
+        // no entry names belongs to no edge and no face.
+        {
+            let mut owned = vec![false; surface_vertices];
+            for e in super::scene::slice(&data.mesh.mesh.edge) {
+                for k in 0..2 {
+                    if let Some(slot) = owned.get_mut(e[k] as usize) {
+                        *slot = true;
+                    }
+                }
+            }
+            let list: Vec<u32> = (0..surface_vertices)
+                .filter(|&i| !owned[i])
+                .map(|i| i as u32)
+                .collect();
+            live.edgeless_vertex
+                .size(device, list.len(), AllocLabel("contact.edgeless_vertex"))?;
+            if !list.is_empty() {
+                live.edgeless_vertex.write(device, 0, &list)?;
+            }
+            live.edgeless_vertices = list.len();
+        }
         live.collider_point_query.size(
             device,
             collider_vertices,
@@ -1478,7 +1509,7 @@ impl Contact {
             device.launch("contact.line_search.overlap_edge", &clear, words)?;
         }
 
-        // THE FOUR VERTEX-SPACE SWEEPS, in a fixed order. The order reaches
+        // THE FIVE VERTEX-SPACE SWEEPS, in a fixed order. The order reaches
         // the answer only through the min-fold, which is order-free, so it is
         // held steady for a reader rather than for the arithmetic.
         //
@@ -1559,6 +1590,44 @@ impl Contact {
             device.launch("contact.line_search.point_point", &args, count)?;
         }
 
+        // An edgeless vertex against the edge tree, the pair none of the other
+        // sweeps bounds: a grain reaching the INTERIOR of a rod edge, which
+        // has no face for the point-face sweep, while the grain has no edge for
+        // the edge-edge sweep and the point-point sweep sees only the rod's end
+        // points. Contact assembly forms the pair all the same, so without this
+        // a step carries the grain into the rod's contact offset (issue #154).
+        if self.edgeless_vertices > 0 && self.edges > 0 {
+            let count = self.edgeless_vertices as u32;
+            let args = CcdPointEdgeArgs {
+                x0,
+                x1,
+                edge: mesh.edge,
+                edge_count: self.edges as u32,
+                vertex_prop: mesh.vertex_prop,
+                start_link_index: mesh.start_link.index,
+                start_link_offset: mesh.start_link.offset,
+                has_start_link: mesh.start_link.present,
+                edge_prop: mesh.edge_prop,
+                vertex_param: mesh.vertex_param,
+                edge_param: mesh.edge_param,
+                edgeless_vertex: self.edgeless_vertex.handle(),
+                vertex_count: self.surface_vertices as u32,
+                node: self.edge_tree.node.handle(),
+                node_count: self.edge_tree.node_count,
+                aabb: self.edge_tree.aabb.handle(),
+                root: self.edge_tree.root,
+                active: vertex_mask,
+                has_active: has_vertex_mask,
+                max_t,
+                ccd_eps,
+                out_toi: self.toi_vertex.handle(),
+                out_overlap: self.overlap_vertex.handle(),
+                count,
+                seam_arena_count: 0,
+            };
+            device.launch("contact.line_search.point_edge", &args, count)?;
+        }
+
         // THE COLLISION-MESH SWEEPS, after the self-contact ones, as
         // `contact::line_search` runs them. The collider has one pose, so its
         // two trees were built at `initialize()` and never refreshed. Each is
@@ -1635,7 +1704,7 @@ impl Contact {
         // margin is untouched, so coverage of `[0, T_vf]` stays conservative.
         //
         // ONE DOWNLOAD SERVES BOTH READINGS. Nothing writes this array after
-        // the four sweeps above, so the value folded here is also the value
+        // the five sweeps above, so the value folded here is also the value
         // folded into the filter below.
         let t_vf_seed = if vertex_slots > 0 {
             let values = self.toi_vertex.handle();
@@ -3478,6 +3547,128 @@ mod tests {
     fn two_grains_moving_apart_keep_the_whole_step() {
         let toi = sweep_two_grains(0.5, 1.5);
         assert_eq!(toi, 1.0, "two grains moving APART had their step cut to {toi}");
+    }
+
+    /// A free grain `height` above the MIDDLE of a two-meter rod edge, and no
+    /// faces (public issue #154).
+    ///
+    /// The grain owns no edge and the rod edge has no face, so the point-face
+    /// and edge-edge sweeps cannot see the pair, and the rod's end points stay
+    /// a meter from the grain throughout, so the point-point sweep finds
+    /// nothing either. The answer is the point-edge sweep's alone.
+    ///
+    /// Safety: as [`scene_over_a_collider`].
+    fn scene_of_a_grain_over_a_rod_edge(height: f32) -> Box<crate::data::DataSet> {
+        use crate::cvec::CVec;
+        use crate::cvecvec::CVecVec;
+        use crate::data::{EdgeParam, EdgeProp, Vec2u};
+        use crate::driver::test_scene::position;
+
+        let mut data: Box<crate::data::DataSet> = Box::new(unsafe { std::mem::zeroed() });
+        let positions = vec![
+            position(-1.0, 0.0, 0.0),
+            position(1.0, 0.0, 0.0),
+            position(0.0, height, 0.0),
+        ];
+        data.vertex.curr = CVec::from(&positions[..]);
+        data.vertex.prev = CVec::from(&positions[..]);
+        let mut prop = VertexProp::default();
+        prop.mass = 1.0;
+        prop.param_index = 0;
+        data.prop.vertex = CVec::from(&[prop; 3][..]);
+        data.param_arrays.vertex = CVec::from(
+            &[VertexParam {
+                ghat: 0.01,
+                offset: 0.0,
+                friction: 0.0,
+            }][..],
+        );
+        data.surface_vert_count = 3;
+        data.mesh.mesh.edge = CVec::from(&[Vec2u::new(0, 1)][..]);
+        let mut edge_prop = EdgeProp::default();
+        edge_prop.mass = 1.0;
+        edge_prop.fixed = false;
+        edge_prop.param_index = 0;
+        data.prop.edge = CVec::from(&[edge_prop][..]);
+        let mut edge_param = EdgeParam::default();
+        edge_param.ghat = 0.01;
+        edge_param.offset = 0.0;
+        data.param_arrays.edge = CVec::from(&[edge_param][..]);
+        let rows: Vec<Vec<u32>> = vec![vec![0], vec![1], vec![2]];
+        let transpose: Vec<Vec<Vec2u>> = vec![Vec::new(), Vec::new(), Vec::new()];
+        data.fixed_index_table = CVecVec::from(&rows[..]);
+        data.transpose_table = CVecVec::from(&transpose[..]);
+        data
+    }
+
+    /// Drive the grain from `height` to `end_height` with the rod held still.
+    fn sweep_grain_over_a_rod_edge(height: f32, end_height: f32) -> f32 {
+        let data = scene_of_a_grain_over_a_rod_edge(height);
+        let param = collision_param();
+        // Safety: the boxed scene outlives every borrow below.
+        unsafe {
+            let mut device = host_device();
+            let mut contact = Contact::allocate(&mut device, &data)
+                .expect("a scene with vertices allocates");
+            let test_mesh = crate::driver::state::test_mesh_of(&mut device, &data);
+            let mesh_refs = test_mesh.refs();
+            let start_host = crate::driver::state::slice_or_empty(
+                data.vertex.curr.data as *const f32,
+                3 * data.vertex.curr.size as usize,
+            );
+            let start_block =
+                crate::driver::state::position_block(&mut device, start_host, "test.rod.x0");
+            let end = [
+                crate::driver::test_scene::position(-1.0, 0.0, 0.0),
+                crate::driver::test_scene::position(1.0, 0.0, 0.0),
+                crate::driver::test_scene::position(0.0, end_height, 0.0),
+            ];
+            let finish_host: Vec<f32> = end
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect();
+            let finish_block =
+                crate::driver::state::position_block(&mut device, &finish_host, "test.rod.x1");
+            let (x0, x1) = (start_block.handle(), finish_block.handle());
+            contact
+                .rebuild_trees(&mut device, &data, mesh_refs, x0, Windows::default())
+                .expect("the trees build");
+            contact
+                .refresh_leaves(
+                    &mut device,
+                    &data,
+                    mesh_refs,
+                    x0,
+                    x1,
+                    param.line_search_max_t,
+                    Windows::default(),
+                )
+                .expect("the leaves refresh");
+            let filter = contact
+                .line_search(&mut device, &data, mesh_refs, &param, x0, x1, Windows::default())
+                .expect("the line search runs");
+            assert!(filter.overlapping_start().is_none());
+            filter.time_of_impact()
+        }
+    }
+
+    #[test]
+    fn the_line_search_stops_a_grain_driven_through_the_middle_of_a_rod_edge() {
+        // Half a meter above the edge and commanded a full meter down, so an
+        // unfiltered step carries the grain through it. The advance parks the
+        // grain at `park_floor(0.01) = 1e-4`, so the answer is just under 0.5.
+        let toi = sweep_grain_over_a_rod_edge(0.5, -0.5);
+        assert!(
+            toi > 0.49 && toi < 0.5,
+            "the line search returned {toi} for a grain driven through the \
+             middle of a rod edge, not the ~0.4999 that stops it at the edge"
+        );
+    }
+
+    #[test]
+    fn a_grain_moving_away_from_a_rod_edge_keeps_the_whole_step() {
+        let toi = sweep_grain_over_a_rod_edge(0.5, 1.5);
+        assert_eq!(toi, 1.0, "a grain moving AWAY from a rod edge had its step cut to {toi}");
     }
 
     /// Two perpendicular edges, `separation` apart in z, and no faces.

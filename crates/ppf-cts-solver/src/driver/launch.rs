@@ -361,6 +361,7 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_overlap_first_flagged_leaf,
     launch_ccd_point_face,
     launch_ccd_point_point,
+    launch_ccd_point_edge,
     launch_ccd_edge_edge,
     launch_ccd_collision_point_face_m2c,
     launch_ccd_collision_point_face_c2m,

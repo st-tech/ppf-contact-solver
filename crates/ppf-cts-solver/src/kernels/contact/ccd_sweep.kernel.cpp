@@ -140,8 +140,8 @@ enum : unsigned {
 
 // Fold one query's answer into its own slot of the per-primitive arrays.
 //
-// A MIN, so the order of the six dispatches cannot change the number. The slot
-// is the query's own and the six sweeps are sequential dispatches, so nothing
+// A MIN, so the order of the seven dispatches cannot change the number. The slot
+// is the query's own and the seven sweeps are sequential dispatches, so nothing
 // here races with anything.
 [[seam::device_fn]] inline void ccd_commit(
     float *out_toi,
@@ -154,7 +154,7 @@ enum : unsigned {
 }
 
 // ---------------------------------------------------------------------------
-// The six per-hit visitors, one for each sweep below.
+// The seven per-hit visitors, one for each sweep below.
 //
 // BOTH METHODS CARRY THE EXECUTION SPACE, and neither may go without it:
 // `test` calls `aabb_overlap`, which is `[[seam::device_fn]]`, and a member
@@ -328,6 +328,101 @@ struct CcdPointPointVisitor {
         const float result = accd::point_point_ccd(a0, a1, b0, b1, offset, ghat,
                                                    max_t, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_POINT, vertex_index, index,
+                           info);
+        if (result < max_t) {
+            toi = fmath::min(toi, result);
+            return true;
+        }
+        return false;
+    }
+};
+
+// A vertex that belongs to NO EDGE against the edge tree (public issue #154).
+//
+// WHICH PAIRS THE OTHER SWEEPS ALREADY BOUND. Contact assembly forms a
+// point-edge pair for every surface vertex near every edge, so the line search
+// owes a bound on each such pair. A vertex that has an edge of its own is
+// bounded through that edge by the edge-edge sweep, since the distance from a
+// segment to an edge never exceeds the distance from either of its end points.
+// A face edge is bounded by the point-face sweep, since a triangle's distance
+// already includes its boundary. What neither reaches is a vertex with no edge,
+// a SAND grain, against the INTERIOR of an edge with no face, a rod's: the
+// point-point sweep sees only the rod's end points. Without this visitor a step
+// carries such a grain into the rod's contact offset, and the next assembly
+// stops the run with "contact starts overlapping".
+//
+// EVERY EDGE IS SWEPT, face edges included. The queries are the edgeless
+// vertices alone, so the extra face-edge sweeps cost little, and the bound
+// holds for exactly the pair set the point-edge assembly reads, at its own
+// offset and gap, without leaning on how a face edge's parameters relate to
+// its faces'.
+struct CcdPointEdgeVisitor {
+    const Vec3f *x0;
+    const Vec3f *x1;
+    const Vec2u *edge;
+    const VertexProp *vertex_prop;
+    const unsigned *start_link_index;
+    const unsigned *start_link_offset;
+    unsigned has_start_link;
+    const EdgeProp *edge_prop;
+    const VertexParam *vertex_param;
+    const EdgeParam *edge_param;
+    unsigned vertex_index;
+    unsigned edge_count;
+    float max_t;
+    float ccd_eps;
+    float toi;
+    CcdOverlapRecord overlap;
+    DiagHandle diag;
+
+    [[seam::device_fn]] bool test(const AABB &box,
+                                  const AABB &q) const {
+        return aabb_overlap(box, q);
+    }
+
+    [[seam::device_fn]] bool operator()(unsigned index) {
+        DIAG_ASSERT4(diag, index < edge_count, static_cast<float>(index),
+                     static_cast<float>(edge_count),
+                     static_cast<float>(vertex_index), 0.0f);
+        if (index >= edge_count) {
+            return false;
+        }
+        const Vec2u e = edge[index];
+        // The queries own no edge, so this never fires on a well-formed list;
+        // it is kept so the visitor states its own precondition rather than
+        // borrowing the caller's.
+        if (e[0] == vertex_index || e[1] == vertex_index) {
+            return false;
+        }
+        const VertexProp vprop = vertex_prop[vertex_index];
+        const VertexProp eanchor = vertex_prop[e[0]];
+        const EdgeProp eprop = edge_prop[index];
+        if (!contact_pair_admitted(pair_side_of_vertex(vprop, vertex_index),
+                                   pair_side_of_edge(eanchor, eprop, e),
+                                   start_link_index, start_link_offset,
+                                   has_start_link)) {
+            return false;
+        }
+        // THE ASSEMBLY'S OWN TERMS (`contact_point_edge_at`), so the sweep
+        // stops a step exactly where that pair's barrier would begin to fail.
+        const VertexParam vparam = vertex_param[vprop.param_index];
+        const EdgeParam eparam = edge_param[eprop.param_index];
+        const float offset = vparam.offset + eparam.offset;
+        const float ghat = 0.5f * (vparam.ghat + eparam.ghat);
+        accd::OverlapInfo info;
+        info.d2 = 0.0f;
+        info.offset = 0.0f;
+        info.flagged = 0u;
+        const Vec3f p0 = x0[vertex_index];
+        const Vec3f p1 = x1[vertex_index];
+        const Vec3f q00 = x0[e[0]];
+        const Vec3f q01 = x0[e[1]];
+        const Vec3f q10 = x1[e[0]];
+        const Vec3f q11 = x1[e[1]];
+        const float result = accd::point_edge_ccd(p0, p1, q00, q01, q10, q11,
+                                                  offset, ghat, max_t,
+                                                  ccd_eps, &info);
+        ccd_record_overlap(overlap, CCD_SWEEP_POINT_EDGE, vertex_index, e[0],
                            info);
         if (result < max_t) {
             toi = fmath::min(toi, result);
@@ -684,7 +779,7 @@ struct CcdCollisionEdgeEdgeVisitor {
 };
 
 // ---------------------------------------------------------------------------
-// The six bodies, one per (query kind, tree) pair.
+// The seven bodies, one per (query kind, tree) pair.
 //
 // THE MORTON REMAP IS A PURE PERMUTATION OF THE QUERY-TO-THREAD ASSIGNMENT.
 // Leaf `t` of a tree stores primitive `node[2 * t] - 1` in Morton order, so
@@ -824,6 +919,64 @@ struct CcdCollisionEdgeEdgeVisitor {
     op.vertex_param = vertex_param;
     op.vertex_index = i;
     op.vertex_count = query_count;
+    op.max_t = max_t;
+    op.ccd_eps = ccd_eps;
+    op.toi = max_t;
+    op.overlap = ccd_no_overlap();
+    op.diag = diag;
+    const AABB box =
+        ccd_point_box(x0, x1, vparam, max_t, active, has_active, i);
+    aabb_query(node, node_count, aabb, root, op, box, diag);
+    ccd_commit(out_toi, out_overlap, i, op.toi, op.overlap);
+}
+
+// An edgeless vertex against the edge tree; see `CcdPointEdgeVisitor` for the
+// pairs it bounds.
+//
+// ONE THREAD PER ENTRY OF `edgeless_vertex`, the surface vertices that belong
+// to no edge, listed once at `initialize()` because the topology never
+// changes. A scene without one dispatches nothing. The list is in vertex
+// order rather than Morton order, so there is no remap; its members are
+// isolated grains, which share no traversal with their index neighbors anyway.
+[[seam::entry(element)]]
+[[seam::device_fn]] inline void ccd_point_edge(
+    const Vec3f *x0, const Vec3f *x1,
+    const Vec2u *edge, unsigned edge_count,
+    const VertexProp *vertex_prop,
+    const unsigned *start_link_index,
+    const unsigned *start_link_offset,
+    unsigned has_start_link,
+    const EdgeProp *edge_prop,
+    const VertexParam *vertex_param,
+    const EdgeParam *edge_param,
+    const unsigned *edgeless_vertex, unsigned vertex_count,
+    const unsigned *node, unsigned node_count,
+    const AABB *aabb, unsigned root,
+    const unsigned *active, unsigned has_active, float max_t,
+    float ccd_eps, float *out_toi,
+    CcdOverlapRecord *out_overlap,
+    DiagHandle diag, unsigned element) {
+    const unsigned i = edgeless_vertex[element];
+    DIAG_ASSERT4(diag, i < vertex_count, static_cast<float>(i),
+                 static_cast<float>(vertex_count),
+                 static_cast<float>(element), 0.0f);
+    if (i >= vertex_count) {
+        return;
+    }
+    const VertexParam vparam = vertex_param[vertex_prop[i].param_index];
+    CcdPointEdgeVisitor op;
+    op.x0 = x0;
+    op.x1 = x1;
+    op.edge = edge;
+    op.vertex_prop = vertex_prop;
+    op.start_link_index = start_link_index;
+    op.start_link_offset = start_link_offset;
+    op.has_start_link = has_start_link;
+    op.edge_prop = edge_prop;
+    op.vertex_param = vertex_param;
+    op.edge_param = edge_param;
+    op.vertex_index = i;
+    op.edge_count = edge_count;
     op.max_t = max_t;
     op.ccd_eps = ccd_eps;
     op.toi = max_t;
@@ -1054,7 +1207,7 @@ struct CcdCollisionEdgeEdgeVisitor {
 }
 
 // ---------------------------------------------------------------------------
-// The six entry points.
+// The seven entry points.
 //
 // `out_toi` AND `out_overlap` ARE BASE POINTERS RATHER THAN SCATTERS, because
 // the slot a body writes is the MORTON-REMAPPED primitive rather than the

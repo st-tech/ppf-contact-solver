@@ -51,6 +51,7 @@ from . import bl_server_stop_is_real
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
 from . import rig_collider_free_edge
+from . import rig_sand_rod_point_edge
 from . import rig_collider_vertex_rigid_body
 from . import rig_degenerate_rest_shape
 from . import bl_fetch_frame_discovery
@@ -417,6 +418,10 @@ REGISTRY = {
     # it. Only the dynamic edge against collider edge pass can see that rim, and
     # the edges it has to act on carry no mass of their own.
     "rig_collider_free_edge": rig_collider_free_edge,
+    # SAND grains dropped onto the interior of a dynamic rod segment rest on
+    # it. Only the point-edge line-search sweep can bound that pair: the grain
+    # owns no edge and the rod edge has no face (issue #154).
+    "rig_sand_rod_point_edge": rig_sand_rod_point_edge,
     # The same contract for the collider vertex against dynamic face pass: a
     # rigid body dropped onto the APEX of a collision mesh rests on it, and a
     # rigid body FACE is the kind that carries no mass of its own.
