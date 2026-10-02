@@ -908,6 +908,10 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*Zozo's Contact Solver | Blender Test*](https://www.youtube.com/watch?v=EcTBUaeOu2U) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 - [*Zozo's Multi-Cloth Simulation | Blender Test*](https://www.youtube.com/watch?v=VVphAZokcjs) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 - [*Testing the new ZOZO Physics Contact Solver Addon for Blender*](https://www.youtube.com/shorts/50dQrbSYoWk) by [Max Grob](https://www.youtube.com/@maxgrob1412).
+- [*Will the Steel Ball Pass Through?*](https://www.youtube.com/shorts/-s57o9FHM9c) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
+- [*Will the Minecraft Slime Block Drop?*](https://www.youtube.com/shorts/H2ncgaLnU6s) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
+- [*Will the Slime Block Make It Down?*](https://www.youtube.com/shorts/yPJKib9Smzc) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
+- [*Will the Squishy Balls Fit Through?*](https://www.youtube.com/shorts/qvGMO8czEAA) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 
 ### 📰 Articles
 
