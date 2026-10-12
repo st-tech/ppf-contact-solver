@@ -370,6 +370,7 @@ pub fn check_self_intersection(
             tris: t_slice,
             is_collider: coll,
             rod_edges: rod,
+            rod_is_collider: None,
             // Standalone utility binding (tests / _intersection_.py); the PDRD
             // body filter and the issue-#138 intersection allowances are
             // applied only in the scene-build assemble path, which is the one

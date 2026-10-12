@@ -19,7 +19,7 @@
 #   B. static_and_empty_targets_are_refused: a Static group is refused when
 #      set, and a narrowed source with an empty list, or naming a group that
 #      no longer exists, fails the encode by name.
-#   C. payload_names_groups_by_position: the Force field's grid and the script
+#   C. payload_names_groups_by_position: the Force field object and the script
 #      carry exactly their group's position in the payload's group list.
 #   D. python_api_round_trips: get/set_force_field_targets read and write the
 #      same state.
@@ -94,8 +94,6 @@ try:
     text = bpy.data.texts.new("ff_targets.py")
     text.from_string("def eval(x, y, z, t):\n    return (0.0, 2.0, 0.0)\n")
     state.force_field_script = text
-    state.force_field_spacing = 0.1
-    state.force_field_time_samples = 1
 
     # ----- A --------------------------------------------------------------
     bpy.ops.scene.force_field_choose_groups(source="FFPush")
@@ -141,11 +139,11 @@ try:
     active = [g for g in groups_mod.iterate_object_groups(scene) if g.active]
     pos = {g.uuid: i for i, g in enumerate(active)}
     ffp = built.get("force_field") or {}
-    grid_groups = [g.get("groups") for g in ffp.get("grids", [])]
+    field_groups = [f.get("groups") for f in ffp.get("fields", [])]
     script_groups = [s_.get("groups") for s_ in ffp.get("scripts", [])]
     dh.record("C_payload_names_groups_by_position",
-              grid_groups == [[pos[group_a.uuid]]] and script_groups == [[pos[group_b.uuid]]],
-              {"grids": grid_groups, "scripts": script_groups, "positions": pos})
+              field_groups == [[pos[group_a.uuid]]] and script_groups == [[pos[group_b.uuid]]],
+              {"fields": field_groups, "scripts": script_groups, "positions": pos})
 
     # ----- D --------------------------------------------------------------
     got_push = api.get_force_field_targets("FFPush")

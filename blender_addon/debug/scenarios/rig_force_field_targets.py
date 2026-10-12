@@ -4,7 +4,7 @@
 # License: Apache v2.0
 #
 # A force field source reaches every object, or only the groups it names:
-# group-targeted grids and scripts move only their groups, an ungrouped
+# group-targeted field objects and scripts move only their groups, an ungrouped
 # object gets only the untargeted source, and an unknown group is refused.
 # The cases and the reasoning behind each are in `_force_field_probe.py`.
 

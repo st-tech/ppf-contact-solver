@@ -3,10 +3,11 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# A grid acts by POSITION and by TIME: two halves of a box push two sheets
-# apart, a sheet outside the box is unforced and the solver logs it, two time
-# samples reverse the motion, and an air-velocity grid drives the drag only
-# when the air has density.
+# A field object acts by POSITION and by TIME, exactly: the kernel matches the
+# reference evaluator for four laws, for a field far from the scene and
+# under World Scaling; a moving origin reverses the motion; a Wind drives the
+# drag only when the air has density; a falloff that does not reach leaves a
+# sheet still.
 # The cases and the reasoning behind each are in `_force_field_probe.py`.
 
 from __future__ import annotations
@@ -20,4 +21,4 @@ NOT_PARALLELIZABLE = True
 
 
 def run(ctx: r.ScenarioContext) -> dict:
-    return probe.run_section(ctx, "spatial", "force field in space and time")
+    return probe.run_section(ctx, "spatial", "force field objects")

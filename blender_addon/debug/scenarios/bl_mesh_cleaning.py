@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Mesh Cleaning coverage (Utility Tools panel, mesh_ops/cleaning_ops.py).
+# Mesh Cleaning coverage (Mesh Repair panel, mesh_ops/cleaning_ops.py).
 #
 # The tool scans a mesh for the geometry defects that make a Transfer fail or
 # make the solver abort, then repairs the repairable ones. The check that
@@ -416,9 +416,14 @@ try:
         and "object.dissolve_degenerate" in drawn_ops
         and "object.triangulate_for_solver" in drawn_ops
         and any("No defects found" in t for t in labels)
+        # The open-surface hint names both types that are refused at
+        # Transfer for it: a SOLID cannot be tetrahedralized and a PDRD body
+        # has no enclosed volume to take its mass from.
+        and any("SOLID and PDRD need a closed surface" in t for t in labels)
         and (rep_tet or {}).get("n_errors") == 0
         and (rep_tet or {}).get("n_notes") == 0,
         {"err": draw_err, "ops": sorted(drawn_ops), "n_labels": len(labels),
+         "surface_hint": [t for t in labels if "closed surface" in t],
          "all_errors": (rep_all or {}).get("n_errors"),
          "tet": {k: (rep_tet or {}).get(k) for k in ("n_errors", "n_notes")}},
     )

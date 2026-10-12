@@ -337,6 +337,7 @@ fn find_edge_tri_intersections(
     edge_bb_max: &[[f64; 3]],
     tri_bvh: &Bvh,
     is_collider_tri: &[bool],
+    is_collider_rod_edge: bool,
     tri_body_id: &[i32],
     policy: &VertexIntersectPolicy<'_>,
 ) -> Vec<(i32, i32)> {
@@ -372,8 +373,10 @@ fn find_edge_tri_intersections(
         [e0, e1, e0]
     };
 
-    // The edge is "collider" iff either of its parent triangles is.
-    let edge_is_collider = (parent_tri0 >= 0 && is_collider_tri[parent_tri0 as usize])
+    // The edge is "collider" iff either of its parent triangles is. A rod
+    // edge has no parent triangle, so the caller says whether it is one.
+    let edge_is_collider = is_collider_rod_edge
+        || (parent_tri0 >= 0 && is_collider_tri[parent_tri0 as usize])
         || (parent_tri1 >= 0 && is_collider_tri[parent_tri1 as usize]);
 
     // The edge's PDRD rigid-body id (0 = not a member of any body). Every
@@ -461,6 +464,16 @@ pub struct IntersectionInput<'a> {
     pub tris: &'a [i32],
     pub is_collider: Option<&'a [bool]>,
     pub rod_edges: Option<&'a [i32]>,
+    /// Per-ROD-EDGE collider flag, one entry per pair of `rod_edges`: true
+    /// for a segment whose both vertices are pinned, so that its motion is
+    /// prescribed as a collider triangle's is. Such a segment against a
+    /// collider triangle is a pair with nothing free to move, which is not
+    /// a contact pair in the solver (`either_dyn` in
+    /// `kernels/contact/pair_filter.kernel.cpp`) and is skipped here the way
+    /// a fully pinned triangle against a collider triangle is. It is what
+    /// lets a strand held over its first segment grow out of the surface it
+    /// is rooted on. `None` treats every rod edge as free.
+    pub rod_is_collider: Option<&'a [bool]>,
     /// Optional per-triangle 1-based PDRD rigid-body id (0 = not a member
     /// of any rigid body). Parallel to `tris`. When two triangles share
     /// the same nonzero id they belong to the same rigid body, which
@@ -570,11 +583,26 @@ pub fn scan_self_intersection(input: IntersectionInput<'_>) -> SelfIntersections
         pin_allows: input.vert_pin_allow,
     };
 
+    if let Some(rod_is_collider) = input.rod_is_collider {
+        assert_eq!(
+            rod_is_collider.len(),
+            n_rod_edges,
+            "rod_is_collider has {} entries but there are {} rod edges",
+            rod_is_collider.len(),
+            n_rod_edges
+        );
+    }
+
     // Step 5: per-edge parallel scan into (edge_idx, tri_idx) hits.
     let n_edges = all_edges.len() / 2;
     let edge_tri_pairs: Vec<(i32, i32)> = (0..n_edges)
         .into_par_iter()
         .flat_map(|ei| {
+            // Rod edges follow the mesh edges in `all_edges`.
+            let is_collider_rod_edge = ei >= n_mesh_edges
+                && input
+                    .rod_is_collider
+                    .is_some_and(|flags| flags[ei - n_mesh_edges]);
             find_edge_tri_intersections(
                 ei,
                 input.verts,
@@ -585,6 +613,7 @@ pub fn scan_self_intersection(input: IntersectionInput<'_>) -> SelfIntersections
                 &edge_bb_max,
                 &tri_bvh,
                 is_collider,
+                is_collider_rod_edge,
                 tri_body_id,
                 &policy,
             )
@@ -643,6 +672,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -664,6 +694,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -685,6 +716,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -706,6 +738,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -727,6 +760,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -749,6 +783,7 @@ mod tests {
             tris: &tris,
             is_collider: Some(&coll_both),
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -763,6 +798,7 @@ mod tests {
             tris: &tris,
             is_collider: Some(&coll_one),
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -791,6 +827,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: Some(&same_body),
             vert_object_id: None,
             vert_group_id: None,
@@ -806,6 +843,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: Some(&diff_body),
             vert_object_id: None,
             vert_group_id: None,
@@ -821,6 +859,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: Some(&one_body),
             vert_object_id: None,
             vert_group_id: None,
@@ -844,6 +883,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: Some(&rod),
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id: None,
             vert_group_id: None,
@@ -851,6 +891,71 @@ mod tests {
             vert_pin_allow: None,
         });
         assert_eq!(r, vec![(-1, 0)]);
+    }
+
+    /// The `rod_edge_detected` fixture with the collider flags of its two
+    /// elements given: a rod edge piercing the one triangle.
+    fn check_piercing_rod(tri_is_collider: bool, rod_is_collider: Option<bool>) -> Vec<(i32, i32)> {
+        let verts = flat3(&[
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0],
+            [0.25, 0.25, -1.0], [0.25, 0.25, 1.0],
+        ]);
+        let tris = flat3i(&[[0, 1, 2]]);
+        let rod = vec![3i32, 4];
+        let tri_flags = [tri_is_collider];
+        let rod_flags = rod_is_collider.map(|flag| [flag]);
+        check_self_intersection(IntersectionInput {
+            verts: &verts,
+            tris: &tris,
+            is_collider: Some(&tri_flags),
+            rod_edges: Some(&rod),
+            rod_is_collider: rod_flags.as_ref().map(|flags| flags.as_slice()),
+            tri_body_id: None,
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
+        })
+    }
+
+    #[test]
+    fn collider_rod_edge_skipped_against_a_collider_triangle_only() {
+        // Both prescribed: nothing is free to move, so the pair is not one
+        // the solver forms contact for and it is not reported.
+        assert!(
+            check_piercing_rod(true, Some(true)).is_empty(),
+            "a pinned rod segment against a collider triangle must be skipped"
+        );
+        // One side free: the pair is a contact pair and the crossing is a
+        // defect, whichever side is the prescribed one.
+        assert_eq!(check_piercing_rod(false, Some(true)), vec![(-1, 0)]);
+        assert_eq!(check_piercing_rod(true, Some(false)), vec![(-1, 0)]);
+        assert_eq!(check_piercing_rod(false, Some(false)), vec![(-1, 0)]);
+        // No flags given: every rod edge is free.
+        assert_eq!(check_piercing_rod(true, None), vec![(-1, 0)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "rod_is_collider has 2 entries but there are 1 rod edges")]
+    fn rod_collider_flags_must_cover_every_rod_edge() {
+        let verts = flat3(&[
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0],
+            [0.25, 0.25, -1.0], [0.25, 0.25, 1.0],
+        ]);
+        let tris = flat3i(&[[0, 1, 2]]);
+        let rod = vec![3i32, 4];
+        check_self_intersection(IntersectionInput {
+            verts: &verts,
+            tris: &tris,
+            is_collider: None,
+            rod_edges: Some(&rod),
+            rod_is_collider: Some(&[true, true]),
+            tri_body_id: None,
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
+        });
     }
 
     // ----- Intersection allowances (issue #138) -----
@@ -885,6 +990,7 @@ mod tests {
             tris: &tris,
             is_collider: None,
             rod_edges: None,
+            rod_is_collider: None,
             tri_body_id: None,
             vert_object_id,
             vert_group_id,

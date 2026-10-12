@@ -93,7 +93,8 @@ def set_scene_parameters(
 
     Only the parameters passed are written; the rest keep their current value.
     Two of them are enums that reject anything else: friction_mode accepts
-    "MIN", "MAX" or "MEAN", and precond accepts "BLOCK_JACOBI" or "SCHWARZ".
+    "MIN", "MAX" or "MEAN", and precond accepts "BLOCK_JACOBI", "SCHWARZ" or
+    "MULTIGRID".
     post_snap_exactly is the one parameter here that is not sent to the
     solver: it controls how already-simulated frames are written back on
     fetch, so changing it takes effect on the next fetch and needs no new run.
@@ -139,7 +140,11 @@ def set_scene_parameters(
         auto_save_interval: Auto-save interval (frames)
         save_state_on_finish: Save a resumable state when the simulation finishes
         keep_states: Number of most-recent saved states to retain (0 = keep all)
-        precond: PCG preconditioner, "BLOCK_JACOBI" (default) or "SCHWARZ"
+        precond: PCG preconditioner: "BLOCK_JACOBI" (default), "SCHWARZ" or
+            "MULTIGRID" (geometric multigrid: far fewer iterations, faster
+            on large cloth and soft bodies, slower on small scenes). A scene
+            with a PDRD group that holds an included object cannot be
+            transferred with "MULTIGRID"; the transfer refuses it by name
         schwarz_levels: Number of additive Schwarz levels, 1 (single-level
             smoother) or 2 (two-level coarse correction, default). Only used
             when precond is "SCHWARZ".
@@ -164,8 +169,14 @@ def set_scene_parameters(
         wind_direction = check_vec3("wind_direction", wind_direction, MCPError)
     if precond is not None:
         precond = precond.upper()
-        if precond not in {"SCHWARZ", "BLOCK_JACOBI"}:
-            raise MCPError("precond must be 'SCHWARZ' or 'BLOCK_JACOBI'")
+        # The valid identifiers are the ones the encoder has a solver name
+        # for, so the message names exactly what an assignment would accept.
+        from ...models.groups import PRECOND_SOLVER_NAMES
+        if precond not in PRECOND_SOLVER_NAMES:
+            raise MCPError(
+                "precond must be one of "
+                + ", ".join(f"'{name}'" for name in PRECOND_SOLVER_NAMES)
+            )
     if schwarz_levels is not None and schwarz_levels not in (1, 2):
         raise MCPError("schwarz_levels must be 1 or 2")
     if friction_mode is not None:

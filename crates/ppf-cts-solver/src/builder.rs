@@ -503,6 +503,15 @@ pub struct PdrdSceneData<'a> {
     pub rest_centered: &'a [f32],
 }
 
+/// Cosserat rod inputs threaded from `Scene`: `edge` marks the rod edges
+/// (aligned with them, `rod_count` long) that belong to a Cosserat rod and so
+/// carry a material frame, and `tilt` is the authored roll of that frame about
+/// its tangent, one value per vertex, or empty.
+pub struct CosseratSceneData<'a> {
+    pub edge: &'a [u8],
+    pub tilt: &'a [f32],
+}
+
 /// Static aggregate-lock inputs threaded from `Scene`.
 ///
 /// Each axis table has one normalized solver-space axis per displacement
@@ -584,6 +593,7 @@ pub fn build(
     constraint: Constraint,
     pdrd: PdrdSceneData<'_>,
     lock_data: LockSceneData<'_>,
+    cosserat_in: CosseratSceneData<'_>,
 ) -> data::DataSet {
     let dt = clamp_substep_dt(sim_args.dt, sim_args.fps);
     // Every param table this function builds follows the same rule as the face
@@ -1878,6 +1888,68 @@ pub fn build(
         hinge: CVec::from(&hinge_type[..]),
     };
 
+    // Cosserat rods: a material frame for every marked rod edge and the rest
+    // Darboux vector at every node between two of them (`cosserat.rs`). A
+    // tangent is the difference of the edge's endpoints, taken before any cast.
+    let cosserat_frames = {
+        let mut inputs = Vec::new();
+        for ei in 0..rod_count {
+            if cosserat_in.edge.get(ei).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            let e = mesh.mesh.mesh.edge.column(ei);
+            let (v0, v1) = (e[0], e[1]);
+            let d = (mesh.vertex.column(v1) - mesh.vertex.column(v0)).map(f32::from);
+            let length = d.norm();
+            assert!(length > 0.0, "Cosserat edge {ei} has zero rest length");
+            let material = &props.edge_params[props.edge[ei].param_index as usize];
+            // The frame sits at the edge's middle, so its authored roll is the
+            // mean of its two endpoints' tilts; a difference between neighboring
+            // edges is an authored twist, which the rest Darboux reads.
+            let roll = if cosserat_in.tilt.is_empty() {
+                0.0
+            } else {
+                0.5 * (cosserat_in.tilt[v0] + cosserat_in.tilt[v1])
+            };
+            inputs.push(crate::cosserat::CosseratEdgeInput {
+                edge: ei as u32,
+                v0: v0 as u32,
+                v1: v1 as u32,
+                tangent: d / length,
+                length,
+                rest_twist: material.cosserat_rest_twist,
+                fix_ends: material.cosserat_fix_ends > 0.5,
+                twist_rate: material.cosserat_end_twist_rate,
+                straight_rest: material.cosserat_straight_rest > 0.5,
+                roll,
+            });
+        }
+        crate::cosserat::build_cosserat_frames(&inputs)
+    };
+    let cosserat_slots = cosserat_frames.quat.len();
+    let cosserat_edge_nodes: Vec<Vec2u> = (0..cosserat_slots)
+        .map(|s| Vec2u::new(cosserat_frames.node_from[s], cosserat_frames.node_to[s]))
+        .collect();
+    let cosserat_quat: Vec<f32> = cosserat_frames.quat.iter().flatten().copied().collect();
+    let cosserat_fixed: Vec<u32> = cosserat_frames.fixed.iter().map(|&f| f as u32).collect();
+    let cosserat_bend_slots: Vec<Vec2u> = cosserat_frames
+        .bend_sites
+        .iter()
+        .map(|b| Vec2u::new(b.slot_prev, b.slot_next))
+        .collect();
+    let cosserat_rest_darboux: Vec<Vec3f> = cosserat_frames
+        .bend_sites
+        .iter()
+        .map(|b| Vec3f::new(b.rest_darboux[0], b.rest_darboux[1], b.rest_darboux[2]))
+        .collect();
+    let cosserat_bend_invlen: Vec<f32> =
+        cosserat_frames.bend_sites.iter().map(|b| b.inv_len).collect();
+    let cosserat_rest_metric: Vec<f32> = cosserat_frames
+        .bend_sites
+        .iter()
+        .flat_map(|b| crate::cosserat::rest_metric(b.rest_darboux, b.inv_len))
+        .collect();
+
     let mesh = data::FfiMesh {
         face: CVec::from(
             mesh.mesh
@@ -1981,6 +2053,15 @@ pub fn build(
         statistics_static_object_index: CVec::new(),
         statistics_contact_count: CVec::new(),
         start_link: CVecVec::from(&start_link[..]),
+        cosserat_edge: CVec::from(cosserat_frames.edge_order.as_slice()),
+        cosserat_edge_nodes: CVec::from(cosserat_edge_nodes.as_slice()),
+        cosserat_quat: CVec::from(cosserat_quat.as_slice()),
+        cosserat_fixed: CVec::from(cosserat_fixed.as_slice()),
+        cosserat_end_omega: CVec::from(cosserat_frames.end_omega.as_slice()),
+        cosserat_bend_slots: CVec::from(cosserat_bend_slots.as_slice()),
+        cosserat_rest_darboux: CVec::from(cosserat_rest_darboux.as_slice()),
+        cosserat_bend_invlen: CVec::from(cosserat_bend_invlen.as_slice()),
+        cosserat_rest_metric: CVec::from(cosserat_rest_metric.as_slice()),
     }
 }
 
@@ -2086,14 +2167,23 @@ pub fn make_param(args: &SimArgs) -> data::ParamSet {
         // vertices in the kernel, so scale it into sim space too. 0.0 (disabled)
         // stays 0.0.
         fix_xz: args.fix_xz * args.world_scaling,
-        // Linear-solve preconditioner. PPF_PRECOND env (block-jacobi|schwarz)
-        // overrides the param when set; otherwise the parsed args.precond
-        // (default block-jacobi) wins. Unknown values fall back to block-jacobi.
-        precond: std::env::var("PPF_PRECOND")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .or_else(|| args.precond.parse().ok())
-            .unwrap_or(data::PrecondMode::BlockJacobi),
+        // Linear-solve preconditioner. The PPF_PRECOND environment variable
+        // (block-jacobi|schwarz|multigrid) overrides the param when set;
+        // otherwise args.precond (default block-jacobi) decides.
+        //
+        // A NAME THAT IS NOT A PRECONDITIONER STOPS THE RUN, from either
+        // source. Answering it with block-jacobi instead would let a
+        // misspelled `multigrid` run to the end as another preconditioner,
+        // with nothing in its output to say which one produced the iteration
+        // counts being read.
+        // An empty PPF_PRECOND is an unset one, as a shell that exports the
+        // name with no value means it.
+        precond: match std::env::var("PPF_PRECOND") {
+            Ok(name) if !name.is_empty() => name
+                .parse()
+                .unwrap_or_else(|e| panic!("the PPF_PRECOND environment variable: {e}")),
+            _ => args.precond.parse().unwrap_or_else(|e| panic!("{e}")),
+        },
         // Number of additive Schwarz levels (1 = single-level, 2 = two-level
         // coarse correction). schwarz::build clamps to its internal cap and
         // still honors the PPF_SCHWARZ_LEVELS env override. 0 (e.g. from an
@@ -2500,6 +2590,13 @@ pub(crate) fn averaged_edge_param(
         bend_rest_from_geometry: false,
         deform_damping: 0.0,
         bend_damping: 0.0,
+        cosserat_shear: 0.0,
+        cosserat_bend: 0.0,
+        cosserat_twist: 0.0,
+        cosserat_rest_twist: 0.0,
+        cosserat_fix_ends: 0.0,
+        cosserat_end_twist_rate: 0.0,
+        cosserat_straight_rest: 0.0,
     }
 }
 

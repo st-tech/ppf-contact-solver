@@ -28,9 +28,10 @@ Design notes (verified against Blender 5.1.2, live):
     the file is complete on return), so the finally-block state restore is safe.
     Alembic keeps ``as_background_job=False`` for the same reason; do NOT flip it
     on, or the restore would race the still-running export and corrupt the tail.
-  * Rods (CURVE objects) deform through a frame-change handler rather than a
-    MESH_CACHE modifier, and the built-in exporters do not fire it reliably, so
-    they are excluded and reported as a WARNING rather than silently dropped.
+  * Rods (CURVE objects) and Hair Curves deform through a frame-change handler
+    rather than a MESH_CACHE modifier, and the built-in exporters do not fire it
+    reliably, so they are excluded and reported as a WARNING rather than
+    silently dropped.
 """
 
 from __future__ import annotations
@@ -130,15 +131,16 @@ def _exportable_meshes(context):
 
 
 def _excluded_sim_curves(context):
-    """Names of CURVE (rod) objects in the view layer that carry a solver cache.
+    """Names of CURVE (rod) and Hair Curves objects in the view layer that
+    carry a solver cache.
 
-    Rods deform via a frame-change handler the built-in exporters do not fire,
+    Both deform via a frame-change handler the built-in exporters do not fire,
     so they cannot be exported faithfully through this path; we list them so the
     user is warned rather than silently losing them.
     """
     names = []
     for obj in context.view_layer.objects:
-        if obj.type == "CURVE" and has_mesh_cache(obj):
+        if obj.type in ("CURVE", "CURVES") and has_mesh_cache(obj):
             names.append(obj.name)
     return names
 

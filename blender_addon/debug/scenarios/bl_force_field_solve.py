@@ -93,8 +93,6 @@ try:
     text = bpy.data.texts.new("ff_drift.py")
     text.from_string("def eval(x, y, z, t):\n    return (0.0, 2.0, 0.0)\n")
     state.force_field_script = text
-    state.force_field_spacing = 0.1
-    state.force_field_time_samples = 2
 
     data_bytes, param_bytes = dh.encode_payload()
     dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,

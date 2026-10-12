@@ -357,6 +357,36 @@ def _draw_native_status(layout, server_type, path) -> None:
         layout.label(text=iface_("Using solver root: {path}").format(path=resolved))
 
 
+def _draw_connection_advanced(layout, state, props) -> None:
+    """The server's idle stop and the add-on's ping, in a collapsed section.
+
+    Drawn on the box rather than in the column a connection disables: the
+    idle stop is applied at Start Server and the ping interval at once, so
+    both are reachable while connected.
+    """
+    from ..core.connection import ping_outlasts_idle_stop
+
+    box = layout.box()
+    row = box.row()
+    row.prop(
+        state,
+        "show_connection_advanced",
+        icon="TRIA_DOWN" if state.show_connection_advanced else "TRIA_RIGHT",
+        emboss=False,
+        icon_only=True,
+    )
+    row.label(text="Advanced", icon="PREFERENCES")
+    if not state.show_connection_advanced:
+        return
+    box.prop(props, "server_idle_timeout")
+    box.prop(props, "ping_interval")
+    if ping_outlasts_idle_stop(props.server_idle_timeout, props.ping_interval):
+        box.label(
+            text="Ping Interval must be shorter than the idle time",
+            icon="ERROR",
+        )
+
+
 def _draw_remote_device(layout, props) -> None:
     """Draw the Compute Device and GPU Backend rows for a REMOTE connection.
 
@@ -893,6 +923,7 @@ class MAIN_PT_RemotePanel(Panel):
             _draw_name_warning(box, state.project_name)
             if "DOCKER" in props.server_type:
                 box.prop(props, "docker_port")
+            _draw_connection_advanced(box, state, props)
 
             row = box.row()
             if com.is_connecting():

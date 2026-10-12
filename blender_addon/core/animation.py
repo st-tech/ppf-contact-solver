@@ -39,8 +39,10 @@ def clear_animation_data(context, move_to_frame: bool = True):
                 if obj.type in ("MESH", "CURVE"):
                     cleanup_mesh_cache(obj)
                 continue
-            # Clear curve animation (MESH_CACHE + PC2)
-            if obj.type == "CURVE":
+            # Clear curve animation (MESH_CACHE + PC2). A Hair Curves
+            # object is cleared the same way: its groom was never
+            # overwritten, so there is no shape to restore afterwards.
+            if obj.type in ("CURVE", "CURVES"):
                 cleanup_mesh_cache(obj)
                 continue
             if obj.type != "MESH":

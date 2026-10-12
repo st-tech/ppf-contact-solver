@@ -22,8 +22,9 @@
 #      different depending on where the object sits (measured: per-vertex
 #      forces change 275% at 1 m and 2202% at 8 m, while a uniform pressure is
 #      exactly invariant). The enum id stays reserved.
-#   E_rod_map_refused: a rod carries no element table a per-vertex map can be
-#      reduced over, so no key is offered for one.
+#   E_rod_refuses_what_a_segment_does_not_read: a rod's element table is its
+#      segments, so a map on a value a segment reads is accepted, and one on a
+#      value only a triangle reads (the UV-frame bending) is refused by name.
 #   F_rod_keyframe_refused: the per-frame material tables are written for
 #      TRIANGLES only, so a rod's sampled schedule reached no element table.
 #      It was shipped and silently ignored for the whole solve.
@@ -145,13 +146,17 @@ try:
     )
     entry.parameter = "bend"
 
-    # ----- E: a rod has no element table to reduce a map over
+    # ----- E: a rod takes the maps its segments read, and no other
     group.object_type = "ROD"
+    err_e_read = encode_error()
+    entry.parameter = "bend-warp"
     err_e = encode_error()
     dh.record(
-        "E_rod_map_refused",
-        "not available as a map" in err_e and "ROD" in err_e,
-        {"error": err_e[:300]},
+        "E_rod_refuses_what_a_segment_does_not_read",
+        err_e_read == ""
+        and "bend-warp" in err_e and "not available as a map" in err_e
+        and "ROD" in err_e,
+        {"bend": err_e_read[:300], "bend_warp": err_e[:300]},
     )
     group.material_maps.clear()
     group.material_maps_index = 0

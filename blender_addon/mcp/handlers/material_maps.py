@@ -244,17 +244,20 @@ def add_material_map(
     target_value: float,
     enabled: bool = True,
 ):
-    """Add a spatial material map, varying one parameter across the surface.
+    """Add a spatial material map, varying one parameter across the surface
+    of a shell or a solid, or along a rod.
 
     The value at a vertex is lerp(base, target, weight), where base is the
     group's own slider for that parameter and weight is read per vertex from
     the named source, clamped to [0, 1]. A weight of 0 therefore reproduces the
     unmapped result exactly. Each element takes the mean of its own vertices'
-    weights.
+    weights, which for a rod is the two ends of a segment.
 
-    Only SHELL and SOLID groups carry the element tables a map is reduced over,
-    and each object type reads a different set of parameters, so 'parameter' is
-    checked against this group's type. 'pressure' is never mappable. A group
+    Only SHELL, SOLID and ROD groups carry the element tables a map is reduced
+    over, and each object type reads a different set of parameters, so
+    'parameter' is checked against this group's type: a ROD group takes
+    young-mod, bend, friction, deformation-damping, bending-damping,
+    strain-limit and bend-plasticity. 'pressure' is never mappable. A group
     takes at most one enabled map per parameter.
 
     The source is resolved when the scene is built, so the vertex group or
@@ -262,13 +265,22 @@ def add_material_map(
     the object; an attribute is read from the evaluated mesh on the POINT
     domain, which is where a Store Named Attribute node writes one.
 
+    A Hair Curves object has no vertex groups, so a map on a ROD group that
+    holds one takes source_type ATTRIBUTE: a float, integer or boolean point
+    attribute of the groom, or one a Geometry Nodes modifier in front of the
+    first modifier that generates curves stores (the Spline Parameter gives a
+    value running from root to tip). A legacy Curve object in the group is
+    refused when the scene is built, since its rod vertices are sampled along
+    the curve.
+
     Args:
         group_uuid: UUID of the group to add the map to.
         parameter: Solver key to vary. One of young-mod, bend, friction,
             deformation-damping, bending-damping, strain-limit, plasticity,
             bend-plasticity, bend-warp, bend-weft.
         source_type: VERTEX_GROUP to read weight paint, ATTRIBUTE to read a
-            float attribute off the evaluated mesh.
+            float attribute off the evaluated mesh, or a point attribute of
+            a Hair Curves object.
         source_name: Name of the vertex group or float attribute holding the
             weights at the start frame.
         target_value: Value reached where the weight is 1, in the same units as

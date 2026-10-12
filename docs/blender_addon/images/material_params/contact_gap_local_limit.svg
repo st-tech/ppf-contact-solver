@@ -1,0 +1,546 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 560" role="img" aria-label="Local Gap Limit illustration">
+  <title>Local Gap Limit</title>
+  <desc>
+    Two columns, each showing a fine mesh patch above a coarse one. Every
+    mesh point carries a dashed red ring whose radius is half the contact
+    gap, so two rings that overlap mean the two points are inside each
+    other's contact layer. In the left column, with no limit, the same gap
+    is drawn on both meshes: on the fine mesh the rings overlap their
+    neighbors everywhere, on the coarse mesh they stay clear. In the right
+    column, with the limit at 25 percent, the rings on the fine mesh are
+    shrunk to a quarter of the triangle height and no longer touch, while
+    the rings on the coarse mesh are unchanged.
+  </desc>
+
+  <style>
+    .title      { font: 700 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .subtitle   { font: italic 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #555; }
+    .label      { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1a1a1a; }
+    .note       { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #555; }
+    .bad        { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #c93b3b; }
+    .good       { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #2e7d4f; }
+    .edge       { stroke: #9aa7b4; stroke-width: 1; }
+    .pt         { fill: #2e6da4; }
+    .gap        { stroke: #c93b3b; stroke-width: 1.4; stroke-dasharray: 4 3; fill: #c93b3b; fill-opacity: 0.06; }
+    .divider    { stroke: #bbb; stroke-width: 1; stroke-dasharray: 3 3; }
+    .hdr-bg-off { fill: #fdf2f2; }
+    .hdr-bg-on  { fill: #eef8f1; }
+  </style>
+
+  <!-- Header bands -->
+  <rect x="0"   y="0" width="410" height="68" class="hdr-bg-off" />
+  <rect x="410" y="0" width="410" height="68" class="hdr-bg-on" />
+  <text x="205" y="30" text-anchor="middle" class="title">Gap as authored</text>
+  <text x="205" y="54" text-anchor="middle" class="subtitle">the same gap on every mesh</text>
+  <text x="615" y="30" text-anchor="middle" class="title">Local Gap Limit 25%</text>
+  <text x="615" y="54" text-anchor="middle" class="subtitle">gap capped at a quarter of the mesh spacing</text>
+
+  <!-- Row labels -->
+  <text x="205" y="96" text-anchor="middle" class="label">fine mesh</text>
+  <text x="615" y="96" text-anchor="middle" class="label">fine mesh</text>
+  <text x="205" y="330" text-anchor="middle" class="label">coarse mesh</text>
+  <text x="615" y="330" text-anchor="middle" class="label">coarse mesh</text>
+
+  <!-- Left column, fine mesh: rings overlap -->
+  <line x1="117.0" y1="157.4" x2="139.0" y2="157.4" class="edge" />
+  <line x1="117.0" y1="157.4" x2="128.0" y2="176.4" class="edge" />
+  <line x1="139.0" y1="157.4" x2="161.0" y2="157.4" class="edge" />
+  <line x1="139.0" y1="157.4" x2="128.0" y2="176.4" class="edge" />
+  <line x1="139.0" y1="157.4" x2="150.0" y2="176.4" class="edge" />
+  <line x1="161.0" y1="157.4" x2="183.0" y2="157.4" class="edge" />
+  <line x1="161.0" y1="157.4" x2="150.0" y2="176.4" class="edge" />
+  <line x1="161.0" y1="157.4" x2="172.0" y2="176.4" class="edge" />
+  <line x1="183.0" y1="157.4" x2="205.0" y2="157.4" class="edge" />
+  <line x1="183.0" y1="157.4" x2="172.0" y2="176.4" class="edge" />
+  <line x1="183.0" y1="157.4" x2="194.0" y2="176.4" class="edge" />
+  <line x1="205.0" y1="157.4" x2="227.0" y2="157.4" class="edge" />
+  <line x1="205.0" y1="157.4" x2="194.0" y2="176.4" class="edge" />
+  <line x1="205.0" y1="157.4" x2="216.0" y2="176.4" class="edge" />
+  <line x1="227.0" y1="157.4" x2="249.0" y2="157.4" class="edge" />
+  <line x1="227.0" y1="157.4" x2="216.0" y2="176.4" class="edge" />
+  <line x1="227.0" y1="157.4" x2="238.0" y2="176.4" class="edge" />
+  <line x1="249.0" y1="157.4" x2="271.0" y2="157.4" class="edge" />
+  <line x1="249.0" y1="157.4" x2="238.0" y2="176.4" class="edge" />
+  <line x1="249.0" y1="157.4" x2="260.0" y2="176.4" class="edge" />
+  <line x1="271.0" y1="157.4" x2="293.0" y2="157.4" class="edge" />
+  <line x1="271.0" y1="157.4" x2="260.0" y2="176.4" class="edge" />
+  <line x1="271.0" y1="157.4" x2="282.0" y2="176.4" class="edge" />
+  <line x1="293.0" y1="157.4" x2="282.0" y2="176.4" class="edge" />
+  <line x1="128.0" y1="176.4" x2="150.0" y2="176.4" class="edge" />
+  <line x1="128.0" y1="176.4" x2="117.0" y2="195.5" class="edge" />
+  <line x1="128.0" y1="176.4" x2="139.0" y2="195.5" class="edge" />
+  <line x1="150.0" y1="176.4" x2="172.0" y2="176.4" class="edge" />
+  <line x1="150.0" y1="176.4" x2="139.0" y2="195.5" class="edge" />
+  <line x1="150.0" y1="176.4" x2="161.0" y2="195.5" class="edge" />
+  <line x1="172.0" y1="176.4" x2="194.0" y2="176.4" class="edge" />
+  <line x1="172.0" y1="176.4" x2="161.0" y2="195.5" class="edge" />
+  <line x1="172.0" y1="176.4" x2="183.0" y2="195.5" class="edge" />
+  <line x1="194.0" y1="176.4" x2="216.0" y2="176.4" class="edge" />
+  <line x1="194.0" y1="176.4" x2="183.0" y2="195.5" class="edge" />
+  <line x1="194.0" y1="176.4" x2="205.0" y2="195.5" class="edge" />
+  <line x1="216.0" y1="176.4" x2="238.0" y2="176.4" class="edge" />
+  <line x1="216.0" y1="176.4" x2="205.0" y2="195.5" class="edge" />
+  <line x1="216.0" y1="176.4" x2="227.0" y2="195.5" class="edge" />
+  <line x1="238.0" y1="176.4" x2="260.0" y2="176.4" class="edge" />
+  <line x1="238.0" y1="176.4" x2="227.0" y2="195.5" class="edge" />
+  <line x1="238.0" y1="176.4" x2="249.0" y2="195.5" class="edge" />
+  <line x1="260.0" y1="176.4" x2="282.0" y2="176.4" class="edge" />
+  <line x1="260.0" y1="176.4" x2="249.0" y2="195.5" class="edge" />
+  <line x1="260.0" y1="176.4" x2="271.0" y2="195.5" class="edge" />
+  <line x1="282.0" y1="176.4" x2="271.0" y2="195.5" class="edge" />
+  <line x1="282.0" y1="176.4" x2="293.0" y2="195.5" class="edge" />
+  <line x1="117.0" y1="195.5" x2="139.0" y2="195.5" class="edge" />
+  <line x1="117.0" y1="195.5" x2="128.0" y2="214.5" class="edge" />
+  <line x1="139.0" y1="195.5" x2="161.0" y2="195.5" class="edge" />
+  <line x1="139.0" y1="195.5" x2="128.0" y2="214.5" class="edge" />
+  <line x1="139.0" y1="195.5" x2="150.0" y2="214.5" class="edge" />
+  <line x1="161.0" y1="195.5" x2="183.0" y2="195.5" class="edge" />
+  <line x1="161.0" y1="195.5" x2="150.0" y2="214.5" class="edge" />
+  <line x1="161.0" y1="195.5" x2="172.0" y2="214.5" class="edge" />
+  <line x1="183.0" y1="195.5" x2="205.0" y2="195.5" class="edge" />
+  <line x1="183.0" y1="195.5" x2="172.0" y2="214.5" class="edge" />
+  <line x1="183.0" y1="195.5" x2="194.0" y2="214.5" class="edge" />
+  <line x1="205.0" y1="195.5" x2="227.0" y2="195.5" class="edge" />
+  <line x1="205.0" y1="195.5" x2="194.0" y2="214.5" class="edge" />
+  <line x1="205.0" y1="195.5" x2="216.0" y2="214.5" class="edge" />
+  <line x1="227.0" y1="195.5" x2="249.0" y2="195.5" class="edge" />
+  <line x1="227.0" y1="195.5" x2="216.0" y2="214.5" class="edge" />
+  <line x1="227.0" y1="195.5" x2="238.0" y2="214.5" class="edge" />
+  <line x1="249.0" y1="195.5" x2="271.0" y2="195.5" class="edge" />
+  <line x1="249.0" y1="195.5" x2="238.0" y2="214.5" class="edge" />
+  <line x1="249.0" y1="195.5" x2="260.0" y2="214.5" class="edge" />
+  <line x1="271.0" y1="195.5" x2="293.0" y2="195.5" class="edge" />
+  <line x1="271.0" y1="195.5" x2="260.0" y2="214.5" class="edge" />
+  <line x1="271.0" y1="195.5" x2="282.0" y2="214.5" class="edge" />
+  <line x1="293.0" y1="195.5" x2="282.0" y2="214.5" class="edge" />
+  <line x1="128.0" y1="214.5" x2="150.0" y2="214.5" class="edge" />
+  <line x1="128.0" y1="214.5" x2="117.0" y2="233.6" class="edge" />
+  <line x1="128.0" y1="214.5" x2="139.0" y2="233.6" class="edge" />
+  <line x1="150.0" y1="214.5" x2="172.0" y2="214.5" class="edge" />
+  <line x1="150.0" y1="214.5" x2="139.0" y2="233.6" class="edge" />
+  <line x1="150.0" y1="214.5" x2="161.0" y2="233.6" class="edge" />
+  <line x1="172.0" y1="214.5" x2="194.0" y2="214.5" class="edge" />
+  <line x1="172.0" y1="214.5" x2="161.0" y2="233.6" class="edge" />
+  <line x1="172.0" y1="214.5" x2="183.0" y2="233.6" class="edge" />
+  <line x1="194.0" y1="214.5" x2="216.0" y2="214.5" class="edge" />
+  <line x1="194.0" y1="214.5" x2="183.0" y2="233.6" class="edge" />
+  <line x1="194.0" y1="214.5" x2="205.0" y2="233.6" class="edge" />
+  <line x1="216.0" y1="214.5" x2="238.0" y2="214.5" class="edge" />
+  <line x1="216.0" y1="214.5" x2="205.0" y2="233.6" class="edge" />
+  <line x1="216.0" y1="214.5" x2="227.0" y2="233.6" class="edge" />
+  <line x1="238.0" y1="214.5" x2="260.0" y2="214.5" class="edge" />
+  <line x1="238.0" y1="214.5" x2="227.0" y2="233.6" class="edge" />
+  <line x1="238.0" y1="214.5" x2="249.0" y2="233.6" class="edge" />
+  <line x1="260.0" y1="214.5" x2="282.0" y2="214.5" class="edge" />
+  <line x1="260.0" y1="214.5" x2="249.0" y2="233.6" class="edge" />
+  <line x1="260.0" y1="214.5" x2="271.0" y2="233.6" class="edge" />
+  <line x1="282.0" y1="214.5" x2="271.0" y2="233.6" class="edge" />
+  <line x1="282.0" y1="214.5" x2="293.0" y2="233.6" class="edge" />
+  <line x1="117.0" y1="233.6" x2="139.0" y2="233.6" class="edge" />
+  <line x1="117.0" y1="233.6" x2="128.0" y2="252.6" class="edge" />
+  <line x1="139.0" y1="233.6" x2="161.0" y2="233.6" class="edge" />
+  <line x1="139.0" y1="233.6" x2="128.0" y2="252.6" class="edge" />
+  <line x1="139.0" y1="233.6" x2="150.0" y2="252.6" class="edge" />
+  <line x1="161.0" y1="233.6" x2="183.0" y2="233.6" class="edge" />
+  <line x1="161.0" y1="233.6" x2="150.0" y2="252.6" class="edge" />
+  <line x1="161.0" y1="233.6" x2="172.0" y2="252.6" class="edge" />
+  <line x1="183.0" y1="233.6" x2="205.0" y2="233.6" class="edge" />
+  <line x1="183.0" y1="233.6" x2="172.0" y2="252.6" class="edge" />
+  <line x1="183.0" y1="233.6" x2="194.0" y2="252.6" class="edge" />
+  <line x1="205.0" y1="233.6" x2="227.0" y2="233.6" class="edge" />
+  <line x1="205.0" y1="233.6" x2="194.0" y2="252.6" class="edge" />
+  <line x1="205.0" y1="233.6" x2="216.0" y2="252.6" class="edge" />
+  <line x1="227.0" y1="233.6" x2="249.0" y2="233.6" class="edge" />
+  <line x1="227.0" y1="233.6" x2="216.0" y2="252.6" class="edge" />
+  <line x1="227.0" y1="233.6" x2="238.0" y2="252.6" class="edge" />
+  <line x1="249.0" y1="233.6" x2="271.0" y2="233.6" class="edge" />
+  <line x1="249.0" y1="233.6" x2="238.0" y2="252.6" class="edge" />
+  <line x1="249.0" y1="233.6" x2="260.0" y2="252.6" class="edge" />
+  <line x1="271.0" y1="233.6" x2="293.0" y2="233.6" class="edge" />
+  <line x1="271.0" y1="233.6" x2="260.0" y2="252.6" class="edge" />
+  <line x1="271.0" y1="233.6" x2="282.0" y2="252.6" class="edge" />
+  <line x1="293.0" y1="233.6" x2="282.0" y2="252.6" class="edge" />
+  <line x1="128.0" y1="252.6" x2="150.0" y2="252.6" class="edge" />
+  <line x1="150.0" y1="252.6" x2="172.0" y2="252.6" class="edge" />
+  <line x1="172.0" y1="252.6" x2="194.0" y2="252.6" class="edge" />
+  <line x1="194.0" y1="252.6" x2="216.0" y2="252.6" class="edge" />
+  <line x1="216.0" y1="252.6" x2="238.0" y2="252.6" class="edge" />
+  <line x1="238.0" y1="252.6" x2="260.0" y2="252.6" class="edge" />
+  <line x1="260.0" y1="252.6" x2="282.0" y2="252.6" class="edge" />
+  <circle cx="117.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="139.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="161.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="183.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="205.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="227.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="249.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="271.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="293.0" cy="157.4" r="14.0" class="gap" />
+  <circle cx="128.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="150.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="172.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="194.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="216.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="238.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="260.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="282.0" cy="176.4" r="14.0" class="gap" />
+  <circle cx="117.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="139.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="161.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="183.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="205.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="227.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="249.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="271.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="293.0" cy="195.5" r="14.0" class="gap" />
+  <circle cx="128.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="150.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="172.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="194.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="216.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="238.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="260.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="282.0" cy="214.5" r="14.0" class="gap" />
+  <circle cx="117.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="139.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="161.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="183.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="205.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="227.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="249.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="271.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="293.0" cy="233.6" r="14.0" class="gap" />
+  <circle cx="128.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="150.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="172.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="194.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="216.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="238.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="260.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="282.0" cy="252.6" r="14.0" class="gap" />
+  <circle cx="117.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="139.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="161.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="183.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="205.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="227.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="249.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="271.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="293.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="128.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="150.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="172.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="194.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="216.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="238.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="260.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="282.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="117.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="139.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="161.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="183.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="205.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="227.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="249.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="271.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="293.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="128.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="150.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="172.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="194.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="216.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="238.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="260.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="282.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="117.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="139.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="161.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="183.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="205.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="227.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="249.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="271.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="293.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="128.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="150.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="172.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="194.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="216.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="238.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="260.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="282.0" cy="252.6" r="1.3" class="pt" />
+  <text x="205" y="300" text-anchor="middle" class="bad">rings overlap: neighbors push each other apart</text>
+
+  <!-- Right column, fine mesh: rings capped -->
+  <line x1="527.0" y1="157.4" x2="549.0" y2="157.4" class="edge" />
+  <line x1="527.0" y1="157.4" x2="538.0" y2="176.4" class="edge" />
+  <line x1="549.0" y1="157.4" x2="571.0" y2="157.4" class="edge" />
+  <line x1="549.0" y1="157.4" x2="538.0" y2="176.4" class="edge" />
+  <line x1="549.0" y1="157.4" x2="560.0" y2="176.4" class="edge" />
+  <line x1="571.0" y1="157.4" x2="593.0" y2="157.4" class="edge" />
+  <line x1="571.0" y1="157.4" x2="560.0" y2="176.4" class="edge" />
+  <line x1="571.0" y1="157.4" x2="582.0" y2="176.4" class="edge" />
+  <line x1="593.0" y1="157.4" x2="615.0" y2="157.4" class="edge" />
+  <line x1="593.0" y1="157.4" x2="582.0" y2="176.4" class="edge" />
+  <line x1="593.0" y1="157.4" x2="604.0" y2="176.4" class="edge" />
+  <line x1="615.0" y1="157.4" x2="637.0" y2="157.4" class="edge" />
+  <line x1="615.0" y1="157.4" x2="604.0" y2="176.4" class="edge" />
+  <line x1="615.0" y1="157.4" x2="626.0" y2="176.4" class="edge" />
+  <line x1="637.0" y1="157.4" x2="659.0" y2="157.4" class="edge" />
+  <line x1="637.0" y1="157.4" x2="626.0" y2="176.4" class="edge" />
+  <line x1="637.0" y1="157.4" x2="648.0" y2="176.4" class="edge" />
+  <line x1="659.0" y1="157.4" x2="681.0" y2="157.4" class="edge" />
+  <line x1="659.0" y1="157.4" x2="648.0" y2="176.4" class="edge" />
+  <line x1="659.0" y1="157.4" x2="670.0" y2="176.4" class="edge" />
+  <line x1="681.0" y1="157.4" x2="703.0" y2="157.4" class="edge" />
+  <line x1="681.0" y1="157.4" x2="670.0" y2="176.4" class="edge" />
+  <line x1="681.0" y1="157.4" x2="692.0" y2="176.4" class="edge" />
+  <line x1="703.0" y1="157.4" x2="692.0" y2="176.4" class="edge" />
+  <line x1="538.0" y1="176.4" x2="560.0" y2="176.4" class="edge" />
+  <line x1="538.0" y1="176.4" x2="527.0" y2="195.5" class="edge" />
+  <line x1="538.0" y1="176.4" x2="549.0" y2="195.5" class="edge" />
+  <line x1="560.0" y1="176.4" x2="582.0" y2="176.4" class="edge" />
+  <line x1="560.0" y1="176.4" x2="549.0" y2="195.5" class="edge" />
+  <line x1="560.0" y1="176.4" x2="571.0" y2="195.5" class="edge" />
+  <line x1="582.0" y1="176.4" x2="604.0" y2="176.4" class="edge" />
+  <line x1="582.0" y1="176.4" x2="571.0" y2="195.5" class="edge" />
+  <line x1="582.0" y1="176.4" x2="593.0" y2="195.5" class="edge" />
+  <line x1="604.0" y1="176.4" x2="626.0" y2="176.4" class="edge" />
+  <line x1="604.0" y1="176.4" x2="593.0" y2="195.5" class="edge" />
+  <line x1="604.0" y1="176.4" x2="615.0" y2="195.5" class="edge" />
+  <line x1="626.0" y1="176.4" x2="648.0" y2="176.4" class="edge" />
+  <line x1="626.0" y1="176.4" x2="615.0" y2="195.5" class="edge" />
+  <line x1="626.0" y1="176.4" x2="637.0" y2="195.5" class="edge" />
+  <line x1="648.0" y1="176.4" x2="670.0" y2="176.4" class="edge" />
+  <line x1="648.0" y1="176.4" x2="637.0" y2="195.5" class="edge" />
+  <line x1="648.0" y1="176.4" x2="659.0" y2="195.5" class="edge" />
+  <line x1="670.0" y1="176.4" x2="692.0" y2="176.4" class="edge" />
+  <line x1="670.0" y1="176.4" x2="659.0" y2="195.5" class="edge" />
+  <line x1="670.0" y1="176.4" x2="681.0" y2="195.5" class="edge" />
+  <line x1="692.0" y1="176.4" x2="681.0" y2="195.5" class="edge" />
+  <line x1="692.0" y1="176.4" x2="703.0" y2="195.5" class="edge" />
+  <line x1="527.0" y1="195.5" x2="549.0" y2="195.5" class="edge" />
+  <line x1="527.0" y1="195.5" x2="538.0" y2="214.5" class="edge" />
+  <line x1="549.0" y1="195.5" x2="571.0" y2="195.5" class="edge" />
+  <line x1="549.0" y1="195.5" x2="538.0" y2="214.5" class="edge" />
+  <line x1="549.0" y1="195.5" x2="560.0" y2="214.5" class="edge" />
+  <line x1="571.0" y1="195.5" x2="593.0" y2="195.5" class="edge" />
+  <line x1="571.0" y1="195.5" x2="560.0" y2="214.5" class="edge" />
+  <line x1="571.0" y1="195.5" x2="582.0" y2="214.5" class="edge" />
+  <line x1="593.0" y1="195.5" x2="615.0" y2="195.5" class="edge" />
+  <line x1="593.0" y1="195.5" x2="582.0" y2="214.5" class="edge" />
+  <line x1="593.0" y1="195.5" x2="604.0" y2="214.5" class="edge" />
+  <line x1="615.0" y1="195.5" x2="637.0" y2="195.5" class="edge" />
+  <line x1="615.0" y1="195.5" x2="604.0" y2="214.5" class="edge" />
+  <line x1="615.0" y1="195.5" x2="626.0" y2="214.5" class="edge" />
+  <line x1="637.0" y1="195.5" x2="659.0" y2="195.5" class="edge" />
+  <line x1="637.0" y1="195.5" x2="626.0" y2="214.5" class="edge" />
+  <line x1="637.0" y1="195.5" x2="648.0" y2="214.5" class="edge" />
+  <line x1="659.0" y1="195.5" x2="681.0" y2="195.5" class="edge" />
+  <line x1="659.0" y1="195.5" x2="648.0" y2="214.5" class="edge" />
+  <line x1="659.0" y1="195.5" x2="670.0" y2="214.5" class="edge" />
+  <line x1="681.0" y1="195.5" x2="703.0" y2="195.5" class="edge" />
+  <line x1="681.0" y1="195.5" x2="670.0" y2="214.5" class="edge" />
+  <line x1="681.0" y1="195.5" x2="692.0" y2="214.5" class="edge" />
+  <line x1="703.0" y1="195.5" x2="692.0" y2="214.5" class="edge" />
+  <line x1="538.0" y1="214.5" x2="560.0" y2="214.5" class="edge" />
+  <line x1="538.0" y1="214.5" x2="527.0" y2="233.6" class="edge" />
+  <line x1="538.0" y1="214.5" x2="549.0" y2="233.6" class="edge" />
+  <line x1="560.0" y1="214.5" x2="582.0" y2="214.5" class="edge" />
+  <line x1="560.0" y1="214.5" x2="549.0" y2="233.6" class="edge" />
+  <line x1="560.0" y1="214.5" x2="571.0" y2="233.6" class="edge" />
+  <line x1="582.0" y1="214.5" x2="604.0" y2="214.5" class="edge" />
+  <line x1="582.0" y1="214.5" x2="571.0" y2="233.6" class="edge" />
+  <line x1="582.0" y1="214.5" x2="593.0" y2="233.6" class="edge" />
+  <line x1="604.0" y1="214.5" x2="626.0" y2="214.5" class="edge" />
+  <line x1="604.0" y1="214.5" x2="593.0" y2="233.6" class="edge" />
+  <line x1="604.0" y1="214.5" x2="615.0" y2="233.6" class="edge" />
+  <line x1="626.0" y1="214.5" x2="648.0" y2="214.5" class="edge" />
+  <line x1="626.0" y1="214.5" x2="615.0" y2="233.6" class="edge" />
+  <line x1="626.0" y1="214.5" x2="637.0" y2="233.6" class="edge" />
+  <line x1="648.0" y1="214.5" x2="670.0" y2="214.5" class="edge" />
+  <line x1="648.0" y1="214.5" x2="637.0" y2="233.6" class="edge" />
+  <line x1="648.0" y1="214.5" x2="659.0" y2="233.6" class="edge" />
+  <line x1="670.0" y1="214.5" x2="692.0" y2="214.5" class="edge" />
+  <line x1="670.0" y1="214.5" x2="659.0" y2="233.6" class="edge" />
+  <line x1="670.0" y1="214.5" x2="681.0" y2="233.6" class="edge" />
+  <line x1="692.0" y1="214.5" x2="681.0" y2="233.6" class="edge" />
+  <line x1="692.0" y1="214.5" x2="703.0" y2="233.6" class="edge" />
+  <line x1="527.0" y1="233.6" x2="549.0" y2="233.6" class="edge" />
+  <line x1="527.0" y1="233.6" x2="538.0" y2="252.6" class="edge" />
+  <line x1="549.0" y1="233.6" x2="571.0" y2="233.6" class="edge" />
+  <line x1="549.0" y1="233.6" x2="538.0" y2="252.6" class="edge" />
+  <line x1="549.0" y1="233.6" x2="560.0" y2="252.6" class="edge" />
+  <line x1="571.0" y1="233.6" x2="593.0" y2="233.6" class="edge" />
+  <line x1="571.0" y1="233.6" x2="560.0" y2="252.6" class="edge" />
+  <line x1="571.0" y1="233.6" x2="582.0" y2="252.6" class="edge" />
+  <line x1="593.0" y1="233.6" x2="615.0" y2="233.6" class="edge" />
+  <line x1="593.0" y1="233.6" x2="582.0" y2="252.6" class="edge" />
+  <line x1="593.0" y1="233.6" x2="604.0" y2="252.6" class="edge" />
+  <line x1="615.0" y1="233.6" x2="637.0" y2="233.6" class="edge" />
+  <line x1="615.0" y1="233.6" x2="604.0" y2="252.6" class="edge" />
+  <line x1="615.0" y1="233.6" x2="626.0" y2="252.6" class="edge" />
+  <line x1="637.0" y1="233.6" x2="659.0" y2="233.6" class="edge" />
+  <line x1="637.0" y1="233.6" x2="626.0" y2="252.6" class="edge" />
+  <line x1="637.0" y1="233.6" x2="648.0" y2="252.6" class="edge" />
+  <line x1="659.0" y1="233.6" x2="681.0" y2="233.6" class="edge" />
+  <line x1="659.0" y1="233.6" x2="648.0" y2="252.6" class="edge" />
+  <line x1="659.0" y1="233.6" x2="670.0" y2="252.6" class="edge" />
+  <line x1="681.0" y1="233.6" x2="703.0" y2="233.6" class="edge" />
+  <line x1="681.0" y1="233.6" x2="670.0" y2="252.6" class="edge" />
+  <line x1="681.0" y1="233.6" x2="692.0" y2="252.6" class="edge" />
+  <line x1="703.0" y1="233.6" x2="692.0" y2="252.6" class="edge" />
+  <line x1="538.0" y1="252.6" x2="560.0" y2="252.6" class="edge" />
+  <line x1="560.0" y1="252.6" x2="582.0" y2="252.6" class="edge" />
+  <line x1="582.0" y1="252.6" x2="604.0" y2="252.6" class="edge" />
+  <line x1="604.0" y1="252.6" x2="626.0" y2="252.6" class="edge" />
+  <line x1="626.0" y1="252.6" x2="648.0" y2="252.6" class="edge" />
+  <line x1="648.0" y1="252.6" x2="670.0" y2="252.6" class="edge" />
+  <line x1="670.0" y1="252.6" x2="692.0" y2="252.6" class="edge" />
+  <circle cx="527.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="549.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="571.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="593.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="615.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="637.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="659.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="681.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="703.0" cy="157.4" r="2.4" class="gap" />
+  <circle cx="538.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="560.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="582.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="604.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="626.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="648.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="670.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="692.0" cy="176.4" r="2.4" class="gap" />
+  <circle cx="527.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="549.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="571.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="593.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="615.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="637.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="659.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="681.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="703.0" cy="195.5" r="2.4" class="gap" />
+  <circle cx="538.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="560.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="582.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="604.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="626.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="648.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="670.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="692.0" cy="214.5" r="2.4" class="gap" />
+  <circle cx="527.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="549.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="571.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="593.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="615.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="637.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="659.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="681.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="703.0" cy="233.6" r="2.4" class="gap" />
+  <circle cx="538.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="560.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="582.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="604.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="626.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="648.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="670.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="692.0" cy="252.6" r="2.4" class="gap" />
+  <circle cx="527.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="549.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="571.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="593.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="615.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="637.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="659.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="681.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="703.0" cy="157.4" r="1.3" class="pt" />
+  <circle cx="538.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="560.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="582.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="604.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="626.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="648.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="670.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="692.0" cy="176.4" r="1.3" class="pt" />
+  <circle cx="527.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="549.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="571.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="593.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="615.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="637.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="659.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="681.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="703.0" cy="195.5" r="1.3" class="pt" />
+  <circle cx="538.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="560.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="582.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="604.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="626.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="648.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="670.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="692.0" cy="214.5" r="1.3" class="pt" />
+  <circle cx="527.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="549.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="571.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="593.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="615.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="637.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="659.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="681.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="703.0" cy="233.6" r="1.3" class="pt" />
+  <circle cx="538.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="560.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="582.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="604.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="626.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="648.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="670.0" cy="252.6" r="1.3" class="pt" />
+  <circle cx="692.0" cy="252.6" r="1.3" class="pt" />
+  <text x="615" y="300" text-anchor="middle" class="good">gap lowered here: neighbors stay clear</text>
+
+  <!-- Left column, coarse mesh: rings clear -->
+  <line x1="69.0" y1="371.1" x2="205.0" y2="371.1" class="edge" />
+  <line x1="69.0" y1="371.1" x2="137.0" y2="488.9" class="edge" />
+  <line x1="205.0" y1="371.1" x2="341.0" y2="371.1" class="edge" />
+  <line x1="205.0" y1="371.1" x2="137.0" y2="488.9" class="edge" />
+  <line x1="205.0" y1="371.1" x2="273.0" y2="488.9" class="edge" />
+  <line x1="341.0" y1="371.1" x2="273.0" y2="488.9" class="edge" />
+  <line x1="137.0" y1="488.9" x2="273.0" y2="488.9" class="edge" />
+  <circle cx="69.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="205.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="341.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="137.0" cy="488.9" r="14.0" class="gap" />
+  <circle cx="273.0" cy="488.9" r="14.0" class="gap" />
+  <circle cx="69.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="205.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="341.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="137.0" cy="488.9" r="3.2" class="pt" />
+  <circle cx="273.0" cy="488.9" r="3.2" class="pt" />
+  <text x="205" y="530" text-anchor="middle" class="note">rings clear each other</text>
+
+  <!-- Right column, coarse mesh: unchanged -->
+  <line x1="479.0" y1="371.1" x2="615.0" y2="371.1" class="edge" />
+  <line x1="479.0" y1="371.1" x2="547.0" y2="488.9" class="edge" />
+  <line x1="615.0" y1="371.1" x2="751.0" y2="371.1" class="edge" />
+  <line x1="615.0" y1="371.1" x2="547.0" y2="488.9" class="edge" />
+  <line x1="615.0" y1="371.1" x2="683.0" y2="488.9" class="edge" />
+  <line x1="751.0" y1="371.1" x2="683.0" y2="488.9" class="edge" />
+  <line x1="547.0" y1="488.9" x2="683.0" y2="488.9" class="edge" />
+  <circle cx="479.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="615.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="751.0" cy="371.1" r="14.0" class="gap" />
+  <circle cx="547.0" cy="488.9" r="14.0" class="gap" />
+  <circle cx="683.0" cy="488.9" r="14.0" class="gap" />
+  <circle cx="479.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="615.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="751.0" cy="371.1" r="3.2" class="pt" />
+  <circle cx="547.0" cy="488.9" r="3.2" class="pt" />
+  <circle cx="683.0" cy="488.9" r="3.2" class="pt" />
+  <text x="615" y="530" text-anchor="middle" class="note">unchanged: the cap is above the gap</text>
+
+  <!-- Divider -->
+  <line x1="410" y1="80" x2="410" y2="545" class="divider" />
+</svg>

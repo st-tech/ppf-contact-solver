@@ -49,6 +49,7 @@ EXPECTED_PUBLIC_NAMES = {
     "Extra",
     "FixedScene",
     "ForceField",
+    "FluidVolume",
     "ForceFieldScriptError",
     "noise",
     "curl_noise",

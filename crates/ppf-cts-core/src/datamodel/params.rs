@@ -28,6 +28,15 @@ pub enum ObjectKind {
     Tri,
     Tet,
     Rod,
+    /// Cosserat rod: a Rod-asset strand whose nodes carry positions and whose
+    /// edges additionally carry a full SO(3) orientation, coupled by stretch,
+    /// shear, bending and twist energies (Romanya-Serrasolsas, Casafranca and
+    /// Otaduy, "Painless Differentiable Rotation Dynamics", ACM TOG 44(4),
+    /// 2025, Section 6.2, on the Spillmann and Teschner CoRdE discretization).
+    /// Unlike the position-only `Rod`, it represents twist. Stretch stiffness
+    /// is `young-mod` (density normalized); the rotational stiffness keys are
+    /// `cosserat-shear`, `cosserat-bend` and `cosserat-twist`.
+    Cosserat,
     /// Painless Differentiable Rotation Dynamics: a Tri-asset body whose vertices move
     /// exactly rigidly via a single best-fit rigid transform shared by
     /// the whole body. No per-element elastic energy, no bending; only
@@ -47,6 +56,7 @@ impl ObjectKind {
             "tri" => Ok(Self::Tri),
             "tet" => Ok(Self::Tet),
             "rod" => Ok(Self::Rod),
+            "cosserat" => Ok(Self::Cosserat),
             "pdrd" => Ok(Self::Pdrd),
             "points" => Ok(Self::Points),
             _ => Err(ParamError::UnknownObjectKind(s.to_string())),
@@ -265,7 +275,7 @@ pub fn app_param() -> ParamHolder {
     m.insert("friction-mode".into(), entry("min", "Friction Combination Mode",
         "How to combine the friction coefficients of two contacting elements. Choices: min, max, mean. Default min preserves the prior behavior (the more slippery side wins)."));
     m.insert("precond".into(), entry("block-jacobi", "Linear Solver Preconditioner",
-        "Preconditioner for the PCG linear solve. Choices: block-jacobi (3x3 per-vertex diagonal, default; fast with the device-resident PCG loop and does not run out of memory on heavy-contact scenes), schwarz (additive aggregate-Schwarz; fewer iterations on mixed stiff/soft systems but heavier per iteration and can OOM on large contact counts; its level count is set by schwarz-levels)."));
+        "Preconditioner for the PCG linear solve. Choices: block-jacobi (3x3 per-vertex diagonal, default; fast with the device-resident PCG loop and does not run out of memory on heavy-contact scenes), schwarz (additive aggregate-Schwarz; fewer iterations on mixed stiff/soft systems but heavier per iteration and can OOM on large contact counts; its level count is set by schwarz-levels), multigrid (geometric multigrid over grids laid on each piece of mesh; far fewer iterations on fine or stiff meshes and on solids, at several times the cost per iteration and a setup per solve, so it pays where block-jacobi needs hundreds of iterations; not available in a scene with rigid bodies or Cosserat rods)."));
     m.insert("schwarz-levels".into(), entry(2i64, "Schwarz Levels",
         "Number of additive levels for the Schwarz preconditioner (only used when precond is schwarz). 1 = single-level smoother; 2 = two-level coarse correction over the connectivity partition (default), which reduces the worst-case PCG iteration count on stiff multibody contact. Values above the solver's internal cap are clamped."));
     m.insert("stitch-length-factor".into(), entry(10.0f64, "Stitch Length Factor",
@@ -285,14 +295,14 @@ pub fn app_param() -> ParamHolder {
     m.insert("fake-crash-frame".into(), entry(-1i64, "Fake Crash Frame",
         "Frame number to intentionally crash simulation for testing. -1 disables."));
     m.insert("world-scaling".into(), entry(1.0f64, "World Scaling Factor",
-        "Uniform spatial scale applied to all input geometry before the simulation runs; output positions are divided back by it. Values below 1 shrink (e.g. 0.1 simulates a 15 m mesh at 1.5 m under the same gravity and writes results back at 15 m). The Blender add-on scales its scene-unit lengths (contact gaps, velocities, the constraint gap) by it at encode; gravity, wind and material parameters are physical and do not scale."));
+        "Uniform spatial scale applied to all input geometry before the simulation runs; output positions are divided back by it. Values below 1 shrink (e.g. 0.1 simulates a 15 m mesh at 1.5 m under the same gravity and writes results back at 15 m). The Blender add-on scales its scene-unit lengths (contact gaps, velocities, the constraint gap) by it at encode; a force field is authored in scene units, and the solver scales its positions and a Fluid Flow's domain and velocity by it; gravity, wind and material parameters are physical and do not scale."));
 
     ParamHolder::new(m)
 }
 
 /// Default per-object parameters. Defaults vary per element kind; the
-/// conditional fields (plasticity, bend-plasticity,
-/// bend-rest-from-geometry) are added based on `kind`.
+/// conditional fields (plasticity, the `cosserat-*` keys, the `sand-*`
+/// keys) are added based on `kind`.
 pub fn object_param(kind: ObjectKind) -> ParamHolder {
     // For PDRD bodies the solver advances an exact per-body rigid motion.
     // The face-level keys (model, young-mod, bend, ...) are still emitted
@@ -304,6 +314,12 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         ObjectKind::Tri => ("baraff-witkin", 1000.0f64, 1.0f64, 0.0f64, 10.0f64),
         ObjectKind::Tet => ("arap", 500.0, 100.0, 0.0, 1.0),
         ObjectKind::Rod => ("arap", 1e4, 1.0, 1e-3, 0.0),
+        // A Cosserat rod is edge based like `Rod`, so `model` names the same
+        // one-dimensional stretch law and `young-mod` carries its stretch
+        // stiffness. `bend` stays 0.0, which leaves the position hinge of the
+        // rod inert: a Cosserat rod bends and twists through its orientation
+        // energies, whose stiffnesses are the `cosserat-*` keys below.
+        ObjectKind::Cosserat => ("arap", 1e4, 1.0, 1e-3, 0.0),
         ObjectKind::Pdrd => ("pdrd", 0.0, 100.0, 0.0, 0.0),
         // Faceless particle cloud: no elements, so the per-element elastic
         // expansion produces nothing and the model string is never applied.
@@ -350,6 +366,14 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Barrier activation distance for contact detection, in scene units. At each pair the solver uses the mean of the two participants' gaps as the threshold. Must be positive."));
     m.insert("contact-offset".into(), entry(offset, "Contact Offset",
         "Extra per-element padding added on top of the contact gap (scene units). At each pair the two participants' offsets are summed, acting like a skin thickness that guarantees minimum clearance. Must be non-negative."));
+    // Per OBJECT, like the intersection allowances below: the frontend
+    // resolves it into the per-element `contact-gap` values and drops it from
+    // every element's parameters (`frontend/_contact_gap_limit_.py`). What it
+    // prevents is the contact locking of Gomez-Nogales, Chen, Martin, Garces
+    // and Kaufman, "Unlocking Thickness Modeling for Codimensional Contact
+    // Simulation", arXiv:2510.10256 (2025).
+    m.insert("contact-gap-limit".into(), entry(0.0f64, "Contact Gap Limit",
+        "Upper bound on the contact gap, as a fraction of the room this object's own mesh leaves between neighbors. The room at an element is the smallest altitude among a triangle and the triangles sharing a vertex with it, or the shortest length among a rod segment and the segments sharing a vertex with it, less twice the object's contact offset: the gap at which that element would start in contact with its own mesh neighbors. Each element's gap becomes the smaller of 'contact-gap' and this fraction of its room, so a mesh finer than its gap does not press its own neighbors apart. Must be 0.0, which sets no limit, or lie between 0.01 and 0.5. Applies only to an object that can be in contact with itself: a static collider, a PDRD body and an object with 'allow-self-intersection' are left as authored. A gap past the room is the contact locking described by Gomez-Nogales et al., 'Unlocking Thickness Modeling for Codimensional Contact Simulation' (arXiv:2510.10256)."));
     m.insert("strain-limit".into(), entry(0.0f64, "Strain Limit",
         "Upper bound on per-element tensile strain (dimensionless, e.g. 0.05 = 5% stretch). 0.0 disables strain limiting. Supported on 'tri' and 'rod' elements only, and incompatible with non-unit shrink-x/shrink-y on the same face."));
     m.insert("friction".into(), entry(0.0f64, "Friction Coefficient",
@@ -383,7 +407,7 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
     // allowances above: the frontend resolves it into one weight per vertex
     // and drops it from every element's parameters.
     m.insert("force-field-weight".into(), entry(1.0f64, "Force Field Weight",
-        "Scale on the scene's external force field (scene.force_field) for this object's vertices. 1.0 applies the field as authored, 0.0 opts the object out, and any other finite value scales it. Fix-pinned vertices ignore the field whatever the weight."));
+        "Scale on the scene's external force field (scene.force_field) for this object's vertices. 1.0 applies the field as authored, 0.0 opts the object out, and any other finite value scales it. A negative weight reverses the field, the damping of Drag, Harmonic, Vortex and Fluid Flow included; an implicit term adds to the linear solve's matrix only where the weight times its coefficient is positive, and otherwise acts through its force alone. Fix-pinned vertices ignore the field whatever the weight."));
 
     if matches!(kind, ObjectKind::Tri | ObjectKind::Tet | ObjectKind::Pdrd) {
         m.insert("plasticity".into(), entry(0.0f64, "Plasticity Rate",
@@ -403,6 +427,31 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Angular dead zone (radians) around the rest angle. Bend plasticity only activates when |theta - theta_rest| exceeds this threshold. 0.0 means any angular deviation triggers creep."));
     m.insert("bend-rest-from-geometry".into(), entry(0.0f64, "Bend Rest From Initial Geometry",
         "If non-zero, initialize each hinge or rod-joint rest angle from the initial pose instead of the default (flat for shells, straight for rods). Treated as a boolean flag."));
+
+    // Cosserat rod knobs. Defined only for the Cosserat kind, so a plain rod
+    // carries none of them and the frontend fills them with 0.0 where a plain
+    // rod's segments share a table with a Cosserat rod's. The stretch
+    // stiffness is `young-mod` above; these add the shear, bending and twist
+    // stiffness of the per-edge orientation energies, density normalized like
+    // every other stiffness, plus the rest state and the end-frame boundary
+    // condition. The two flags are float-encoded booleans, following
+    // `bend-rest-from-geometry`.
+    if matches!(kind, ObjectKind::Cosserat) {
+        m.insert("cosserat-shear".into(), entry(1e3f64, "Cosserat Shear Stiffness",
+            "Stiffness of the shear energy that aligns each segment with the third axis of its orientation frame, pre-normalized by density. Raise it for a nearly unshearable rod. Must be non-negative. Cosserat rods only."));
+        m.insert("cosserat-bend".into(), entry(1e4f64, "Cosserat Bending Stiffness",
+            "Isotropic bending stiffness between neighboring segment frames, in the units of the rod-joint 'bend': the flexural rigidity is this value times the linear density times (1 cm)^2, so one value describes one rod at any segment length. Must be non-negative. Cosserat rods only; the rod-joint 'bend' key is a separate, position-only term and defaults to 0.0 on a Cosserat rod."));
+        m.insert("cosserat-twist".into(), entry(1e4f64, "Cosserat Twist Stiffness",
+            "Torsional stiffness between neighboring segment frames, in the units of 'cosserat-bend': the torsional rigidity is this value times the linear density times (1 cm)^2, at any segment length. Must be non-negative. Cosserat rods only."));
+        m.insert("cosserat-rest-twist".into(), entry(0.0f64, "Cosserat Rest Twist",
+            "Intrinsic rest twist rate, in radians per unit length, added to the rest state. A non-zero value makes a straight rod store twist energy in its straight pose, so with its end frames held it can buckle into a helix. The sign selects the handedness. Cosserat rods only."));
+        m.insert("cosserat-fix-ends".into(), entry(0.0f64, "Cosserat Fixed Ends",
+            "If non-zero, the orientation frames of the first and last segment are held fixed, a Dirichlet boundary condition on the end frames. With pinned end positions and a rest twist, the stored twist can then buckle the centerline instead of unwinding through the ends. Treated as a boolean flag. Cosserat rods only."));
+        m.insert("cosserat-end-twist-rate".into(), entry(0.0f64, "Cosserat End Twist Rate",
+            "Rate, in radians per second, at which the held end frames turn about their own segment, the two ends in opposite senses, so a cable held at both ends is twisted as if its clamps were turned against each other. Requires 'cosserat-fix-ends'. The sign selects the handedness. Cosserat rods only."));
+        m.insert("cosserat-straight-rest".into(), entry(0.0f64, "Cosserat Straight Rest",
+            "If non-zero, the rest state is straight and untwisted instead of the authored shape, so a curved or coiled rod springs toward straight rather than holding its modeled form. Any 'cosserat-rest-twist' still applies on top of it. Off by default, because a Cosserat rod's authored shape is normally its rest shape (a coil spring rests as a coil). Treated as a boolean flag. Cosserat rods only."));
+    }
 
     // Granular (sand) material knobs. Defined only for the faceless particle
     // kind so the addon's `sand-*` params resolve at decode.
@@ -505,8 +554,63 @@ mod tests {
         assert_eq!(ObjectKind::from_str("tri").unwrap(), ObjectKind::Tri);
         assert_eq!(ObjectKind::from_str("tet").unwrap(), ObjectKind::Tet);
         assert_eq!(ObjectKind::from_str("rod").unwrap(), ObjectKind::Rod);
+        assert_eq!(ObjectKind::from_str("cosserat").unwrap(), ObjectKind::Cosserat);
         assert_eq!(ObjectKind::from_str("pdrd").unwrap(), ObjectKind::Pdrd);
         assert!(ObjectKind::from_str("blob").is_err());
+    }
+
+    /// The seven Cosserat keys with their defaults, in one place for the tests
+    /// below.
+    const COSSERAT_KEYS: [(&str, f64); 7] = [
+        ("cosserat-shear", 1e3),
+        ("cosserat-bend", 1e4),
+        ("cosserat-twist", 1e4),
+        ("cosserat-rest-twist", 0.0),
+        ("cosserat-fix-ends", 0.0),
+        ("cosserat-end-twist-rate", 0.0),
+        ("cosserat-straight-rest", 0.0),
+    ];
+
+    #[test]
+    fn object_param_cosserat_has_rotational_keys() {
+        let p = object_param(ObjectKind::Cosserat);
+        // Edge based like a rod: model stays arap, stretch rides young-mod,
+        // and the position hinge is inert.
+        assert_eq!(p.get("model").unwrap(), &ParamValue::String("arap".into()));
+        assert_eq!(p.get("young-mod").unwrap(), &ParamValue::Float(1e4));
+        assert_eq!(p.get("density").unwrap(), &ParamValue::Float(1.0));
+        assert_eq!(p.get("bend").unwrap(), &ParamValue::Float(0.0));
+        for (key, default) in COSSERAT_KEYS {
+            assert_eq!(p.get(key).unwrap(), &ParamValue::Float(default), "{key}");
+        }
+        // Like a rod, no stretch plasticity; the sand knobs are absent.
+        assert!(p.get("plasticity").is_err());
+        assert!(p.get("sand-friction").is_err());
+    }
+
+    #[test]
+    fn cosserat_keys_extend_the_rod_key_set_and_nothing_else_has_them() {
+        // The frontend concatenates a plain rod's and a Cosserat rod's segment
+        // params into one table by taking the union of their keys, which is
+        // only sound when the Cosserat set is the rod set plus the seven keys.
+        let rod = object_param(ObjectKind::Rod);
+        let cosserat = object_param(ObjectKind::Cosserat);
+        let mut expected: Vec<&str> = rod.key_list();
+        expected.extend(COSSERAT_KEYS.iter().map(|(k, _)| *k));
+        expected.sort_unstable();
+        assert_eq!(cosserat.key_list(), expected);
+        for kind in [
+            ObjectKind::Tri,
+            ObjectKind::Tet,
+            ObjectKind::Rod,
+            ObjectKind::Pdrd,
+            ObjectKind::Points,
+        ] {
+            let p = object_param(kind);
+            for (key, _) in COSSERAT_KEYS {
+                assert!(p.get(key).is_err(), "{kind:?} must not carry {key}");
+            }
+        }
     }
 
     #[test]

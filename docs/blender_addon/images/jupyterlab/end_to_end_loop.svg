@@ -9,7 +9,7 @@
     Blender then quits. JupyterLab drives the simulation through
     app.session.run, preview, and stream, and frames land on disk on
     the solver host. A later Blender session launches, connects, and
-    fetches the animation; the solver host hands the PC2 cache back to
+    fetches the animation; the solver host hands the animation cache back to
     the meshes.
   </desc>
 
@@ -72,7 +72,7 @@
   <!-- Transfer arrow -->
   <line x1="140" y1="115" x2="420" y2="115" class="arr-b" marker-end="url(#arrow-blue)" />
   <text x="280" y="108" text-anchor="middle" class="lbl">Transfer</text>
-  <text x="280" y="131" text-anchor="middle" class="note">mesh + params pickled</text>
+  <text x="280" y="131" text-anchor="middle" class="note">mesh + params stored</text>
 
   <!-- Export notebook arrow -->
   <line x1="140" y1="160" x2="420" y2="160" class="arr-b" marker-end="url(#arrow-blue)" />
@@ -114,8 +114,8 @@
   <text x="580" y="503" text-anchor="middle" class="lbl">Connect + Fetch</text>
   <text x="580" y="526" text-anchor="middle" class="lbl-mono">fetch_animation()</text>
 
-  <!-- PC2 cache returned to Blender(2) -->
+  <!-- animation cache returned to Blender(2) -->
   <line x1="440" y1="560" x2="720" y2="560" class="arr-g" marker-end="url(#arrow-green)" />
-  <text x="580" y="553" text-anchor="middle" class="lbl">PC2 cache</text>
+  <text x="580" y="553" text-anchor="middle" class="lbl">animation cache</text>
   <text x="580" y="576" text-anchor="middle" class="note">attached to the meshes</text>
 </svg>

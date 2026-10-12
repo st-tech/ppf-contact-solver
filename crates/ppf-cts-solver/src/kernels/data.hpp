@@ -325,6 +325,20 @@ struct DataSet {
     // Field order must mirror the Rust DataSet in data.rs (repr(C) ABI);
     // tail-append only.
     VecVec<unsigned> start_link;
+    // Cosserat rods: one material frame per Cosserat rod edge (a slot), empty
+    // when the scene has none. The slot's rod edge, its oriented endpoints, its
+    // rest quaternion (x, y, z, w; four floats per slot), its held flag and its
+    // end drive rate; then one bend site per pair of consecutive slots: the two
+    // slots, the rest Darboux vector and the reciprocal integration length.
+    Vec<unsigned> cosserat_edge;
+    Vec<Vec2u> cosserat_edge_nodes;
+    Vec<float> cosserat_quat;
+    Vec<unsigned> cosserat_fixed;
+    Vec<float> cosserat_end_omega;
+    Vec<Vec2u> cosserat_bend_slots;
+    Vec<Vec3f> cosserat_rest_darboux;
+    Vec<float> cosserat_bend_invlen;
+    Vec<float> cosserat_rest_metric;
 };
 
 #endif

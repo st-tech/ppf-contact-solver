@@ -566,7 +566,9 @@ def _spawn_server(spec: WorkerSpec, *, python: str,
     stdout = open(stdout_path, "wb")
     stderr = open(stderr_path, "wb")
     proc = subprocess.Popen(
-        [server_bin, "--port", str(spec.server_port), "--debug"],
+        # `--idle-timeout 0`: the rig stops this server itself, and a run of
+        # scenarios that never talk to it can outlast any idle time.
+        [server_bin, "--port", str(spec.server_port), "--debug", "--idle-timeout", "0"],
         cwd=spec.server_dir,
         env=env,
         stdout=stdout,

@@ -736,6 +736,23 @@ def _absent_gpu_backend_message(root, gpu_backend, builds):
     )
 
 
+def idle_timeout_args(idle_timeout) -> list[str]:
+    """The server's ``--idle-timeout`` arguments: none for None, which leaves
+    the server's own default (3600 seconds); seconds otherwise, 0 for never.
+    One spelling for every launch, native and remote (``effect_runner``)."""
+    if idle_timeout is None:
+        return []
+    return ["--idle-timeout", str(int(idle_timeout))]
+
+
+def ping_outlasts_idle_stop(idle_timeout, ping_interval) -> bool:
+    """Whether a server stopping after ``idle_timeout`` seconds would stop
+    while Blender is connected, because the add-on pings it only every
+    ``ping_interval`` seconds. The panel warns and Start Server refuses on
+    this one test, so the two never disagree."""
+    return int(idle_timeout) > 0 and int(ping_interval) >= int(idle_timeout)
+
+
 def spawn_win_native_server(
     root,
     port,
@@ -743,6 +760,7 @@ def spawn_win_native_server(
     cuda_device_uuid="",
     device=DEVICE_GPU,
     gpu_backend=GPU_BACKEND_AUTO,
+    idle_timeout=None,
 ):
     """Spawn a fresh win_native ``ppf-cts-server.exe`` subprocess and return the Popen.
 
@@ -886,7 +904,7 @@ def spawn_win_native_server(
     log_fp = open(log_path, "ab")
     try:
         return subprocess.Popen(
-            [rust_bin, "--port", str(port)],
+            [rust_bin, "--port", str(port)] + idle_timeout_args(idle_timeout),
             cwd=root,
             env=env,
             stdout=log_fp,
@@ -1495,7 +1513,7 @@ def _count_quarantined(root):
     return len([line for line in listing.splitlines() if line])
 
 
-def spawn_mac_native_server(root, port, device=DEVICE_GPU):
+def spawn_mac_native_server(root, port, device=DEVICE_GPU, idle_timeout=None):
     """Spawn a fresh mac_native ``ppf-cts-server`` subprocess and return the Popen.
 
     Used by both initial connect and the Stop/Start cycle on the mac_native
@@ -1637,7 +1655,7 @@ def spawn_mac_native_server(root, port, device=DEVICE_GPU):
     log_fp = open(log_path, "ab")
     try:
         return subprocess.Popen(
-            [rust_bin, "--port", str(port)],
+            [rust_bin, "--port", str(port)] + idle_timeout_args(idle_timeout),
             cwd=root,
             env=env,
             stdout=log_fp,
@@ -1720,6 +1738,7 @@ def spawn_linux_native_server(
     cuda_device_uuid="",
     device=DEVICE_GPU,
     gpu_backend=GPU_BACKEND_AUTO,
+    idle_timeout=None,
 ):
     """Spawn a fresh linux_native ``ppf-cts-server`` subprocess and return the Popen.
 
@@ -1862,7 +1881,7 @@ def spawn_linux_native_server(
     log_fp = open(log_path, "ab")
     try:
         return subprocess.Popen(
-            [rust_bin, "--port", str(port)],
+            [rust_bin, "--port", str(port)] + idle_timeout_args(idle_timeout),
             cwd=root,
             env=env,
             stdout=log_fp,

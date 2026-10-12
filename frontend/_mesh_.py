@@ -272,6 +272,90 @@ class MeshManager:
         )
         return self.create.rod(vert, edge)
 
+    def helix(
+        self,
+        radius: float = 0.1,
+        pitch: float = 0.1,
+        turns: float = 5.0,
+        n: int = 200,
+        center: Optional[list[float]] = None,
+        axis: Optional[list[float]] = None,
+    ) -> "Rod":
+        """Create a helical rod, the centerline of a coil or a spring.
+
+        A sibling of :meth:`line`: ``n`` vertices wind about ``axis`` at
+        ``radius``, rising ``pitch`` along it per full turn, joined by
+        ``n - 1`` segments. The helix is centered on ``center`` along the
+        axis, so :meth:`Object.at` places its midpoint. Pair it with
+        :meth:`Object.as_cosserat` to author a coil spring: a helix resists
+        axial load mostly through torsion of the wire, which only a Cosserat
+        rod has a degree of freedom for.
+
+        Args:
+            radius (float, optional): Coil radius. Must be positive.
+                Defaults to ``0.1``.
+            pitch (float, optional): Rise along the axis per full turn.
+                Defaults to ``0.1``.
+            turns (float, optional): Number of turns. Must be positive.
+                Defaults to ``5.0``.
+            n (int, optional): Number of vertices along the strand, at least
+                2. Defaults to ``200``.
+            center (list[float], optional): Midpoint of the helix. Defaults
+                to the origin.
+            axis (list[float], optional): Coil axis direction, normalized
+                here. Defaults to ``[0, 1, 0]``.
+
+        Returns:
+            Rod: The helical rod, unpackable as ``(vertices, edges)``.
+
+        Example:
+            Author a hanging Cosserat spring::
+
+                V, E = app.mesh.helix(radius=0.08, pitch=0.35, turns=2.5, n=100)
+                app.asset.add.rod("spring", V, E)
+                spring = scene.add("spring").as_cosserat()
+        """
+        n = int(n)
+        if n < 2:
+            raise ValueError(f"helix needs at least 2 vertices; got n={n}")
+        if not (np.isfinite(radius) and radius > 0.0):
+            raise ValueError(f"helix radius must be positive and finite; got {radius}")
+        if not (np.isfinite(turns) and turns > 0.0):
+            raise ValueError(f"helix turns must be positive and finite; got {turns}")
+        if not np.isfinite(pitch):
+            raise ValueError(f"helix pitch must be finite; got {pitch}")
+        center_v = np.array(
+            [0.0, 0.0, 0.0] if center is None else center, dtype=np.float64
+        ).reshape(3)
+        w = np.array(
+            [0.0, 1.0, 0.0] if axis is None else axis, dtype=np.float64
+        ).reshape(3)
+        w_norm = float(np.linalg.norm(w))
+        if not (np.isfinite(w_norm) and w_norm > 1e-12):
+            raise ValueError(f"helix axis must be a finite non-zero vector; got {axis}")
+        w = w / w_norm
+        # An orthonormal basis (u, v, w) of the coil. The helper axis is the
+        # one of x and y that is farther from parallel to w, so the cross
+        # product stays well conditioned.
+        helper = (
+            np.array([1.0, 0.0, 0.0]) if abs(w[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+        )
+        u = np.cross(w, helper)
+        u = u / np.linalg.norm(u)
+        v = np.cross(w, u)
+        t = np.linspace(0.0, float(turns), n)
+        theta = 2.0 * np.pi * t
+        height = float(pitch) * t
+        height = height - height.mean()
+        pts = (
+            center_v
+            + float(radius) * (np.cos(theta)[:, None] * u + np.sin(theta)[:, None] * v)
+            + height[:, None] * w
+        )
+        vert = np.ascontiguousarray(pts, dtype=np.float64)
+        edge = np.stack([np.arange(n - 1), np.arange(1, n)], axis=1).astype(np.uint32)
+        return self.create.rod(vert, edge)
+
     def box(self, width: float = 1, height: float = 1, depth: float = 1) -> "TriMesh":
         """Create a box mesh."""
         V, F = _rust.scene_box_mesh(float(width), float(height), float(depth))

@@ -4,9 +4,9 @@
 # License: Apache v2.0
 #
 # Blender force field OBJECTS alone move simulated cloth end to end, with NO
-# script in the scene (issue #114): the sampled grids are the only force
-# field the solver receives. The other solve scenarios always carry a script
-# beside the fields, so a payload of grids and an empty script list is
+# script in the scene (issue #114): the field objects are the only force field
+# the solver receives. The other solve scenarios always carry a script beside
+# the fields, so a payload of field objects and an empty script list is
 # exercised here and nowhere else.
 #
 # Five sheets side by side and one far away, gravity off, Air Density 1. Each
@@ -20,15 +20,16 @@
 #   * TURBULENCE at its sheet: the sheet moves, by a pattern with no net lift
 #     to predict, so only that it moved is checked.
 #   * A Force field KEYFRAMED from far away to under its sheet over the run:
-#     the sheet rises only once the field arrives, which only time samples of
-#     a moving field can produce.
+#     the sheet rises only once the field arrives, which only the per-frame
+#     track of a moving field can produce.
 #
 # The far sheet has no field near it and must not move at all, which is also
 # what separates "the fields act" from "something moved".
 #
 # Subtests:
-#   A. payload_carries_grids_and_no_script: an acceleration and an
-#      air-velocity grid, and an empty script list.
+#   A. payload_carries_field_objects_and_no_script: the five field objects,
+#      the keyframed one with a track of one sample per solve frame, and an
+#      empty script list.
 #   B. force_field_lifts_its_sheet
 #   C. wind_field_lifts_through_the_drag
 #   D. vortex_turns_its_sheet
@@ -111,16 +112,16 @@ try:
     moving.location = (xs["FFOMoving"], 0.0, -0.3)
     moving.keyframe_insert("location", frame=FRAME_COUNT)
     state.force_field_script = None
-    state.force_field_padding = 0.5
-    state.force_field_spacing = 0.1
-    state.force_field_time_samples = 8
 
     # ----- A --------------------------------------------------------------
     ffp = params_mod._build_param_dict(bpy.context).get("force_field") or {}
-    kinds = sorted(g["kind"] for g in ffp.get("grids", []))
-    dh.record("A_payload_carries_grids_and_no_script",
-              kinds == ["acceleration", "air-velocity"] and ffp.get("scripts") == [],
-              {"kinds": kinds, "scripts": ffp.get("scripts")})
+    kinds = sorted(f["type"] for f in ffp.get("fields", []))
+    tracks = sorted(len(f["strength"]) if isinstance(f["strength"], list) else 1
+                    for f in ffp.get("fields", []))
+    dh.record("A_payload_carries_field_objects_and_no_script",
+              kinds == ["force", "force", "turbulence", "vortex", "wind"]
+              and tracks == [1, 1, 1, 1, FRAME_COUNT] and ffp.get("scripts") == [],
+              {"kinds": kinds, "tracks": tracks, "scripts": ffp.get("scripts")})
 
     data_bytes, param_bytes = dh.encode_payload()
     dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,

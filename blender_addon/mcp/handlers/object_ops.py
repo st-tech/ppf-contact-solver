@@ -2341,6 +2341,12 @@ def capture_pin_deformation(group_uuid: str, vertex_group_identifier: str):
     runs as a modal operator and continues after this call returns; poll
     ``get_pin_deformation_status`` until ``frame_count`` is non-zero.
 
+    It applies to a Hair Curves pin as well, and there it also records
+    motion of the whole object: hair is parented to the surface it is
+    attached to, so a head that only turns carries the roots with it, and
+    this recording is what makes the pinned points follow. A hair pin's
+    points take no keyframes, so this is the only way one moves.
+
     Press again any time the underlying animation changes. The recording
     does NOT update on its own. Refuses to start if the pin already
     carries manual Make-Keyframe vertex-co fcurves; clear those first.
@@ -2359,16 +2365,21 @@ def capture_pin_deformation(group_uuid: str, vertex_group_identifier: str):
     pin_item, obj_uuid, vg_name = _resolve_pin(group, vertex_group_identifier)
 
     obj = bpy.data.objects.get(_parse_pin_identifier(vertex_group_identifier)[0])
-    if obj is None or obj.type != "MESH":
+    if obj is None or obj.type not in ("MESH", "CURVES"):
         raise MCPError(
-            f"Pin '{vertex_group_identifier}': capture only applies to mesh pins"
+            f"Pin '{vertex_group_identifier}': capture only applies to mesh "
+            "and Hair Curves pins"
         )
-    from ...core.utils import has_deforming_modifier_stack
-    if not has_deforming_modifier_stack(obj):
+    # The predicate the panel button and the operator use, so all three
+    # accept the same pins.
+    from ...ui.dynamics.pin_capture_ops import pin_object_supports_capture
+    if not pin_object_supports_capture(obj):
         raise MCPError(
             f"Object '{obj.name}' has no deforming modifier stack. "
             "Capture Deformation applies to pins whose vertices move "
-            "(Armature, Lattice, Mesh Deform, Shape Keys, or drivers)."
+            "(Armature, Lattice, Mesh Deform, Shape Keys, or drivers), and "
+            "to a Hair Curves pin whose object anything moves (its parent, "
+            "its own keyframes, a constraint or a driver)."
         )
 
     pin_index = _resolve_pin_index(group, pin_item)

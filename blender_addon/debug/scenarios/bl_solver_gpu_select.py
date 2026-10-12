@@ -279,7 +279,9 @@ try:
     # passes them on every re-spawn. Measured: a double missing the third
     # failed every run with "_fake_spawn() takes from 2 to 5 positional
     # arguments but 6 were given". Each is recorded so a regression that
-    # dropped one on restart shows up here.
+    # dropped one on restart shows up here. Start Server also hands the launch
+    # the server's idle time (`--idle-timeout`), recorded and checked the same
+    # way rather than absorbed.
     def _fake_spawn(
         root,
         port,
@@ -287,10 +289,12 @@ try:
         cuda_device_uuid="",
         device="GPU",
         gpu_backend=conn.GPU_BACKEND_AUTO,
+        idle_timeout=None,
     ):
         seen["args"] = (root, port, cuda_device, cuda_device_uuid)
         seen["device"] = device
         seen["gpu_backend"] = gpu_backend
+        seen["idle_timeout"] = idle_timeout
         return None
 
     original_spawn = conn.spawn_win_native_server
@@ -301,10 +305,10 @@ try:
         # is_alive() would probe a socket; the point here is the launch
         # argument, so hold the backend in the stopped state directly.
         backend.is_alive = lambda: False
-        backend.start_server(1)
-        first = seen.get("args")
+        backend.start_server(1, idle_timeout=45)
+        first, first_idle = seen.get("args"), seen.get("idle_timeout")
         backend.start_server(3)
-        moved = seen.get("args")
+        moved, moved_idle = seen.get("args"), seen.get("idle_timeout")
         backend.start_server()
         default = seen.get("args")
     finally:
@@ -312,8 +316,10 @@ try:
     record("G_start_applies_the_given_device",
            first == ("C:\\dev", 59999, 1, "")
            and moved == ("C:\\dev", 59999, 3, "")
-           and default == ("C:\\dev", 59999, gpu.AUTOMATIC, ""),
-           {"first": first, "moved": moved, "default": default})
+           and default == ("C:\\dev", 59999, gpu.AUTOMATIC, "")
+           and first_idle == 45 and moved_idle is None,
+           {"first": first, "moved": moved, "default": default,
+            "idle_timeout": [first_idle, moved_idle]})
 
     # ----- I: the outcome row reads the server, not the intent ----------
     # Connect attaches when a server already holds the port, so the selection
@@ -550,7 +556,7 @@ try:
             self._process = object()
             self.stopped = False
 
-        def start_server(self, cuda_device, cuda_device_uuid=""):
+        def start_server(self, cuda_device, cuda_device_uuid="", idle_timeout=None):
             return True
 
         def stop_server(self):

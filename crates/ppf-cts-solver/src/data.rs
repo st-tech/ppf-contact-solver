@@ -150,10 +150,27 @@ pub struct EdgeParam {
     pub plasticity_threshold: f32,
     pub bend_rest_from_geometry: bool,
     // Rayleigh damping coefficients (per object, replicated per element).
-    // MUST mirror the C++ EdgeParam in data_records.hpp field-for-field (repr(C)).
+    // MUST mirror the C++ EdgeParam in kernels/data_records.hpp field-for-field
+    // (repr(C)).
     pub deform_damping: f32,
     pub bend_damping: f32,
+    // A Cosserat rod's stiffnesses, zero on a plain rod: shear holds the frame's
+    // director to its edge, bend and twist hold adjacent frames to their rest
+    // Darboux vector.
+    pub cosserat_shear: f32,
+    pub cosserat_bend: f32,
+    pub cosserat_twist: f32,
+    // Read by the host frame builder only (`cosserat.rs`); carried here so that
+    // two edges differing in them are distinct materials.
+    pub cosserat_rest_twist: f32,
+    pub cosserat_fix_ends: f32,
+    pub cosserat_end_twist_rate: f32,
+    pub cosserat_straight_rest: f32,
 }
+
+// The C++ mirror's size, which every rendering that reads the record asserts
+// on its side.
+const _: () = assert!(std::mem::size_of::<EdgeParam>() == 72);
 
 // A device buffer is made of this, so `Pod` is stated where the layout is.
 unsafe impl ppf_cts_compute::Pod for EdgeParam {}
@@ -171,6 +188,13 @@ impl std::hash::Hash for EdgeParam {
         self.bend_rest_from_geometry.hash(state);
         self.deform_damping.to_bits().hash(state);
         self.bend_damping.to_bits().hash(state);
+        self.cosserat_shear.to_bits().hash(state);
+        self.cosserat_bend.to_bits().hash(state);
+        self.cosserat_twist.to_bits().hash(state);
+        self.cosserat_rest_twist.to_bits().hash(state);
+        self.cosserat_fix_ends.to_bits().hash(state);
+        self.cosserat_end_twist_rate.to_bits().hash(state);
+        self.cosserat_straight_rest.to_bits().hash(state);
     }
 }
 
@@ -187,6 +211,13 @@ impl PartialEq for EdgeParam {
             && self.bend_rest_from_geometry == other.bend_rest_from_geometry
             && self.deform_damping.to_bits() == other.deform_damping.to_bits()
             && self.bend_damping.to_bits() == other.bend_damping.to_bits()
+            && self.cosserat_shear.to_bits() == other.cosserat_shear.to_bits()
+            && self.cosserat_bend.to_bits() == other.cosserat_bend.to_bits()
+            && self.cosserat_twist.to_bits() == other.cosserat_twist.to_bits()
+            && self.cosserat_rest_twist.to_bits() == other.cosserat_rest_twist.to_bits()
+            && self.cosserat_fix_ends.to_bits() == other.cosserat_fix_ends.to_bits()
+            && self.cosserat_end_twist_rate.to_bits() == other.cosserat_end_twist_rate.to_bits()
+            && self.cosserat_straight_rest.to_bits() == other.cosserat_straight_rest.to_bits()
     }
 }
 
@@ -720,6 +751,7 @@ impl std::str::FromStr for FrictionMode {
 pub enum PrecondMode {
     BlockJacobi,
     Schwarz,
+    Multigrid,
 }
 
 impl std::str::FromStr for PrecondMode {
@@ -728,8 +760,9 @@ impl std::str::FromStr for PrecondMode {
         match s {
             "block-jacobi" | "blockjacobi" | "jacobi" => Ok(PrecondMode::BlockJacobi),
             "schwarz" => Ok(PrecondMode::Schwarz),
+            "multigrid" => Ok(PrecondMode::Multigrid),
             _ => Err(format!(
-                "Invalid precond: {s} (valid choices: block-jacobi, schwarz)"
+                "Invalid precond: {s} (valid choices: block-jacobi, schwarz, multigrid)"
             )),
         }
     }
@@ -1372,4 +1405,30 @@ pub struct DataSet {
     /// Empty (size 0) when nothing was linked, which the contact passes read
     /// as "no table". Mirrors the tail of the C++ `DataSet` in `data.hpp`.
     pub start_link: CVecVec<u32>,
+    /// Cosserat rods (`cosserat.rs`): one material frame per Cosserat rod edge,
+    /// a SLOT, in the frame builder's chain order. Every array is empty when the
+    /// scene has no Cosserat rod. The rod edge index of each slot.
+    pub cosserat_edge: CVec<u32>,
+    /// Each slot's oriented endpoints (from, to); its frame's Z axis points from
+    /// the first to the second.
+    pub cosserat_edge_nodes: CVec<Vec2u>,
+    /// Each slot's frame at rest, a unit quaternion (x, y, z, w), four floats
+    /// per slot.
+    pub cosserat_quat: CVec<f32>,
+    /// 1 where a slot's orientation is held (a Dirichlet condition), else 0.
+    pub cosserat_fixed: CVec<u32>,
+    /// The signed rate (radians per second) a held end is turned at about its
+    /// own tangent, 0 elsewhere.
+    pub cosserat_end_omega: CVec<f32>,
+    /// One bend site per pair of consecutive slots: the two slots (previous,
+    /// next),
+    pub cosserat_bend_slots: CVec<Vec2u>,
+    /// the rest Darboux vector in the previous slot's frame,
+    pub cosserat_rest_darboux: CVec<Vec3f>,
+    /// the reciprocal of the site's integration length,
+    pub cosserat_bend_invlen: CVec<f32>,
+    /// and its rest metric, two floats: the factors the bend energy's stiffness
+    /// is corrected by along and across the rest rotation's axis
+    /// (`crate::cosserat::rest_metric`).
+    pub cosserat_rest_metric: CVec<f32>,
 }

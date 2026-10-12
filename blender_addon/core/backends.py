@@ -1014,7 +1014,8 @@ class WinNativeBackend:
         return report
 
     def start_server(
-        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = ""
+        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = "",
+        idle_timeout: int | None = None,
     ) -> bool:
         """Launch ``ppf-cts-server.exe`` on CUDA device *cuda_device*.
 
@@ -1036,6 +1037,7 @@ class WinNativeBackend:
             cuda_device_uuid,
             self._device,
             self._gpu_backend,
+            idle_timeout,
         )
         return self._process is not None
 
@@ -1217,7 +1219,7 @@ class MacNativeBackend:
         self._process = None
         return report
 
-    def start_server(self) -> bool:
+    def start_server(self, idle_timeout: int | None = None) -> bool:
         """Launch ``ppf-cts-server`` from the solver root.
 
         Takes no device argument: the Metal backend opens the system default
@@ -1237,7 +1239,7 @@ class MacNativeBackend:
             return False
         from .connection import spawn_mac_native_server
         self._process = spawn_mac_native_server(
-            self._directory, self._port, self._device
+            self._directory, self._port, self._device, idle_timeout
         )
         return self._process is not None
 
@@ -1414,7 +1416,8 @@ class LinuxNativeBackend:
         return report
 
     def start_server(
-        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = ""
+        self, cuda_device: int = AUTOMATIC, cuda_device_uuid: str = "",
+        idle_timeout: int | None = None,
     ) -> bool:
         """Launch ``ppf-cts-server`` from the solver root, on CUDA device *cuda_device*.
 
@@ -1442,6 +1445,7 @@ class LinuxNativeBackend:
             cuda_device_uuid,
             self._device,
             self._gpu_backend,
+            idle_timeout,
         )
         return self._process is not None
 

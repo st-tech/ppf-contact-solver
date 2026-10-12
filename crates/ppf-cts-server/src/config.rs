@@ -123,6 +123,10 @@ pub struct EngineConfig {
     /// What the solver in `solver_target_dir` printed for `--backend`, or
     /// empty when there is no solver there or it could not be asked.
     pub solver_backend: String,
+    /// Seconds without a request and with nothing running after which the
+    /// server stops itself (`--idle-timeout`), 0 for never. Reported on
+    /// every response; `serve::stop_when_idle` does the stopping.
+    pub idle_timeout_s: u64,
 }
 
 impl Default for EngineConfig {
@@ -137,6 +141,7 @@ impl Default for EngineConfig {
             data_root: None,
             solver_target_dir: String::new(),
             solver_backend: String::new(),
+            idle_timeout_s: 0,
         }
     }
 }

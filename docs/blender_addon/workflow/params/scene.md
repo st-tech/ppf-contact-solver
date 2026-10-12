@@ -1,199 +1,278 @@
 # 🌐 Scene Parameters
 
-Scene-wide simulation settings (gravity, time step, wind, air density,
-frame count, CG tolerances) all live in one place: the **Scene
-Configuration** panel in the 3D viewport's sidebar.
+The **Scene Configuration** panel holds the settings that apply to the
+whole simulation: gravity, time step, wind, air density, frame count,
+force fields, invisible colliders and the PCG linear-solver settings. Save
+them as a scene profile to reuse them in another scene.
 
 ## Scene Configuration Panel
 
-Open the sidebar (`N`) in the 3D viewport and switch to the add-on's tab.
-The **Scene Configuration** panel is the third panel, below **Backend
-Communicator** and **Solver**; everything in it is scoped to the whole
-scene rather than a single object group.
+1. Press `N` in the 3D viewport to open the sidebar.
+2. Click the **ZOZO's Contact Solver** tab.
+3. Find **Scene Configuration**, the third panel, below **Backend
+   Communicator** and **Solver**.
+
+Everything in this panel applies to the whole scene, not to one object
+group.
 
 ```{figure} ../../images/scene_params/panel_overview.png
-:alt: Scene Configuration panel in its default state. Open Profile row at the top; a Take FPS from Scene box holding FPS and Time Scale; a Take Starting Frame from Scene box holding Starting Frame; then Frame Count, Step Size, Min Newton Steps, Air Density, Air Friction, World Scaling, Gravity, Preview Direction and a grayed Inactive Momentum Frames; and five collapsed sub-section headers (Save and Checkpoints, Wind, Invisible Colliders, Linear System Solver, Advanced Params)
+:alt: Scene Configuration panel in its default state, top to bottom. An Open Profile row with a Save icon; a Take FPS from Scene box holding FPS and Time Scale; a Take Starting Frame from Scene box holding Starting Frame; Frame Count, Step Size, Min Newton Steps, Air Density, Air Friction, World Scaling, Gravity, Preview Direction and a grayed Inactive Momentum Frames; then the collapsed box headers Save and Checkpoints, Wind, Invisible Colliders, Linear System Solver and Advanced Params
 :width: 500px
 
 Default layout of the **Scene Configuration** panel. Top-down: the
-**Open Profile** row (no profile loaded yet), the basic parameters
-block, and the five collapsible sub-section headers. Grayed rows
-(like `Inactive Momentum Frames` here) are gated on scene contents.
+profile row, the basic settings, and the collapsible box headers. The
+**Force Fields** header is between **Wind** and **Invisible Colliders**
+and is not in this capture. A grayed row (**Inactive Momentum Frames**
+here) is gated on the scene's contents.
 ```
 
-The top row is the **scene profile** row. If no profile is loaded you
-see an **Open Profile** button plus a small save icon; once a profile
-is open the row collapses into a dropdown (the profile selector) with
-four icon buttons on the right: **Open**, **Clear**, **Reload**, and
-**Save** (identical layout to the per-group material profile row).
-Opening a profile reads its TOML payload into the scene parameters the
-profile covers, replaces the legacy dynamic-parameter entries, and
-replaces invisible colliders. Clear drops the association without
-touching current values. Reload re-reads the file from disk. Save
-writes the current scene parameters, dynamic-parameter block, and
-invisible-collider block back out to the file.
+From top to bottom the panel holds:
 
-:::{important}
-**The scene-profile TOML file is authored through the Save icon, not by
-hand.** Configure the Scene Configuration panel (basic parameters,
-Wind, Invisible Colliders, Linear System Solver, Advanced Params) the
-way you want it, then click the **Save** icon on the profile row: the
-add-on creates a new `.toml` on the first save and overwrites the
-currently selected entry on later saves. The TOML layout shown further
-down is for inspection only; the intended workflow is always UI → Save.
+- The **profile row**, for saving and loading the settings. See
+  [Scene Profiles](#scene-profiles).
+- A **Take FPS from Scene** box with **FPS** and **Time Scale**, and a
+  **Take Starting Frame from Scene** box with **Starting Frame**.
+- The basic settings, one per row: **Frame Count**, **Step Size**, **Min
+  Newton Steps**, **Air Density (kg/m³)**, **Air Friction**, **World
+  Scaling**, **Gravity (m/s²)**, **Preview Direction** and **Inactive
+  Momentum Frames**. See [Basic](#basic).
+- Six collapsible boxes, in this order. Each has a disclosure triangle on
+  its header row, opens and closes on its own, and starts closed.
+  - **Save and Checkpoints**: resumable states. See
+    [Save and Checkpoints](#save-and-checkpoints).
+  - **Wind**: direction and strength. See [Wind](#wind).
+  - **Force Fields**: field objects, sampling, script and **Visualize**.
+    See [Force Fields](force_fields.md).
+  - **Invisible Colliders**: walls and spheres with their own keyframes.
+    See [Invisible Colliders](../constraints/colliders.md).
+  - **Linear System Solver**: **PCG Max Iterations**, **PCG Tolerance**,
+    **Preconditioner** and, only while **Schwarz** is selected, **Schwarz
+    Levels**. See [Linear System Solver](#linear-system-solver).
+  - **Advanced Params**: **Max Contact**, **Vertex Air Damping**, **Line
+    Search Max T**, **Constraint Gap**, **Include Face Mass**, **Friction
+    Mode** and **Disable Contact**. See [Advanced Params](#advanced-params).
 
-```{figure} ../../images/scene_params/save_icon.png
-:alt: Scene Configuration panel with the floppy-disk Save icon at the top-right of the Open Profile row highlighted in red
-:width: 500px
-
-The **Save** icon (floppy disk, highlighted in red) at the top-right of
-the Scene Configuration profile row. Clicking it writes the scene
-parameters, the wind block, the linear-solver and advanced settings, the
-legacy dynamic-parameter block and the invisible colliders out to the
-`.toml` file. **World Scaling**, **Friction Mode**, **Save State on
-Finish**, **Keep Saved States** and the **Save Checkpoints** list are
-not part of a scene profile (**Auto Save** and its interval are), and
-neither are keyframes drawn on a slider; those stay on the `.blend`.
-```
-:::
-
-```{figure} ../../images/scene_params/profile_row_loaded.png
-:alt: Scene Configuration panel with a scene profile loaded. The top row is now a Profile dropdown followed by Open / Clear / Reload / Save icons
-:width: 500px
-
-With a scene profile loaded, the top row collapses into a **Profile**
-dropdown with four icons on the right: **Open**, **Clear**, **Reload**,
-**Save**. Switching entries in the dropdown applies that preset to the
-scene (overwriting scene parameters, dynamic parameters, and invisible
-colliders).
-```
-
-Below the profile row, the panel lays out the basic parameters one per
-line: **FPS** (inside a small box, with a checkbox to drive it from
-Blender's render FPS instead, and a **Time Scale** slider that
-re-interprets how much simulated time one frame covers), a **Starting
-Frame** box (with its own checkbox to take the start frame from the
-scene), **Frame Count**, **Step Size**, **Min Newton Steps**, **Air
-Density**, **Air Friction**, **World Scaling**, **Gravity**
-(a 3-component vector), a **Preview Direction** toggle (viewport arrow),
-and an **Inactive Momentum Frames** row that is grayed-out unless the
-scene contains at least one **Shell** group.
-
-Below the basics, five collapsible sub-sections hang off the panel, in
-this order: **Save and Checkpoints**, **Wind**, **Invisible Colliders**,
-**Linear System Solver**, and **Advanced Params**. Each has a disclosure
-triangle on its header row and toggles open/closed independently:
-
-- **Save and Checkpoints**: save-on-finish, the auto-save interval and
-  retention, and the explicit checkpoint-frame list. Covered below in
-  [Save and Checkpoints](#save-and-checkpoints).
-- **Wind**: wind direction vector, preview toggle, wind strength.
-
-```{figure} ../../images/scene_params/wind_expanded.png
-:alt: Scene Configuration panel with the Wind sub-section expanded. Direction XYZ, Preview Direction toggle, and Strength (m/s) rows
-:width: 500px
-
-With the **Wind** disclosure triangle open, the sub-section reveals a
-**Direction** XYZ field, a **Preview Direction** viewport toggle, and a
-**Strength (m/s)** scalar. Encoding combines the normalized direction
-with the strength, so a direction of `(0, 0, 0)` is accepted only with a
-**Strength** of `0`.
-```
-
-- **Invisible Colliders**: walls and spheres with their own keyframe
-  lists. Covered separately in [Invisible Colliders](../constraints/colliders.md).
-- **Linear System Solver**: CG max iter, CG tol, the preconditioner
-  choice, and — only while **Schwarz** is selected — Schwarz Levels.
-- **Advanced Params**: contact NNZ, vertex air damp, CCD line-search
-  max t, constraint ghat, include-face-mass, friction-mode, and
-  disable-contact toggles.
-
-```{figure} ../../images/scene_params/advanced_expanded.png
-:alt: Scene Configuration panel with the Advanced Params sub-section expanded, showing Max Contact, Vertex Air Damping, Line Search Max T, Constraint Gap, Include Face Mass, Friction Mode and Disable Contact
-:width: 500px
-
-**Advanced Params** exposes the tuning knobs most users never need to
-touch: contact-matrix capacity (**Max Contact**), per-vertex air drag,
-CCD line-search bounds, the barrier gap, the friction-combination mode,
-and two debugging toggles. Raise Max Contact only when the solver
-reports overflow. The PCG iteration cap, its tolerance and the
-preconditioner choice are one box up in **Linear System Solver**, and
-**Auto Save** is in [Save and Checkpoints](#save-and-checkpoints).
-```
-
-Gravity, wind, air density, air friction, vertex air damp and step size
-are keyframed on their own sliders rather than in a sub-section. See
+**Step Size**, **Air Density**, **Air Friction**, **Gravity**, the wind
+and **Vertex Air Damping** can be keyframed on their own sliders. See
 [Dynamic Parameters](dynamic.md).
 
-Only the sub-section headers are visible when collapsed; click the
-triangle on any of them to expand.
+## Scene Profiles
+
+A **scene profile** saves the scene settings under a name in a `.toml`
+file, so you can load them in another scene or share them with a team.
+One file holds any number of entries. The row at the top of the panel
+manages them. It works like the profile row of the **Backend
+Communicator** panel (see [Connection Profiles](../../connections/profiles.md)).
+
+| State        | What the row shows                                          |
+| ------------ | ----------------------------------------------------------- |
+| No file open | An **Open Profile** button and the **Save Scene Profile** icon. |
+| File open    | A **Profile** dropdown, followed by four icon buttons.      |
+
+The add-on remembers the file's location in the `.blend`. If the file is
+moved or deleted, the row shows **Open Profile** again the next time
+Blender is started.
+
+The four buttons show icons only. Hover over one to read its name.
+
+| Icon            | Button                    | Effect                                                                                                         |
+| --------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Folder          | **Open Scene Profile**    | Pick a `.toml` file. The dropdown lists its entries sorted by name, and the first one is selected and applied. |
+| X               | **Clear Scene Profile**   | Stop using the file. The settings keep their values.                                                           |
+| Circular arrows | **Reload Scene Profile**  | Re-read the file and apply the selected entry again.                                                           |
+| Floppy disk     | **Save Scene Profile**    | Overwrite the selected entry. With no file open, ask for a file and an **Entry Name**.                         |
+
+Picking another entry in the dropdown applies it at once.
+
+### Saving a Profile
+
+Create profiles with the **Save Scene Profile** icon, the floppy disk at
+the right end of the profile row. You do not write the `.toml` file
+yourself.
+
+1. Set the scene up in the panel.
+2. If the row shows a **Profile** dropdown, click **Clear Scene Profile**
+   so that the row shows **Open Profile**.
+3. Click the **Save Scene Profile** icon.
+4. In the file browser, choose or type the `.toml` file name (the
+   suggested name is `scene_profile.toml`). To add an entry to an existing
+   file, choose that file. Set **Entry Name** in the file browser's
+   options (the default is `Default`; a name the file already holds
+   replaces that entry), then confirm.
+5. The status bar reports `Saved to '<Entry Name>'`. The dropdown shows the
+   new entry.
+
+:::{warning}
+Use an ASCII **Entry Name**: letters, digits, `_` and `-`. A name such as
+`Büro`, with a non-ASCII letter and no space or punctuation, is written
+without quotes, which TOML does not allow. The add-on then cannot read the
+file, and the next save replaces the file with the one new entry. A name
+with a space or punctuation is quoted and is safe.
+:::
+
+With a file open and an entry selected, the **Save Scene Profile** icon
+overwrites that entry at once, with no file browser. The other entries of
+the file stay in it. Saving rewrites the whole file, so it removes
+comments and formatting. If the file cannot be parsed, the add-on reads it
+as empty and saving replaces it with the one entry, so keep a backup of a
+file you edit by hand.
+
+### What a Profile Holds
+
+A profile stores most of the settings in the [Basic](#basic),
+[Wind](#wind), [Linear System Solver](#linear-system-solver) and
+[Advanced Params](#advanced-params) tables, under the property name shown
+there (**Gravity** is stored as `gravity`). It also stores **Auto Save**,
+**Auto Save Interval** and the scene's invisible colliders. It does not
+store:
+
+- **World Scaling**, **Friction Mode**, `fix_xz`, **Save State on Finish**,
+  **Keep Saved States** and the **Save Checkpoints** list.
+- The **Preview Direction** toggles and whether a box is open.
+- The **Force Fields** settings.
+- Keyframes drawn on a slider. They stay in the `.blend`.
+
+Opening or selecting an entry sets every setting the entry names. A
+setting the entry does not name keeps its current value. If the entry
+holds invisible colliders, they replace the scene's colliders; an entry
+saved from a scene with no colliders leaves the current ones in place.
+[Invisible Colliders](../constraints/colliders.md#saving-with-a-scene-profile)
+lists which collider properties are stored.
+
+A scene profile does not hold object groups, pins or merge pairs. Group
+settings have [material profiles](material.md#material-profiles), pin
+operations have their own profiles, and merge pairs are stored in the
+`.blend` only.
+
+An entry looks like this. The file is for reading and comparing; change
+the scene in the panel and click **Save Scene Profile** instead of editing
+it. Decimal values are written at the float32 precision Blender stores, so
+a real file shows longer numbers than this excerpt, for example
+`-9.800000190734863` for `-9.8`:
+
+```toml
+[Default]
+step_size = 0.01
+min_newton_steps = 1
+air_density = 0.001
+air_friction = 0.2
+gravity = [0.0, 0.0, -9.8]
+frame_count = 180
+frame_start = 1
+use_scene_frame_start = false
+frame_rate = 60
+use_scene_fps = false
+time_scale = 1.0
+inactive_momentum_frames = 0
+wind_direction = [0.0, 0.0, 0.0]
+wind_strength = 0.0
+contact_nnz = 100000000
+vertex_air_damp = 0.0
+auto_save = false
+auto_save_interval = 10
+line_search_max_t = 1.25
+constraint_ghat = 0.001
+cg_max_iter = 10000
+cg_tol = 0.001
+precond = "BLOCK_JACOBI"
+schwarz_levels = "LEVEL_2"
+include_face_mass = false
+disable_contact = false
+
+[[Default.colliders]]
+collider_type = "SPHERE"
+name = "Floor Bowl"
+position = [0.0, 0.0, 0.0]
+contact_gap = 0.001
+friction = 0.0
+radius = 0.98
+hemisphere = true
+invert = true
+
+[[Default.colliders.keyframes]]
+frame = 1
+```
+
+A file might hold entries such as these (an illustration, not a file the
+add-on ships):
+
+| Entry         | Highlights                                                                   |
+| ------------- | ---------------------------------------------------------------------------- |
+| `Default`     | The add-on defaults: step 0.01 s, 180 frames at 60 FPS, gravity (0, 0, -9.8). |
+| `Windy`       | Same as `Default`, plus `wind_direction = [0, 1, 0]`, `wind_strength = 5.0`. |
+| `HighRes`     | step 0.001 s (the minimum), 360 frames, `cg_max_iter = 20000`.               |
+| `SlowMotion`  | 600 frames at 120 FPS.                                                       |
+| `ZeroGravity` | `gravity = [0, 0, 0]`, 300 frames.                                           |
 
 ## Basic
 
-| UI label                     | Python / TOML key          | Default       | Description                                                         |
-| ---------------------------- | -------------------------- | ------------- | ------------------------------------------------------------------- |
-| **Frame Count**              | `frame_count`              | 180           | Simulation length in frames. Minimum 10.                            |
-| **FPS**                      | `frame_rate`               | 60            | FPS used to convert frames to seconds at encode time. Minimum 1, soft max 240. |
-| **Take FPS from Scene**      | `use_scene_fps`            | `False`       | Run at Blender's own frame rate instead of the **FPS** field.       |
-| **Time Scale**               | `time_scale`               | 1.0           | Playback speed of the Blender animation in simulated time. `0.5` re-interprets it at half speed. Range 0.01 – 10. |
-| **Starting Frame**           | `frame_start`              | 1             | Blender frame the first output frame lands on; simulated time zero. Minimum 0. |
-| **Take Starting Frame from Scene** | `use_scene_frame_start` | `False`   | Start at the Blender scene's start frame instead of the field.      |
-| **Step Size**                | `step_size`                | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.01.                 |
-| **Min Newton Steps**         | `min_newton_steps`         | 1             | Minimum Newton iterations per step. 1 – 64.                         |
-| **Air Density (kg/m³)**      | `air_density`              | 0.001         | Air density, kg/m³. Range 0 – 0.01.                                 |
-| **Air Friction**             | `air_friction`             | 0.2           | Tangential-to-normal air drag ratio, 0 – 1 (see below).             |
-| **World Scaling**            | `world_scaling`            | 1.0           | Physical size the scene is simulated at, as a uniform scale; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000 (see below). |
-| **Gravity (m/s²)**           | `gravity_3d`               | (0, 0, -9.8)  | Gravity vector, m/s² (Z-up Blender frame).                          |
-| **Preview Direction** (gravity) | `preview_gravity_direction` | `False`    | Draw the gravity-direction arrow overlay in the viewport. Overlay-only. |
-| **Inactive Momentum Frames** | `inactive_momentum_frames` | 0             | Frames over which shell momentum is ignored at startup (0 – 600).   |
+| UI label                           | Python property             | Default       | Description                                                                                                                     |
+| ---------------------------------- | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Take FPS from Scene**            | `use_scene_fps`             | `False`       | Run at Blender's own frame rate instead of the **FPS** field. An **FPS (from Scene)** readout replaces the field while it is on. |
+| **FPS**                            | `frame_rate`                | 60            | Frame rate the simulation runs at: how much simulated time one frame covers. Minimum 1, soft max 240.                           |
+| **Time Scale**                     | `time_scale`                | 1.0           | Playback speed of the Blender animation in simulated time. `0.5` plays it at half speed. Range 0.01 – 10. Solve cost grows as 1 / **Time Scale**. |
+| **Take Starting Frame from Scene** | `use_scene_frame_start`     | `False`       | Start at the scene's start frame instead of the **Starting Frame** field. A **Starting Frame (from Scene)** readout replaces the field while it is on. |
+| **Starting Frame**                 | `frame_start`               | 1             | Blender frame that holds the first output frame; simulated time zero. Minimum 0.                                                |
+| **Frame Count**                    | `frame_count`               | 180           | Simulation length in frames. Minimum 10.                                                                                        |
+| **Step Size**                      | `step_size`                 | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.01.                                                                             |
+| **Min Newton Steps**               | `min_newton_steps`          | 1             | Minimum Newton iterations per step. Range 1 – 64.                                                                               |
+| **Air Density (kg/m³)**            | `air_density`               | 0.001         | Air density. Range 0 – 0.01.                                                                                                    |
+| **Air Friction**                   | `air_friction`              | 0.2           | Ratio of sideways to head-on air drag. Range 0 – 1. See [Air Friction](#air-friction).                                          |
+| **World Scaling**                  | `world_scaling`             | 1.0           | Physical size the scene is simulated at, as a uniform scale; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000. See [World Scaling](#world-scaling). |
+| **Gravity (m/s²)**                 | `gravity_3d` (or `gravity`) | (0, 0, -9.8)  | Gravity vector in Blender's Z-up frame.                                                                                         |
+| **Preview Direction** (gravity)    | `preview_gravity_direction` | `False`       | Draw the gravity arrow in the viewport. Viewport only. See [Previewing Direction](#previewing-direction).                       |
+| **Inactive Momentum Frames**       | `inactive_momentum_frames`  | 0             | Number of frames at the start of the solve without velocity, gravity, wind or force fields. Range 0 – 600.                      |
 
-**Inactive Momentum Frames** is only honored when the scene contains at
-least one **Shell** group; otherwise the UI disables the row. It counts
-frames from the start of the solve, so it takes no keyframe, and a
-keyframe that a saved file still carries on it stops **Transfer** with a
-message naming it; delete that keyframe.
+**Take FPS from Scene** reads the whole-number **FPS** of the scene's
+**Frame Rate** (Output properties, Format) and ignores its **Base** factor.
+A 23.98 fps scene, which is 24 with a **Base** of 1.001, runs at 24.
+
+When **Time Scale** is not `1.0`, the panel adds an **Animation at N%
+speed** label under it.
+
+Changing **Frame Count**, **Starting Frame** or **Take Starting Frame from
+Scene** raises the scene's **End** frame to the last frame of the solve (the
+starting frame plus **Frame Count** minus 1) when the **End** frame is
+earlier, so the timeline covers every simulated frame. It never lowers the
+**End** frame and never moves the scene's **Start** frame, so shorten the
+timeline yourself when you shorten the run. Setting `frame_count`,
+`frame_start` or `use_scene_frame_start` from Python or over
+[MCP](../../integrations/mcp.md) does the same.
+
+**Inactive Momentum Frames** is available only while the scene contains at
+least one **Shell** group; otherwise the row is grayed out and the value
+is not sent. During those frames velocity, gravity, wind and force fields
+do not move the simulated objects, which hold their positions, and pins
+act as usual. The count starts at the solve's first frame, so the setting
+takes no keyframe. A keyframe already on this setting stops **Transfer**
+with a message naming it; delete that keyframe.
 
 ### Air Friction
 
-At every shell vertex, the solver accumulates an air-damping force
-that resists motion relative to the wind. The move `(x¹ - x⁰) - Δt·w`
-(current minus previous position, minus the wind displacement over
-one step) is split by the vertex normal into a **normal** component
-and a **tangential** component, and the two are weighted differently
-in the damping energy:
+**Air Friction** sets how much air resists a surface sliding sideways
+compared with a surface pushing straight into the air.
 
-$$
-E_\text{air} = \tfrac{1}{2}\,\bigl(v_n^{\,2} + \texttt{air\_friction}\,\lVert v_t \rVert^{2}\bigr)
-$$
+- At `0`, air resists only motion into or out of the surface, so a
+  surface slides edgewise through still air unopposed.
+- At `1`, sideways resistance equals the resistance to pushing into the
+  air.
+- The default is `0.2`.
 
-- **Normal** drag is always on with coefficient `1`. Pushing a shell
-  face into or out of the air is always resisted.
-- **Tangential** drag is scaled by **Air Friction**. At `0`, air
-  offers no sideways resistance, so a shell can slide edgewise through
-  still air unopposed. At `1`, tangential and normal drag are equal
-  in magnitude. The default `0.2` gives air a little "grip" on the
-  fabric without over-damping swings.
+The drag is scaled by each vertex's area and by **Air Density**. At
+**Air Density** `0` there is no air drag at all, whatever **Air Friction**
+is. The scene **Wind** also acts through this drag, so wind has no effect
+at **Air Density** `0`.
 
-The per-vertex air-damping force is then scaled by the vertex's
-associated area and by **Air Density** before being added to the
-Newton solve. A side-effect of that last multiplication: at
-`air_density = 0` there is no shell air damping at all, regardless of
-**Air Friction**.
-
-**Vertex Air Damping** (under **Advanced**) is a separate, isotropic
-per-vertex damper applied to every vertex in the scene, with no area or
-air-density weighting and no directional split. Use it when you need to
-calm a rod or a particle-heavy scene that **Air Friction** does not
-reach.
-
-Both **Air Friction** and **Vertex Air Damping** are keyframeable;
-see [Dynamic Parameters](dynamic.md).
+**Vertex Air Damping** (in **Advanced Params**) is a separate damper on
+every vertex, with no area or **Air Density** weighting and no sideways
+split. **Air Friction** does not act on a vertex that belongs to no face,
+such as a rod's; **Vertex Air Damping** does.
 
 ### World Scaling
 
 **World Scaling** changes the physical size the scene is simulated at.
-The solver multiplies the scene by this factor on the way in and divides
-the simulated result back out on the way home, so the scene keeps the
+The solver multiplies the scene by this factor before the solve and
+divides the simulated result by it after the solve, so the scene keeps the
 size you authored it at. Use it when a scene is modeled at a size it
 does not represent: at `0.1` a 15 m mesh is simulated as a 1.5 m one
 under the same gravity, and the result comes back at 15 m.
@@ -205,8 +284,8 @@ and thicknesses, and pin operations' moves and centers), velocities
 **Contact Offset** whether absolute or a ratio of the bounding box, the
 **Contact Gap** of every invisible wall and sphere, and the scene-level
 **Constraint Gap**. Keyframed contact distances scale the same way as
-their static values. So a contact that just
-touches at `1.0` still just touches at any other setting.
+their static values. So a contact that just touches at `1.0` just touches
+at any other setting.
 
 Physical constants are left alone, because they describe the world the
 resized scene is simulated in: **Gravity**, **Wind**, the material
@@ -217,74 +296,131 @@ changes size is what makes the scene behave as the size it represents.
 
 A **Rod** group's **Bend Stiffness** is measured against a 1 cm reference
 segment in solver units, that is, after **World Scaling** has been
-applied. At the default `1.0` the reference is simply the segment length
-as drawn in Blender. See [Material Parameters](material.md).
+applied. At the default `1.0`, solver units equal scene units, so the
+reference is a 1 cm segment as drawn in Blender. See
+[Material Parameters](material.md).
+
+## Save and Checkpoints
+
+A long simulation can save its state along the way, so you can resume it
+instead of starting over. These settings control when those saves happen
+and how many are kept.
+
+1. Click the triangle on the **Save and Checkpoints** header.
+2. Tick **Save State on Finish** to save the state on the final frame.
+3. For saves at a regular interval, tick **Auto Save** in the **Auto
+   Save** row. Click that row's own triangle to set **Auto Save Interval**
+   and **Keep Saved States**. Both fields are grayed out until **Auto
+   Save** is on.
+4. For saves at chosen frames, click the triangle of the **Save
+   Checkpoints** row. Move the timeline's playhead to a frame and click
+   **Add Frame N**, where `N` is the playhead's frame. To delete a frame,
+   select its row and click **Remove**.
+
+| UI label                 | Python property          | Default | Description                                                                                                            |
+| ------------------------ | ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Save State on Finish** | `save_state_on_finish`   | `False` | Save the state on the final frame before the solver exits, so the finished result stays resumable even when **Auto Save** is off. |
+| **Auto Save**            | `auto_save`              | `False` | Save the state periodically while the simulation runs.                                                                 |
+| **Auto Save Interval**   | `auto_save_interval`     | 10      | How often to auto-save, in frames. Minimum 1.                                                                          |
+| **Keep Saved States**    | `keep_states`            | 0       | How many auto-saved states to keep. `0` keeps all of them.                                                             |
+| **Save Checkpoints**     | `save_checkpoint_frames` | (empty) | A list of frames at which to save a resumable state.                                                                   |
+
+**Auto Save** writes a state every **Auto Save Interval** frames. At the
+default **Keep Saved States** of `0` every state is kept, so you can resume
+from any of them. A positive number keeps only that many of the most
+recent states and discards the oldest as new ones are written.
+
+**Save Checkpoints** saves specific frames, in addition to or instead of
+the **Auto Save** schedule. Its frames are Blender frames. **Add Frame**
+refuses a frame that is already in the list, and stores a frame below 1 as
+1. Each frame has to come after the **Starting Frame**, where nothing has
+been simulated yet: **Transfer** refuses a checkpoint at or before it,
+naming the frame.
+
+**Resume** lists the saved states the server holds, so auto-saved frames,
+the on-finish save and your checkpoints all appear there. See
+[Resuming a Run](../sim/simulating.md#resuming-a-run).
 
 ## Wind
 
-| UI label               | Python / TOML key       | Default   | Description                                     |
-| ---------------------- | ----------------------- | --------- | ----------------------------------------------- |
-| **Wind** (disclosure)  | `show_wind`             | `False`   | Whether the Wind sub-section is expanded.       |
-| **Direction**          | `wind_direction`        | (0, 0, 0) | Wind direction (normalized at encode time).     |
-| **Preview Direction**  | `preview_wind_direction`| `False`   | Draw the wind-direction arrow overlay in the viewport. Overlay-only. |
-| **Strength (m/s)**     | `wind_strength`         | 0.0       | Wind speed, m/s. Range 0 – 1000.                |
+1. Click the triangle on the **Wind** header.
+2. Set **Direction** (an XYZ vector) and **Strength (m/s)**.
+3. Optional: tick **Preview Direction** to draw the wind arrow in the
+   viewport. See [Previewing Direction](#previewing-direction).
 
-The encoder normalizes **Direction** and multiplies it by **Strength
-(m/s)** into a single vector before sending, so only the direction of
-**Direction** matters, and a **Strength** of `0` means no wind whatever
-the direction. A **Direction** of `(0, 0, 0)` with a nonzero
-**Strength** names no direction to blow in, and **Transfer** refuses
-it; the same holds for every keyframe of the wind.
+| UI label              | Python property          | Default   | Description                                                          |
+| --------------------- | ------------------------ | --------- | -------------------------------------------------------------------- |
+| **Direction**         | `wind_direction`         | (0, 0, 0) | Wind direction. Only its direction matters; the add-on normalizes it. |
+| **Preview Direction** | `preview_wind_direction` | `False`   | Draw the wind arrow in the viewport. Viewport only.                  |
+| **Strength (m/s)**    | `wind_strength`          | 0.0       | Wind speed in m/s. Range 0 – 1000.                                   |
 
-```{figure} ../../images/scene_params/wind_preview.png
-:alt: Scene Configuration with Wind expanded. Direction (0, 1, 0), Strength 5.0 m/s, Preview Direction on, and a green wind arrow plus sphere overlay drawn in the 3D viewport
-:width: 500px
+The wind is **Direction** normalized and multiplied by **Strength**. A
+**Strength** of `0` means no wind whatever the direction. A **Direction**
+of `(0, 0, 0)` with a nonzero **Strength** names no direction to blow in,
+and **Transfer** refuses it; the same holds for every keyframe of the
+wind.
 
-A live example of the Wind fields. With **Direction = (0, 1, 0)** and
-**Strength = 5.0 m/s**, the encoder ships `direction × strength = (0, 5,
-0)` to the solver. Turning **Preview Direction** on draws the green
-wind-arrow overlay (and a translucent sphere sized to a fixed fraction
-of the current view distance, for scale) so you can judge the wind field
-relative to scene geometry without running a simulation. It is the
-arrow's length that tracks the strength, up to a cap. The viewport label
-echoes the magnitude and normalized direction live.
-```
+The solver varies the scene wind between 75% and 100% of **Strength**, in
+gusts with a period of about 0.21 s, so **Strength** is the peak speed.
+The wind does not blow during the **Inactive Momentum Frames**. It acts
+through air drag on faces (see [Air Friction](#air-friction)), so it needs
+**Air Density** above zero. Below an **Air Friction** of `1`, a surface
+facing the flow receives more of it than a surface edge-on. A Wind force
+field adds its own air flow to the
+scene wind without the gust variation; see [Force Fields](force_fields.md).
 
-## Advanced
+## Previewing Direction
 
-The panel splits these across two boxes. **Linear System Solver** holds
-**PCG Max Iterations**, **PCG Tolerance**, **Preconditioner** and
-**Schwarz Levels**; **Advanced Params** holds the rest.
+Gravity and wind each have a **Preview Direction** checkbox next to their
+fields. Tick it to draw an arrow, and a translucent sphere for scale, in
+the 3D viewport. Use it to check a direction before you run a simulation.
 
-| UI label                  | Python / TOML key    | Default     | Description                                                      |
-| ------------------------- | -------------------- | ----------- | ---------------------------------------------------------------- |
-| **Max Contact**           | `contact_nnz`        | 100 000 000 | Capacity of the contact sparse matrix (non-zero entries).        |
-| **Vertex Air Damping**    | `vertex_air_damp`    | 0.0         | Per-vertex isotropic air damping, 0 – 1.                         |
-| **Line Search Max T**     | `line_search_max_t`  | 1.25        | CCD line-search maximum step factor. Range 0.1 – 10.             |
-| **Constraint Gap**        | `constraint_ghat`    | 0.001       | Barrier gap distance, in scene units; scales with **World Scaling**. Range 0.0001 – 0.1. |
-| **PCG Max Iterations**    | `cg_max_iter`        | 10 000      | Max iterations for the PCG linear solver. 100 – 100 000.         |
-| **PCG Tolerance**         | `cg_tol`             | 0.001       | PCG relative tolerance. 0.00001 – 0.1.                           |
-| **Preconditioner**        | `precond`            | `BLOCK_JACOBI` | Preconditioner used by the PCG linear solver. Choices: `BLOCK_JACOBI` (default), `SCHWARZ`. See [Preconditioner](#preconditioner). |
-| **Schwarz Levels**        | `schwarz_levels`     | `LEVEL_2`   | Number of additive Schwarz levels (used only when **Preconditioner** is `SCHWARZ`). Choices: `LEVEL_1` (single-level smoother), `LEVEL_2` (two-level coarse correction, default). See [Schwarz Levels](#schwarz-levels). |
-| **Include Face Mass**     | `include_face_mass`  | `False`     | Fold shell face mass into attached solids.                       |
-| **Friction Mode**         | `friction_mode`      | `MIN`       | How to combine the two contacting objects' friction coefficients. Choices: `MIN`, `MAX`, `MEAN`. See [Friction at a contact](material.md#shared-parameters). |
-| **Disable Contact**       | `disable_contact`    | `False`     | Turn off contact detection entirely (debugging / ablation).      |
+The gravity arrow is blue and the wind arrow is green. A label above the
+sphere reads the strength and the normalized direction, for example
+`Gravity: 9.8 m/s² (0.0, 0.0, -1.0)` or `Wind: 5.0 m/s (0.0, 1.0, 0.0)`.
+When both toggles are on, each arrow gets its own sphere, placed side by
+side.
 
-Raise **PCG Max Iterations** (and lower **PCG Tolerance**) for stiff
-systems that fail to converge. Raise **Max Contact** only if the solver
-reports a contact-matrix overflow; it's an upper bound, not a target.
+- An arrow's length follows the strength, up to a strength of 20.
+- The sphere is sized to a fixed fraction of the current view distance.
+- The previews follow the timeline's current frame, so a keyframed gravity
+  or wind shows its value at the playhead.
+- Nothing is drawn for a zero gravity vector, or for a wind with a zero
+  **Direction** or a zero **Strength**.
+- **Hide all directional arrows** in the **Visualization** panel hides
+  these arrows, along with the force-field and velocity arrows. See
+  [Visualization](../../getting_started/tour.md#visualization).
+
+The toggles are viewport overlays only. They do not affect the
+simulation. They are also available from Python as
+`solver.param.preview_gravity_direction` and
+`solver.param.preview_wind_direction` (see
+[Blender Python API](#blender-python-api)).
+
+## Linear System Solver
+
+The **Linear System Solver** box holds the settings of the PCG linear
+solve.
+
+| UI label               | Python property  | Default        | Description                                                                                                    |
+| ---------------------- | ---------------- | -------------- | -------------------------------------------------------------------------------------------------------------- |
+| **PCG Max Iterations** | `cg_max_iter`    | 10 000         | Maximum number of PCG iterations per solve. Range 100 – 100 000.                                               |
+| **PCG Tolerance**      | `cg_tol`         | 0.001          | Relative tolerance at which PCG stops. Range 0.00001 – 0.1.                                                    |
+| **Preconditioner**     | `precond`        | `BLOCK_JACOBI` | Preconditioner of the PCG solve. Choices: **Block Jacobi** (`BLOCK_JACOBI`, default), **Schwarz** (`SCHWARZ`). See [Preconditioner](#preconditioner). |
+| **Schwarz Levels**     | `schwarz_levels` | `LEVEL_2`      | Levels of the Schwarz preconditioner. Drawn only while **Preconditioner** is **Schwarz**. Choices: **Level 1** (`LEVEL_1`), **Level 2** (`LEVEL_2`, default). See [Schwarz Levels](#schwarz-levels). |
 
 ### Preconditioner
 
-The **Preconditioner** selects how the PCG linear solver is accelerated.
-Both choices produce the same result; they differ only in how quickly
-the solver converges and, with it, the wall-clock cost per frame.
+The **Preconditioner** selects how the PCG solve is accelerated. Both
+choices reach the same **PCG Tolerance**. They differ in the number of
+iterations per solve, the time per iteration and the memory used.
 
-- **Block Jacobi** (the default) treats each vertex on its own. Each PCG
-  iteration is cheap, so it is fast in practice, and it keeps a small,
-  steady memory footprint even on scenes with very heavy contact.
+- **Block Jacobi** (the default) treats each vertex on its own. Each
+  iteration is cheap, so it is fast in practice. It stores one 3 x 3
+  block per vertex, so scenes with very heavy contact are less likely to
+  run out of memory with it.
 - **Schwarz** groups nearby vertices and solves each group together. On
-  scenes that mix stiff and soft materials it can converge in fewer PCG
+  scenes that mix stiff and soft materials it can converge in fewer
   iterations, but each iteration costs more and it uses more memory, which
   on scenes with very heavy contact can be enough to run out of memory.
 
@@ -294,188 +430,72 @@ and you have memory to spare.
 
 ### Schwarz Levels
 
-When the **Preconditioner** is set to **Schwarz**, the **Schwarz Levels**
-control picks how many additive levels the preconditioner uses. It has no
-effect on **Block Jacobi**, and the row is shown only while **Schwarz** is
-selected.
+**Schwarz Levels** picks how many additive levels the **Schwarz**
+preconditioner uses. It has no effect on **Block Jacobi**, and the row is
+drawn only while **Schwarz** is selected.
 
-- **Level 2** (the default) adds a coarse correction over the connectivity
-  partition on top of the per-aggregate solve. On stiff multibody contact
-  this lowers the worst-case PCG iteration count, so it is the better
-  all-around choice.
-- **Level 1** uses a single-level additive aggregate-Schwarz smoother only.
-  It is cheaper to set up per iteration but can take more PCG iterations on
-  stiff or mixed scenes.
+- **Level 1** uses a single level.
+- **Level 2** (the default) adds a second, coarser level, which reduces
+  the worst-case PCG iteration count on stiff multibody contact.
 
-Leave it on **Level 2** unless you are profiling and want to compare against
-the single-level smoother.
+## Advanced Params
 
-## Save and Checkpoints
+| UI label               | Python property     | Default     | Description                                                                                             |
+| ---------------------- | ------------------- | ----------- | ------------------------------------------------------------------------------------------------------- |
+| **Max Contact**        | `contact_nnz`       | 100 000 000 | Stored with the scene and sent to the solver, which sizes the contact matrix itself and does not read it, so changing it has no effect. Minimum 10 000 000. |
+| **Vertex Air Damping** | `vertex_air_damp`   | 0.0         | Per-vertex isotropic air damping. Range 0 – 1.                                                          |
+| **Line Search Max T**  | `line_search_max_t` | 1.25        | Factor that extends the time of impact found by continuous collision detection, to avoid possible solver divergence. Range 0.1 – 10. |
+| **Constraint Gap**     | `constraint_ghat`   | 0.001       | Gap distance at which boundary-condition barriers activate, in scene units; scales with **World Scaling**. Range 0.0001 – 0.1. |
+| **Include Face Mass**  | `include_face_mass` | `False`     | Include the mass of the surface (shell) elements of **Solid** groups.                                   |
+| **Friction Mode**      | `friction_mode`     | `MIN`       | How to combine the friction coefficients of two contacting objects. Choices: **Minimum** (`MIN`, default), **Maximum** (`MAX`), **Mean** (`MEAN`). See [Friction at a Contact](material.md#friction-at-a-contact). |
+| **Disable Contact**    | `disable_contact`   | `False`     | Turn off all contact detection in the simulation.                                                       |
 
-A long simulation can save its state along the way so you can resume it
-later instead of starting over. These settings control when those saves
-happen and how many are kept.
-
-| UI label                | Python / TOML key        | Default     | Description                                                        |
-| ----------------------- | ------------------------ | ----------- | ----------------------------------------------------------------- |
-| **Save State on Finish**| `save_state_on_finish`   | `False`     | Save the state on the final frame before the solver exits, so the finished result stays resumable even when **Auto Save** is off. |
-| **Auto Save**           | `auto_save`              | `False`     | Save the state periodically while the simulation runs.            |
-| **Auto Save Interval**  | `auto_save_interval`     | 10          | How often to auto-save, in frames. Minimum 1.                     |
-| **Keep Saved States**   | `keep_states`            | 0           | How many auto-saved states to keep. `0` keeps all of them.        |
-| **Save Checkpoints**    | `save_checkpoint_frames` | (empty)     | An explicit list of frames at which to save a resumable state.    |
-
-**Auto Save** writes a fresh state every **Auto Save Interval** frames.
-With **Keep Saved States** at its default `0`, every one of those states
-is kept, so you can resume from any of them later. Set it to a positive
-number to keep only that many of the most recent states; older ones are
-discarded as new ones are written. Keep it at `0` if you want the option
-to resume from earlier frames.
-
-**Save Checkpoints** lets you pick specific frames to save, in addition
-to (or instead of) the regular **Auto Save** schedule. Add the frames
-you care about to the list and the solver writes a resumable state at
-each one. The list is empty by default. The frames are Blender frames,
-and each has to come after the **Starting Frame**, where nothing has
-been simulated yet: **Transfer** refuses a checkpoint at or before it,
-naming the frame.
-
-The **Resume** dialog offers exactly the frames that have been saved.
-Auto-saved frames, the on-finish save, and your explicit **Save
-Checkpoints** all show up there; pick one to continue the simulation
-from that point without re-sending geometry or rebuilding.
-
-## Previewing Direction
-
-Both **Gravity** and **Wind** have a **Preview Direction** toggle next to
-their vector fields. Turning it on draws an arrow (and a translucent
-sphere for scale) in the 3D viewport showing the current direction (and
-for wind, the magnitude) so you can judge the setup before running a
-simulation.
-
-```{figure} ../../images/scene_params/gravity_preview.png
-:alt: Scene Configuration with gravity Preview Direction enabled and the resulting arrow visible in the 3D viewport
+```{figure} ../../images/scene_params/advanced_expanded.png
+:alt: Scene Configuration panel with the Advanced Params box expanded, showing Max Contact, Vertex Air Damping, Line Search Max T, Constraint Gap, Include Face Mass, Friction Mode and Disable Contact
 :width: 500px
 
-With **Preview Direction** enabled next to the gravity vector, a blue
-arrow is drawn in the 3D viewport pointing in the gravity direction.
-The text label echoes the magnitude and normalized direction. Toggle it
-off to declutter the viewport.
+The **Advanced Params** box. **Linear System Solver** and **Save and
+Checkpoints** are separate boxes.
 ```
 
-```{figure} ../../images/scene_params/wind_preview.png
-:alt: Scene Configuration with wind Preview Direction enabled and the resulting green arrow visible in the 3D viewport
-:width: 500px
+## Fix XZ Above Height
 
-Wind preview with direction `(0, 1, 0)` and strength `5.0 m/s`. The
-green arrow's length scales with the wind strength, so you can see at a
-glance how strong the wind field is relative to the scene geometry.
-```
+**Fix XZ Above Height** (`fix_xz`) has no row in the panel, and it is not
+in the **Advanced Params** box. Set it from Python with
+`solver.param.fix_xz` or over MCP with `set_scene_parameters`. It is a
+height along Blender's Z axis, in scene units. Above that height the solver
+holds a vertex still horizontally (in X and Y), and the hold ramps in over
+the first meter above the height, measured after **World Scaling**.
+Vertices held by a fixed pin follow the pin and are not affected. Use it
+for cloth or rods that hang from above without a pin.
 
-The **Preview Direction** toggles (one for gravity, one for wind) are
-also exposed to Python, so you can flip them from a script. They are
-purely viewport overlays; they never affect the simulation.
+The default `0` turns it off. A negative value is refused over MCP and
+clamps to `0` from Python. The height scales with **World Scaling**, the
+setting offers no keyframe, and `get_scene_parameters` reports it.
 
-## What `Update Params` Does
+## Update Params on Remote
 
-On the Solver panel, **Update Params on Remote** re-encodes the
-parameters (scene block, per-group block, pin config, merge pairs,
-dynamic parameters, invisible colliders) and ships them to the solver,
-then triggers a rebuild. Geometry is **not** resent; the mesh buffers
-on the server are preserved. Use this when you want to tweak material
-parameters, gravity, or dynamic keyframes without paying the full
-transfer cost.
+**Update Params on Remote** on the **Solver** panel re-sends the parameters
+without the geometry, then rebuilds. The mesh stays on the solver host, so
+it is faster than a full **Transfer**. Use it after you change scene
+settings, material parameters, keyframed settings, force fields or
+invisible colliders. A topology change needs a full **Transfer**. See
+[Update Params vs Transfer](../sim/simulating.md#update-params-vs-transfer)
+for every other kind of edit and the button it needs.
 
-Topology changes (adding or removing vertices, edges, or faces) still
-require a full **Transfer**, because the mesh hash changes.
-
-## Scene Profiles
-
-A **scene profile** is a named set of scene parameters saved to a TOML
-file with the **Save** icon. A file can hold any number of presets; for
-example:
-
-| Preset        | Highlights                                                                  |
-| ------------- | --------------------------------------------------------------------------- |
-| `Default`     | step 0.001 s, 180 frames at 60 FPS, gravity (0, 0, -9.8).                   |
-| `Windy`       | Same as `Default`, plus `wind_direction = (0, 1, 0)`, `wind_strength = 5.0`. |
-| `HighRes`     | step 0.001 s (the minimum), 360 frames, `cg_max_iter = 20000`.              |
-| `SlowMotion`  | 600 frames at 120 FPS. Step size stays at 0.001 s.                          |
-| `ZeroGravity` | `gravity = (0, 0, 0)`, 300 frames.                                          |
-
-```{note}
-The `Default` preset above is just a **profile name** in this example, not
-the addon's new-scene default. These presets deliberately tighten `step_size`
-to 0.001 s for the more demanding example setups; a fresh Blender scene
-still starts at the addon default of 0.01 s (see the [Basic](#basic) table).
-```
-
-Unlike material profiles, scene profiles also capture **dynamic
-parameters** and **invisible colliders**. Applying the profile clears
-existing dynamic parameters and invisible colliders first, then rebuilds
-them from the TOML entries.
-
-The example below is shown so you can read or diff an existing file;
-it is **produced by clicking Save**, not written by hand. Tweak the
-scene in the panel and click Save again rather than editing TOML
-directly.
-
-Example excerpt:
-
-```toml
-[Default]
-step_size = 0.001
-min_newton_steps = 1
-air_density = 0.001
-air_friction = 0.2
-gravity = [0.0, 0.0, -9.8]
-frame_count = 180
-frame_rate = 60
-wind_direction = [0.0, 1.0, 0.0]
-wind_strength = 0.0
-contact_nnz = 100000000
-cg_max_iter = 10000
-cg_tol = 0.001
-
-[[Default.dyn_params]]
-param_type = "WIND"
-
-[[Default.dyn_params.keyframes]]
-frame = 1
-
-[[Default.dyn_params.keyframes]]
-frame = 40
-use_hold = true
-
-[[Default.dyn_params.keyframes]]
-frame = 60
-wind_direction_value = [0.0, 1.0, 0.0]
-wind_strength_value = 5.0
-
-[[Default.colliders]]
-collider_type = "SPHERE"
-name = "Floor Bowl"
-position = [0.0, 0.0, 0.0]
-radius = 0.98
-hemisphere = true
-invert = true
-contact_gap = 0.001
-friction = 0.0
-
-[[Default.colliders.keyframes]]
-frame = 1
-```
-
-:::{note}
-Scene profiles do **not** touch object groups, pins, or merge pairs.
-Those live on per-group material profiles and on the scene file itself.
-:::
+The button is available while the add-on is connected to a running server
+and no simulation is running. It needs scene data already on the server,
+so run **Transfer** once first.
 
 ## Blender Python API
 
-The same workflow is available from Python. The settings are reachable
-through `solver.param`. Assignments are immediate; they don't require a
-transfer, but do require `update_params()` before the solver actually
-sees the new values on the next run.
+The settings are reachable through `solver.param`. An assignment takes
+effect at once in the panel, but the solver uses the new values only after
+`update_params()` (or a new **Transfer**).
+
+The import below works for an add-on in the **User Default** repository. If
+you installed the add-on from a remote repository, import `solver` as shown
+in [Blender Python API: Import](../../integrations/python_api.md#import).
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
@@ -488,29 +508,69 @@ solver.param.step_size = 0.001
 solver.update_params()
 ```
 
+Over [MCP](../../integrations/mcp.md), `set_scene_parameters` and
+`get_scene_parameters` read and write the settings above and `fix_xz` (see
+[Fix XZ Above Height](#fix-xz-above-height)), except the **Preview
+Direction** toggles and the **Save Checkpoints** list. They also carry
+**Post Snap Exactly** (see
+[Post Snap Exactly](../constraints/snap_merge.md#post-snap-exactly)) and the
+**Project Name** of the **Backend Communicator**. The **Save Checkpoints**
+list has its own tools, `set_save_checkpoint_frames`,
+`list_save_checkpoint_frames` and `clear_save_checkpoint_frames`;
+`solver.param` cannot set it. See [Dynamic Parameters](dynamic.md) for
+keyframing the other settings from Python.
+
+Over MCP, `schwarz_levels` is the number `1` or `2`, where
+`solver.param.schwarz_levels` and a scene profile use `LEVEL_1` and
+`LEVEL_2`. `get_scene_parameters` also reports `effective_fps`, the frame
+rate before **Time Scale** is applied, and `effective_start_frame`, the
+starting frame, each after **Take FPS from Scene** and **Take Starting Frame
+from Scene** have been applied. See **Under the hood** below, **FPS and
+Starting Frame from the Blender scene**.
+
 :::{admonition} Under the hood
 :class: toggle
 
-**FPS from the Blender scene**
+**FPS and Starting Frame from the Blender scene**
 
-The checkbox in the **FPS** box (`use_scene_fps`, labeled **Take FPS
-from Scene**) runs the simulation at Blender's own frame rate instead of
-the **FPS** field. While it is on, the panel replaces the field with an
-**FPS (from Scene)** readout, because `frame_rate` keeps whatever value
-it last held: the rate the solver runs at is the one on that readout,
-not the one in the field. Over MCP the same number comes back as
-`effective_fps`.
+The **Take FPS from Scene** checkbox (`use_scene_fps`) runs the simulation
+at Blender's own frame rate instead of the **FPS** field. While it is on,
+the panel replaces the field with an **FPS (from Scene)** readout, because
+`frame_rate` retains the value it last held: the frame rate in use is the
+one on that readout, not the one in the field, and **Time Scale** is
+applied on top of it. Over MCP the same number comes back as
+`effective_fps`. **Take Starting Frame from Scene**
+(`use_scene_frame_start`) behaves the same way for **Starting Frame**, which
+comes back over MCP as `effective_start_frame`.
+
+**Air drag energy**
+
+Let x⁰ be a vertex's position at the start of the step, x¹ its position
+being solved for, Δt the step size and w the air velocity (the scene wind
+plus any Wind force fields). The vertex velocity relative to the air is
+v = (x¹ − x⁰) / Δt − w. Split v along the vertex normal into a normal part
+v_n and a sideways part v_t. The drag energy of the vertex is
+
+$$
+E_\text{air} = \tfrac{1}{2}\,\bigl(v_n^{\,2} + \texttt{air\_friction}\,\lVert v_t \rVert^{2}\bigr)
+$$
+
+scaled by the vertex's area and by **Air Density**.
 
 **Scene profile shape**
 
-A scene profile TOML entry has a flat block of the scene-parameter keys
-at the top, followed by `[[<Profile>.dyn_params]]` arrays describing
-keyframed parameters and `[[<Profile>.colliders]]` arrays describing
-walls and spheres.
+A scene profile entry has a flat block of the scene-setting keys at the
+top, followed by one `[[<Entry>.colliders]]` table per invisible collider.
+An entry can also carry `[[<Entry>.dyn_params]]` tables describing
+keyframed parameters. Saving writes them only for a scene that holds
+entries in the add-on's keyframe-list format (see
+[Dynamic Parameters](dynamic.md)), and applying an entry that contains
+them replaces the scene's entries. Keyframes drawn on a slider are never
+written to a profile.
 
 **Solver payload keys**
 
-At transfer time the scene parameters are sent under solver-side names:
+At transfer time the scene settings are sent under solver-side names:
 
 ```
 dt, min-newton-steps, air-density, air-friction, gravity[3], wind[3],
@@ -519,6 +579,7 @@ include-face-mass, disable-contact, inactive-momentum,
 line-search-max-t, auto-save, ...
 ```
 
-**Update Params on Remote** reships this payload without re-encoding
-geometry.
+`frames` is **Frame Count** minus one, and `fps` is the **FPS** the solver
+runs at multiplied by **Time Scale**. **Update Params on Remote** re-sends
+this payload without re-encoding the geometry.
 :::

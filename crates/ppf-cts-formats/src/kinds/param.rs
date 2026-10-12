@@ -51,11 +51,15 @@ pub struct ParamPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dyn_param: Option<BTreeMap<String, ciborium::Value>>,
 
-    /// The external force field (issues #151 and #114): `grids`, each
-    /// `{kind, shape [T, D, H, W, 3], min, max, times, data}` with `data` the
-    /// zlib-compressed little-endian f32 samples in the solver's axes, and
-    /// `script`, `{source, name}` or null. Kept as opaque CBOR: the frontend
-    /// decoder is its only reader, through `scene.force_field`.
+    /// The external force field (issues #151 and #114): `fields`, each the
+    /// keyword arguments of the frontend's `ForceField.add` plus `type` and
+    /// `groups`, in the solver's axes and scene units; and `scripts`, each
+    /// `{source, name, groups}`. A Texture's `image` travels as little-endian
+    /// f32 RGB bytes with its `image_shape`. A Fluid Flow's `fluid` holds, per
+    /// frame, `resolution`, `tables` (`<u4`), `bricks` (`<f4`), `corner`,
+    /// `axes` and a per-axis `cell`, then `start` and `step`. Every byte
+    /// string is sent whole or as a list of chunks. Kept as opaque CBOR: the
+    /// frontend decoder is its only reader, through `scene.force_field`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_field: Option<ciborium::Value>,
 
@@ -193,6 +197,26 @@ pub struct GroupParams {
     /// ROD only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub length_factor: Option<f64>,
+
+    /// COSSERAT only. The shear, bending and twist stiffness of the per-edge
+    /// orientation energies (density normalized; stretch stiffness is
+    /// `young_mod`), the rest twist rate, the end-frame hold and its twist
+    /// rate, and the straight-rest switch. The hold and the switch are
+    /// float-encoded booleans, like `bend_rest_from_geometry`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_shear: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_bend: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_twist: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_rest_twist: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_fix_ends: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_end_twist_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cosserat_straight_rest: Option<f64>,
 
     /// Initial velocity per UUID at frame 1.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,6 +460,55 @@ mod tests {
             back.group[0].0.contact_offset,
             Some(PerObject::Uniform(0.002))
         );
+    }
+
+    #[test]
+    fn cosserat_params_roundtrip() {
+        let mut payload = ParamPayload::default();
+        payload.group.push((
+            GroupParams {
+                model: Some("arap".into()),
+                young_mod: Some(1e4),
+                cosserat_shear: Some(1e3),
+                cosserat_bend: Some(1e2),
+                cosserat_twist: Some(50.0),
+                cosserat_rest_twist: Some(-2.5),
+                cosserat_fix_ends: Some(1.0),
+                cosserat_end_twist_rate: Some(3.0),
+                cosserat_straight_rest: Some(1.0),
+                ..Default::default()
+            },
+            vec!["strand".into()],
+            vec!["uuid-c".into()],
+        ));
+        let bytes = to_cbor(KIND_PARAM, &payload).unwrap();
+        let back: ParamPayload = from_cbor(KIND_PARAM, &bytes).unwrap();
+        let g = &back.group[0].0;
+        assert_eq!(g.cosserat_shear, Some(1e3));
+        assert_eq!(g.cosserat_bend, Some(1e2));
+        assert_eq!(g.cosserat_twist, Some(50.0));
+        assert_eq!(g.cosserat_rest_twist, Some(-2.5));
+        assert_eq!(g.cosserat_fix_ends, Some(1.0));
+        assert_eq!(g.cosserat_end_twist_rate, Some(3.0));
+        assert_eq!(g.cosserat_straight_rest, Some(1.0));
+        // Absent fields stay None.
+        assert_eq!(g.length_factor, None);
+    }
+
+    #[test]
+    fn cosserat_params_travel_under_their_kebab_case_keys() {
+        // The frontend reads a group's params by the registry's key, so the
+        // wire spelling is the contract, not the Rust field name.
+        let group = GroupParams {
+            cosserat_end_twist_rate: Some(1.5),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&group, &mut bytes).unwrap();
+        let value: ciborium::Value = ciborium::from_reader(bytes.as_slice()).unwrap();
+        let map = value.as_map().expect("GroupParams encodes as a map");
+        let keys: Vec<&str> = map.iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert_eq!(keys, vec!["cosserat-end-twist-rate"]);
     }
 
     #[test]

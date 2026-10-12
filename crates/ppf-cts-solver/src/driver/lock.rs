@@ -1034,6 +1034,7 @@ mod tests {
                 rows: vertices as u32,
             },
             diagonal: diag_d.handle(),
+            difference: None,
         };
 
         let rows = RowInputs {

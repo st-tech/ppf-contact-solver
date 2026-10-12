@@ -24,9 +24,11 @@
 #   B. both_uilists_drew: the map row and the sample row.
 #   C. solid_group_drew: the SOLID branch, which adds the note that interior
 #      values are extended from the painted surface.
-#   D. rod_group_drew: a group whose object_type was changed after the map was
-#      authored. The rows survive the change and still reach the encoder, so
-#      they have to stay drawable and therefore removable.
+#   D. rod_group_drew: the ROD branch, whose maps vary a value along a rod.
+#   D2. retyped_group_drew: a group whose object_type was changed, after the
+#      map was authored, to one that draws no map list of its own. The rows
+#      survive the change and still reach the encoder, so they have to stay
+#      drawable and therefore removable.
 #   E. sample_ops: Add seeds the playhead's frame, a second Add at the same
 #      frame is refused rather than raising into the UI, and Remove leaves the
 #      index on a real row.
@@ -107,9 +109,10 @@ try:
     ui_lists = __import__(pkg + ".ui.dynamics.ui_lists", fromlist=["x"])
 
     # Count the map box itself, not just the panel: the real panel draws for
-    # every group type, and what has to be proved is that the ROD case still
-    # reaches the map list. Deleting the post-chain fallback would otherwise
-    # leave this green while a retyped group's rows became unreachable.
+    # every group type, and what has to be proved is that the retyped case
+    # still reaches the map list. Deleting the post-chain fallback would
+    # otherwise leave this green while a retyped group's rows became
+    # unreachable.
     _real_draw_maps = panels._draw_material_maps
 
     def _counting_draw_maps(*args, **kwargs):
@@ -129,9 +132,9 @@ try:
             g = bpy.context.scene.zozo_contact_solver.object_group_0
             # The REAL panel, so the `if/elif group.object_type` chain and the
             # post-chain fallback are traversed. Calling `_draw_material_maps`
-            # directly would leave the ROD case green even with the fallback
-            # deleted, which is the branch that keeps a retyped group's rows
-            # reachable.
+            # directly would leave the retyped case green even with the
+            # fallback deleted, which is the branch that keeps a retyped
+            # group's rows reachable.
             panels.DYNAMICS_PT_Groups.draw(self, context)
             DREW["maps"] += 1
             item = g.material_maps[0]
@@ -175,7 +178,11 @@ try:
         {"draws": dict(DREW)},
     )
 
-    for object_type, name in (("SOLID", "C_solid"), ("ROD", "D_rod")):
+    # PDRD draws no map list of its own, so its rows are reached through the
+    # fallback alone.
+    for object_type, name in (
+        ("SOLID", "C_solid"), ("ROD", "D_rod"), ("PDRD", "D2_retyped"),
+    ):
         group.object_type = object_type
         before = dict(DREW)
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=2)

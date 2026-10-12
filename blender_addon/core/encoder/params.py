@@ -3,12 +3,17 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 
-import hashlib
 import json
 
 import numpy as np
 
-from ...models.groups import get_addon_data, iterate_object_groups
+from ...models.groups import (
+    PRECOND_SOLVER_NAMES,
+    contact_gap_limit_fraction,
+    get_addon_data,
+    iterate_object_groups,
+    multigrid_refusal,
+)
 from ...models.intersection_allowances import (
     EXISTING_ALLOWANCE,
     INTER_GROUP_ALLOWANCE,
@@ -142,6 +147,13 @@ def _encode_scene_params(context, state, fps):
     )
     use_inactive_momentum = has_shell_type and int(state.inactive_momentum_frames) > 0
 
+    # The solver stops a multigrid run that holds a rigid body, and it does so
+    # after the transfer and the build. The scene is refused here instead,
+    # with the sentence the panel shows under the picker.
+    refusal = multigrid_refusal(scene, state)
+    if refusal is not None:
+        raise ValueError(refusal)
+
     # constraint-ghat is a scene-unit length the solver reads raw, so World
     # Scaling is applied to it here; gravity and wind are physical constants
     # and are not scaled (see resolve_world_scaling).
@@ -153,7 +165,7 @@ def _encode_scene_params(context, state, fps):
         "air-density": np.float32(state.air_density),
         "air-friction": np.float32(state.air_friction),
         "friction-mode": str(state.friction_mode).lower(),
-        "precond": "schwarz" if state.precond == "SCHWARZ" else "block-jacobi",
+        "precond": PRECOND_SOLVER_NAMES[str(state.precond)],
         "schwarz-levels": 1 if state.schwarz_levels == "LEVEL_1" else 2,
         "gravity": solver_gravity(state.gravity_3d),
         "wind": solver_wind(
@@ -329,24 +341,14 @@ def _encode_lock_rotation_axis(assigned) -> list[float]:
 def _encode_force_field(context, groups, state, start_frame, frame_count, fps):
     """The scene's force fields and exact script, or ``None`` for neither.
 
-    Sampled into grids by ``core.force_field.encode``, over the box the
-    simulated objects occupy at the starting frame unless a Domain is set.
+    Each field object travels as its settings and a track of per-frame
+    samples (``core.force_field.encode``), which the solver evaluates exactly
+    at every vertex.
     """
     from ..force_field import encode
-    from ..uuid_registry import resolve_assigned
 
-    dynamic = []
-    for group in groups:
-        if str(group.object_type) == "STATIC":
-            continue
-        for assigned in group.assigned_objects:
-            if assigned.included:
-                obj = resolve_assigned(assigned)
-                if obj is not None:
-                    dynamic.append(obj)
     position_by_uuid = {group.uuid: i for i, group in enumerate(groups)}
-    return encode(context, state, dynamic, start_frame, frame_count, fps,
-                  position_by_uuid)
+    return encode(context, state, start_frame, frame_count, fps, position_by_uuid)
 
 
 def _encode_intersection_allowance(group, spec, object_uuids):
@@ -406,6 +408,11 @@ def object_contact_lengths(group, assigned, scale: float = 1.0) -> tuple[float, 
     that authors an absolute distance gives every object the same one. A SAND
     grain's physical radius IS its contact skin, so its offset is the locked
     seeding radius (``sand_seeded_radius``).
+
+    The gap is the AUTHORED one. A group's local gap limit lowers an element
+    below it where the mesh is finer than the gap, which is decided at build
+    on the mesh the solver ingests (``frontend/_contact_gap_limit_.py``), so
+    a reader here holds an upper bound on the gap an element is solved at.
     """
     if group.object_type == "SAND":
         from ...models.groups import sand_seeded_radius
@@ -474,6 +481,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "deformation-damping",
                 "contact-gap",
                 "contact-offset",
+                "contact-gap-limit",
                 "plasticity",
                 "plasticity-threshold",
                 "model",
@@ -504,6 +512,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "bending-damping",
                 "contact-gap",
                 "contact-offset",
+                "contact-gap-limit",
                 "strain-limit",
                 "bend",
                 "bend-warp",
@@ -543,6 +552,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "bending-damping",
                 "contact-gap",
                 "contact-offset",
+                "contact-gap-limit",
                 "bend",
                 "strain-limit",
                 "bend-plasticity",
@@ -748,6 +758,12 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "bending-damping": np.float32(group.bending_damping),
             "contact-gap": contact_gap_value,
             "contact-offset": contact_offset_value,
+            # The share of the room between mesh neighbors the gap may take.
+            # The strip loop below keeps it for SOLID, SHELL and ROD, and the
+            # frontend lowers each element's gap to it. A plain float rather
+            # than the float32 its neighbors are: the frontend refuses a
+            # fraction outside 0.01 to 0.5, and float32(0.01) is below 0.01.
+            "contact-gap-limit": contact_gap_limit_fraction(group),
             "bend": np.float32(group.bend),
             # Directional bending stiffnesses added on top of `bend`. Both
             # default to 0.0, which adds nothing, so a group that leaves them
@@ -1154,12 +1170,12 @@ def encode_param_with_hash(context) -> tuple[bytes, str]:
     Avoids the build-twice cost of calling ``encode_param`` then
     ``compute_param_hash`` separately. ``_build_param_dict`` produces a fixed
     dict-insertion order and ``cbor2.dumps`` preserves it, so the
-    SHA-256 of the bytes is stable across runs.
+    digest of the bytes (``payload_digest``) is stable across runs.
     """
-    from .cbor_encode import dumps_envelope
+    from .cbor_encode import dumps_envelope, payload_digest
     tree = _build_param_dict(context)
     encoded = dumps_envelope("Param", tree)
-    return encoded, hashlib.sha256(encoded).hexdigest()
+    return encoded, payload_digest(encoded)
 
 
 def compute_param_hash(context) -> str:
@@ -1168,7 +1184,5 @@ def compute_param_hash(context) -> str:
     Hashes the same CBOR bytes that ``encode_param`` produces, so the
     upload-time hash and the click-time drift hash always agree.
     """
-    from .cbor_encode import dumps_envelope
-    return hashlib.sha256(
-        dumps_envelope("Param", _build_param_dict(context))
-    ).hexdigest()
+    from .cbor_encode import dumps_envelope, payload_digest
+    return payload_digest(dumps_envelope("Param", _build_param_dict(context)))

@@ -862,6 +862,9 @@ def has_deforming_modifier_stack(obj) -> bool:
     writes vertex positions: the ubiquitous auto-added "Smooth by Angle"
     group moves nothing and must not be mistaken for a deformer.
     """
+    if obj is not None and obj.type == "CURVES":
+        from .hair_curves import has_deforming_modifier_stack as _hair_deforms
+        return _hair_deforms(obj)
     if obj is None or obj.type != "MESH":
         return False
     if not hasattr(obj, "modifiers"):
@@ -904,8 +907,10 @@ def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None,
     modifier in a stack that changes the vertex count is a cut point, as it
     is for the cache placement.
 
-    Returns ``None`` in two cases: *obj* is not a mesh, or the cut stack
-    still changes the vertex count, which takes a modifier in front of the
+    A Hair Curves object is read the same way, point for vertex.
+
+    Returns ``None`` in two cases: *obj* is neither a mesh nor Hair Curves,
+    or the cut stack still changes the vertex count, which takes a modifier in front of the
     cut that changes it without being one the cache placement counts as
     topology-changing (a Fluid domain, an Ocean in Generate mode, a Mesh
     Sequence Cache whose topology differs from the mesh). A base
@@ -917,6 +922,15 @@ def eval_deform_local_positions(obj, context=None, exclude_modifier_name=None,
 
     from .pc2 import modifiers_after_cache_boundary
 
+    if obj is not None and obj.type == "CURVES":
+        # A Hair Curves object's points, read at the same cut. Where that cut
+        # falls is measured rather than read off modifier types
+        # (``hair_curves.cache_insertion_index``).
+        from .hair_curves import eval_local_positions
+        excluded = set(exclude_modifier_names)
+        if exclude_modifier_name:
+            excluded.add(exclude_modifier_name)
+        return eval_local_positions(obj, context, excluded)
     if obj is None or obj.type != "MESH":
         return None
     if context is None:
@@ -1316,6 +1330,7 @@ def get_vertices_in_group(obj, vg) -> list[int]:
 
     For MESH objects, reads from Blender vertex groups.
     For CURVE objects, reads from custom property ``_pin_{vg.name}``.
+    For Hair Curves, reads the pin of that name (``hair_curves.pin_indices``).
 
     Args:
         obj: Blender object (MESH or CURVE).
@@ -1331,6 +1346,9 @@ def get_vertices_in_group(obj, vg) -> list[int]:
         if raw:
             return json.loads(raw)
         return []
+    if obj.type == "CURVES":
+        from .hair_curves import pin_indices
+        return pin_indices(obj, vg.name)
     indices = []
     if not hasattr(obj.data, "vertices"):
         return indices

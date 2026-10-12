@@ -187,7 +187,8 @@ fn app_param_dict(py: Python<'_>) -> PyResult<Py<PyDict>> {
 }
 
 /// Same as `app_param_dict` but for the per-object schema. `kind`
-/// must be one of `"tri"`, `"tet"`, `"rod"`.
+/// must be one of `"tri"`, `"tet"`, `"rod"`, `"cosserat"`, `"pdrd"`,
+/// `"points"`.
 #[pyfunction]
 fn object_param_dict(py: Python<'_>, kind: &str) -> PyResult<Py<PyDict>> {
     let k = ObjectKind::from_str(kind).map_err(crate::errors::into_py_err)?;

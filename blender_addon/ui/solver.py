@@ -109,6 +109,9 @@ def _find_missing_pc2_paths(context) -> list[str]:
         ``bpy.path.abspath`` — the file Blender plays back.
       * CURVE: the basename-derived ``get_pc2_path(key)`` — curves have no
         modifier, playback reads this path directly.
+      * Hair Curves with ``ContactSolverCache``: the same canonical path.
+        Its modifier is a Geometry Nodes group holding no path, and playback
+        reads the file by key as it does for a curve.
 
     The scope is load-bearing, and it is the same scope
     ``scene_has_solver_cache`` takes. A ``ContactSolverCache`` outlives its
@@ -149,6 +152,15 @@ def _find_missing_pc2_paths(context) -> list[str]:
     saw_modifier = False
     active_uuids = assigned_uuids_in_active_groups(context.scene)
     for obj in bpy.data.objects:
+        if obj.type == "CURVES":
+            if obj.modifiers.get(MODIFIER_NAME) is None:
+                continue
+            key = object_pc2_key_readonly(obj)
+            if key not in active_uuids:
+                continue
+            saw_modifier = True
+            candidates.append(get_pc2_path(key))
+            continue
         if obj.type != "MESH":
             continue
         mod = obj.modifiers.get(MODIFIER_NAME)
@@ -278,6 +290,23 @@ def _warn_if_mesh_topology_stale(op, context) -> None:
             console.write(f"[Mesh hash] {msg}")
         except Exception:
             pass
+
+
+def _report_fluid_volumes(op) -> None:
+    """Report the size of each Fluid Flow volume the parameter encode just
+    read (`core.force_field.volume_report`), before the upload starts.
+
+    A Fluid Flow's volume is read at every solve frame and travels in the
+    parameters, so it is what makes them large; the figure is said before
+    the transfer rather than discovered as a slow one.
+    """
+    from ..core import force_field as ff
+    from ..models.console import console
+
+    for entry in ff.volume_report():
+        line = ff.volume_report_line(entry)
+        op.report({"INFO"}, line)
+        console.write(f"[Force field] {line}")
 
 
 def _staged_encode_active() -> bool:
@@ -737,6 +766,8 @@ class SOLVER_OT_Transfer(AsyncOperator):
         self._payload["data_hash"] = data_hash
 
     def _stage_encode_params(self, context):
+        from ..core.force_field import upload_refusal
+
         try:
             param, param_hash = encode_param_with_hash(context)
         except (Cbor2NotInstalledError, ValueError) as e:
@@ -744,6 +775,15 @@ class SOLVER_OT_Transfer(AsyncOperator):
             raise StageAbort(str(e))
         self._payload["param"] = param
         self._payload["param_hash"] = param_hash
+        _report_fluid_volumes(self)
+        # Both payloads are known here, before anything is sent: the server
+        # refuses an upload whose two payloads together pass what a transfer
+        # carries without reading it, which a streamed connection would see
+        # as a reset socket rather than this reason.
+        why = upload_refusal(len(self._payload["data"]), len(param))
+        if why is not None:
+            com.set_error(why)
+            raise StageAbort(why)
 
     def _stage_upload(self, context):
         # The topology stamp lands HERE, not in the encoder: every stage that
@@ -991,8 +1031,10 @@ class SOLVER_OT_ResumeFrom(AsyncOperator):
         # heavy work as Transfer). It runs before the checkpoint picker dialog
         # opens, so the panel's encode bar is not reachable from here; drive
         # the cursor's progress indicator instead so the click is not a silent
-        # freeze. The encode is the fast path now (see the encoder perf fixes),
-        # so this is brief.
+        # freeze. The parameter encode includes the force fields: a moving
+        # field steps the timeline through every solve frame, and a Fluid
+        # Flow whose source changed since the last encode is read again at
+        # each, so this can take as long as Transfer's own parameter encode.
         wm = context.window_manager
         wm.progress_begin(0.0, 2.0)
         try:
@@ -1144,6 +1186,7 @@ class SOLVER_OT_UpdateParams(AsyncOperator):
         except (Cbor2NotInstalledError, ValueError) as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
+        _report_fluid_volumes(self)
         # Upload param-only atomically + auto-build. data_size=0 tells
         # the server to keep the existing data.pickle untouched while a
         # fresh upload_id is minted against the new param. The param

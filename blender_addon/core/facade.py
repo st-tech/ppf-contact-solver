@@ -34,6 +34,7 @@ from .events import (
     StartServerRequested,
     StopServerRequested,
     TerminateRequested,
+    ViolationsDismissed,
 )
 from .state import Activity, AppState, Phase, Server
 from .status import CommunicatorInfo, ConnectionInfo, RemoteStatus
@@ -238,18 +239,22 @@ class CommunicatorFacade:
     # -- server lifecycle --
 
     def start_server(
-        self, cuda_device=AUTOMATIC, cuda_device_uuid="", device="", gpu_backend=""
+        self, cuda_device=AUTOMATIC, cuda_device_uuid="", device="", gpu_backend="",
+        idle_timeout=None,
     ):
         # `device` and `gpu_backend` name which BUILD a remote server comes out
         # of. They are read at Start Server rather than held from connect,
         # because that is when the panel's rows have been drawn against the
         # solver host's own listing and the artist has had a chance to move
         # them. Empty keeps whatever the backend holds.
+        # `idle_timeout` is the server's `--idle-timeout`, None for its
+        # default.
         self._dispatch_and_tick(StartServerRequested(
             cuda_device=cuda_device,
             cuda_device_uuid=cuda_device_uuid,
             device=device,
             gpu_backend=gpu_backend,
+            idle_timeout=idle_timeout,
         ))
 
     def refresh_solver_host_gpus(self):
@@ -279,6 +284,14 @@ class CommunicatorFacade:
     def last_kill_report(self):
         """What the most recent stop or kill found and did, or ``None``."""
         return self._runner.last_kill_report
+
+    def dismiss_violations(self):
+        """Take down the violation overlay of the upload the server holds.
+
+        For an edit that moved the geometry the highlights point at. They
+        stay down until the next upload, whose violations are its own.
+        """
+        self._dispatch_and_tick(ViolationsDismissed())
 
     # -- solver operations --
 
@@ -593,6 +606,17 @@ _WATCHDOG_TIMEOUT_S = 30.0
 _TICK_INTERVAL_S = 0.25  # persistent-timer poll cadence
 _last_progress_key: tuple | None = None
 _stuck_since: float = 0.0
+def _sync_ping_interval() -> None:
+    """Copy the scene's Ping Interval to the runner's ping thread, which
+    cannot read Blender data itself. The property's own update sets it at
+    once; this keeps it right after a file load, which runs no update."""
+    try:
+        import bpy  # pyright: ignore
+        from ..models.groups import get_addon_data
+
+        runner.ping_interval_s = float(get_addon_data(bpy.context.scene).ssh_state.ping_interval)
+    except Exception:
+        pass
 
 
 def _engine_is_idle() -> bool:
@@ -687,6 +711,7 @@ def _persistent_tick() -> float:
             refresh_ssh_panel()
         except Exception:
             pass
+        _sync_ping_interval()
         if _engine_is_idle():
             _watchdog_reset()
             return _TICK_INTERVAL_S

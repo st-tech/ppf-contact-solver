@@ -533,39 +533,15 @@ def am_author(dh, cell):
 # -------------------------------------------------------------- pipeline --
 
 def am_build(dh, message, first, local_path, server_port, project_name):
-    # One build, waited on until the server echoes THIS payload's hashes.
-    # An upload invalidates the build the server held, so once both hashes
-    # are this payload's, a terminal solver state is this build's verdict and
-    # not the previous cell's.
-    data_hash = dh.encoder_mesh.compute_data_hash(bpy.context)
-    param_hash = dh.encoder_param.compute_param_hash(bpy.context)
-    data_bytes = dh.encoder_mesh.encode_obj(bpy.context)
-    param_bytes = dh.encoder_param.encode_param(bpy.context)
+    # One build, waited on until its verdict is its own. The cells build one
+    # after another on one server, and a cell may be refused, so the wait is
+    # `build_verdict`'s: a terminal state under an upload id the server did
+    # not hold at dispatch.
     if first:
         dh.connect(local_path=local_path, server_port=server_port,
                    project_name=project_name)
-    dh.facade.engine.dispatch(dh.events.BuildPipelineRequested(
-        data=data_bytes, param=param_bytes,
-        data_hash=data_hash, param_hash=param_hash, message=message,
-    ))
-    deadline = time.time() + BUILD_TIMEOUT
-    while time.time() < deadline:
-        dh.facade.engine.dispatch(dh.events.PollTick())
-        dh.facade.tick()
-        s = dh.facade.engine.state
-        if (s.activity.name == "IDLE"
-                and s.solver.name in ("READY", "RESUMABLE", "FAILED")
-                and s.server_data_hash == data_hash
-                and s.server_param_hash == param_hash):
-            return s.solver.name
-        time.sleep(0.1)
-    s = dh.facade.engine.state
-    raise RuntimeError(
-        "build %r did not produce its own verdict within %ss: solver=%s "
-        "activity=%s data_hash echoed=%s param_hash echoed=%s error=%r"
-        % (message, BUILD_TIMEOUT, s.solver.name, s.activity.name,
-           s.server_data_hash == data_hash, s.server_param_hash == param_hash,
-           s.error))
+    solver, _error = dh.build_verdict(message, timeout=BUILD_TIMEOUT)
+    return solver
 
 
 def am_measure(arr, idx):

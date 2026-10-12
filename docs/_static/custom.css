@@ -36,7 +36,7 @@ a.gh-corner-link {
    Our embedded SVG diagrams were drawn for a light background (pastel
    fills, dark text). On shibuya's dark theme they stand out as bright
    blocks. Rather than maintain per-SVG dark palettes, invert luminance
-   at render time and rotate hues 180° so colours stay roughly in their
+   at render time and rotate hues 180° so colors stay roughly in their
    original family (blue stays blue, etc.). invert(0.92) avoids pure
    white → pure black, which reads slightly softer.
 

@@ -305,6 +305,85 @@ fn upload_invalidates_built_state() {
 }
 
 #[test]
+fn upload_drops_the_verdict_of_the_build_it_invalidates() {
+    // A refused build leaves `Build::Failed` and its error. The next upload
+    // replaces the payload that error was about, and the response carrying
+    // the new payload's hashes must not carry the old error beside them: the
+    // status is "NO_BUILD" for a failed build and for an unrequested one
+    // alike, so the error is all a client has to tell them apart.
+    let s = ServerState {
+        name: "p".into(),
+        root: "/tmp/p".into(),
+        data: Data::Uploaded,
+        build: Build::Failed,
+        upload_id: "old".into(),
+        error: "ValueError: the previous payload was refused".into(),
+        crash_kind: "linear_solve".into(),
+        violations: vec!["two triangles of the previous payload".into()],
+        ..Default::default()
+    };
+    assert_eq!(s.status_string(), "NO_BUILD");
+    let (s2, _) = transition(s, Event::upload_landed("new"));
+    assert_eq!(s2.upload_id, "new");
+    assert_eq!(s2.build, Build::None);
+    assert_eq!(s2.status_string(), "NO_BUILD");
+    assert!(s2.error.is_empty(), "the old error outlived its payload: {}", s2.error);
+    assert!(s2.crash_kind.is_empty());
+    // The violations are positions in the replaced payload's geometry. A
+    // client draws what a response carries, so left here they are drawn
+    // over the new payload until its build ends.
+    assert!(
+        s2.violations.is_empty(),
+        "the old violations outlived their payload: {:?}",
+        s2.violations
+    );
+}
+
+#[test]
+fn a_build_request_drops_the_previous_verdict_violations() {
+    // Building again on the same payload: the error is cleared when the
+    // build starts, and the violations reported with it go the same way.
+    let s = ServerState {
+        name: "p".into(),
+        root: "/tmp/p".into(),
+        data: Data::Uploaded,
+        build: Build::Failed,
+        upload_id: "same".into(),
+        error: "ValueError: refused".into(),
+        violations: vec!["two triangles".into()],
+        ..Default::default()
+    };
+    let (s2, _) = transition(
+        s,
+        Event::BuildRequested {
+            preserve_output: false,
+        },
+    );
+    assert_eq!(s2.build, Build::Building);
+    assert!(s2.error.is_empty());
+    assert!(s2.violations.is_empty());
+}
+
+#[test]
+fn upload_during_building_keeps_the_in_flight_build_and_its_state() {
+    // An in-flight build is not invalidated, so nothing of it is dropped.
+    let s = ServerState {
+        name: "p".into(),
+        root: "/tmp/p".into(),
+        data: Data::Uploaded,
+        build: Build::Building,
+        upload_id: "old".into(),
+        error: "left alone".into(),
+        violations: vec!["left alone".into()],
+        ..Default::default()
+    };
+    let (s2, _) = transition(s, Event::upload_landed("new"));
+    assert_eq!(s2.build, Build::Building);
+    assert_eq!(s2.error, "left alone");
+    assert_eq!(s2.violations, vec!["left alone".to_string()]);
+}
+
+#[test]
 fn upload_during_building_preserves_build_state() {
     let s = ServerState {
         name: "p".into(),

@@ -11,7 +11,7 @@
 // mesh (vert + face/edge + optional uv/stitch) OR a `mesh_ref` UUID
 // pointing at an earlier object in the same payload that holds the
 // canonical mesh, plus a 4x4 world transform. Object types: STATIC | SAND |
-// SOLID | SHELL | ROD.
+// SOLID | SHELL | ROD | COSSERAT | PDRD.
 //
 // The Python consumer at frontend/_decoder_.py:851-1430 reads the
 // same structure. The addon emits CBOR via `cbor2.dumps`, and we
@@ -25,7 +25,7 @@ pub type ScenePayload = Vec<ObjectGroup>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectGroup {
-    /// One of "STATIC", "SOLID", "SHELL", "ROD".
+    /// One of "STATIC", "SOLID", "SHELL", "ROD", "COSSERAT", "PDRD", "SAND".
     /// Kept as a string (not enum) so unknown future types don't fail
     /// decode hard; the consumer logic in _decoder_.py branches on
     /// the string value at lines 986/1112, so we mirror that surface.
@@ -65,9 +65,17 @@ pub struct ObjectInfo {
     pub face: Option<Vec<[u32; 3]>>,
 
     /// Rod edges, shape (K, 2). uint32 in pickle. Required when group
-    /// type is ROD; absent otherwise.
+    /// type is ROD or COSSERAT; absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge: Option<Vec<[u32; 2]>>,
+
+    /// COSSERAT only, optional: the authored roll of the material frame about
+    /// the tangent, in radians, one value per vertex in `vert` order. The
+    /// frame builder rolls each edge's frame by the mean of its two
+    /// endpoints' values. A position-only ROD has no twist degree of freedom,
+    /// so it never carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tilt: Option<Vec<f32>>,
 
     /// Per-face UV data (SHELL only). Length matches `face` row count.
     /// Each entry is the per-triangle UV layout the addon's
@@ -232,6 +240,47 @@ mod tests {
         let obj = &back[0].objects[0];
         assert_eq!(obj.mesh_ref.as_deref(), Some("abc-123"));
         assert!(obj.vert.is_none());
+    }
+
+    #[test]
+    fn scene_cosserat_tilt_roundtrip_and_absent_tilt_decodes() {
+        let tilted: ScenePayload = vec![ObjectGroup {
+            group_type: "COSSERAT".into(),
+            objects: vec![ObjectInfo {
+                name: "strand".into(),
+                uuid: "cos-1".into(),
+                vert: Some(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+                edge: Some(vec![[0, 1], [1, 2]]),
+                tilt: Some(vec![0.0, 0.5, 1.0]),
+                ..Default::default()
+            }],
+        }];
+        let bytes = to_cbor(KIND_SCENE, &tilted).unwrap();
+        let back: ScenePayload = from_cbor(KIND_SCENE, &bytes).unwrap();
+        assert_eq!(back[0].group_type, "COSSERAT");
+        assert_eq!(back[0].objects[0].tilt.as_deref(), Some(&[0.0f32, 0.5, 1.0][..]));
+
+        // An object written without the field, as every non-Cosserat object
+        // and every payload from before the field existed is, still decodes,
+        // and an absent tilt is not written back out.
+        let plain: ScenePayload = vec![ObjectGroup {
+            group_type: "ROD".into(),
+            objects: vec![ObjectInfo {
+                name: "rope".into(),
+                uuid: "rod-1".into(),
+                vert: Some(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+                edge: Some(vec![[0, 1]]),
+                ..Default::default()
+            }],
+        }];
+        let bytes = to_cbor(KIND_SCENE, &plain).unwrap();
+        let back: ScenePayload = from_cbor(KIND_SCENE, &bytes).unwrap();
+        assert!(back[0].objects[0].tilt.is_none());
+        let mut raw = Vec::new();
+        ciborium::into_writer(&plain[0].objects[0], &mut raw).unwrap();
+        let value: ciborium::Value = ciborium::from_reader(raw.as_slice()).unwrap();
+        let map = value.as_map().expect("ObjectInfo encodes as a map");
+        assert!(map.iter().all(|(k, _)| k.as_text() != Some("tilt")));
     }
 
     #[test]

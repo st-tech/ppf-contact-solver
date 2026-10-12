@@ -52,7 +52,7 @@ enum class FrictionMode { Min, Max, Mean };
 // Linear-solve preconditioner selector. Scoped enum so it is a 4-byte int,
 // matching the Rust #[repr(C)] PrecondMode mirror in data.rs. Variant order MUST
 // stay in step with the Rust enum.
-enum class PrecondMode { BlockJacobi, Schwarz };
+enum class PrecondMode { BlockJacobi, Schwarz, Multigrid };
 
 struct VertexParam {
     float ghat;
@@ -76,6 +76,18 @@ struct EdgeParam {
     // layout MUST mirror the Rust EdgeParam in data.rs (repr(C) ABI).
     float deform_damping;
     float bend_damping;
+    // A Cosserat rod's stiffnesses, zero on a plain rod: shear holds the
+    // frame's director to its edge, bend and twist hold adjacent frames to their
+    // rest Darboux vector. The last four are read by the host frame builder
+    // only and ride here so that edges differing in them are distinct
+    // materials.
+    float cosserat_shear;
+    float cosserat_bend;
+    float cosserat_twist;
+    float cosserat_rest_twist;
+    float cosserat_fix_ends;
+    float cosserat_end_twist_rate;
+    float cosserat_straight_rest;
 };
 
 struct FaceParam {

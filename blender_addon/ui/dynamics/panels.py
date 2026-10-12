@@ -11,11 +11,15 @@ from bpy.types import Panel  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_
 
 from ...core.utils import get_category_name
+from ...core.hair_curves import pin_is_weighted as _hair_pin_weighted
 from ...models.groups import (
+    CONTACT_GAP_LIMIT_TYPES,
     GROUP_TYPE_ICONS,
+    decode_vertex_group_identifier,
     get_addon_data,
     group_missing_uv_object,
     has_addon_data,
+    multigrid_refusal,
     pair_supports_cross_stitch,
     withdrawn_shell_model_refusal,
 )
@@ -369,16 +373,87 @@ def _draw_force_field_targets(layout, context, params, source, source_name):
         layout.label(text="Choose at least one group", icon="ERROR")
 
 
+def _draw_force_field_row(box, context, params, obj):
+    """One field object: its name and Blender's name for its type, whether
+    Transfer would send it and why not, a Fluid Flow's source, and the groups
+    it pushes.
+
+    The status is ``force_field_status``'s, the one MCP and the Python API
+    report. A Fluid Flow's lines come from its source's metadata at the
+    current frame, never from its grid, so a redraw stays cheap.
+    """
+    from ...core import force_field as ff
+    from . import force_field_status as status
+
+    scene = context.scene
+    static = status.static_refusal(obj)
+    fluid = status.fluid_info(obj, scene, params, context.view_layer.depsgraph)
+    problem = static or status.scene_problem(scene, params, obj) or (
+        fluid or {}).get("problem")
+    field_box = box.box()
+    kind = iface_(status.type_name(obj.field.type))
+    field_box.label(text=f"{obj.name}: {kind}", translate=False,
+                    icon="ERROR" if problem else "CHECKMARK")
+    if problem:
+        status.draw_wrapped(field_box, context, problem, depth=2)
+    if fluid is not None:
+        for text, icon in status.fluid_lines(fluid):
+            status.draw_wrapped(field_box, context, text, icon=icon, depth=2)
+    if static is None:
+        _draw_force_field_targets(field_box, context, params, obj, obj.name)
+        # Transfer refuses a field that reaches no simulated object; said
+        # here first.
+        if not ff.pushed_objects(scene, params, obj):
+            status.draw_wrapped(
+                field_box, context,
+                iface_("Pushes no object: assign objects to the groups it reaches"),
+                icon="ERROR", depth=2)
+
+
+def _draw_linear_system_solver(layout, context, params):
+    """The Linear System Solver box: the PCG limits and the preconditioner.
+
+    The Schwarz level count is drawn only under Schwarz, which is the one
+    preconditioner that reads it. Under Multigrid the box says when Transfer
+    will refuse the scene, from the predicate the encoder asks, so the artist
+    reads the refusal where the choice is made.
+    """
+    ls_box = layout.box()
+    ls_row = ls_box.row()
+    ls_row.prop(
+        params,
+        "show_linear_system_solver",
+        icon="TRIA_DOWN" if params.show_linear_system_solver else "TRIA_RIGHT",
+        emboss=False,
+        icon_only=True,
+    )
+    ls_row.label(text="Linear System Solver", icon="SETTINGS")
+    if not params.show_linear_system_solver:
+        return
+    ls_box.prop(params, "cg_max_iter")
+    ls_box.prop(params, "cg_tol")
+    ls_box.prop(params, "precond")
+    if params.precond == "SCHWARZ":
+        ls_box.prop(params, "schwarz_levels")
+    if multigrid_refusal(context.scene, params) is not None:
+        ls_box.label(
+            text="Multigrid does not solve PDRD groups; Transfer will refuse",
+            icon="ERROR",
+        )
+
+
 def _draw_force_fields(layout, context, params):
-    """The scene's force fields: which ones, where and how finely they are
-    sampled for the solver, the exact script, and the Visualize overlay.
+    """The scene's force fields: each field object with its status and the
+    groups it pushes, the exact script, and the Visualize overlay.
 
     The Compile and Check button is drawn ALWAYS and disabled with a status
     line when it cannot run, from the same predicate the
     operator polls.
     """
     from ...core import force_field as ff
+    from . import force_field_status as status
     from .force_field_ops import check_unavailable_reason
+    from .overlay_geometry.force_field import preview_errors
 
     box = layout.box()
     row = box.row()
@@ -397,34 +472,9 @@ def _draw_force_fields(layout, context, params):
     objs = ff.field_objects(context.scene, params)
     if objs:
         for obj in objs:
-            why = ff.refusal(obj)
-            field_box = box.box()
-            field_box.label(
-                text=f"{obj.name}: {obj.field.type.title()}"
-                + (f" ({why})" if why else ""),
-                icon="ERROR" if why else "CHECKMARK",
-            )
-            if not why:
-                _draw_force_field_targets(field_box, context, params, obj, obj.name)
+            _draw_force_field_row(box, context, params, obj)
     else:
         box.label(text="No force field objects", icon="INFO")
-
-    sample_box = box.box()
-    sample_box.label(text="Sampling")
-    sample_box.prop(params, "force_field_padding")
-    sample_box.prop(params, "force_field_spacing")
-    sample_box.prop(params, "force_field_time_samples")
-    try:
-        shapes = ff.plan_shapes(ff.grid_plan(context.scene, params))
-    except ValueError as e:
-        sample_box.label(text=str(e), icon="ERROR")
-    else:
-        if shapes:
-            sample_box.label(
-                text=ff.estimate_line(shapes, params.force_field_time_samples),
-                icon="INFO",
-            )
-    sample_box.prop(params, "force_field_max_mb")
 
     script_box = box.box()
     script_box.label(text="Script")
@@ -451,19 +501,32 @@ def _draw_force_fields(layout, context, params):
         elif result is None:
             script_box.label(text="Not checked since the last edit", icon="INFO")
         elif result.get("ok"):
-            script_box.label(text=f"OK: {result.get('summary', '')}", icon="CHECKMARK")
+            status.draw_wrapped(
+                script_box, context,
+                iface_("Force field script OK: {summary}").format(
+                    summary=result.get("summary", "")),
+                icon="CHECKMARK", depth=2)
         else:
             line = result.get("line")
-            where = f"Line {line}: " if line else ""
-            script_box.label(text=f"{where}{result.get('error', '')}", icon="ERROR")
+            where = iface_("Line {line}: ").format(line=line) if line else ""
+            status.draw_wrapped(script_box, context, f"{where}{result.get('error', '')}",
+                                icon="ERROR", depth=2)
 
     viz_box = box.box()
     viz_box.prop(params, "force_field_visualize")
     if params.force_field_visualize:
         viz_box.row().prop(params, "force_field_preview_resolution")
         pw, ph, pd = params.force_field_preview_resolution
-        viz_box.label(text=f"{pw * ph * pd} arrows at the current frame, drawing only",
-                      icon="INFO")
+        viz_box.label(
+            text=iface_("{count} arrows at the current frame, drawing only").format(
+                count=pw * ph * pd),
+            translate=False, icon="INFO")
+        # A field the overlay could not read is left out of the drawing and
+        # named here (each message names its field); the others still draw.
+        for error in preview_errors():
+            status.draw_wrapped(viz_box, context,
+                                iface_("Not drawn: {error}").format(error=error),
+                                icon="ERROR", depth=2)
 
 
 def _material_prop(layout, group, prop_name, text=None):
@@ -500,14 +563,29 @@ def _material_prop(layout, group, prop_name, text=None):
     row.prop_decorator(group, prop_name)
 
 
+def _exact_pin_above(group, pin_idx, pin_item) -> bool:
+    """Whether a pin of the same object that holds exactly is listed above
+    `pin_item`.
+
+    The later pin wins a point two pins share, so such a pin loses its shared
+    points to a pulling pin below it. That is so whether it is plain or
+    carries a motion: a Roots pin captured to follow a moving head is the
+    usual one. Reads no point data, so a draw may ask.
+    """
+    return any(
+        earlier.object_uuid == pin_item.object_uuid and not earlier.use_pull
+        for earlier in list(group.pin_vertex_groups)[:pin_idx]
+    )
+
+
 def _draw_material_maps(param_box, group, actual_index):
     """Draw the group's spatial material maps.
 
-    Each row is one parameter varied across the surface, blended from this
-    group's own slider toward the row's target and weighted per vertex. A row
-    with no source name is drawn in alert color: an unnamed source cannot be
-    resolved at encode and would abort the transfer, so it is worth showing
-    before the artist presses it.
+    Each row is one parameter varied across the surface, or along a rod,
+    blended from this group's own slider toward the row's target and weighted
+    per vertex. A row with no source name is drawn in alert color: an unnamed
+    source cannot be resolved at encode and would abort the transfer, so it is
+    worth showing before the artist presses it.
 
     A row's own source is the map at the start frame. Its samples name later
     sources, and the weights between two consecutive samples are their linear
@@ -568,6 +646,29 @@ def _draw_material_maps(param_box, group, actual_index):
             sample_detail.prop(sample, "frame")
             sample_detail.prop(sample, "source_type")
             sample_detail.prop(sample, "source_name")
+
+
+def _draw_contact_distances(param_box, group):
+    """A group's contact gap and offset, and the limit on the gap.
+
+    A ROD authors absolute distances only, since the box around a strand says
+    nothing about how thick it is. The local gap limit is drawn for the types
+    in CONTACT_GAP_LIMIT_TYPES, whose objects can be in contact with
+    themselves. SAND draws its own box, a gap beside its grain radius.
+    """
+    contact_box = param_box.box()
+    relative = False
+    if group.object_type != "ROD":
+        contact_box.prop(group, "use_group_bounding_box_diagonal")
+        relative = group.use_group_bounding_box_diagonal
+    if relative:
+        _material_prop(contact_box, group, "contact_gap_rat")
+        _material_prop(contact_box, group, "contact_offset_rat")
+    else:
+        _material_prop(contact_box, group, "contact_gap")
+        _material_prop(contact_box, group, "contact_offset")
+    if group.object_type in CONTACT_GAP_LIMIT_TYPES:
+        contact_box.prop(group, "contact_gap_limit_percent")
 
 
 def _draw_collision_windows(param_box, group, actual_index):
@@ -1301,23 +1402,7 @@ class MAIN_PT_SceneConfiguration(Panel):
                             if ic_item.collider_type == "SPHERE":
                                 kf_box.prop(kf, "radius")
 
-        # Linear System Solver (enclosed box)
-        ls_box = layout.box()
-        ls_row = ls_box.row()
-        ls_row.prop(
-            params,
-            "show_linear_system_solver",
-            icon="TRIA_DOWN" if params.show_linear_system_solver else "TRIA_RIGHT",
-            emboss=False,
-            icon_only=True,
-        )
-        ls_row.label(text="Linear System Solver", icon="SETTINGS")
-        if params.show_linear_system_solver:
-            ls_box.prop(params, "cg_max_iter")
-            ls_box.prop(params, "cg_tol")
-            ls_box.prop(params, "precond")
-            if params.precond == "SCHWARZ":
-                ls_box.prop(params, "schwarz_levels")
+        _draw_linear_system_solver(layout, context, params)
 
         advanced_box = layout.box()
         row = advanced_box.row()
@@ -1633,7 +1718,10 @@ class DYNAMICS_PT_Groups(Panel):
                     if 0 <= _pin_idx < len(group.pin_vertex_groups):
                         _pin_obj_uuid = group.pin_vertex_groups[_pin_idx].object_uuid or ""
                     _editing_pin_obj = False
-                    if context.mode in ("EDIT_MESH", "EDIT_CURVE") and context.edit_object:
+                    if (
+                        context.mode in ("EDIT_MESH", "EDIT_CURVE", "EDIT_CURVES")
+                        and context.edit_object
+                    ):
                         _editing_pin_obj = (
                             _pin_obj_uuid != ""
                             and get_object_uuid(context.edit_object) == _pin_obj_uuid
@@ -1645,6 +1733,9 @@ class DYNAMICS_PT_Groups(Panel):
                         desel_op = row.operator("object.deselect_pin_vertices", icon="RESTRICT_SELECT_ON")
                         desel_op.group_index = actual_index
                         row = col.row(align=True)
+                        # Hair Curves points take no keyframes, so a hair
+                        # pin moves through Capture Deformation alone.
+                        row.enabled = context.edit_object.type != "CURVES"
                         mk_op = row.operator("object.make_pin_keyframe", icon="KEYFRAME")
                         mk_op.group_index = actual_index
                         dk_op = row.operator("object.delete_pin_keyframes", icon="KEYFRAME_HLT")
@@ -1673,10 +1764,11 @@ class DYNAMICS_PT_Groups(Panel):
                             _pin_obj = _resolve_pin(pin_item)
                         except ValueError:
                             _pin_obj = None
-                        _pin_can_capture = (
-                            _pin_obj is not None
-                            and _pin_obj.type == "MESH"
-                            and _pin_supports_cap(_pin_obj)
+                        # The predicate names the object types a capture
+                        # reads: a mesh, or Hair Curves.
+                        _pin_can_capture = _pin_supports_cap(_pin_obj)
+                        _pin_is_hair = (
+                            _pin_obj is not None and _pin_obj.type == "CURVES"
                         )
                         _pin_has_cache = _pin_has_cap(pin_item)
                         _pin_capture_active = _is_pin_capture_running()
@@ -1708,9 +1800,19 @@ class DYNAMICS_PT_Groups(Panel):
                                 text=iface_("Pin cache: {count} frame(s)").format(count=n),
                                 icon="FILE_CACHE",
                             )
+                        elif _pin_can_capture and _pin_is_hair:
+                            col.label(
+                                text="This hair moves; capture so its pin follows",
+                                icon="INFO",
+                            )
                         elif _pin_can_capture:
                             col.label(
                                 text="Deforming modifier detected; capture to encode",
+                                icon="INFO",
+                            )
+                        elif _pin_is_hair:
+                            col.label(
+                                text="Nothing moves this pin's hair object",
                                 icon="INFO",
                             )
                         else:
@@ -1794,6 +1896,31 @@ class DYNAMICS_PT_Groups(Panel):
                         sub = row.row()
                         sub.enabled = pin_item.use_pull
                         sub.prop(pin_item, "pull_strength")
+                        # A hair pin stored as a float attribute carries a
+                        # weight per point, which scales the pull. Nothing
+                        # else on the row shows that the pin is weighted, and
+                        # the weights do nothing until the pin pulls.
+                        if _pin_is_hair and _hair_pin_weighted(
+                            _pin_obj, decode_vertex_group_identifier(pin_item.name)[1]
+                        ):
+                            col.label(
+                                text="Each point is pulled with Strength x its weight"
+                                if pin_item.use_pull
+                                else "Weighted pin: turn on Pull for the weights to count",
+                                icon="INFO",
+                            )
+                        # The later pin wins a point two pins share, and hair
+                        # gets its Roots pin first. A pull pin added after it
+                        # that reaches the roots would hold them softly, so
+                        # say which way the order cuts while it stands so.
+                        if (
+                            _pin_is_hair and pin_item.use_pull
+                            and _exact_pin_above(group, pin_idx, pin_item)
+                        ):
+                            col.label(
+                                text="Pins above lose shared points to this one: move Roots below",
+                                icon="INFO",
+                            )
 
                         # Fix weight threshold (SOLID hard pins only). Tet
                         # verts whose diffused pin weight reaches this become
@@ -2063,15 +2190,7 @@ class DYNAMICS_PT_Groups(Panel):
                         _material_prop(param_box, group, "shrink")
                         _material_prop(param_box, group, "friction")
 
-                        # Contact Gap Settings Box
-                        contact_box = param_box.box()
-                        contact_box.prop(group, "use_group_bounding_box_diagonal")
-                        if group.use_group_bounding_box_diagonal:
-                            _material_prop(contact_box, group, "contact_gap_rat")
-                            _material_prop(contact_box, group, "contact_offset_rat")
-                        else:
-                            _material_prop(contact_box, group, "contact_gap")
-                            _material_prop(contact_box, group, "contact_offset")
+                        _draw_contact_distances(param_box, group)
                         _draw_collision_windows(param_box, group, actual_index)
                         _draw_material_maps(param_box, group, actual_index)
                         plast_box = param_box.box()
@@ -2108,15 +2227,7 @@ class DYNAMICS_PT_Groups(Panel):
                         _material_prop(param_box, group, "shell_poisson_ratio")
                         _material_prop(param_box, group, "friction")
 
-                        # Contact Gap Settings Box
-                        contact_box = param_box.box()
-                        contact_box.prop(group, "use_group_bounding_box_diagonal")
-                        if group.use_group_bounding_box_diagonal:
-                            _material_prop(contact_box, group, "contact_gap_rat")
-                            _material_prop(contact_box, group, "contact_offset_rat")
-                        else:
-                            _material_prop(contact_box, group, "contact_gap")
-                            _material_prop(contact_box, group, "contact_offset")
+                        _draw_contact_distances(param_box, group)
                         _draw_collision_windows(param_box, group, actual_index)
                         _material_prop(param_box, group, "bend")
                         aniso_col = param_box.column(align=True)
@@ -2178,10 +2289,9 @@ class DYNAMICS_PT_Groups(Panel):
                         _material_prop(param_box, group, "friction")
                         _material_prop(param_box, group, "length_factor")
 
-                        contact_box = param_box.box()
-                        _material_prop(contact_box, group, "contact_gap")
-                        _material_prop(contact_box, group, "contact_offset")
+                        _draw_contact_distances(param_box, group)
                         _draw_collision_windows(param_box, group, actual_index)
+                        _draw_material_maps(param_box, group, actual_index)
                         bend_box = param_box.box()
                         bend_box.label(text="Bend")
                         _material_prop(bend_box, group, "bend")
@@ -2235,14 +2345,7 @@ class DYNAMICS_PT_Groups(Panel):
                                 sub.enabled = hinge_assigned.pdrd_hinge_enable
                                 sub.prop(hinge_assigned, "pdrd_hinge_axis")
 
-                        contact_box = param_box.box()
-                        contact_box.prop(group, "use_group_bounding_box_diagonal")
-                        if group.use_group_bounding_box_diagonal:
-                            _material_prop(contact_box, group, "contact_gap_rat")
-                            _material_prop(contact_box, group, "contact_offset_rat")
-                        else:
-                            _material_prop(contact_box, group, "contact_gap")
-                            _material_prop(contact_box, group, "contact_offset")
+                        _draw_contact_distances(param_box, group)
                         _draw_collision_windows(param_box, group, actual_index)
                         _draw_velocity_keyframes(
                             param_box, group, actual_index, show_angular=True,
@@ -2313,14 +2416,7 @@ class DYNAMICS_PT_Groups(Panel):
                         if group.enable_soft_constraint:
                             soft_box.prop(group, "soft_constraint_stiffness")
 
-                        contact_box = param_box.box()
-                        contact_box.prop(group, "use_group_bounding_box_diagonal")
-                        if group.use_group_bounding_box_diagonal:
-                            _material_prop(contact_box, group, "contact_gap_rat")
-                            _material_prop(contact_box, group, "contact_offset_rat")
-                        else:
-                            _material_prop(contact_box, group, "contact_gap")
-                            _material_prop(contact_box, group, "contact_offset")
+                        _draw_contact_distances(param_box, group)
 
                     # Outside the type chain on purpose: both tolerances apply
                     # to every group type.
@@ -2333,11 +2429,12 @@ class DYNAMICS_PT_Groups(Panel):
                         ff_row = param_box.row()
                         ff_row.prop(group, "force_field_weight", icon="FORCE_FORCE")
 
-                    # The map list is drawn by the SOLID and SHELL branches
-                    # above. A group whose type was changed afterwards keeps
-                    # its rows, and they still reach the encoder, so they are
-                    # drawn here too rather than becoming unreachable state.
-                    if group.object_type not in ("SOLID", "SHELL") and len(
+                    # The map list is drawn by the SOLID, SHELL and ROD
+                    # branches above. A group whose type was changed
+                    # afterwards keeps its rows, and they still reach the
+                    # encoder, so they are drawn here too rather than
+                    # becoming unreachable state.
+                    if group.object_type not in ("SOLID", "SHELL", "ROD") and len(
                         group.material_maps
                     ):
                         _draw_material_maps(param_box, group, actual_index)
@@ -2432,7 +2529,7 @@ class SNAPMERGE_PT_SnapAndMerge(Panel):
 
 
 class UTILITY_PT_UtilityTools(Panel):
-    bl_label = "Utility Tools"
+    bl_label = "Mesh Repair"
     bl_idname = "UTILITY_PT_UtilityTools"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -2445,6 +2542,10 @@ class UTILITY_PT_UtilityTools(Panel):
 
     def draw(self, context):
         from ...mesh_ops.cleaning_ops import draw_mesh_cleaning
+        from ...mesh_ops.intersection_ops import draw_intersection_correction
+        from ...mesh_ops.shell_intersection_ops import (
+            draw_shell_intersection_correction,
+        )
 
         layout = self.layout
 
@@ -2469,6 +2570,9 @@ class UTILITY_PT_UtilityTools(Panel):
             tri_box.label(text="Select one or more mesh objects", icon="INFO")
         else:
             tri_box.label(text=iface_("{count} mesh object(s) selected").format(count=n_mesh), icon="CHECKMARK")
+
+        draw_intersection_correction(layout, context)
+        draw_shell_intersection_correction(layout, context)
 
 
 class VISUALIZATION_PT_Visualization(Panel):

@@ -236,10 +236,17 @@ rod_bend_force(const Vec3f &x0,
 // materials, evaluates the turning-angle force and Hessian, adds the lagged
 // Rayleigh block and scatters both, under one dispatch.
 //
-// TWO GATES DECIDE WHICH SITES CONTRIBUTE. A prescribed interior vertex carries
-// no bending, its row leaving the Newton system entirely, and a site whose
-// stiffness comes out non-positive contributes nothing. Those two decide the
-// set `builder.rs` registered stencils for.
+// A SITE IS SKIPPED ONLY WHEN ALL THREE OF ITS VERTICES ARE PRESCRIBED, the
+// rule every other element follows (`builder.rs` marks a face, an edge or a
+// tet `fixed` when every one of its vertices is). A prescribed INTERIOR vertex
+// between free neighbors still bends them: the energy depends on their
+// positions, so its gradient on their rows is a real force, and the Dirichlet
+// pass (`main/dirichlet.kernel.cpp`) eliminates the prescribed row and lifts
+// its couplings into theirs. Skipping such a site on the interior vertex alone
+// turns a rod clamped by fixed pins into a hinge at the clamp's last vertex,
+// and a cantilever then hangs straight down whatever its stiffness. A site
+// whose stiffness comes out non-positive contributes nothing either.
+// `builder.rs` registers a stencil for every interior rod vertex.
 //
 // THE MATERIAL IS AVERAGED OVER THE TWO SEGMENTS, which is what
 // `rod_bend_segment_average` states: a site sits BETWEEN two edges and its
@@ -265,7 +272,9 @@ rod_bend_force(const Vec3f &x0,
     unsigned element) {
     const unsigned interior = node_slots[3u * element + 1u];
     const VertexProp center = vertex_prop[interior];
-    if (center.fix_index != 0u) {
+    if (center.fix_index != 0u &&
+        vertex_prop[node_slots[3u * element]].fix_index != 0u &&
+        vertex_prop[node_slots[3u * element + 2u]].fix_index != 0u) {
         return;
     }
     const unsigned first = site_edge[2u * element];

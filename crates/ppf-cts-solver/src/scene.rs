@@ -148,6 +148,13 @@ pub struct Scene {
     /// Centered rest position per entry of `pdrd_vert_list`, packed
     /// (x, y, z). Length 3 * pdrd_vert_list.len().
     pdrd_rest_centered: Vec<f32>,
+    /// One byte per rod edge, aligned with `rod`: non-zero where the edge
+    /// belongs to a Cosserat rod, whose edges carry a material frame.
+    cosserat_edge: Vec<u8>,
+    /// The authored roll of a Cosserat rod's material frame about its tangent,
+    /// one radian value per vertex, aligned with `vert`; empty when no rod
+    /// authored one.
+    cosserat_tilt: Vec<f32>,
 }
 
 #[derive(Clone)]
@@ -1867,6 +1874,35 @@ impl Scene {
             Vec::new()
         };
 
+        let cosserat_edge_path = format!("{}/bin/cosserat_edge.bin", args.path);
+        let cosserat_edge = if std::path::Path::new(&cosserat_edge_path).exists() {
+            let v = read_vec::<u8>(&cosserat_edge_path).expect("Failed to read cosserat_edge.bin");
+            assert_eq!(
+                v.len(),
+                n_rod,
+                "cosserat_edge.bin holds {} entries for {} rod edges; it is one byte per rod edge",
+                v.len(),
+                n_rod,
+            );
+            v
+        } else {
+            vec![0; n_rod]
+        };
+        let cosserat_tilt_path = format!("{}/bin/cosserat_tilt.bin", args.path);
+        let cosserat_tilt = if std::path::Path::new(&cosserat_tilt_path).exists() {
+            let v = read_vec::<f32>(&cosserat_tilt_path).expect("Failed to read cosserat_tilt.bin");
+            assert_eq!(
+                v.len(),
+                n_vert,
+                "cosserat_tilt.bin holds {} entries for {} vertices; it is one float per vertex",
+                v.len(),
+                n_vert,
+            );
+            v
+        } else {
+            Vec::new()
+        };
+
         Self {
             args: config.param,
             dyn_args,
@@ -1914,6 +1950,8 @@ impl Scene {
             pdrd_vert_index,
             pdrd_vert_list,
             pdrd_rest_centered,
+            cosserat_edge,
+            cosserat_tilt,
         }
     }
 
@@ -2258,6 +2296,13 @@ impl Scene {
                 let mut bend_rest_from_geometry = None;
                 let mut deform_damping = None;
                 let mut bend_damping = None;
+                let mut cosserat_shear = None;
+                let mut cosserat_bend = None;
+                let mut cosserat_twist = None;
+                let mut cosserat_rest_twist = None;
+                let mut cosserat_fix_ends = None;
+                let mut cosserat_end_twist_rate = None;
+                let mut cosserat_straight_rest = None;
                 let rod = mesh.mesh.mesh.edge.column(i);
                 let x0 = mesh.vertex.column(rod[0]);
                 let x1 = mesh.vertex.column(rod[1]);
@@ -2293,6 +2338,20 @@ impl Scene {
                         bend_damping = Some(as_value(value, i, name));
                     } else if name == "pressure" {
                         // Pressure is a tri-only parameter; ignore for rods.
+                    } else if name == "cosserat-shear" {
+                        cosserat_shear = Some(as_value(value, i, name));
+                    } else if name == "cosserat-bend" {
+                        cosserat_bend = Some(as_value(value, i, name));
+                    } else if name == "cosserat-twist" {
+                        cosserat_twist = Some(as_value(value, i, name));
+                    } else if name == "cosserat-rest-twist" {
+                        cosserat_rest_twist = Some(as_value(value, i, name));
+                    } else if name == "cosserat-fix-ends" {
+                        cosserat_fix_ends = Some(as_value(value, i, name));
+                    } else if name == "cosserat-end-twist-rate" {
+                        cosserat_end_twist_rate = Some(as_value(value, i, name));
+                    } else if name == "cosserat-straight-rest" {
+                        cosserat_straight_rest = Some(as_value(value, i, name));
                     } else {
                         panic!("Unknown rod parameter: {name}");
                     }
@@ -2310,6 +2369,18 @@ impl Scene {
                 let bend_rest_from_geometry = bend_rest_from_geometry.unwrap_or(false);
                 let deform_damping = deform_damping.unwrap_or(0.0);
                 let bend_damping = bend_damping.unwrap_or(0.0);
+                // A plain rod beside a Cosserat one carries the cosserat-* keys
+                // at zero, and a scene with no Cosserat rod carries none.
+                let cosserat_shear = cosserat_shear.unwrap_or(0.0);
+                let cosserat_bend = cosserat_bend.unwrap_or(0.0);
+                let cosserat_twist = cosserat_twist.unwrap_or(0.0);
+                let cosserat_rest_twist = cosserat_rest_twist.unwrap_or(0.0);
+                let cosserat_fix_ends = cosserat_fix_ends.unwrap_or(0.0);
+                let cosserat_end_twist_rate = cosserat_end_twist_rate.unwrap_or(0.0);
+                let cosserat_straight_rest = cosserat_straight_rest.unwrap_or(0.0);
+                assert_ge!(cosserat_shear, 0.0, "Cosserat shear stiffness must be non-negative");
+                assert_ge!(cosserat_bend, 0.0, "Cosserat bend stiffness must be non-negative");
+                assert_ge!(cosserat_twist, 0.0, "Cosserat twist stiffness must be non-negative");
                 assert_ge!(
                     deform_damping,
                     0.0,
@@ -2345,6 +2416,13 @@ impl Scene {
                     bend_rest_from_geometry,
                     deform_damping,
                     bend_damping,
+                    cosserat_shear,
+                    cosserat_bend,
+                    cosserat_twist,
+                    cosserat_rest_twist,
+                    cosserat_fix_ends,
+                    cosserat_end_twist_rate,
+                    cosserat_straight_rest,
                 };
                 let param_idx = dedup_param(&mut edge_param_map, &mut edge_params, param);
 
@@ -3438,6 +3516,14 @@ impl Scene {
     /// (x, y, z). Length 3 * pdrd_vert_list.len().
     pub fn pdrd_rest_centered(&self) -> &[f32] {
         &self.pdrd_rest_centered
+    }
+
+    pub fn cosserat_edge(&self) -> &[u8] {
+        &self.cosserat_edge
+    }
+
+    pub fn cosserat_tilt(&self) -> &[f32] {
+        &self.cosserat_tilt
     }
 
     /// One normalized solver-space center-of-mass lock axis per displacement

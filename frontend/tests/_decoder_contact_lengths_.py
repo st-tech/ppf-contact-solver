@@ -21,6 +21,8 @@
 #   * the two shapes can arrive side by side, one key a map and the other a
 #     number, which is what a group does whose offset ratio is zero only by
 #     value and not by shape.
+#   * a group's `contact-gap-limit` is one fraction, set on every object of
+#     the group, and an object of a group that sends none keeps no limit.
 
 from __future__ import annotations
 
@@ -120,6 +122,20 @@ def test_the_two_shapes_arrive_side_by_side():
         assert ws.value(SMALL, "contact-gap") == pytest.approx(0.0125)
         for uuid in (BIG, SMALL):
             assert ws.value(uuid, "contact-offset") == pytest.approx(0.0)
+
+
+def test_a_contact_gap_limit_reaches_every_object_of_the_group():
+    with Workspace() as ws:
+        ws.decode({"contact-gap": 0.004, "contact-offset": 0.0})
+        for uuid in (BIG, SMALL):
+            assert ws.value(uuid, "contact-gap-limit") == 0.0
+        ws.decode({
+            "contact-gap": {BIG: 0.05, SMALL: 0.0125},
+            "contact-offset": 0.0,
+            "contact-gap-limit": 0.25,
+        })
+        for uuid in (BIG, SMALL):
+            assert ws.value(uuid, "contact-gap-limit") == pytest.approx(0.25)
 
 
 @pytest.mark.parametrize("key", ["contact-gap", "contact-offset"])

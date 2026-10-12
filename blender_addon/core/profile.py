@@ -217,6 +217,7 @@ _MATERIAL_PARAM_FIELDS = {
     "use_group_bounding_box_diagonal": "use_group_bounding_box_diagonal",
     "contact_gap_rat": "contact_gap_rat",
     "contact_offset_rat": "contact_offset_rat",
+    "contact_gap_limit_percent": "contact_gap_limit_percent",
     "bend": "bend",
     "shrink": "shrink",
     "shrink_x": "shrink_x",

@@ -4,7 +4,7 @@
 # License: Apache v2.0
 #
 # The external force field's two sources against plain gravity: a uniform
-# acceleration grid and a constant script each reproduce it, and a
+# field object and a constant script each reproduce it, and a
 # `force-field-weight` of 0 opts an object out.
 # The cases and the reasoning behind each are in `_force_field_probe.py`.
 

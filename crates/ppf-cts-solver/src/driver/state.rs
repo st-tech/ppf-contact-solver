@@ -762,6 +762,9 @@ pub struct SolverState {
     /// only when the row count changes: the factorization is quadratic in
     /// the dense-block cap and the partition is a sequential host sweep.
     pub schwarz: super::schwarz::State,
+    /// The geometric multigrid preconditioner: its hierarchy, laid at the first
+    /// solve that asks for it, and every level's operator and smoother.
+    pub multigrid: super::multigrid::State,
     pub precond_inverse: Buffer<f32>,
     /// Which vertices are Dirichlet-removed this step, one per vertex.
     ///
@@ -938,6 +941,13 @@ pub struct SolverState {
     pub rigid_target: ReadbackBuffer<f32>,
     /// The reduced solve's own vectors.
     pub pcg_rigid: super::pcg::RigidWorkspace,
+
+    /// The Cosserat rods' frames, the blocks a Newton iteration assembles over
+    /// them, and the augmented solve's own vectors. `cosserat.slots` is zero on
+    /// every scene without a Cosserat rod, and every Cosserat dispatch is gated
+    /// on it.
+    pub cosserat: super::cosserat::State,
+    pub pcg_cosserat: super::pcg::CosseratWorkspace,
 
     pub lock: super::lock::Scratch,
     pub pcg_locked: super::pcg::LockedWorkspace,
@@ -2343,6 +2353,13 @@ impl SolverState {
                     self.rigid.dim,
                     self.rigid.body_base
                 );
+            }
+            // THE COSSERAT FRAMES, staged once. A scene with no Cosserat rod
+            // stages nothing and sizes no workspace.
+            self.cosserat.allocate(device, data, vertices, rods)?;
+            if self.cosserat.slots > 0 {
+                self.pcg_cosserat
+                    .allocate(device, vertices, self.cosserat.slots, self.cosserat.chains)?;
             }
             // The SAND blocks, sized for every vertex whatever the scene holds:
             // the analytic contact writes all of them.

@@ -182,10 +182,29 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
             // to NONE so the next BuildRequested is accepted; an
             // in-flight build (BUILDING) is preserved; the client
             // detects upload_id mismatch and aborts on its side.
-            let new_build = if state.build != Build::Building {
-                Build::None
+            //
+            // THE VERDICT GOES WITH THE BUILD IT WAS ABOUT. `error`,
+            // `crash_kind` and `violations` describe the payload this upload
+            // just replaced. The violations are positions in THAT payload's
+            // geometry, and a client draws whatever a response carries, so
+            // kept past this point they are drawn over a scene they do not
+            // describe until the next build ends.
+            // Left in place they travel in the same response as the NEW
+            // payload's hashes, and `status_string` reports a build that
+            // was never requested as "NO_BUILD", which is also how it
+            // reports one that failed: the client tells the two apart by
+            // the error alone, so a stale one reads as this payload's
+            // build having failed, before that build has started.
+            let invalidated = state.build != Build::Building;
+            let new_build = if invalidated { Build::None } else { state.build };
+            let (new_error, new_crash_kind, new_violations) = if invalidated {
+                (String::new(), String::new(), vec![])
             } else {
-                state.build
+                (
+                    state.error.clone(),
+                    state.crash_kind.clone(),
+                    state.violations.clone(),
+                )
             };
             let log = format!(
                 "Upload landed (id={upload_id}, data={has_data}, param={has_param})."
@@ -197,6 +216,9 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     data_hash: new_data_hash,
                     param_hash: new_param_hash,
                     build: new_build,
+                    error: new_error,
+                    crash_kind: new_crash_kind,
+                    violations: new_violations,
                     resumable: false,
                     ..state
                 },
@@ -216,6 +238,9 @@ pub fn transition(state: ServerState, event: Event) -> (ServerState, Vec<Effect>
                     total_frames: 0,
                     error: String::new(),
                     crash_kind: String::new(),
+                    // What the previous build or run reported is that
+                    // verdict's, like the error beside it.
+                    violations: vec![],
                     exemptions: vec![],
                     ..state
                 },

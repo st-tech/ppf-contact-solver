@@ -7,8 +7,7 @@
     has X pointing right, Y pointing straight up, and Z pointing
     diagonally toward the viewer (out of the page). An arrow between
     them is labeled with the conversion rule: a Blender vector
-    (x, y, z) is shipped to the solver as [x, z, -y], and solver results
-    are un-flipped the same way on fetch.
+    (x, y, z) is sent to the solver as [x, z, -y], and solver results are converted back the same way on fetch.
   </desc>
 
   <defs>
@@ -82,12 +81,12 @@
   <line x1="370" y1="210" x2="450" y2="210" class="map" marker-end="url(#arrow-map)" />
   <text x="410" y="192" text-anchor="middle" class="map-tx">(x, y, z)</text>
   <text x="410" y="235" text-anchor="middle" class="map-tx">[x, z, -y]</text>
-  <text x="410" y="255" text-anchor="middle" class="map-nt">encode to solver</text>
+  <text x="410" y="255" text-anchor="middle" class="map-nt">sent to solver</text>
   <!-- Return arrow (below) -->
   <line x1="450" y1="320" x2="370" y2="320" class="map" marker-end="url(#arrow-map)" />
   <text x="410" y="305" text-anchor="middle" class="map-tx">[X, Y, Z]</text>
   <text x="410" y="345" text-anchor="middle" class="map-tx">(X, -Z, Y)</text>
-  <text x="410" y="365" text-anchor="middle" class="map-nt">decode on fetch</text>
+  <text x="410" y="365" text-anchor="middle" class="map-nt">back on fetch</text>
 
   <!-- Right: Solver triad -->
   <!-- origin at (640, 260) -->

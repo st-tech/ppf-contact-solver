@@ -287,6 +287,9 @@ def compute_vg_hash(obj: bpy.types.Object, vg_name: str) -> int:
     """Compute a 64-bit content hash from vertex/pin indices."""
     if obj.type == "CURVE":
         return _hash_indices(_get_curve_pin_indices(obj, vg_name))
+    if obj.type == "CURVES":
+        from .hair_curves import pin_indices
+        return _hash_indices(pin_indices(obj, vg_name))
     return _hash_indices(_get_vg_indices(obj, vg_name))
 
 
@@ -300,6 +303,10 @@ def _iter_vg_candidates(obj: bpy.types.Object):
             if key.startswith("_pin_"):
                 name = key[5:]
                 yield name, _hash_indices(_get_curve_pin_indices(obj, name))
+    elif obj.type == "CURVES":
+        from .hair_curves import pin_indices, pin_names
+        for name in pin_names(obj):
+            yield name, _hash_indices(pin_indices(obj, name))
 
 
 def _vg_slot_exists(obj: bpy.types.Object, vg_name: str) -> bool:
@@ -311,6 +318,9 @@ def _vg_slot_exists(obj: bpy.types.Object, vg_name: str) -> bool:
         return obj.vertex_groups.get(vg_name) is not None
     if obj.type == "CURVE":
         return obj.get(f"_pin_{vg_name}") is not None
+    if obj.type == "CURVES":
+        from .hair_curves import pin_exists
+        return pin_exists(obj, vg_name)
     return False
 
 

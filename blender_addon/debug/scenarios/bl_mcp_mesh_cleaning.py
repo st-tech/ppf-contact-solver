@@ -5,7 +5,7 @@
 #
 # The MCP mesh-cleaning surface.
 #
-# Mesh Cleaning is the Utility Tools panel that finds and repairs the
+# Mesh Cleaning is the entry of the Mesh Repair panel that finds and repairs the
 # geometry the solver rejects. Its operators read ``context.selected_objects``,
 # which an MCP caller cannot see or reason about, so the tools take explicit
 # object names and set the selection themselves. That shifts two properties
@@ -454,7 +454,7 @@ try:
         and poke_res.get("changed_count") == 2
         and poke_entries.get("PokeTarget", {}).get("vertices_after") == 13
         and poke_entries.get("PokeTwin", {}).get("vertices_after") == 13
-        # It is a Utility Tools operation, not a repair: it takes no
+        # It sits in the Mesh Repair panel but is not a repair: it takes no
         # acknowledgement and deletes none of the caches it invalidates.
         and has_cache_modifier(poke),
         {"status": poke_res.get("status"), "before": poke_before,

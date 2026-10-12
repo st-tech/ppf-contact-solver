@@ -1,25 +1,27 @@
 # Profiling
 
-When the sidebar feels laggy or a viewport overlay is dragging redraws, the
-in-addon draw-time profiler tells you which draw callbacks are eating the
-frame. It wraps every add-on draw method so each call is timed, and
-leaves everything else alone.
+When the sidebar feels laggy or a viewport overlay slows redraws, the
+in-add-on draw-time profiler shows which draw callbacks take the most time.
+It wraps the add-on's panel draw methods, list draw methods, and the two
+viewport-overlay callbacks so each call is timed, and leaves everything else
+alone.
 
-The profiler lives at `blender_addon/ui/perf.py`. You drive it from the
-CLI at `blender_addon/debug/perf.py`, which ships Python snippets to
-Blender over the same transport as `debug/main.py`.
+The profiler is `blender_addon/ui/perf.py`. You drive it from the CLI at
+`blender_addon/debug/perf.py`, which ships Python snippets to Blender over the
+same transport as `debug/main.py`. Blender must be running with the MCP server
+or the reload server started; see [Hot Reload](hot_reload.md).
 
 ## What It Instruments
 
-| Category        | Target                                                                         |
-| --------------- | ------------------------------------------------------------------------------ |
-| Panels          | Every registered `Panel.draw` whose class lives in this add-on.                |
-| UILists         | Every `UIList.draw_item`, `draw_filter`, and `filter_items` method.            |
-| Viewport overlay | `POST_VIEW` and `POST_PIXEL` draw-handler callbacks in `ui/dynamics/overlay`. |
+| Category         | Target                                                                          |
+| ---------------- | ------------------------------------------------------------------------------- |
+| Panels           | The `draw` method of each `Panel` class that this add-on defines.               |
+| UILists          | The `draw_item`, `draw_filter`, and `filter_items` methods of each `UIList` class that this add-on defines. |
+| Viewport overlay | The `POST_VIEW` callback `draw_overlay_callback` and the `POST_PIXEL` callback `_draw_overlay_labels` in `ui/dynamics/overlay.py`. |
 
-Each recorded entry stores call count, cumulative total, minimum, and
-maximum time. Draw methods whose module is not part of this add-on are
-left alone.
+Each recorded entry stores the call count and the cumulative, minimum, and
+maximum time. Classes from other add-ons, operator `draw` methods (popup
+dialogs), and panel headers are not wrapped.
 
 ## CLI
 
@@ -32,7 +34,9 @@ python blender_addon/debug/perf.py reset            # clear collected stats
 python blender_addon/debug/perf.py disable          # restore original draw methods
 ```
 
-Options for `enable`:
+`enable` installs the wrappers, clears the collected stats, tags every area
+for redraw, and prints how many panels, list methods, and overlay callbacks it
+wrapped. Its options:
 
 | Flag            | Effect                                           |
 | --------------- | ------------------------------------------------ |
@@ -40,14 +44,21 @@ Options for `enable`:
 | `--no-uilists`  | Skip wrapping `UIList` methods.                  |
 | `--no-overlay`  | Skip wrapping viewport overlay callbacks.        |
 
-`sample` forces redraws via `bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',
-iterations=N)` inside the same snippet that enables the profiler and
-prints the report. It is the fastest way to get a first readout, but it
-only covers panels and overlays that are **currently visible**. Panels in
-a collapsed region, a closed sidebar, or a different workspace will report
-zero samples.
+`report` prints the first 30 rows by default. `report --top N` changes the
+count. `report --json` prints an object with `enabled` and `rows`, where each
+row has `name`, `count`, `total_ms`, `mean_ms`, `max_ms`, and `min_ms`. The
+text table omits `min_ms`.
 
-Global options (same as `debug/main.py`):
+`sample` forces redraws with `bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',
+iterations=N)` inside the same snippet that enables the profiler and prints
+the report. It is the fastest way to get a first readout. `--iterations N`
+sets the redraw count (default 5) and `--top N` the row count (default 30).
+It covers only the panels and overlays that are **currently visible**. Panels
+in a collapsed region, a closed sidebar, or a different workspace do not appear
+in the report. When nothing was recorded, the table has no rows and a line
+under the header says there are no samples.
+
+Global options go before the subcommand, as for `debug/main.py`:
 
 | Option             | Default     | Description                       |
 | ------------------ | ----------- | --------------------------------- |
@@ -56,52 +67,54 @@ Global options (same as `debug/main.py`):
 
 ## Recommended Workflow
 
-1. **Enable.** Run `perf.py enable`. The profiler resets its stats and tags
-   all areas for redraw, so the first samples land almost immediately.
+1. **Enable.** Run `perf.py enable`. It clears the stats and tags all areas
+   for redraw, so samples start to arrive at once.
 2. **Reproduce.** Hover the mouse over the affected panels, resize the
-   sidebar, scrub frames, toggle overlays, or anything else that would cause the
-   draws you want to measure. The more you trigger the slow path, the more
-   meaningful the numbers.
+   sidebar, scrub frames, toggle overlays, or do anything else that causes the
+   draws you want to measure.
 3. **Report.** Run `perf.py report`. Rows are sorted by cumulative total
    time.
-4. **Disable.** Run `perf.py disable` when you are done. The wrappers are
-   cheap but they do add a `time.perf_counter()` call per draw.
+4. **Disable.** Run `perf.py disable` when you are done. The wrappers make two
+   `time.perf_counter()` calls per draw.
 
-`reset` without `disable` is useful when you want to measure a specific
-interaction: enable, idle, reset, interact, report.
+To measure one specific interaction without disabling the profiler, run
+`enable`, leave Blender idle, run `reset`, perform the interaction, then run
+`report`.
 
 ## Reading the Output
 
-Columns are fixed-width:
+Columns are fixed-width. The values below are illustrative:
 
 ```text
-name                                                         count  total(ms)  mean(ms)   max(ms)
+name                                                          count  total(ms)  mean(ms)   max(ms)
 ----------------------------------------------------------------------------------------------------
-Panel:DYNAMICS_PT_Groups.draw                                  42      318.14     7.575    18.402
-Overlay:draw_overlay_callback                                 180       84.20     0.468     2.031
-UIList:OBJECT_UL_PinOperationsList.draw_item                  612       31.44     0.051     0.330
+Panel:DYNAMICS_PT_Groups.draw                                    42     318.14     7.575    18.402
+Overlay:draw_overlay_callback                                   180      84.20     0.468     2.031
+UIList:OBJECT_UL_PinOperationsList.draw_item                    612      31.44     0.051     0.330
 ```
 
 Interpretation hints:
 
-- **Sort order is cumulative total time.** A panel with a very high
-  `count` but low `mean` is not necessarily slow, but it is being redrawn
-  far more often than expected. This is usually a sign of over-aggressive
-  `tag_redraw` calls somewhere (e.g. a timer that tags on every tick, or
-  an operator that tags inside a loop).
-- **Overlay entries appear by handler name**, prefixed with `Overlay:`.
-  There are two hooks: one for geometry (POST_VIEW) and one for labels
-  (POST_PIXEL text). If the labels hook dominates, the culprit is
-  usually a large number of text draws per pin / operation.
-- **`max` spikes** tell you about worst-case frames. A `mean` of 0.5 ms
-  with a `max` of 20 ms means something occasionally re-builds geometry
-  from scratch, which is worth profiling with `enable` and then looking at the
-  cache version counters in `overlay_cache`.
+- **Rows are sorted by cumulative total time.** A callback with a high `count`
+  and a low `mean` runs often rather than slowly. Look for code that calls
+  `tag_redraw` repeatedly, for example a timer that tags on every tick or an
+  operator that tags inside a loop.
+- **Overlay entries appear by handler name**, prefixed with `Overlay:`. There
+  are two hooks: `draw_overlay_callback` for geometry (`POST_VIEW`) and
+  `_draw_overlay_labels` for text labels (`POST_PIXEL`). If the labels
+  callback dominates, look at how many direction, operation, velocity,
+  violation, and exemption labels are on screen.
+- **`max` spikes** show the worst case. A `mean` of 0.5 ms with a `max` of
+  20 ms means a call occasionally takes far longer than usual, for example
+  when an overlay rebuilds its geometry. Check the cache keys in
+  `_overlay_cache` (`ui/dynamics/overlay.py`), which decide when the overlay
+  rebuilds.
 
 :::{tip}
-`UIList.draw_item` is called once per row every draw. If a list with 500
-pins shows `count = 50000`, the list has been drawn 100 times. That is
-expensive regardless of how fast each row is.
+`UIList.draw_item` is timed once for each row a list draws, so the `count` of
+a `draw_item` row grows with both the number of redraws and the number of rows
+drawn per redraw. Use `mean` for the cost of one row and `total` for the whole
+list.
 :::
 
 ## Related Pages
@@ -113,20 +126,20 @@ expensive regardless of how fast each row is.
 
 **Overlay handler install**
 
-Overlay handlers need a slightly different install than panels and
-UILists because Blender stores a function pointer at registration time:
-the profiler briefly unregisters the overlay handlers, swaps in the
-timed versions, and re-registers them.
+Overlay handlers need a different install from panels and UILists, because
+Blender stores a function pointer when a draw handler is added. The profiler
+unregisters the overlay handlers, replaces the two callbacks in the overlay
+module with timed versions, and registers the handlers again.
 
 **Calling the profiler from your own script**
 
-The CLI loads `ui/perf.py` dynamically because the add-on's top-level
-package name depends on how Blender installed it (legacy vs extension).
-The CLI scans loaded modules to find the add-on's top-level package
-name, then imports `<pkg>.ui.perf` from there.
+The CLI loads `ui/perf.py` dynamically, because the add-on's top-level package
+name depends on how Blender installed it (extension or legacy layout). It
+scans the loaded modules for one that ends in `.ui.dynamics.overlay`, strips
+that suffix to get the add-on's package name, and imports `<pkg>.ui.perf`.
 
-If you want to drive the profiler from a Python snippet that is not
-routed through `debug/perf.py`, reuse the same pattern:
+To drive the profiler from a Python snippet that is not routed through
+`debug/perf.py`, reuse the same pattern:
 
 ```python
 import sys
@@ -148,6 +161,12 @@ print(perf.report())
 perf.disable()
 ```
 
-This is also the right entry point if you are wiring a test or a
-regression check that needs deterministic draw-time numbers.
+`perf.report(top_n)` returns the text table (20 rows by default) and
+`perf.report_json(top_n)` returns the same rows as a dictionary. Unlike the
+CLI `enable`, `perf.enable()` does not clear the stats; call `perf.reset()`
+for that.
+
+This is also the entry point for a script or regression check that compares
+draw-time measurements. The numbers are wall-clock samples from
+`time.perf_counter()`, so expect run-to-run variation.
 :::

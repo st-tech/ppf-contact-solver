@@ -301,7 +301,15 @@ def prepare_upload(
 
     Returns ``(data, param, data_hash, param_hash)``. Either payload
     is ``b""`` (and its hash ``""``) when its ``want_*`` flag is False.
+    Raises ``ValueError`` when the two together pass what a transfer
+    carries (``core.force_field.upload_refusal``), since the server would
+    refuse the upload unread.
     """
+    from ..force_field import upload_refusal
+
     data, data_hash = encode_obj_with_hash(context) if want_data else (b"", "")
     param, param_hash = encode_param_with_hash(context) if want_param else (b"", "")
+    why = upload_refusal(len(data), len(param))
+    if why is not None:
+        raise ValueError(why)
     return data, param, data_hash, param_hash

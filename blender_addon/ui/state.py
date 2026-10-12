@@ -21,7 +21,13 @@ from bpy.props import (  # pyright: ignore
 from bpy.types import PropertyGroup  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore
 
-from ..models.defaults import DEFAULT_MCP_PORT, DEFAULT_RELOAD_PORT, DEFAULT_SERVER_PORT
+from ..models.defaults import (
+    DEFAULT_IDLE_STOP_S,
+    DEFAULT_MCP_PORT,
+    DEFAULT_PING_INTERVAL_S,
+    DEFAULT_RELOAD_PORT,
+    DEFAULT_SERVER_PORT,
+)
 from ..models.enum_props import EnumProperty, dynamic_enum_items
 # `decode_vertex_group_identifier`, `assign_display_indices`,
 # `find_available_group_slot` are imported here because ui.dynamics
@@ -194,6 +200,13 @@ def _on_profile_selected(self, context):
     redraw_all_areas(context)
 
 
+def _on_ping_interval(self, _context):
+    """Hand a new Ping Interval to the add-on's ping thread at once."""
+    from ..core.facade import runner
+
+    runner.ping_interval_s = float(self.ping_interval)
+
+
 class SSHState(PropertyGroup):
     profile_path: StringProperty(
         name="Profile",
@@ -218,6 +231,31 @@ class SSHState(PropertyGroup):
         name="SSH Key",
         subtype="FILE_PATH",
         default=default_key_path,
+    )  # pyright: ignore
+    server_idle_timeout: IntProperty(
+        name="Stop Idle Server After (s)",
+        default=DEFAULT_IDLE_STOP_S,
+        min=0,
+        soft_max=86400,
+        description=(
+            "Seconds after which the server stops itself when no Blender is "
+            "connected to it and no simulation or build is running. 0 keeps "
+            "it running until Stop Server. Applied at Start Server"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    ping_interval: IntProperty(
+        name="Ping Interval (s)",
+        default=DEFAULT_PING_INTERVAL_S,
+        min=1,
+        max=3600,
+        update=_on_ping_interval,
+        description=(
+            "Seconds between the pings Blender sends a server it is "
+            "connected to, which keep that server from stopping itself while "
+            "Blender is idle. Must be shorter than Stop Idle Server After"
+        ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     proxy_jump: StringProperty(
         name="Proxy Jump",
@@ -661,59 +699,13 @@ class State(PropertyGroup):
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    force_field_padding: FloatProperty(
-        name="Padding",
-        default=0.5,
-        min=0.0,
-        soft_max=10.0,
-        unit="LENGTH",
-        description=(
-            "How far each field's sampled box extends past the objects it "
-            "pushes, so they stay inside it as they move. Outside the box a "
-            "sampled field is zero"
-        ),
-        update=_on_direction_preview_changed,
-        options=NOT_ANIMATABLE,
-    )  # pyright: ignore
-    force_field_spacing: FloatProperty(
-        name="Spacing",
-        default=0.1,
-        min=1e-3,
-        soft_max=1.0,
-        unit="LENGTH",
-        description=(
-            "Distance between neighboring sample points sent to the solver, "
-            "the same along X, Y and Z. Smaller follows the fields more "
-            "closely and takes more memory"
-        ),
-        options=NOT_ANIMATABLE,
-    )  # pyright: ignore
-    force_field_time_samples: IntProperty(
-        name="Time Samples",
-        default=8,
-        min=1,
-        max=100000,
-        description=(
-            "Instants the fields are sampled at, spread evenly over the "
-            "simulation; the solver interpolates between them. 1 samples the "
-            "starting frame only"
-        ),
-        options=NOT_ANIMATABLE,
-    )  # pyright: ignore
-    force_field_max_mb: FloatProperty(
-        name="Size Limit (MB)",
-        default=2000.0,
-        min=1.0,
-        description="Transfer refuses sampled fields larger than this",
-        options=NOT_ANIMATABLE,
-    )  # pyright: ignore
     force_field_script: PointerProperty(
         name="Script",
         type=bpy.types.Text,
         description=(
             "A text holding def eval(x, y, z, t) returning (ax, ay, az) in m/s^2, "
             "in Blender's axes and scene units, t in seconds. Evaluated exactly "
-            "at every vertex on the solver, in addition to the sampled fields"
+            "at every vertex on the solver, in addition to the force field objects"
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
@@ -745,7 +737,7 @@ class State(PropertyGroup):
         max=48,
         description=(
             "Arrows drawn along X, Y and Z, at the timeline's current frame. "
-            "Only for drawing; the solver receives the Spacing above"
+            "Only for drawing; the solver evaluates each field exactly at every vertex"
         ),
         update=_on_direction_preview_changed,
         options=NOT_ANIMATABLE,
@@ -800,6 +792,11 @@ class State(PropertyGroup):
              "Single-level additive aggregate-Schwarz; fewer iterations on "
              "systems mixing stiff and soft elements, but heavier per iteration "
              "and can OOM on large contact counts", "NONE", 1),
+            ("MULTIGRID", "Multigrid",
+             "Geometric multigrid over grids laid on each connected piece of "
+             "mesh; far fewer iterations, faster on large cloth and soft "
+             "bodies, slower than Block Jacobi on small scenes and on stacked "
+             "solids, and not available with PDRD groups", "NONE", 2),
         ],
         default="BLOCK_JACOBI",
         description="Preconditioner for the PCG linear solver",
@@ -1138,6 +1135,12 @@ class State(PropertyGroup):
         description="Toggle visibility of connection settings",
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
+    show_connection_advanced: BoolProperty(
+        name="Advanced",
+        default=False,
+        description="Toggle visibility of advanced connection settings",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
     show_mcp: BoolProperty(
         name="MCP Settings",
         default=False,
@@ -1293,6 +1296,41 @@ class State(PropertyGroup):
         name="Linear System Solver",
         default=False,
         description="Toggle visibility of linear system solver settings",
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+
+    # Mesh Repair > Intersection Correction. Settings of a tool, read when
+    # its button is pressed; nothing here reaches the encoder.
+    intersection_fix_iterations: IntProperty(
+        name="Max Iterations",
+        default=50,
+        min=1,
+        soft_max=200,
+        description=(
+            "How many passes to spend. Each pass finds the overlaps that are "
+            "left and moves the objects once"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    intersection_fix_clearance: FloatProperty(
+        name="Clearance",
+        default=1.0,
+        min=0.1,
+        soft_max=10.0,
+        description=(
+            "How far apart to leave surfaces that overlap, beyond their "
+            "contact offsets, in multiples of each object's contact gap. "
+            "Surfaces closer than half of this count as overlapping"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    intersection_fix_selected_only: BoolProperty(
+        name="Selected Only",
+        default=False,
+        description=(
+            "Move only the selected objects. The others stay where they are "
+            "and the selected ones move around them"
+        ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
 

@@ -312,7 +312,119 @@ def connect_platform_native(com, pkg, ssh_state, path, port, device=None):
 """
 
 
-DRIVER_LIB = BUILD_FAILURE_LIB + r"""
+FLUID_BAKE_LIB = r"""
+import bpy, os
+import numpy as np
+
+
+def _baked_non_finite(dom):
+    # The frames of a gas domain's OpenVDB cache whose grids hold a value that
+    # is not finite, as {file name: count}. Blender's Mantaflow bake writes
+    # such values now and then (measured: 52 non-finite velocities in frame 2
+    # of a 16^3 gas bake, once in about thirty bakes, never reproduced by the
+    # same bake alone), and the add-on then refuses the frame by name.
+    import glob
+    import openvdb
+
+    ds = next(m for m in dom.modifiers if m.type == "FLUID").domain_settings
+    root = bpy.path.abspath(ds.cache_directory, library=dom.library)
+    bad = {}
+    for path in sorted(glob.glob(os.path.join(root, "data", "*.vdb"))):
+        for g in openvdb.readAll(path)[0]:
+            if g.activeVoxelCount() == 0:
+                continue
+            lo, hi = g.evalActiveVoxelBoundingBox()
+            shape = tuple(int(h - l + 1) for l, h in zip(lo, hi))
+            vector = "Vec3" in type(g).__name__
+            arr = np.zeros(shape + ((3,) if vector else ()), dtype=np.float32)
+            g.copyToArray(arr, ijk=tuple(int(v) for v in lo))
+            count = int((~np.isfinite(arr)).sum())
+            if count:
+                bad[os.path.basename(path)] = bad.get(os.path.basename(path), 0) + count
+    return bad
+
+
+def _unbaked_frames(dom):
+    # The frames of a gas domain's cache range (Cache Frame Start .. End)
+    # whose OpenVDB data file is missing. A non-finite scan passes a cache
+    # with frames missing, and a bake_all that resumed after the files were
+    # deleted, or into a new Cache Directory, leaves exactly that (measured:
+    # one frame written, ten missing). A bake_all that resumed over intact
+    # files leaves every file and is not seen here; _reset_bake prevents it.
+    ds = next(m for m in dom.modifiers if m.type == "FLUID").domain_settings
+    data = os.path.join(bpy.path.abspath(ds.cache_directory, library=dom.library), "data")
+    have = set(os.listdir(data)) if os.path.isdir(data) else set()
+    return [f for f in range(int(ds.cache_frame_start), int(ds.cache_frame_end) + 1)
+            if "fluid_data_%04d.vdb" % f not in have]
+
+
+def _reset_bake(dom):
+    # Blender's own reset of a gas domain's bake, made by changing Cache
+    # Type away and back: the change deletes every cache file and sets the
+    # resume frame (cache_frame_pause_data) to 0 and has_cache_baked_data to
+    # False, so the next bake_all simulates every frame again (measured: bit
+    # for bit the first bake, Blender 5.1.2 on Windows, 5.2.0 on Linux and
+    # 5.2.1 on macOS). Not bpy.ops.fluid.free_all(), because a bake that
+    # follows it crashes Blender 5.1.2 on Windows; not a write of the resume
+    # frame over the files, because the next bake reads them back (it
+    # crashed on Windows 5.1.2 and Linux 5.2.0, and spread the bad frame's
+    # values on macOS 5.2.1); and not deleting the files, which leaves the
+    # resume frame where it was.
+    ds = next(m for m in dom.modifiers if m.type == "FLUID").domain_settings
+    kept = ds.cache_type
+    ds.cache_type = "MODULAR" if kept == "ALL" else "ALL"
+    ds.cache_type = kept
+    if ds.cache_frame_pause_data != 0 or ds.has_cache_baked_data:
+        raise RuntimeError(
+            "changing Cache Type did not reset the bake of %s (resume frame %d, baked %s)"
+            % (dom.name, ds.cache_frame_pause_data, ds.has_cache_baked_data))
+
+
+def bake_fluid_domain(scene, dom, notes=None, after_bake=None):
+    # Bake a gas domain (Cache Type All or Modular) over its whole cache
+    # range, and check the bake: every frame of the range has its file, and
+    # no grid holds a value that is not finite. A domain already baked is
+    # reset first (_reset_bake): a bake_all over a bake resumes at its last
+    # frame and writes that frame alone (measured). A bake that wrote a value
+    # that is not finite (_baked_non_finite) is reset and baked once more,
+    # and the retry is recorded in `notes` (a list) when given: the input is
+    # Blender's, not the code under test. A second bad bake fails loudly,
+    # naming the frames. `after_bake(dom, attempt)`, attempt 0 for the first
+    # bake and 1 for the retry, runs after each bake and before its checks;
+    # bl_fluid_bake_retry makes a bake bad through it.
+    def run(op):
+        with bpy.context.temp_override(scene=scene, object=dom, active_object=dom,
+                                       selected_objects=[dom]):
+            done = op()
+        if done != {"FINISHED"}:
+            raise RuntimeError("%s on %s returned %s" % (op, dom.name, done))
+
+    ds = next(m for m in dom.modifiers if m.type == "FLUID").domain_settings
+    for attempt in (0, 1):
+        if attempt or ds.has_cache_baked_data:
+            _reset_bake(dom)
+        run(bpy.ops.fluid.bake_all)
+        if after_bake is not None:
+            after_bake(dom, attempt)
+        if ds.cache_data_format != "OPENVDB":
+            return
+        missing = _unbaked_frames(dom)
+        if missing:
+            raise RuntimeError("Blender's bake of %s wrote no data file for frames %s"
+                               % (dom.name, missing))
+        bad = _baked_non_finite(dom)
+        if not bad:
+            return
+        if attempt:
+            raise RuntimeError("Blender's bake of %s wrote non-finite values twice: %s"
+                               % (dom.name, bad))
+        if notes is not None:
+            notes.append("Blender's bake of %s wrote non-finite values %s; baked again"
+                         % (dom.name, bad))
+"""
+
+
+DRIVER_LIB = BUILD_FAILURE_LIB + FLUID_BAKE_LIB + r"""
 import bpy, os, struct, time
 import numpy as np
 
@@ -355,6 +467,38 @@ class DriverHelpers:
         self.result.setdefault("checks", {})[name] = {
             "ok": bool(ok), "details": details,
         }
+
+    # -- the event trail of a wait --
+    #
+    # A WAIT REPORTS THE EVENTS THAT ARE NOT ITS OWN POLL TICKS. The engine
+    # keeps a bounded ring of recent events, and a wait that dispatches a
+    # tick every pass fills it: the last entries are ticks whatever
+    # happened, and over a long wait the ring holds nothing else. So a wait
+    # collects the other events as it goes: `trail_start` before its
+    # dispatch, `trail_collect` every pass, `trail_text` in its report.
+
+    def trail_start(self):
+        self._trail = []
+        self._trail_keys = set()
+        self._trail_from = time.monotonic()
+
+    def trail_collect(self):
+        for at, name, text in self.facade.engine.recent_events:
+            if name == "PollTick" or at < self._trail_from:
+                continue
+            key = (at, name)
+            if key not in self._trail_keys:
+                self._trail_keys.add(key)
+                self._trail.append((at, name, text))
+
+    def trail_text(self, limit=60):
+        self.trail_collect()
+        events = sorted(self._trail)[-limit:]
+        if not events:
+            return "  (no event but poll ticks since the dispatch)"
+        return "\n".join(
+            f"  +{at - self._trail_from:8.3f}s {name} {text}"
+            for at, name, text in events)
 
     def record_subtest(self, name, ok, details):
         self.result.setdefault("subtests", {})[name] = {
@@ -588,12 +732,14 @@ class DriverHelpers:
         # Distinct from naive solver-state polling: a previous run can
         # leave solver=READY before the new build's transitions even
         # fire, so we require activity to return to IDLE first.
+        self.trail_start()
         self.com.build_pipeline(data=data_bytes, param=param_bytes,
                                 message=message)
         deadline = time.time() + timeout
         while time.time() < deadline:
             self.facade.engine.dispatch(self.events.PollTick())
             self.facade.tick()
+            self.trail_collect()
             s = self.facade.engine.state
             if (s.activity.name == "IDLE"
                     and s.solver.name in ("READY", "RESUMABLE", "FAILED")):
@@ -615,8 +761,7 @@ class DriverHelpers:
             # receiving a build request, with the client idle on
             # solver=NO_BUILD; only the client's own state, error and event
             # trail can say why, and they are all here.
-            events = self.facade.engine.recent_events[-30:]
-            trail = "\n".join(f"  {t:.3f} {name} {rep}" for t, name, rep in events)
+            trail = self.trail_text()
             raise RuntimeError(
                 f"build gate: the build did not complete within {timeout}s: "
                 f"solver={s.solver.name} activity={s.activity.name} "
@@ -624,7 +769,53 @@ class DriverHelpers:
                 f"server={s.server.name} error={s.error!r}\n"
                 + build_failure_message(self.facade, self.com,
                                         prefix="build did not complete")
-                + f"\nrecent events:\n{trail}")
+                + f"\nevents since the dispatch, poll ticks left out:\n{trail}")
+
+    def build_verdict(self, message, *, timeout=120.0):
+        # Encode the scene, dispatch ONE build, and return (solver, error)
+        # once that verdict is THIS build's. For a scenario that builds more
+        # than once, where `build_and_wait`'s "idle and terminal" is also
+        # true of the previous build for a moment after the dispatch.
+        #
+        # THE WITNESS IS THE SERVER'S UPLOAD ID. The server mints one per
+        # upload, and in the same transition it drops the build the previous
+        # payload had and that build's error
+        # (`ppf-cts-core/src/transitions/mod.rs`, `UploadLanded`). Every
+        # status response carries the id beside the status, and the engine
+        # takes both from one response, so a terminal state seen under an id
+        # that differs from the one held at dispatch can only be the new
+        # build's. That holds whatever the two builds' verdicts are and
+        # whether or not their payloads differ, and it is persistent state:
+        # nothing here depends on catching a phase between two polls.
+        data_hash = self.encoder_mesh.compute_data_hash(bpy.context)
+        param_hash = self.encoder_param.compute_param_hash(bpy.context)
+        data_bytes, param_bytes = self.encode_payload()
+        before = self.facade.engine.state.server_upload_id
+        self.trail_start()
+        self.facade.engine.dispatch(self.events.BuildPipelineRequested(
+            data=data_bytes, param=param_bytes,
+            data_hash=data_hash, param_hash=param_hash, message=message,
+        ))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.facade.engine.dispatch(self.events.PollTick())
+            self.facade.tick()
+            self.trail_collect()
+            s = self.facade.engine.state
+            if (s.activity.name == "IDLE"
+                    and s.solver.name in ("READY", "RESUMABLE", "FAILED")
+                    and s.server_upload_id != before):
+                return s.solver.name, (s.server_error or "")
+            time.sleep(0.05)
+        s = self.facade.engine.state
+        trail = self.trail_text()
+        raise RuntimeError(
+            f"build {message!r} did not produce its own verdict within "
+            f"{timeout}s: solver={s.solver.name} activity={s.activity.name} "
+            f"upload id {s.server_upload_id!r} (was {before!r}) "
+            f"server={s.server.name} error={s.error!r} "
+            f"server_error={(s.server_error or '')[:200]!r}\n"
+            f"events since the dispatch, poll ticks left out:\n{trail}")
 
     def run_and_wait(self, *, timeout=90.0):
         self.com.run()

@@ -39,9 +39,12 @@ MATERIAL_MAP_KEYS = [
 # BASE is whatever that property holds (or that frame's animated value), so a
 # weight of 0 reproduces the unmapped result exactly.
 #
-# Only SHELL and SOLID appear. A map is reduced to one coefficient per element
-# by averaging that element's own vertices, and a rod, a sand cloud and a PDRD
-# body carry no element table to reduce over.
+# SHELL, SOLID and ROD appear. A map is reduced to one coefficient per element
+# by averaging that element's own vertices, which for a rod is the two ends of
+# a segment, and a sand cloud and a PDRD body carry no element table to reduce
+# over. A ROD entry names a value a rod segment reads from its own material
+# record: bending acts at the vertex between two segments, and the solver
+# gives that vertex the mean of the two.
 #
 # `pressure` is absent on purpose. Its per-face potential is
 # E_f = -(P_f / 6) * x0 . (x1 x x2), whose gradient is translation-variant: only
@@ -59,20 +62,27 @@ MATERIAL_MAP_BASE_PROP = {
     "young-mod": {
         "SHELL": "shell_young_modulus",
         "SOLID": "solid_young_modulus",
+        "ROD": "rod_young_modulus",
     },
     # A solid's surface hinges carry `type.hinge & 1` and the bending energy
     # skips exactly those, which is why the SOLID panel draws no bend slider.
     # A bend map on a solid would name a value no solid element reads.
-    "bend": {"SHELL": "bend"},
-    "friction": {"SHELL": "friction", "SOLID": "friction"},
+    "bend": {"SHELL": "bend", "ROD": "bend"},
+    "friction": {"SHELL": "friction", "SOLID": "friction", "ROD": "friction"},
     "deformation-damping": {
         "SHELL": "deformation_damping",
         "SOLID": "deformation_damping",
+        "ROD": "deformation_damping",
     },
-    "bending-damping": {"SHELL": "bending_damping"},
-    "strain-limit": {"SHELL": "strain_limit_percent"},
+    "bending-damping": {"SHELL": "bending_damping", "ROD": "bending_damping"},
+    "strain-limit": {
+        "SHELL": "strain_limit_percent",
+        "ROD": "strain_limit_percent",
+    },
+    # A rod has no stretch plasticity: its registry carries no such key.
     "plasticity": {"SHELL": "plasticity", "SOLID": "plasticity"},
-    "bend-plasticity": {"SHELL": "bend_plasticity"},
+    "bend-plasticity": {"SHELL": "bend_plasticity", "ROD": "bend_plasticity"},
+    # Read in the UV frame, which only a triangle carries.
     "bend-warp": {"SHELL": "bend_warp"},
     "bend-weft": {"SHELL": "bend_weft"},
 }
@@ -137,6 +147,15 @@ SOURCE_TYPE_ITEMS = [
     ("VERTEX_GROUP", "Vertex Group", "Read weights from a vertex group", 1),
     ("ATTRIBUTE", "Attribute", "Read weights from a float attribute", 2),
 ]
+
+# Blender object types a map's weights can be read from, per group type. A
+# legacy Curve in a ROD group is absent: its rod vertices are sampled along
+# the curve, so no vertex of the rod is a point a weight was authored on.
+MAP_OBJECT_TYPES = {
+    "SHELL": ("MESH",),
+    "SOLID": ("MESH",),
+    "ROD": ("MESH", "CURVES"),
+}
 
 
 def enum_items():

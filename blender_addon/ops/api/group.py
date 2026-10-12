@@ -23,6 +23,7 @@ _PARAM_PROPS = {
     "use_group_bounding_box_diagonal",
     "contact_gap", "contact_gap_rat",
     "contact_offset", "contact_offset_rat",
+    "contact_gap_limit_percent",
     "enable_strain_limit", "strain_limit_percent",
     "enable_inflate", "inflate_pressure",
     "force_field_weight",
@@ -65,7 +66,12 @@ class _ParamProxy:
       objects of one group get distances in proportion to their own
       sizes; the box around the group is never measured. Set it to
       ``False`` to give every object the absolute ``contact_gap`` /
-      ``contact_offset`` values directly.
+      ``contact_offset`` values directly. ``contact_gap_limit_percent``
+      (Solid, Shell and Rod; 1 to 50, default 25) caps the gap of either
+      mode at that share of the room between mesh neighbors, which is the
+      smallest triangle altitude or rod segment length nearby less twice
+      the contact offset, so a mesh finer than its gap does not press its
+      own neighbors apart.
     - **Strain limit**: ``enable_strain_limit``, ``strain_limit_percent``
     - **Inflation**: ``enable_inflate``, ``inflate_pressure``
     - **Force fields**: ``force_field_weight`` (every type but Static): the
@@ -116,6 +122,9 @@ class _ParamProxy:
         group.param.use_group_bounding_box_diagonal = True
         group.param.contact_gap_rat = 0.1
         group.param.contact_offset_rat = 0.2
+
+        # Never more than 10% of the room between mesh neighbors
+        group.param.contact_gap_limit_percent = 10.0
 
         # Strain limit (percentage; 5.0 == 5% allowed stretch)
         group.param.enable_strain_limit = True
@@ -315,7 +324,15 @@ class _Group:
 
     @blender_api
     def add(self, *object_names: str) -> "_Group":
-        """Add mesh objects to this group by name.
+        """Add objects to this group by name.
+
+        Every group type takes meshes. A ROD group also takes curves and
+        Hair Curves objects, both of which are simulated as rods. A Hair
+        Curves point is a rod vertex, so the hair is simulated as it is
+        groomed, and when it is the first object of the group the group
+        takes the settings hair implies: the rest angle from the groom and a
+        zero contact offset. Hair attached to a surface gets its ``Roots``
+        pin, which holds the first segment of every curve.
 
         Args:
             *object_names: One or more Blender object names.
@@ -524,30 +541,46 @@ class _Group:
 
     @blender_api
     def create_pin(self, object_name: str, vertex_group_name: str,
-                   indices: list[int] | None = None) -> _Pin:
-        """Pin a vertex group (mesh) or set of control points (curve).
+                   indices: list[int] | None = None,
+                   weights: list[float] | None = None) -> _Pin:
+        """Pin a vertex group (mesh), a set of control points (curve) or a
+        set of points (Hair Curves).
 
         Args:
-            object_name: Name of the mesh or curve object.
+            object_name: Name of the mesh, curve or Hair Curves object.
             vertex_group_name: For meshes, the name of an existing vertex
                 group on the object.  For curves, the logical name used
                 for the curve's ``_pin_<vertex_group_name>`` custom
-                property holding the pinned control-point indices.
-            indices: Control-point indices for curves only.  When given,
-                the curve's ``_pin_<vertex_group_name>`` property is
-                written before the pin is registered, so the same call
-                both defines and binds the pin.  Must be ``None`` for
-                meshes (meshes use existing vertex groups).
+                property holding the pinned control-point indices.  For
+                Hair Curves, the name of a point attribute, or ``"Roots"``,
+                which holds the first segment of every curve and needs no
+                attribute.  A boolean attribute holds the points it marks; a
+                float one holds every point with a weight above zero.
+            indices: Control-point indices of a curve, or point indices of
+                a Hair Curves object.  When given, the curve's
+                ``_pin_<vertex_group_name>`` property, or the Hair Curves
+                object's point attribute of that name, is written before the
+                pin is registered, so the same call both defines and binds
+                the pin.  Must be ``None`` for meshes (meshes use existing
+                vertex groups).
+            weights: One weight per entry of ``indices``, each above 0 and
+                at most 1, for a Hair Curves object only.  The pin is then
+                stored as a float point attribute, and once the pin pulls
+                (:meth:`Pin.pull`) each point is pulled with the strength
+                times its own weight.  A pin that holds exactly holds every
+                listed point alike.
 
         Returns:
             A :class:`Pin` proxy for the newly created pin.
 
         Raises:
-            ValueError: If the object is missing, not a mesh or curve,
-                the vertex group does not exist on a mesh, the
-                ``_pin_<name>`` property is missing on a curve and no
-                ``indices`` were supplied, or ``indices`` is passed for
-                a mesh.
+            ValueError: If the object is missing, not a mesh, curve or
+                Hair Curves object, the vertex group does not exist on a
+                mesh, the ``_pin_<name>`` property is missing on a curve
+                and no ``indices`` were supplied, a Hair Curves object has
+                no attribute of that name and the name is not ``"Roots"``,
+                ``indices`` is passed for a mesh, or ``weights`` is passed
+                for anything but a Hair Curves object with ``indices``.
 
         Example::
 
@@ -560,16 +593,43 @@ class _Group:
             rod_pin = rod_group.create_pin(
                 "WovenCylinder", "left", indices=[0, 7, 14, 21],
             )
+
+            # Hair Curves: the roots need no indices.
+            hair_pin = rod_group.create_pin("Hair", "Roots")
+
+            # Hair Curves: a pull that fades from the second point of a
+            # strand to its tip.
+            goal = rod_group.create_pin(
+                "Hair", "Goal", indices=[1, 2, 3, 4],
+                weights=[1.0, 0.6, 0.3, 0.1],
+            )
+            goal.pull(strength=5.0)
         """
         obj = bpy.data.objects.get(object_name)
-        if obj is not None and indices is not None:
-            if obj.type != "CURVE":
+        if weights is not None:
+            if obj is None or obj.type != "CURVES":
                 raise ValueError(
-                    f"'indices' is only valid for curve objects; "
-                    f"'{object_name}' is {obj.type}"
+                    "'weights' is only valid for a Hair Curves object, whose pin "
+                    f"is a point attribute that can hold them; '{object_name}' is "
+                    f"{obj.type if obj is not None else 'missing'}"
                 )
-            import json
-            obj[f"_pin_{vertex_group_name}"] = json.dumps(list(indices))
+            if indices is None:
+                raise ValueError(
+                    "'weights' gives one weight per entry of 'indices', and no "
+                    "indices were given"
+                )
+        if obj is not None and indices is not None:
+            if obj.type not in ("CURVE", "CURVES"):
+                raise ValueError(
+                    f"'indices' is only valid for curve and Hair Curves "
+                    f"objects; '{object_name}' is {obj.type}"
+                )
+            if obj.type == "CURVES":
+                from ...core.hair_curves import store_pin_indices
+                store_pin_indices(obj, vertex_group_name, indices, weights)
+            else:
+                import json
+                obj[f"_pin_{vertex_group_name}"] = json.dumps(list(indices))
 
         # Validation + locking + raw mutation all go through
         # core.mutation so scripts and MCP clients share one gate.

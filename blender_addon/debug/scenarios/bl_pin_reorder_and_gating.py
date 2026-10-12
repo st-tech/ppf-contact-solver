@@ -12,6 +12,10 @@
 # Subtests:
 #   A. reorder_operator_moves_pin
 #   B. last_wins_follows_order  (pin-root last => bottom hard; first => pull)
+#   C. last_wins_on_a_shell     (the same rule where a plain pin emits no
+#      settings of its own: listed last, it takes its vertices back from the
+#      pull pin, and a group whose every pulled vertex it took ships no pin
+#      settings at all)
 #   D. show_overlay_default_on
 
 from __future__ import annotations
@@ -118,6 +122,52 @@ try:
         bottom_pull_before is False and bottom_pull_after is True,
         {"bottom_has_pull_with_root_last": bottom_pull_before,
          "bottom_has_pull_with_root_first": bottom_pull_after},
+    )
+
+    # ----- C: the same rule on a SHELL ----------------------------
+    # A plain pin on a SHELL or a ROD has nothing to say to the decoder, so
+    # it emits no settings; a vertex with none is one the decoder holds
+    # exactly. For the later pin to win here, the plain pin has to take its
+    # vertices out of what the pull pin before it emitted.
+    bpy.ops.mesh.primitive_grid_add(
+        x_subdivisions=4, y_subdivisions=4, size=1.0, location=(4.0, 0.0, 0.0))
+    sheet = bpy.context.active_object
+    sheet.name = "Sheet"
+    n_sheet = len(sheet.data.vertices)
+    ymin = min(v.co.y for v in sheet.data.vertices)
+    edge = sorted(
+        v.index for v in sheet.data.vertices if abs(v.co.y - ymin) < 1e-4)
+    sheet.vertex_groups.new(name="all").add(list(range(n_sheet)), 1.0, "REPLACE")
+    sheet.vertex_groups.new(name="edge").add(edge, 1.0, "REPLACE")
+    cloth = dh.api.solver.create_group("Cloth", "SHELL")
+    cloth.add(sheet.name)
+    cloth.create_pin(sheet.name, "all").pull(strength=50.0)   # index 0
+    cloth.create_pin(sheet.name, "edge")                      # index 1 (last)
+    shell_group = addon_root.object_group_1
+    sheet_uuid = decode.get_or_create_object_uuid(sheet)
+
+    def sheet_config():
+        return enc._encode_pin_config(
+            bpy.context, [shell_group], state).get(sheet_uuid)
+
+    plain_last = sheet_config() or {}
+    shell_group.pin_vertex_groups.move(1, 0)
+    plain_first = sheet_config() or {}
+    shell_group.pin_vertex_groups.move(1, 0)
+    # A plain pin that covers every pulled vertex leaves nothing to emit.
+    sheet.vertex_groups["edge"].add(list(range(n_sheet)), 1.0, "REPLACE")
+    plain_covers_all = sheet_config()
+    dh.record(
+        "C_last_wins_on_a_shell",
+        sorted(plain_last) == [i for i in range(n_sheet) if i not in edge]
+        and all("pull_strength" in c for c in plain_last.values())
+        and sorted(plain_first) == list(range(n_sheet))
+        and all(plain_first[i].get("pull_strength") == 50.0 for i in edge)
+        and plain_covers_all is None,
+        {"edge": edge,
+         "configured_with_plain_last": sorted(plain_last),
+         "configured_with_plain_first": sorted(plain_first),
+         "with_plain_covering_all": plain_covers_all},
     )
 
 except Exception as exc:

@@ -8,6 +8,13 @@
 # instead of hardcoding literals.
 
 DEFAULT_SERVER_PORT = 9090
+# Seconds a server the add-on starts waits, with no request and no solve or
+# build running, before stopping itself (`--idle-timeout`). Short, because a
+# connected add-on pings it every DEFAULT_PING_INTERVAL_S from a thread of its
+# own, so only a Blender that closed, disconnected or lost the network stops
+# pinging. A server started by hand keeps the server's own default of an hour.
+DEFAULT_IDLE_STOP_S = 60
+DEFAULT_PING_INTERVAL_S = 10
 DEFAULT_MCP_PORT = 9633
 DEFAULT_RELOAD_PORT = 8765
 

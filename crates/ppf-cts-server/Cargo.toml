@@ -55,6 +55,8 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.13"
+# Paused time, so the idle-stop tests (`serve::tests`) run in no wall-clock time.
+tokio = { workspace = true, features = ["test-util"] }
 
 [build-dependencies]
 # Bake the docstring-harvested log channel map into the binary via

@@ -379,6 +379,11 @@ def _cache_insertion_index(obj) -> int:
     :func:`cache_placement_is_stale` calls this on every frame-pump tick,
     and a stack carrying no Geometry Nodes has no use for the answer.
     """
+    if obj.type == "CURVES":
+        # Every modifier on a Hair Curves object is a Geometry Nodes group,
+        # so the boundary is measured per modifier instead of read off types.
+        from .hair_curves import cache_insertion_index
+        return cache_insertion_index(obj)
     nodes_are_deformers = None
     pos = 0
     for m in obj.modifiers:
@@ -741,7 +746,7 @@ def has_mesh_cache(obj):
     key = object_pc2_key_readonly(obj)
     if not key:
         return False
-    if obj.type == "CURVE" and key in _curve_cache:
+    if obj.type in _HANDLER_PLAYED_TYPES and key in _curve_cache:
         return True
     # Also check for PC2 file on disk (survives addon reload)
     if os.path.exists(get_pc2_path(key)):
@@ -841,6 +846,11 @@ def remove_orphan_solver_cache(obj) -> bool:
     if obj is None or obj.modifiers.get(MODIFIER_NAME) is None:
         return False
     remove_cache_visibility_keys(obj)
+    if obj.type == "CURVES":
+        # The copy inherited the playback attribute along with the modifier.
+        from .hair_curves import clear_playback
+        clear_playback(obj)
+        return True
     remove_mesh_cache_modifier(obj)
     return True
 
@@ -952,12 +962,24 @@ def cleanup_mesh_cache(obj, *, keep_baked_pose: bool = False):
             _saved_handle_types.pop(key, None)
             _handles_freed.discard(key)
         unload_curve_cache(key)
+    elif obj.type == "CURVES":
+        # The groom lives in ``position`` and a solve never wrote it, so
+        # taking the playback away is all it takes to show the groom again.
+        from .hair_curves import clear_playback
+        clear_playback(obj)
+        unload_curve_cache(key)
     remove_pc2_file(key)
 
 
 # ---------------------------------------------------------------------------
-# Curve CV playback via persistent handlers
+# Curve CV and Hair Curves point playback via persistent handlers
 # ---------------------------------------------------------------------------
+
+# Object types Blender refuses a Mesh Cache modifier on. Their PC2 is loaded
+# into ``_curve_cache`` and written to the object by the frame-change handler:
+# a legacy Curve's control points directly, a Hair Curves object's playback
+# attribute (``hair_curves.apply_frame``).
+_HANDLER_PLAYED_TYPES = ("CURVE", "CURVES")
 
 # In-memory cache keyed by object UUID: {uuid: numpy array shape (n_frames, n_cvs, 3)}
 _curve_cache: dict[str, numpy.ndarray] = {}
@@ -977,6 +999,48 @@ def load_curve_cache(key):
         # guard lets the tick's final frame_set re-apply with the just-
         # loaded frame so rods stay in lockstep with the meshes' MESH_CACHE.
         _curve_last_frame = -1
+
+
+class _Pc2Frames:
+    """A PC2 file read one frame at a time, indexed like the array
+    :func:`_load_pc2_array` returns.
+
+    A Hair Curves solve is held this way. A groom of many strands times the
+    frames of a shot is larger than is reasonable to keep in memory, and
+    playback only ever needs the frame the timeline is on. The file is opened
+    for each read and closed again, so nothing holds it while a fetch appends
+    to it or a clear deletes it.
+    """
+
+    def __init__(self, filepath, n_frames, n_verts):
+        self._filepath = filepath
+        self.shape = (n_frames, n_verts, 3)
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, frame_idx):
+        return read_pc2_frame(self._filepath, int(frame_idx), self.shape[1])
+
+
+def load_hair_cache(key):
+    """Register a Hair Curves object's PC2 file for playback (keyed by UUID).
+
+    Only the header is read; see :class:`_Pc2Frames`. Called again after
+    every appended frame so the frame count stays current.
+    """
+    global _curve_last_frame
+    path = get_pc2_path(key)
+    if not os.path.exists(path):
+        return
+    n_frames = read_pc2_frame_count(path)
+    n_verts = read_pc2_n_verts(path)
+    if n_frames < 1 or n_verts < 1:
+        return
+    _curve_cache[key] = _Pc2Frames(path, n_frames, n_verts)
+    # Same reason as in load_curve_cache: a frame applied earlier this tick
+    # against the shorter file must not suppress the corrected re-apply.
+    _curve_last_frame = -1
 
 
 def unload_curve_cache(key=None):
@@ -1056,6 +1120,25 @@ def _apply_curve_cvs(obj, frame_idx, key=None):
                 cv_i += 1
 
 
+def _apply_hair_points(obj, frame_idx, key):
+    """Play the cached frame *frame_idx* on a Hair Curves object.
+
+    A frame recorded with another point count is not written: the groom was
+    edited since the solve, and the points it names are no longer these.
+    """
+    cache = _curve_cache.get(key)
+    if cache is None:
+        return
+    from .hair_curves import apply_frame
+    idx = max(0, min(frame_idx, cache.shape[0] - 1))
+    if not apply_frame(obj, cache[idx]):
+        _log_curve_handler_error(
+            f"'{obj.name}' has {len(obj.data.points)} points but its solve "
+            f"was recorded with {cache.shape[1]}; clear the animation and "
+            "run again"
+        )
+
+
 _curve_last_frame: int = -1
 
 
@@ -1067,13 +1150,16 @@ def _ensure_curve_caches():
     files that aren't already cached.
     """
     for obj in bpy.data.objects:
-        if obj.type != "CURVE":
+        if obj.type not in _HANDLER_PLAYED_TYPES:
             continue
         key = object_pc2_key(obj)
         if key in _curve_cache:
             continue
         if os.path.exists(get_pc2_path(key)):
-            load_curve_cache(key)
+            if obj.type == "CURVES":
+                load_hair_cache(key)
+            else:
+                load_curve_cache(key)
 
 
 def _apply_curves_at_current_frame():
@@ -1100,13 +1186,16 @@ def _apply_curves_at_current_frame():
         from .encoder import resolve_start_frame_or_default
         frame_idx = current - resolve_start_frame_or_default(bpy.context.scene)
         for obj in bpy.data.objects:
-            if obj.type != "CURVE":
+            if obj.type not in _HANDLER_PLAYED_TYPES:
                 continue
             # Read-only key: this runs from frame_change_post, so it must
             # not stamp a UUID on an uncached curve or migrate any file.
             key = object_pc2_key_readonly(obj)
             if key and key in _curve_cache:
-                _apply_curve_cvs(obj, frame_idx, key=key)
+                if obj.type == "CURVES":
+                    _apply_hair_points(obj, frame_idx, key)
+                else:
+                    _apply_curve_cvs(obj, frame_idx, key=key)
     except Exception as e:
         # frame_change handlers run VERY frequently — log once per
         # message rather than every tick, but don't silence entirely.
@@ -1469,7 +1558,31 @@ def migrate_pc2_on_save(*_args):
     migrate_statistics_on_save()
     target_dir = get_pc2_dir()
     tmp_dir = os.path.realpath(os.path.join(tempfile.gettempdir(), "data"))
+    def migrate_pin_deform(obj):
+        # Pin-deform PC2: per-pin caches share the object's UUID prefix and
+        # end with ``__pindeform.pc2``. Migrate every match for this object.
+        uid = get_object_uuid(obj)
+        if not uid or not os.path.isdir(tmp_dir):
+            return
+        prefix = f"{uid}__"
+        for fname in os.listdir(tmp_dir):
+            if (not fname.startswith(prefix)
+                    or not fname.endswith(PIN_DEFORM_SUFFIX + ".pc2")):
+                continue
+            pd_old = os.path.realpath(os.path.join(tmp_dir, fname))
+            if not os.path.exists(pd_old):
+                continue
+            os.makedirs(target_dir, exist_ok=True)
+            pd_new = os.path.join(target_dir, fname)
+            if os.path.realpath(pd_new) != pd_old:
+                shutil.move(pd_old, pd_new)
+                load_pin_anim_cache(fname[:-len(".pc2")])
+
     for obj in bpy.data.objects:
+        if obj.type == "CURVES":
+            # A Hair Curves pin can carry a captured deformation, as a mesh
+            # pin can. Its solve cache is handled with the curves below.
+            migrate_pin_deform(obj)
         if obj.type == "MESH":
             # Static-deform PC2: temp -> data/ migration on first save.
             # Derive the on-disk filename through get_pc2_path so it can
@@ -1483,24 +1596,7 @@ def migrate_pc2_on_save(*_args):
                 if os.path.realpath(sd_new) != sd_old:
                     shutil.move(sd_old, sd_new)
                     load_static_deform_cache(sd_key)
-            # Pin-deform PC2: per-pin caches share the object's UUID
-            # prefix and end with ``__pindeform.pc2``. Migrate every
-            # match for this object.
-            uid = get_object_uuid(obj)
-            if uid and os.path.isdir(tmp_dir):
-                prefix = f"{uid}__"
-                for fname in os.listdir(tmp_dir):
-                    if (not fname.startswith(prefix)
-                            or not fname.endswith(PIN_DEFORM_SUFFIX + ".pc2")):
-                        continue
-                    pd_old = os.path.realpath(os.path.join(tmp_dir, fname))
-                    if not os.path.exists(pd_old):
-                        continue
-                    os.makedirs(target_dir, exist_ok=True)
-                    pd_new = os.path.join(target_dir, fname)
-                    if os.path.realpath(pd_new) != pd_old:
-                        shutil.move(pd_old, pd_new)
-                        load_pin_anim_cache(fname[:-len(".pc2")])
+            migrate_pin_deform(obj)
             mod = obj.modifiers.get(MODIFIER_NAME)
             if mod is None:
                 continue
@@ -1514,7 +1610,7 @@ def migrate_pc2_on_save(*_args):
             new_path = os.path.join(target_dir, filename)
             shutil.move(abs_path, new_path)
             mod.filepath = bpy.path.relpath(new_path)
-        elif obj.type == "CURVE":
+        elif obj.type in _HANDLER_PLAYED_TYPES:
             key = object_pc2_key(obj)
             if key not in _curve_cache:
                 continue
@@ -1530,7 +1626,10 @@ def migrate_pc2_on_save(*_args):
             new_path = os.path.join(target_dir, curve_name)
             shutil.move(old_path, new_path)
             # Reload cache from new location
-            load_curve_cache(key)
+            if obj.type == "CURVES":
+                load_hair_cache(key)
+            else:
+                load_curve_cache(key)
 
 
 # ---------------------------------------------------------------------------

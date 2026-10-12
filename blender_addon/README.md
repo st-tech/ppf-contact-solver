@@ -79,7 +79,7 @@ All addon data lives under `scene.zozo_contact_solver`, accessed via `get_addon_
 Up to 32 groups (`object_group_0` through `object_group_31`, constant `N_MAX_GROUPS = 32`). Each group has:
 - Object type and material model selection
 - Material parameters: density, Young's modulus, Poisson ratio, friction, bend stiffness, anisotropic shrink (X/Y) for shells, uniform shrink for solids, strain limit, inflate pressure, stitch stiffness, initial velocity
-- Contact parameters: contact_gap, contact_offset (absolute, or a ratio of each assigned object's own bounding box diagonal)
+- Contact parameters: contact_gap, contact_offset (absolute, or a ratio of each assigned object's own bounding box diagonal), and for Solid, Shell and Rod a local gap limit that caps the gap at a percentage of the room between mesh neighbors
 - Assigned Blender mesh objects (with per-object inclusion toggle)
 - Pin vertex groups, each with a list of operations (MOVE_BY, SPIN, SCALE, TORQUE, EMBEDDED_MOVE)
 - Overlay visualization: color, wireframe, pin spheres, operation previews
@@ -262,7 +262,7 @@ Re-exported by `core/utils.py` (matrix functions) and `core/encoder/__init__.py`
 
 **`encode_param(context) -> bytes`** (CBOR envelope, schema `crates/ppf-cts-formats`): Dict with keys:
 - `scene`: dt, min-newton-steps, air-density, air-friction, gravity[3], wind[3], frames, fps, csrmat-max-nnz, isotropic-air-friction, auto-save, line-search-max-t, constraint-ghat, cg-max-iter, cg-tol, include-face-mass, disable-contact, inactive-momentum, stitch-stiffness
-- `group`: list of (params_dict, object_names) per group. Params: model, density, young-mod, poiss-rat, friction, contact-gap, contact-offset, bend, shrink (solid), shrink-x, shrink-y, strain-limit, pressure, length-factor, velocity
+- `group`: list of (params_dict, object_names) per group. Params: model, density, young-mod, poiss-rat, friction, contact-gap, contact-offset, contact-gap-limit (solid, shell, rod), bend, shrink (solid), shrink-x, shrink-y, strain-limit, pressure, length-factor, velocity
 - `pin_config`: {obj_name: {vertex_idx: {unpin_time, pull_strength, operations[], embedded_move_index, pin_anim, pin_group_id}}}
 - `merge_pairs`: [(object_a, object_b, stitch_stiffness), ...]
 - `dyn_param` (optional): dict mapping solver key to list of `(time_seconds, value_list, is_hold)` tuples. Keys: `"gravity"`, `"wind"`, `"air-density"`, `"air-friction"`, `"isotropic-air-friction"`. Only present when dynamic parameters with >1 keyframe exist. Encoded by `_encode_dyn_params()`. Vectors are coordinate-converted (Z-up to Y-up), wind is direction*strength combined. The decoder (`frontend/_decoder_.py`) reads this key and applies via `session.param.dyn(key).time(t).hold()` or `.change(v)`.
@@ -419,6 +419,7 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `use_group_bounding_box_diagonal` | BoolProperty | True | Use ratio-based contact, sized per object |
 | `contact_gap_rat` | FloatProperty | 0.001 | Ratio of each object's own bbox diagonal |
 | `contact_offset_rat` | FloatProperty | 0.0 | Ratio of each object's own bbox diagonal |
+| `contact_gap_limit_percent` | FloatProperty | 25.0 | Cap on the gap, percent (1-50) of the room between mesh neighbors (Solid, Shell, Rod) |
 | `enable_strain_limit` | BoolProperty | False | Shell strain limit |
 | `strain_limit_percent` | FloatProperty | 5.0 | Shell strain limit, percent of stretch (5.0 = 5%) |
 | `enable_inflate` | BoolProperty | False | Shell inflation pressure |

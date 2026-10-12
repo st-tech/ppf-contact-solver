@@ -71,6 +71,8 @@ from .events import (
     UploadPipelineComplete,
 )
 from .protocol import DEFAULT_CHUNK_SIZE
+from .state import Phase, Server
+from ..models.defaults import DEFAULT_PING_INTERVAL_S
 from .server_kill import KillReport, kill_remote_server
 from .session import new_session_id
 
@@ -185,6 +187,10 @@ def _decode_display_pin_map_cbor(blob: bytes) -> dict:
     return {"n_total": n_total, "blocks": blocks}
 
 
+# How often the ping thread looks at the clock and the connection.
+PING_LOOP_TICK_S = 0.25
+
+
 class EffectRunner:
     """Execute ``Effect`` objects, dispatching result events to the engine.
 
@@ -219,6 +225,19 @@ class EffectRunner:
         self._stop_event = threading.Event()   # Stops the worker on cleanup
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
+
+        # The ping: a status poll every `ping_interval_s` while connected to a
+        # running server, which is what keeps that server from stopping
+        # itself (`ppf-cts-server --idle-timeout`). It runs on a thread of its
+        # own, not on Blender's timer, so a Blender busy on its main thread
+        # (opening a file, encoding a Transfer) still pings, and only one that
+        # closed, disconnected or lost the network lets the server go. It
+        # queues the poll for the worker above like any other, keeping one
+        # request at a time. `ping_interval_s` is set from the main thread
+        # (`ssh_state.ping_interval`), since this thread cannot read Blender.
+        self.ping_interval_s: float = DEFAULT_PING_INTERVAL_S
+        self._pinger = threading.Thread(target=self._ping_loop, daemon=True)
+        self._pinger.start()
 
         # Connection attempts: a counter, and the lock that makes taking a
         # ticket and adopting a backend one step. A connect runs on a thread
@@ -290,6 +309,8 @@ class EffectRunner:
         self._work_event.clear()
         self._worker = threading.Thread(target=self._worker_loop, daemon=True)
         self._worker.start()
+        self._pinger = threading.Thread(target=self._ping_loop, daemon=True)
+        self._pinger.start()
 
     @property
     def backend(self) -> ConnectionBackend | None:
@@ -347,6 +368,7 @@ class EffectRunner:
                 cuda_device_uuid=device_uuid,
                 device=compute_device,
                 gpu_backend=gpu_backend,
+                idle_timeout=idle_timeout,
             ):
                 self._submit_cmd(
                     self._do_launch_server,
@@ -354,6 +376,7 @@ class EffectRunner:
                     device_uuid,
                     compute_device,
                     gpu_backend,
+                    idle_timeout,
                 )
 
             case DoStopServer():
@@ -500,6 +523,25 @@ class EffectRunner:
         with self._io_lock:
             self._poll_slot = (fn, args)
         self._work_event.set()
+
+    def should_ping(self) -> bool:
+        """Whether the ping goes out now: connected, and the server running."""
+        state = self._engine.state
+        return (
+            self._backend is not None
+            and state.phase == Phase.ONLINE
+            and state.server == Server.RUNNING
+        )
+
+    def _ping_loop(self) -> None:
+        """Queue a status poll every `ping_interval_s` while `should_ping`."""
+        last = 0.0
+        while not self._stop_event.wait(PING_LOOP_TICK_S):
+            now = time.monotonic()
+            if now - last < self.ping_interval_s or not self.should_ping():
+                continue
+            last = now
+            self._submit_poll(self._do_query, {})
 
     def _pick_job(self) -> tuple | None:
         """Pick next job: commands first, then poll."""
@@ -1013,6 +1055,7 @@ class EffectRunner:
         cuda_device_uuid: str = "",
         device: str = "",
         gpu_backend: str = "",
+        idle_timeout: int | None = None,
     ) -> None:
         # BOUND ONCE, for the reason `_do_stop_server` states: a disconnect
         # runs on the main thread and can clear `self._backend` while this
@@ -1030,7 +1073,9 @@ class EffectRunner:
             # when the connection was made, because connecting itself refuses a
             # root that holds no build for it, and the backend keeps that answer
             # so a Stop/Start cycle makes the same choice.
-            self._launch_native_server(backend, cuda_device, cuda_device_uuid)
+            self._launch_native_server(
+                backend, cuda_device, cuda_device_uuid, idle_timeout
+            )
             return
 
         port = backend.server_port
@@ -1106,9 +1151,11 @@ class EffectRunner:
         on_cpu = self._launch_device(device) == DEVICE_CPU
         gpu_index = AUTOMATIC if on_cpu else cuda_device
         gpu_uuid = "" if on_cpu else cuda_device_uuid
-        server_cmd = (
-            f"{shell_prefix(gpu_index, gpu_uuid)}"
-            f"{rust_bin} {host_flag}--port {port}"
+        from .connection import idle_timeout_args
+
+        server_cmd = " ".join(
+            [f"{shell_prefix(gpu_index, gpu_uuid)}{rust_bin} {host_flag}--port {port}"]
+            + idle_timeout_args(idle_timeout)
         )
 
         # Activate the project venv so the build worker subprocess
@@ -1245,6 +1292,7 @@ class EffectRunner:
         backend,
         cuda_device: int = -1,
         cuda_device_uuid: str = "",
+        idle_timeout: int | None = None,
     ) -> None:
         """Start the server a native backend owns, and wait for it to answer.
 
@@ -1261,9 +1309,9 @@ class EffectRunner:
                 # No device selection accompanies it: the Metal backend opens
                 # the system default device and offers no way to name another,
                 # so there is nothing for a device argument to carry.
-                launched = backend.start_server()
+                launched = backend.start_server(idle_timeout)
             else:
-                launched = backend.start_server(cuda_device, cuda_device_uuid)
+                launched = backend.start_server(cuda_device, cuda_device_uuid, idle_timeout)
             self._wait_for_native_server(backend, label)
         except Exception as e:
             cleanup_error = None

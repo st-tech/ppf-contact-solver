@@ -67,3 +67,21 @@ def dumps_envelope(kind: str, payload) -> bytes:
 
     envelope = {"version": SCHEMA_VERSION, "kind": kind, "payload": payload}
     return cbor2.dumps(envelope, default=_numpy_default)
+
+
+def payload_digest(encoded: bytes) -> str:
+    """The fingerprint of an encoded payload: its BLAKE2b digest (32 bytes),
+    in hex.
+
+    The upload and every drift check (Run, Resume, MCP) hash the whole
+    payload, which a Fluid Flow's volume can make hundreds of megabytes.
+    BLAKE2b runs at about 0.8 GB/s in every build of Blender measured
+    (2026-10-06), while SHA-256 there depends on the CPU's SHA instructions
+    reaching Blender's bundled Python: 2.2 GB/s on dev-head's x86 and 0.08
+    GB/s in Blender 5.2 on an Apple M2, where 365 MB took 4.8 s per check.
+    The server stores the digest as an opaque string, so only this function
+    has to agree with itself.
+    """
+    import hashlib
+
+    return hashlib.blake2b(encoded, digest_size=32).hexdigest()

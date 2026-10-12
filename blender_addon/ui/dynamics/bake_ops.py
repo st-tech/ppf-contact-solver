@@ -87,6 +87,61 @@ def _is_bakeable(obj) -> bool:
     return obj is not None and obj.type in ("MESH", "CURVE") and has_mesh_cache(obj)
 
 
+def _hair_curves_left_on_cache(context, group_index: int | None = None) -> list:
+    """Names of the Hair Curves objects in scope that carry a solve.
+
+    A bake turns a solve into keyframes Blender plays without the add-on: shape
+    keys on a mesh, control-point keys on a curve. Hair Curves points take
+    neither, so a bake has nothing to turn their solve into, and they stay on
+    the solver cache. The operators name them rather than pass over them.
+
+    The scope is the one ``_build_queue`` takes: the selected object of one
+    group, or every object of every active group.
+    """
+    from ...core.uuid_registry import resolve_assigned
+
+    def carries_solve(assigned):
+        obj = resolve_assigned(assigned)
+        return obj is not None and obj.type == "CURVES" and has_mesh_cache(obj)
+
+    if group_index is not None:
+        group = get_group_from_index(context.scene, group_index)
+        if group is None:
+            return []
+        idx = group.assigned_objects_index
+        if not (0 <= idx < len(group.assigned_objects)):
+            return []
+        assigned = group.assigned_objects[idx]
+        return [assigned.name] if carries_solve(assigned) else []
+    return [
+        assigned.name
+        for group in iterate_active_object_groups(context.scene)
+        for assigned in group.assigned_objects
+        if carries_solve(assigned)
+    ]
+
+
+def _report_hair_curves_left_on_cache(operator, names) -> None:
+    """Tell the artist which Hair Curves objects a bake of everything left."""
+    if not names:
+        return
+    operator.report(
+        {"WARNING"},
+        iface_(
+            "{count} Hair Curves object(s) were not baked and keep their "
+            "solver cache: {names}"
+        ).format(count=len(names), names=", ".join(names)),
+    )
+
+
+def _hair_curves_cannot_bake(name) -> str:
+    """The refusal for a bake asked of one Hair Curves object by name."""
+    return iface_(
+        "'{name}' is a Hair Curves object and cannot be baked: Blender keeps "
+        "no keyframes for hair points. Its animation stays on the solver cache."
+    ).format(name=name)
+
+
 def _has_animated_objects(context) -> bool:
     """Poll helper: True when at least one dynamic object has animation.
 
@@ -705,6 +760,11 @@ class _ModalBakeBase:
         raise NotImplementedError
 
     def execute(self, context):
+        group_index = getattr(self, "group_index", None) if self._kind == "single" else None
+        self._hair_left = _hair_curves_left_on_cache(context, group_index)
+        if self._kind == "single" and self._hair_left:
+            self.report({"ERROR"}, _hair_curves_cannot_bake(self._hair_left[0]))
+            return {"CANCELLED"}
         queue = self._build_queue_for(context)
         blockers = _check_mesh_shape_keys(queue)
         if blockers:
@@ -720,6 +780,9 @@ class _ModalBakeBase:
         ok, err = _start_job(queue, kind=self._kind)
         if not ok:
             self.report({"WARNING"}, err)
+            # With nothing but hair carrying a solve there is no job to
+            # start, and the hair is the reason.
+            _report_hair_curves_left_on_cache(self, self._hair_left)
             return {"CANCELLED"}
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.01, window=context.window)
@@ -749,6 +812,9 @@ class _ModalBakeBase:
                 iface_("Baked {frame_count} frame(s) for {object_count} object(s)").format(
                     frame_count=n_frames, object_count=n_objs
                 ),
+            )
+            _report_hair_curves_left_on_cache(
+                self, getattr(self, "_hair_left", []),
             )
             return {"FINISHED"}
         return {"RUNNING_MODAL"}
@@ -879,6 +945,9 @@ class OBJECT_OT_BakeSingleFrame(Operator):
         from ...core.uuid_registry import resolve_assigned
         obj = resolve_assigned(assigned)
         obj_name = assigned.name
+        if obj is not None and obj.type == "CURVES":
+            self.report({"ERROR"}, _hair_curves_cannot_bake(obj_name))
+            return {"CANCELLED"}
         if not obj or obj.type not in ("MESH", "CURVE"):
             self.report({"ERROR"}, iface_("Object '{name}' not found").format(name=obj_name))
             return {"CANCELLED"}
@@ -1076,6 +1145,9 @@ class SOLVER_OT_BakeAllSingleFrame(Operator):
             self.report({"ERROR"}, iface_("UUID resolve failed for: {names}").format(names=', '.join(failed)))
             return {"CANCELLED"}
         self.report({"INFO"}, iface_("Baked single frame for {count} object(s)").format(count=count))
+        _report_hair_curves_left_on_cache(
+            self, _hair_curves_left_on_cache(context),
+        )
         return {"FINISHED"}
 
 

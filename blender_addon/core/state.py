@@ -122,6 +122,13 @@ class AppState:
     # that sets ``server_error``, so the two cannot disagree.
     crash_kind: str = ""
     violations: list = field(default_factory=list)
+    # The upload whose violations the artist has answered by an edit that
+    # moved the geometry they point at (``ViolationsDismissed``). The server
+    # goes on reporting a refused upload's violations for as long as it holds
+    # that upload, so a clear of ``violations`` alone would last one poll;
+    # responses for this upload are mirrored without them instead. The next
+    # upload has another id, and its violations are shown.
+    violations_dismissed_for: str = ""
     # Allow Existing Intersections: what the server's latest successful build
     # exempted (the response's ``exemptions``), in the violation record shape.
     # Mirrored from every response, so it empties when a build starts, fails,

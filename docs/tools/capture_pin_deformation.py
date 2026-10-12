@@ -16,8 +16,8 @@ First, the button cannot be pressed from a pre-python script.
 the frame range from a timer, so invoking the operator would return
 immediately and the capture timer would photograph a job still in
 flight. The module's own job functions are driven synchronously instead
-— ``_start_job`` / ``_tick_job`` until it reports no more work /
-``_finalize_job`` / ``_cleanup_after_job`` — which is the same sequence
+(``_start_job`` / ``_tick_job`` until it reports no more work /
+``_finalize_job`` / ``_cleanup_after_job``), which is the same sequence
 the modal handler runs, minus the waiting.
 
 Second, the pin's object needs a real deforming MODIFIER:

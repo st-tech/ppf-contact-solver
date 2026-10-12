@@ -9,7 +9,7 @@ import bpy  # pyright: ignore
 import numpy as np
 from mathutils import Vector  # pyright: ignore
 
-from ...models.groups import decode_vertex_group_identifier
+from ...models.groups import decode_vertex_group_identifier, pin_is_plain
 from ...models.material_maps import pin_tracks_rest_shape
 from ..utils import (
     get_id_fcurves,
@@ -41,9 +41,11 @@ def _solver_rot_matrix(obj):
 
 
 def _get_point_co(obj, idx):
-    """Get control point position by flat index (works for MESH and CURVE)."""
+    """Get control point position by flat index (MESH, CURVE and Hair Curves)."""
     if obj.type == "MESH":
         return obj.data.vertices[idx].co
+    elif obj.type == "CURVES":
+        return Vector(obj.data.points[idx].position)
     elif obj.type == "CURVE":
         i = 0
         for s in obj.data.splines:
@@ -61,14 +63,34 @@ def _get_point_co(obj, idx):
 
 
 def _get_pin_indices(obj, vg_name):
-    """Get pin vertex indices for both MESH and CURVE objects."""
+    """Get pin vertex indices for MESH, CURVE and Hair Curves objects."""
     if obj.type == "CURVE":
         raw = obj.get(f"_pin_{vg_name}")
         return json.loads(raw) if raw else []
+    if obj.type == "CURVES":
+        from ..hair_curves import pin_indices
+        return pin_indices(obj, vg_name)
     vg = obj.vertex_groups.get(vg_name)
     if vg:
         return get_vertices_in_group(obj, vg)
     return []
+
+
+def _config_indices(obj, vg_name):
+    """The indices a pin's config is keyed by: the solver's vertex indices.
+
+    A MESH or Hair Curves pin holds simulated vertices directly. A CURVE pin
+    holds control points, and the rod it ships is sampled along the curve, so
+    its indices are mapped onto the sampled vertices ``info["pin"]`` carries
+    in encoder/mesh.py (the solver's ``pin_holder.index``). Keyed at the
+    control points instead, a spin or move_by config would miss the
+    frontend's lookup ``obj_cfg.get(sampled_idx)``.
+    """
+    indices = _get_pin_indices(obj, vg_name)
+    if obj.type == "CURVE":
+        from ..curve_rod import map_cp_pins_to_sampled
+        return map_cp_pins_to_sampled(obj, indices)
+    return indices
 
 
 def pin_vertex_indices(obj, vg_name, pin_label, group_name):
@@ -76,7 +98,12 @@ def pin_vertex_indices(obj, vg_name, pin_label, group_name):
     *obj*, refused by name when it holds none.
 
     A MESH pin reads its vertex group, a CURVE pin its ``_pin_<vg_name>``
-    record. A pin whose group is gone (deleted, or renamed and then edited so
+    record, and a Hair Curves pin its point attribute or, for the pin named
+    ``Roots`` with no such attribute, the first segment of every curve
+    (``hair_curves.pin_indices``). A weighted Hair Curves pin whose weight is
+    not a finite number somewhere is refused by name too, since that point
+    would otherwise leave the pin unannounced (``hair_curves.pin_weights``).
+    A pin whose group is gone (deleted, or renamed and then edited so
     its contents no longer identify it) and a pin whose group is empty both
     hold nothing, and skipping either would transfer the object without a pin
     the artist sees in the pin list. The data encoder and the param encoder
@@ -89,6 +116,13 @@ def pin_vertex_indices(obj, vg_name, pin_label, group_name):
         present = raw is not None
         indices = json.loads(raw) if raw else []
         held = "control points"
+    elif obj.type == "CURVES":
+        from ..hair_curves import pin_exists, pin_indices, pin_weights
+        present = pin_exists(obj, vg_name)
+        if present:
+            pin_weights(obj, vg_name)
+        indices = pin_indices(obj, vg_name) if present else []
+        held = "points"
     else:
         vg = obj.vertex_groups.get(vg_name) if vg_name else None
         present = vg is not None
@@ -244,17 +278,28 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
             # pin whose ONLY non-default setting is the allowance has to emit
             # one. Leaving it out of the test would drop that cfg here and the
             # checkbox would silently do nothing.
-            if (group.object_type != "SOLID"
-                    and not pin_item.use_pin_duration and not pin_item.use_pull
-                    and not has_operations
-                    and not getattr(pin_item, "allow_intersection", False)):
-                continue
+            plain = pin_is_plain(group, pin_item)
             from ..uuid_registry import resolve_pin, get_or_create_object_uuid
             obj = resolve_pin(pin_item)
-            if not obj or obj.type not in ("MESH", "CURVE"):
+            if not obj or obj.type not in ("MESH", "CURVE", "CURVES"):
                 continue
             # Re-read after resolve_pin (handles object + VG renames)
             obj_name, vg_name = decode_vertex_group_identifier(pin_item.name)
+            if plain:
+                # A plain pin has no setting to emit, and a vertex with no cfg
+                # is what the decoder holds exactly. The later pin in the list
+                # wins on a vertex two pins share, so this one takes its
+                # vertices back from every pin listed before it: the hard
+                # roots of a strand stay hard under a pull pin that grades
+                # the whole strand, provided the roots are listed after it.
+                obj_uuid = get_or_create_object_uuid(obj)
+                earlier = pin_config.get(obj_uuid)
+                if earlier:
+                    for vi in _config_indices(obj, vg_name):
+                        earlier.pop(vi, None)
+                    if not earlier:
+                        del pin_config[obj_uuid]
+                continue
             if pin_item.object_uuid in shipped:
                 # A pin that holds nothing is refused by name, as the data
                 # encoder refuses it, so an Update Params that never sends
@@ -270,7 +315,10 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
             has_embedded_move = any(
                 op.op_type == "EMBEDDED_MOVE" for op in pin_item.operations
             )
-            if has_embedded_move and obj.type != "MESH":
+            # A Hair Curves pin carries the sentinel only through Capture
+            # Deformation: its points take no keyframes, so the track below
+            # can come from the captured cache alone.
+            if has_embedded_move and obj.type not in ("MESH", "CURVES"):
                 raise ValueError(
                     f"Pin '{vg_name}' on '{obj_name}': keyframed pin "
                     "animation is only supported for mesh objects"
@@ -537,7 +585,7 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
             from ..pc2 import get_pin_anim_cache
             pin_cache = (
                 get_pin_anim_cache(obj, vg_name)
-                if obj.type == "MESH" else None
+                if obj.type in ("MESH", "CURVES") else None
             )
             if pin_cache is not None and pin_cache.shape[0] >= 2:
                 live_pin_indices = _get_pin_indices(obj, vg_name)
@@ -573,6 +621,16 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                 cfg["embedded_move_index"] = 0
                 # Skip the fcurve scan entirely; PC2 owns the track.
                 fcurve_frames, fcurve_lookup = [], {}
+            elif obj.type == "CURVES" and embedded_move_count == 1:
+                # The pin was captured and its cache is gone. With no
+                # keyframes to fall back on, shipping it would hold the
+                # points still where the artist recorded them moving.
+                raise ValueError(
+                    f"Pin '{vg_name}' on '{obj_name}': its captured "
+                    "deformation cache is missing. Press Capture "
+                    "Deformation again, or Clear Deformation Cache to "
+                    "hold the points where they start."
+                )
             else:
                 has_embedded_move_fcurves = (
                     embedded_move_count == 1 and obj.type == "MESH"
@@ -649,25 +707,27 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
                 cfg["fix_weight_threshold"] = float(
                     getattr(pin_item, "fix_weight_threshold", 0.5)
                 )
-            # For curves we must match the sampled-vertex index space used
-            # by ``info["pin"]`` in encoder/mesh.py (the solver's
-            # ``pin_holder.index``). Otherwise spin/move_by configs are
-            # keyed at control-point indices and the frontend's lookup
-            # ``obj_cfg.get(sampled_idx)`` misses them.
-            if obj.type == "CURVE":
-                from ..curve_rod import map_cp_pins_to_sampled
-                config_indices = map_cp_pins_to_sampled(
-                    obj, _get_pin_indices(obj, vg_name)
-                )
-            else:
-                config_indices = _get_pin_indices(obj, vg_name)
+            config_indices = _config_indices(obj, vg_name)
+            # A weighted Hair Curves pin that pulls does so point by point:
+            # the decoder pulls each point with the pin's strength times its
+            # own weight. A pin that holds exactly has no magnitude to scale,
+            # so its weights only say which points it holds.
+            point_weights = None
+            if obj.type == "CURVES" and pin_item.use_pull:
+                from ..hair_curves import pin_weights
+                weights = pin_weights(obj, vg_name)
+                if weights is not None:
+                    point_weights = dict(
+                        zip(config_indices, weights.tolist(), strict=True)
+                    )
             for vi in config_indices:
+                # Shared group fields, then what is this vertex's own: its
+                # track and its weight.
+                entry = cfg
                 if vi in vert_tracks:
-                    # Shared group fields + this vertex's own track.
-                    pin_config[obj_uuid][vi] = {
-                        **cfg, "pin_anim": {vi: vert_tracks[vi]},
-                    }
-                else:
-                    pin_config[obj_uuid][vi] = cfg
+                    entry = {**entry, "pin_anim": {vi: vert_tracks[vi]}}
+                if point_weights is not None:
+                    entry = {**entry, "pull_weight": point_weights[vi]}
+                pin_config[obj_uuid][vi] = entry
 
     return pin_config

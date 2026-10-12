@@ -338,6 +338,31 @@ unsafe fn install_schwarz<D: Device>(
     Ok(())
 }
 
+/// Bring the multigrid preconditioner's levels up to date for this Newton step.
+///
+/// THE HIERARCHY IS LAID ONCE, BEFORE THE FIRST STEP, AND ONLY THE LEVELS'
+/// VALUES ARE REFRESHED HERE. The grids depend on the mesh and on its authored
+/// positions, which no step changes; the coarse operators and the smoother
+/// blocks are functions of the Newton operator's values and are rebuilt against
+/// each one. A solve that finds no hierarchy fails rather than laying one.
+///
+/// # Safety
+/// The operator's handles must be live for this step, `vertices` must be its
+/// row count, `block_diagonal` must be the diagonal the block-Jacobi
+/// preconditioner inverts and `removed` the step's degree-of-freedom mask.
+unsafe fn refresh_multigrid<D: Device>(
+    device: &mut D,
+    multigrid: &mut super::multigrid::State,
+    operator: &Operator,
+    vertices: usize,
+    block_diagonal: Handle,
+    removed: Handle,
+) -> FatalResult<()> {
+    multigrid.require_built(vertices as u32)?;
+    let empty = multigrid.empty_offsets();
+    super::multigrid::refresh(device, multigrid, operator.rows_view(empty), block_diagonal, removed)
+}
+
 pub unsafe fn advance<D: Device>(
     device: &mut D,
     data: &DataSet,
@@ -442,6 +467,12 @@ pub unsafe fn advance<D: Device>(
     // disagree, which is the one failure this backend must never answer with a
     // plausible frame.
     assert_unsupported_absent(data, param)?;
+
+    // THE COSSERAT FRAMES RETURN TO THE LAST COMMITTED STATE. A no-op after a
+    // committed step, which leaves the two equal, and the rollback of an
+    // abandoned one: the positions restart from `curr`, and the frames the
+    // abandoned Newton loop turned must restart with them.
+    state.cosserat.restore(device)?;
 
     let curr = state.positions.handle();
     // THE MESH TOPOLOGY, taken once. `mesh_face` and `mesh_edge` are staged
@@ -632,9 +663,23 @@ pub unsafe fn advance<D: Device>(
     // builds (here, after a dt cut, and on each continuing iteration) reads
     // that one evaluation, which is what keeps the term out of the Newton
     // system's Hessian. A scene with no field dispatches nothing here.
-    state
-        .field
-        .evaluate(device, curr, state.prop_vertex.handle(), prm.time as f32)?;
+    // The vertex-face table and the faces, as the drag reads them, for the
+    // surface normal a field's Wind Factor weighs by.
+    let surface = (
+        super::state::adjacency_handle(&state.neighbor_vertex_face_index),
+        super::state::adjacency_handle(&state.neighbor_vertex_face_offset),
+        u32::from(state.neighbor_vertex_face_offset.len() != 0),
+        state.mesh_face.handle(),
+    );
+    state.field.evaluate(
+        device,
+        curr,
+        prev,
+        prm.prev_dt,
+        state.prop_vertex.handle(),
+        surface,
+        prm.time as f32,
+    )?;
     compute_target(
         device,
         &prm,
@@ -983,6 +1028,18 @@ pub unsafe fn advance<D: Device>(
         // assembling the elastic (membrane / bending / solid) Hessian and
         // force into the fixed matrix.
         log::mark("advance", "asm_elastic", _asm_elastic.elapsed());
+
+        // STEP B7f. The Cosserat frames' shear, rotational inertia, and bend and
+        // twist, after every elastic layer and before the stitch. The shear's
+        // position half lands in `force` and the fixed matrix as the rod
+        // stretch's does, so it is in the matrix the snapshot below takes. `tr`
+        // is the step ratio the position predictor scales its velocity by, so
+        // the frame predictor extrapolates over the same step.
+        {
+            let _phase = super::phase::start("assemble.cosserat");
+            let tr = if prm.prev_dt > 0.0 { dt / prm.prev_dt } else { 1.0 };
+            super::cosserat::State::assemble(state, device, &mut fixed, dt, tr)?;
+        }
 
         // STEP B10. The cross-stitch layer. IT RUNS AHEAD OF B9 IN THIS FILE,
         // because the stitch blocks must land in the live matrix BEFORE that
@@ -1430,6 +1487,10 @@ pub unsafe fn advance<D: Device>(
             dynamic?;
             fixed_lift?;
             dirichlet::prescribe(device, state)?;
+            // The frames' couplings to a removed vertex, which the matrix pass
+            // above cannot see: lifted onto the frames' right-hand side and
+            // zeroed, against the same targets.
+            super::cosserat::State::reduce_dirichlet(state, device)?;
             // THE CHANNEL CARRIES NO DOCSTRING ABOVE IT, so it is deliberately
             // absent from `session.get.log.names()`, and `asm_dirichlet` is the
             // name it is read under.
@@ -1440,6 +1501,10 @@ pub unsafe fn advance<D: Device>(
             // did not happen.
             log::mark("advance", "asm_dirichlet", _dirichlet.elapsed());
         }
+        // THE FRAMES THIS STEP HOLDS, and the turn a clamped edge's frame takes
+        // with it, read against the same targets the Dirichlet pass above read
+        // and before `target` is reused at STEP B20.
+        super::cosserat::State::prescribe(state, device)?;
         // THE LINEAR SOLVE'S TIMER OPENS HERE: after the Dirichlet scope
         // closes and before anything the solve needs is prepared. That places
         // the block-Jacobi build inside it, the preconditioner being part of
@@ -1480,7 +1545,24 @@ pub unsafe fn advance<D: Device>(
             }),
             fixed: fixed.view(),
             diagonal: diagonal.span(0, 9 * vertices),
+            // THE DIFFERENCE FORM RIDES WITH THE MULTIGRID AND WITH NOTHING ELSE.
+            // Its coarse correction is a vector the plain product cannot
+            // resolve in single precision, so a solve preconditioned by it
+            // applies the operator to differences; every other solve applies it
+            // exactly as it always has. The reduced rigid solve is not offered
+            // the multigrid (`refusal.rs`), so it never sees this either.
+            difference: if (*param).precond == crate::data::PrecondMode::Multigrid {
+                state.multigrid.require_built(vertices as u32)?;
+                Some(state.multigrid.difference())
+            } else {
+                None
+            },
         };
+        // The row sums, after the Dirichlet pass above, which is the last
+        // writer of the operator's blocks, and before anything applies it.
+        if operator.difference.is_some() {
+            operator.sum_rows(device)?;
+        }
         operator.precond_diagonal(device, precond_diagonal.span(0, 9 * vertices))?;
         // THE INVERSION IS A DISPATCH, not a host walk. The loop over the rows
         // is the kernel's, and so is the verdict, which comes back through the
@@ -1522,7 +1604,28 @@ pub unsafe fn advance<D: Device>(
         // positions the frames were built at, runs `Q M Q z = Q (b - M q)`, and
         // verifies the solved correction carries no forbidden angular
         // increment.
-        let report = if pdrd_bodies > 0 {
+        let report = if state.cosserat.slots > 0 {
+            // THE AUGMENTED SOLVE, which a scene with Cosserat frames takes
+            // whole: the frames couple to their vertices through the shear, so
+            // the vertex rows and the frame rows are one system. PDRD bodies, a
+            // lock and the Schwarz preconditioner are refused alongside it at
+            // `initialize()`, so none of the branches below has to compose with it.
+            let frames = state.cosserat.blocks(removed > 0);
+            pcg::solve_cosserat(
+                device,
+                &operator,
+                &frames,
+                state.prop_edge.handle(),
+                precond_diagonal.span(0, 9 * vertices),
+                inverse.span(0, 9 * vertices),
+                force.handle(),
+                dx.handle(),
+                work,
+                &mut state.pcg_cosserat,
+                prm.cg_tol,
+                prm.cg_max_iter,
+            )?
+        } else if pdrd_bodies > 0 {
             // THE REDUCED SOLVE, taken whenever
             // the scene carries a body. A PDRD body's vertices own no per-vertex
             // degrees of freedom, so the whole system, cloth rows included,
@@ -1766,6 +1869,7 @@ pub unsafe fn advance<D: Device>(
                 dof_mask,
                 eval_x,
                 schwarz,
+                multigrid,
                 ..
             } = state;
             let rows = super::lock::RowInputs {
@@ -1794,11 +1898,23 @@ pub unsafe fn advance<D: Device>(
             // hierarchy is installed before the locked branch is taken, so a
             // locked scene that set `precond = schwarz` gets Schwarz rather
             // than block-Jacobi under a Schwarz label.
-            let sweep = if (*param).precond == crate::data::PrecondMode::Schwarz {
-                install_schwarz(device, schwarz, &operator, vertices, param)?;
-                Some(&mut *schwarz)
-            } else {
-                None
+            let sweep = match (*param).precond {
+                crate::data::PrecondMode::Schwarz => {
+                    install_schwarz(device, schwarz, &operator, vertices, param)?;
+                    Some(pcg::Sweep::Schwarz(&mut *schwarz))
+                }
+                crate::data::PrecondMode::Multigrid => {
+                    refresh_multigrid(
+                        device,
+                        multigrid,
+                        &operator,
+                        vertices,
+                        precond_diagonal.span(0, 9 * vertices),
+                        dof_mask.handle(),
+                    )?;
+                    Some(pcg::Sweep::Multigrid(&mut *multigrid))
+                }
+                crate::data::PrecondMode::BlockJacobi => None,
             };
             super::dump_linsys::maybe_dump(device, &operator, force.handle(), eval_x.handle(), vertices)?;
             let solved = pcg::solve_locked(
@@ -1866,11 +1982,23 @@ pub unsafe fn advance<D: Device>(
             // quadratic in the dense-block cap and the partition is a
             // sequential host sweep, so paying either per Newton step would
             // cost more than the preconditioner saves.
-            let sweep = if (*param).precond == crate::data::PrecondMode::Schwarz {
-                install_schwarz(device, &mut state.schwarz, &operator, vertices, param)?;
-                Some(&mut state.schwarz)
-            } else {
-                None
+            let sweep = match (*param).precond {
+                crate::data::PrecondMode::Schwarz => {
+                    install_schwarz(device, &mut state.schwarz, &operator, vertices, param)?;
+                    Some(pcg::Sweep::Schwarz(&mut state.schwarz))
+                }
+                crate::data::PrecondMode::Multigrid => {
+                    refresh_multigrid(
+                        device,
+                        &mut state.multigrid,
+                        &operator,
+                        vertices,
+                        precond_diagonal.span(0, 9 * vertices),
+                        state.dof_mask.handle(),
+                    )?;
+                    Some(pcg::Sweep::Multigrid(&mut state.multigrid))
+                }
+                crate::data::PrecondMode::BlockJacobi => None,
             };
             super::dump_linsys::maybe_dump(device, &operator, force.handle(), eval_x.handle(), vertices)?;
             pcg::solve(
@@ -2073,7 +2201,24 @@ pub unsafe fn advance<D: Device>(
         // decide whether the search direction must be rescaled before
         // the line search.
         log::mark("advance", "max_dx", max_dx as f64);
-        let toi_recale = (prm.max_dx / max_dx).min(1.0);
+        let mut toi_recale = (prm.max_dx / max_dx).min(1.0);
+        // THE FRAMES' TWIN OF `max-dx`, folded into the same factor because
+        // positions and frames are one Newton direction and must move by one
+        // fraction of it. `MAX_FRAME_TURN` says why the bound is a quarter turn.
+        if state.cosserat.slots > 0 {
+            let turn = super::cosserat::State::largest_turn(state, device)?;
+            if !turn.is_finite() {
+                return Err(Fatal::invariant(format!(
+                    "solver driver: the solved Newton direction turns a Cosserat frame by \
+                     {turn} radians. The augmented solve returned a non-finite frame step, \
+                     which is an assembly defect upstream of it"
+                )));
+            }
+            if turn > super::cosserat::MAX_FRAME_TURN {
+                toi_recale = toi_recale.min(super::cosserat::MAX_FRAME_TURN / turn);
+            }
+        }
+        let toi_recale = toi_recale;
         // Name: Search Direction Rescale Factor
         // Format: list[(time, ratio)]
         // Description:
@@ -2420,6 +2565,14 @@ pub unsafe fn advance<D: Device>(
             seam_arena_count: 0,
         };
         device.launch("step.position_accept", &accept_args, vertices as u32)?;
+        // THE FRAMES TAKE THE SAME FRACTION, `toi_recale * toi`, so frames and
+        // nodes move in lockstep: `R <- exp(-scale dtheta) R` beside
+        // `x -= scale dx`. A frame is not collidable, so no sweep bounds it
+        // beyond the one that bounded the positions.
+        {
+            let (before, after) = (state.target.handle(), state.eval_x.handle());
+            super::cosserat::State::advance(state, device, toi_recale * toi, before, after)?;
+        }
 
         // STEP B32. THE PDRD RIGIDIFY COMMIT, and it is the reason a body
         // stays a body across frames rather than only within a step.
@@ -2821,6 +2974,10 @@ pub unsafe fn advance<D: Device>(
         // arrays `backend.rs` reads.
         state.positions_prev.copy_from(device, &state.positions)?;
         state.positions.copy_from(device, &state.eval_x)?;
+        // The frames commit with the positions: a held end driven by
+        // `cosserat-end-twist-rate` turns by its rate over this step's `dt`, and
+        // the two-deep history the rotational inertia reads moves one step.
+        state.cosserat.commit(device, dt)?;
 
         // STEP C6. THE SAND SPIN INTEGRATE, on the pose just committed, which
         // is where the committed pose makes it meaningful. It consumes the CONVERGED friction

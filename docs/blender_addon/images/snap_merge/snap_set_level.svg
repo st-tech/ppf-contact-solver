@@ -69,7 +69,7 @@
   <text x="500" y="52" text-anchor="middle" class="subtitle">Seam stitching pairs every A-edge vertex already within the contact gap of a B-edge vertex, and nothing else.</text>
 
   <!-- ==============================================
-       Left panel: edges aligned (the happy path)
+       Left panel: edges aligned (the expected result)
        ============================================== -->
   <rect x="20" y="72" width="470" height="430" class="panel-ok" rx="6" />
   <text x="255" y="100" text-anchor="middle" class="col-title">Edges aligned</text>

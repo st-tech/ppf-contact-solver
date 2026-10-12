@@ -81,6 +81,7 @@ from .events import (
     StopServerRequested,
     TerminateRequested,
     UploadPipelineComplete,
+    ViolationsDismissed,
 )
 from .effects import (
     DoClearAnimation,
@@ -224,6 +225,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
             cuda_device_uuid=device_uuid,
             device=compute_device,
             gpu_backend=gpu_backend,
+            idle_timeout=idle_timeout,
         ) if state.phase == Phase.ONLINE and not state.busy:
             return (
                 replace(state, server=Server.LAUNCHING),
@@ -232,6 +234,7 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
                     cuda_device_uuid=device_uuid,
                     device=compute_device,
                     gpu_backend=gpu_backend,
+                    idle_timeout=idle_timeout,
                 )],
             )
 
@@ -681,6 +684,20 @@ def transition(state: AppState, event: Event) -> tuple[AppState, list[Effect]]:
         case ProgressUpdated(progress=p, traffic=t):
             return replace(state, progress=p, traffic=t), []
 
+        # ── The violation overlay ──────────────────────────
+        case ViolationsDismissed():
+            # Keyed on the upload the violations belong to, because the
+            # server reports them again on every response while it holds
+            # that upload (see `_interpret_response`).
+            return (
+                replace(
+                    state,
+                    violations=[],
+                    violations_dismissed_for=state.server_upload_id,
+                ),
+                [DoRedrawUI()],
+            )
+
         # ── Errors ─────────────────────────────────────────
         case ErrorOccurred(error=e, source=src):
             msg = f"[{src}] {e}" if src else e
@@ -825,6 +842,11 @@ def _interpret_response(
     # Console shows always describe the same failure.
     crash_kind = str(r.get("crash_kind", "") or "")
     violations = r.get("violations", [])
+    # An upload whose violations the artist answered is mirrored without
+    # them. The server cannot know the scene moved: it holds the upload it
+    # refused, and says so until the next one arrives under another id.
+    if server_upload_id and server_upload_id == state.violations_dismissed_for:
+        violations = []
     # Allow Existing Intersections: the server holds what its latest build
     # exempted and sends it on every response, so the client mirrors it. An
     # unchanged list keeps its previous object, which is what the overlay keys
@@ -961,18 +983,38 @@ def _interpret_response(
     #      runs). Promote to FAILED so the BUILDING-terminal-set in
     #      ``ServerPolled`` clears activity and the user can fix the
     #      scene and re-upload.
+    #
+    # A VERDICT IS READ THE SAME WAY EVERY TIME IT IS REPORTED. The server
+    # repeats a refused build on every status response until an upload
+    # replaces the payload, and responses keep arriving after this client has
+    # stopped waiting: the ping polls an idle connection, and a poll already
+    # in flight lands behind the one that ended the build. Path 2 therefore
+    # also holds for a response about the upload this client has already read
+    # as failed. Keyed on ``activity`` alone, the first such response reads
+    # FAILED and clears the activity, and the next one, identical, reads
+    # NO_BUILD: the panel falls back to waiting for a build that was refused,
+    # and a caller waiting for the verdict never sees it.
     is_terminal_with_error = solver in (
         Solver.READY, Solver.RESUMABLE, Solver.FAILED,
     )
-    is_build_failure = (
-        solver == Solver.NO_BUILD and state.activity == Activity.BUILDING
+    is_build_failure = solver == Solver.NO_BUILD and (
+        state.activity == Activity.BUILDING
+        or (
+            state.solver == Solver.FAILED
+            and server_upload_id == state.server_upload_id
+        )
     )
     if error_msg and (is_terminal_with_error or is_build_failure):
         solver = Solver.FAILED
         # Raw lines (no prefix) for the terminal / build-failure path; the
         # bare-line output here is deliberate, unlike the "Remote: "-tagged
-        # out-of-band errors elsewhere.
-        effects.extend(_remote_log_lines(error_msg, prefix=""))
+        # out-of-band errors elsewhere. Logged when the verdict is reached,
+        # not on each response that repeats it: the Console appends whatever
+        # it is given, so a failure reported again by every ping would be
+        # written there again every ping.
+        if not (state.solver == Solver.FAILED
+                and error_msg == state.server_error):
+            effects.extend(_remote_log_lines(error_msg, prefix=""))
     # Log newly-raised server errors even in non-terminal solver states
     # (e.g. NO_BUILD without an active build, ping race window) so they
     # surface in the Console panel, not only on the top-of-panel ERROR

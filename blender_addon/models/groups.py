@@ -89,6 +89,10 @@ OBJECT_GROUP_DEFAULTS = {
     "use_group_bounding_box_diagonal": True,
     "contact_gap_rat": 0.001,
     "contact_offset_rat": 0.0,
+    # Percentage of the room an object's own mesh leaves between neighbors
+    # that its contact gap may reach. The encoder divides by 100 for the
+    # solver wire value.
+    "contact_gap_limit_percent": 25.0,
     # Solid-specific parameters
     "shrink": 1.0,
     # PDRD-specific parameter: volumetric density. The body moves
@@ -312,6 +316,20 @@ def sand_radius_conflict(group):
 # The SHELL model identifier the Model picker no longer offers. Its item keeps
 # slot 0 of ``ObjectGroup.shell_model`` with an empty name, so a .blend or a
 # material profile saved with it still loads it as this identifier.
+# The group types that carry a local gap limit: the ones whose objects can be
+# in contact with themselves. A STATIC collider and a PDRD body form no pair
+# among their own elements, so nothing bounds their gap, and a SAND grain has
+# no mesh to measure. The limit keeps a mesh's own neighbors out of contact at
+# rest, the contact locking of Gomez-Nogales et al., "Unlocking Thickness
+# Modeling for Codimensional Contact Simulation" (arXiv:2510.10256).
+CONTACT_GAP_LIMIT_TYPES = ("SOLID", "SHELL", "ROD")
+
+
+def contact_gap_limit_fraction(group) -> float:
+    """``group``'s local gap limit as the fraction the solver takes."""
+    return float(group.contact_gap_limit_percent) / 100.0
+
+
 WITHDRAWN_SHELL_MODEL = "STABLE_NEOHOOKEAN"
 
 
@@ -348,9 +366,45 @@ def get_vertex_group_items(self, _):
                 if identifier not in names_seen:
                     items.append((identifier, name, description))
                     names_seen.add(identifier)
+        elif obj and obj.type == "CURVES":
+            # A Hair Curves object has no vertex groups: its pins are its
+            # boolean and float point attributes, plus the roots, which are
+            # derived.
+            from ..core.hair_curves import ROOTS_PIN_NAME, pin_names
+            for pin_name in pin_names(obj):
+                name = f"[{obj.name}][{pin_name}]"
+                identifier = encode_vertex_group_identifier(obj.name, pin_name)
+                description = (
+                    f"First segment of every curve of {obj.name}"
+                    if pin_name == ROOTS_PIN_NAME
+                    and obj.data.attributes.get(pin_name) is None
+                    else f"Point attribute {pin_name} of {obj.name}"
+                )
+                if identifier not in names_seen:
+                    items.append((identifier, name, description))
+                    names_seen.add(identifier)
     if not items:
         items.append(("NONE", "None", "No vertex groups found"))
     return items
+
+
+def pin_is_plain(group, pin_item) -> bool:
+    """Whether `pin_item` holds its vertices exactly and has nothing else to
+    tell the decoder: no duration, no pull, no operation and no allowance.
+
+    Such a pin emits no settings, and a vertex with none is one the decoder
+    holds exactly, so the encoder has to take its vertices out of what the
+    pins listed before it emitted for the later pin to win them. A SOLID pin
+    is never plain: it always carries the threshold its hard and soft parts
+    are split at.
+    """
+    return (
+        group.object_type != "SOLID"
+        and not pin_item.use_pin_duration
+        and not pin_item.use_pull
+        and len(pin_item.operations) == 0
+        and not getattr(pin_item, "allow_intersection", False)
+    )
 
 
 def encode_vertex_group_identifier(obj_name: str, vg_name: str) -> str:
@@ -411,6 +465,46 @@ def iterate_active_object_groups(scene):
 
 # Object types that participate in the dynamics solve (STATIC is excluded).
 DYNAMIC_OBJECT_TYPES = ("SOLID", "SHELL", "ROD", "PDRD", "SAND")
+
+
+# The Preconditioner picker's identifiers (``State.precond``) and the name the
+# solver takes for each. The encoder ships the value from this table and the
+# MCP tool accepts its keys, so the picker, the tool and the solver cannot
+# name different sets.
+PRECOND_SOLVER_NAMES = {
+    "BLOCK_JACOBI": "block-jacobi",
+    "SCHWARZ": "schwarz",
+    "MULTIGRID": "multigrid",
+}
+
+
+def multigrid_refusal(scene, state):
+    """Why *scene* cannot be transferred with the Multigrid preconditioner, or None.
+
+    The solver does not offer the multigrid beside a rigid body and stops
+    such a run when it starts, after the transfer and the build. A scene
+    that would meet that is refused at encode with this sentence instead,
+    and the panel labels the picker whenever this answers, so both ask one
+    predicate. A PDRD group with no included object sends the solver no
+    body and is not counted.
+    """
+    if state.precond != "MULTIGRID":
+        return None
+    rigid = [
+        group.name
+        for group in iterate_active_object_groups(scene)
+        if group.object_type == "PDRD"
+        and any(assigned.included for assigned in group.assigned_objects)
+    ]
+    if not rigid:
+        return None
+    names = ", ".join(f"'{name}'" for name in rigid)
+    return (
+        "The Multigrid preconditioner does not solve PDRD groups, and this "
+        f"scene has {names}. Choose Block Jacobi or Schwarz as the "
+        "Preconditioner under Linear System Solver, or delete the PDRD group "
+        "or uncheck Include on its objects."
+    )
 
 
 def has_simulatable_dynamics(scene) -> bool:

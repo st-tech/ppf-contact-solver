@@ -95,17 +95,26 @@ pub fn maybe_dump<D: Device>(
         size: n as u32,
         allocated: n as u32,
     };
-    let mut pass = |device: &mut D, offset: Handle, index: Handle, value: Handle| -> FatalResult<()> {
+    // The handles are taken per call rather than captured, because the split
+    // below reads two of these buffers back between the two passes.
+    let pass = |device: &mut D,
+                    offset: Handle,
+                    index: Handle,
+                    value: Handle,
+                    cursor: Handle,
+                    out: [Handle; 3],
+                    diagonal: Handle|
+     -> FatalResult<()> {
         let args = DumpLinsysRowToCooArgs {
             row_begin: offset,
             row_end: one_on(offset),
             column: index,
             block: value,
-            cursor: cursor.handle(),
-            out_row: out_row.handle(),
-            out_column: out_column.handle(),
-            out_block: out_block.handle(),
-            diagonal: diagonal.handle(),
+            cursor,
+            out_row: out[0],
+            out_column: out[1],
+            out_block: out[2],
+            diagonal,
             capacity: capacity as u32,
             count: n as u32,
             seam_arena_count: 0,
@@ -115,10 +124,37 @@ pub fn maybe_dump<D: Device>(
         unsafe { device.launch("step.dump_linsys", &args, n as u32) }?;
         Ok(())
     };
+    // THE CONTACT MATRIX'S OWN SHARE, read between the two passes. The cursor
+    // after the dynamic pass counts its records, which are therefore the
+    // leading ones of the file, and the diagonal at that point is `C` plus the
+    // contact matrix's diagonal blocks. A preconditioner study needs the three
+    // terms apart, and the file's own layout sums them.
+    let block_diagonal: Vec<f32> = {
+        diagonal.download(device)?;
+        diagonal.host()[..9 * n].to_vec()
+    };
     if let Some(dynamic) = operator.dynamic.as_ref() {
-        pass(device, dynamic.offset, dynamic.index, dynamic.value)?;
+        let out = [out_row.handle(), out_column.handle(), out_block.handle()];
+        pass(device, dynamic.offset, dynamic.index, dynamic.value, cursor.handle(), out, diagonal.handle())?;
     }
-    pass(device, operator.fixed.offset, operator.fixed.index, operator.fixed.value)?;
+    cursor.download(device)?;
+    let dynamic_records = (cursor.host()[0] as usize).min(capacity);
+    let contact_diagonal: Vec<f32> = {
+        diagonal.download(device)?;
+        diagonal.host()[..9 * n].to_vec()
+    };
+    {
+        let out = [out_row.handle(), out_column.handle(), out_block.handle()];
+        pass(
+            device,
+            operator.fixed.offset,
+            operator.fixed.index,
+            operator.fixed.value,
+            cursor.handle(),
+            out,
+            diagonal.handle(),
+        )?;
+    }
 
     cursor.download(device)?;
     out_row.download(device)?;
@@ -158,6 +194,14 @@ pub fn maybe_dump<D: Device>(
         xw.write_all(&v.to_le_bytes()).expect("write");
     }
     xw.flush().expect("flush");
+    // The split: how many leading records are the contact matrix's, the block
+    // diagonal `C` alone, and `C` plus the contact matrix's diagonal blocks.
+    let spath = format!("{dir}/split_{solve}.bin");
+    let mut sw = std::io::BufWriter::new(std::fs::File::create(&spath).expect("create split"));
+    put_u32(&mut sw, dynamic_records as u32);
+    put_f32s(&mut sw, &block_diagonal);
+    put_f32s(&mut sw, &contact_diagonal);
+    sw.flush().expect("flush");
     eprintln!("[dump_linsys] wrote {path}: nrow={n} n_offdiag={n_off} (solve #{solve})");
     std::process::exit(0);
 }

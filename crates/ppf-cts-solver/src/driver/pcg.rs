@@ -943,6 +943,41 @@ impl Workspace {
     }
 }
 
+/// A preconditioner that is a pass of its own shape rather than one block per
+/// row, with the state that pass reads.
+///
+/// `None` in a solve's argument is block-Jacobi, which is fused into the
+/// iteration's own row pass and so is not one of these.
+pub enum Sweep<'a> {
+    /// Multilevel additive Schwarz over the aggregates the driver built.
+    Schwarz(&'a mut super::schwarz::State),
+    /// One V-cycle of the geometric multigrid.
+    Multigrid(&'a mut super::multigrid::State),
+}
+
+impl Sweep<'_> {
+    /// Append `z = M^-1 r` to a region.
+    ///
+    /// # Safety
+    /// The state must have been brought up to date against `op`, and `r` and
+    /// `z` must outlive the dispatches this appends.
+    unsafe fn encode(
+        &mut self,
+        encoder: &mut dyn Encoder,
+        op: &Operator,
+        r: ppf_cts_compute::Handle,
+        z: ppf_cts_compute::Handle,
+        rows: u32,
+    ) -> Result<(), Fault> {
+        match self {
+            Sweep::Schwarz(state) => {
+                super::schwarz::encode_whole_sweep(encoder, state, r, z, rows)
+            }
+            Sweep::Multigrid(state) => super::multigrid::encode_cycle(encoder, state, op, r, z),
+        }
+    }
+}
+
 /// `z = M^-1 r`, one 3x3 block per row.
 ///
 /// # Safety
@@ -1033,11 +1068,11 @@ pub fn solve<D: Device>(
     // THE PRECONDITIONER, when it is not the block-diagonal one.
     //
     // `None` is block-Jacobi, the default, and stays the fast path: one
-    // dispatch of `mat3_mul` per row IS the block-diagonal apply. `Some` is an
-    // additive Schwarz sweep, three dispatches over the domains the caller
-    // built. Both are pushed onto the same encoder, so an iteration still
-    // costs one submission either way.
-    mut schwarz: Option<&mut super::schwarz::State>,
+    // dispatch of `mat3_mul` per row IS the block-diagonal apply. `Some` is a
+    // pass of its own shape, an additive Schwarz sweep or a multigrid cycle,
+    // over the state the caller built. Each is pushed onto the same encoder, so
+    // an iteration still costs one submission whichever runs.
+    mut sweep: Option<Sweep<'_>>,
     tolerance: f32,
     max_iterations: u32,
 ) -> Result<Report, Fault> {
@@ -1109,12 +1144,11 @@ pub fn solve<D: Device>(
                 // is measured against. It is the SEEDED residual and never
                 // ||b||_1; see the module doc.
                 encode_fold(encoder, r_h, n, fold, err_out, true)?;
-                match schwarz.as_deref_mut() {
+                match sweep.as_mut() {
                     // THE WHOLE SWEEP, fine level and every coarse level,
                     // pushed onto this one encoder so an iteration still costs
                     // one submission whichever preconditioner runs.
-                    Some(state) => super::schwarz::encode_whole_sweep(
-                        encoder, state, r_h, z_h, rows)?,
+                    Some(state) => state.encode(encoder, op, r_h, z_h, rows)?,
                     None => encode_preconditioner(
                         encoder, inverse_diagonal, r_h, z_h, rows)?,
                 }
@@ -1315,17 +1349,16 @@ pub fn solve<D: Device>(
                 // x += alpha p and r -= alpha Ap. A breakdown leaves `alpha` at
                 // zero, so both updates are exact no-ops and the iterate the
                 // report returns is the one the guard fired at.
-                match schwarz.as_deref_mut() {
-                    // THE SCHWARZ PATH STAYS SPLIT. Its sweep is a multi-level
-                    // pass of its own shape, not a per-row apply, so there is
-                    // nothing for the fused row to absorb and the four
-                    // dispatches below are what it costs.
+                match sweep.as_mut() {
+                    // A SWEEP STAYS SPLIT. It is a multi-level pass of its own
+                    // shape, not a per-row apply, so there is nothing for the
+                    // fused row to absorb and the dispatches below are what it
+                    // costs.
                     Some(state) => {
                         encode_add_scaled_indirect(encoder, p_h, x, alpha_slot, 1.0, n)?;
                         encode_add_scaled_indirect(
                             encoder, ap_h, r_h, alpha_slot, -1.0, n)?;
-                        super::schwarz::encode_whole_sweep(
-                            encoder, state, r_h, z_h, rows)?;
+                        state.encode(encoder, op, r_h, z_h, rows)?;
                         terms.encode_fill(encoder, r_h, z_h, n)?;
                     }
                     // ONE PASS OVER THE ROW for the iterate, the residual, the
@@ -1375,8 +1408,8 @@ pub fn solve<D: Device>(
                 // dispatch and the merge begins above it. When that one level
                 // is the whole residual fold there is nothing left to merge
                 // and `r . z` folds by itself.
-                match schwarz.as_deref_mut() {
-                    // THE SCHWARZ PATH KEEPS THE CHAIN, because its sweep is a
+                match sweep.as_mut() {
+                    // A SWEEP KEEPS THE CHAIN, because it is a
                     // pass of its own shape and its row is not the fused one:
                     // `terms.encode_fill` still writes per-ROW arrays there.
                     Some(_) => {
@@ -1852,6 +1885,25 @@ impl DotTerms<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unit_scale_is_an_exact_power_of_two_that_brings_a_norm_into_one_to_two() {
+        for norm in [0.65f32, 1.0, 1.5, 1.99, 2.0, 3.0e-15, 7.0e-30, 1.0e-37, 5.0e12, 1.0e30] {
+            let scale = unit_scale(norm);
+            assert_eq!(
+                scale.to_bits() & 0x007f_ffff,
+                0,
+                "the scale {scale} for {norm} is not a power of two"
+            );
+            let scaled = norm * scale;
+            assert!((1.0..2.0).contains(&scaled), "{norm} scaled by {scale} is {scaled}");
+            assert_eq!(scaled / scale, norm, "scaling {norm} by {scale} lost a bit");
+        }
+        // Nothing can be rescaled into range: leave these as they are.
+        for norm in [0.0f32, 1.0e-40, f32::INFINITY, f32::NAN, 3.0e38] {
+            assert_eq!(unit_scale(norm), 1.0, "{norm}");
+        }
+    }
     use crate::driver::launch::host_device;
     use crate::driver::spmv;
 
@@ -2149,6 +2201,7 @@ mod tests {
                 dynamic: None,
                 fixed: resident.view(),
                 diagonal,
+                difference: None,
             }
         }
     }
@@ -3411,7 +3464,7 @@ pub unsafe fn solve_locked<D: Device>(
     // `precond = schwarz` with a label rather than a preconditioner, which is
     // the failure this seam is most exposed to: a preconditioner that is
     // compiled, correct and reached by nothing.
-    mut schwarz: Option<&mut super::schwarz::State>,
+    mut sweep: Option<Sweep<'_>>,
     tolerance: f32,
     max_iterations: u32,
 ) -> super::scene::FatalResult<Report> {
@@ -3484,9 +3537,8 @@ pub unsafe fn solve_locked<D: Device>(
     device.run("pcg.locked.precondition", |encoder| {
         // Safety: every buffer is borrowed for the whole call.
         unsafe {
-            match schwarz.as_deref_mut() {
-                Some(state) => super::schwarz::encode_whole_sweep(
-                    encoder, state, r.handle(), z.handle(), rows),
+            match sweep.as_mut() {
+                Some(state) => state.encode(encoder, op, r.handle(), z.handle(), rows),
                 None => encode_preconditioner(
                     encoder, inverse_diagonal, r.handle(), z.handle(), rows),
             }
@@ -3623,9 +3675,8 @@ pub unsafe fn solve_locked<D: Device>(
         device.run("pcg.locked.precondition", |encoder| {
             // Safety: as above.
             unsafe {
-                match schwarz.as_deref_mut() {
-                    Some(state) => super::schwarz::encode_whole_sweep(
-                        encoder, state, r.handle(), z.handle(), rows),
+                match sweep.as_mut() {
+                    Some(state) => state.encode(encoder, op, r.handle(), z.handle(), rows),
                     None => encode_preconditioner(
                         encoder, inverse_diagonal, r.handle(), z.handle(), rows),
                 }
@@ -4095,4 +4146,549 @@ pub unsafe fn solve_rigid<D: Device>(
 
     let _ = work;
     finish!(Outcome::MaxIterations, max_iterations, 1.0);
+}
+
+/// The vectors the Cosserat augmented solve needs beside [`Workspace`].
+///
+/// SIZED ONCE FOR THE RUN, as every workspace here is. The augmented vector is
+/// the vertex rows, three per vertex exactly as the plain solve lays them out,
+/// followed by three per Cosserat frame; `theta_base` in the kernels is the
+/// offset of the second block.
+#[derive(Default)]
+pub struct CosseratWorkspace {
+    b: Buffer<f32>,
+    x: Buffer<f32>,
+    r: Buffer<f32>,
+    z: Buffer<f32>,
+    p: Buffer<f32>,
+    ap: Buffer<f32>,
+    /// THE DOT TERMS OF THE AUGMENTED VECTOR, one per row of three, so
+    /// `rows + slots` long. The main workspace's pair is sized to the vertex
+    /// rows, and `DotTerms::fill` takes its extent from its buffer's length, so
+    /// borrowing that pair would silently drop the frame rows from every dot.
+    product: ReadbackBuffer<f32>,
+    magnitude: ReadbackBuffer<f32>,
+    /// The fold's levels, sized for the longest fold this solve makes, which is
+    /// the one over the whole augmented vector.
+    fold: Buffer<f32>,
+    /// The two group norms: the vertex block, then the frame block.
+    group_norm: ReadbackBuffer<f32>,
+    /// THE COARSE SPACE'S OWN VECTORS. `coarse_in` is an augmented vector whose
+    /// vertex rows are zero for the run and whose frame rows take the roll
+    /// vectors at each solve, so the operator applied to it is the frame block
+    /// applied to the roll; `coarse_out` receives that product.
+    coarse_in: Buffer<f32>,
+    coarse_out: Buffer<f32>,
+    /// Per chain, `e . K e`, formed once per solve, and `e . r`, per application.
+    coarse_energy: Buffer<f32>,
+    coarse_load: Buffer<f32>,
+    /// Per slot, its frame's residual in force units, folded for the norm.
+    torque_scaled: Buffer<f32>,
+}
+
+impl CosseratWorkspace {
+    pub fn allocate<D: Device>(
+        &mut self,
+        device: &mut D,
+        rows: usize,
+        slots: usize,
+        chains: usize,
+    ) -> Result<(), Fault> {
+        let dim = 3 * (rows + slots);
+        for (buffer, label) in [
+            (&mut self.b, "cosserat.cg.b"),
+            (&mut self.x, "cosserat.cg.x"),
+            (&mut self.r, "cosserat.cg.r"),
+            (&mut self.z, "cosserat.cg.z"),
+            (&mut self.p, "cosserat.cg.p"),
+            (&mut self.ap, "cosserat.cg.ap"),
+        ] {
+            buffer.size(device, dim, AllocLabel(label))?;
+        }
+        self.product
+            .size(device, rows + slots, AllocLabel("cosserat.cg.product"))?;
+        self.magnitude
+            .size(device, rows + slots, AllocLabel("cosserat.cg.magnitude"))?;
+        self.fold
+            .size(device, fold_scratch_len(dim).max(1), AllocLabel("cosserat.cg.fold"))?;
+        self.group_norm
+            .size(device, 2, AllocLabel("cosserat.cg.group_norm"))?;
+        self.coarse_in.size(device, dim, AllocLabel("cosserat.cg.coarse_in"))?;
+        device.fill_zero(self.coarse_in.handle(), dim * size_of::<f32>())?;
+        self.coarse_out.size(device, dim, AllocLabel("cosserat.cg.coarse_out"))?;
+        self.coarse_energy
+            .size(device, chains.max(1), AllocLabel("cosserat.cg.coarse_energy"))?;
+        self.coarse_load
+            .size(device, chains.max(1), AllocLabel("cosserat.cg.coarse_load"))?;
+        self.torque_scaled
+            .size(device, slots, AllocLabel("cosserat.cg.torque_scaled"))?;
+        Ok(())
+    }
+}
+
+/// The power of two that brings `norm` into `[1, 2)`, or `1.0` when no power of
+/// two can: zero, a denormal, an infinity and a NaN are left as they are.
+///
+/// PCG is homogeneous in its right-hand side. Scaling the initial residual by
+/// `s` scales every vector the iteration forms by `s` and leaves every ratio it
+/// takes (`alpha`, `beta`, the curvature verdict's slack, the relative
+/// residual) as it was. A power of two is exact in binary floating point, so
+/// the scaled iteration reproduces the unscaled one bit for bit wherever the
+/// unscaled one stays in the normal range, and it is the scaled one that stays
+/// there when the residual is tiny: a Newton step that is already converged
+/// leaves a residual near 1e-15, its `r . z` falls to 1e-38 and below, and a
+/// device that flushes denormals to zero reads the next `r . z` as exactly zero,
+/// which the iteration cannot tell from a preconditioner that is not positive.
+fn unit_scale(norm: f32) -> f32 {
+    let exponent = ((norm.to_bits() >> 23) & 0xff) as i32;
+    // Biased exponent 0 is zero or a denormal, 255 an infinity or a NaN.
+    if exponent == 0 || exponent == 255 {
+        return 1.0;
+    }
+    // 2^-(exponent - 127) has the biased exponent 254 - exponent, which is a
+    // normal float for 1 <= 254 - exponent <= 254.
+    let biased = 254 - exponent;
+    if biased < 1 {
+        return 1.0;
+    }
+    f32::from_bits((biased as u32) << 23)
+}
+
+
+/// PCG on the AUGMENTED system of a scene with Cosserat rods: the vertex rows
+/// and one three-row block per frame, solved together.
+///
+/// ```text
+/// [ A      H_xt ] [dx]   [force   ]
+/// [ H_xt^T H_tt ] [dt] = [gradient]
+/// ```
+///
+/// `A` is the assembled per-vertex operator, applied as the plain solve applies
+/// it; the couplings `H_xt` and the frame blocks `H_tt` are the per-slot and
+/// per-site 3x3s `driver::cosserat` assembled, applied by their own rows. The
+/// preconditioner is an additive Schwarz over OVERLAPPING blocks, each Cosserat
+/// edge's two vertices and its frame factored together, with block-Jacobi on
+/// every vertex no edge covers and each chain's rigid roll as a coarse space
+/// (`kernels/energy/model/cosserat.kernel.cpp` says why the shear needs it).
+///
+/// THE TOLERANCE IS MEASURED IN ONE UNIT: the vertex rows' L1 norm plus each
+/// frame's torque residual over its edge's length, the force that balances it
+/// at the edge's vertices, against the same at the seed. A force and a torque
+/// are not comparable as they stand, and measuring each block against its own
+/// seed instead fails where the frames start at rest: their seeded residual is
+/// round-off, and a tolerance relative to it cannot be met.
+///
+/// SEEDED FROM THE CALLER'S `x` on the vertex rows, which carries each
+/// prescribed row's exact Dirichlet correction, and from `frames.prescribed` on
+/// the frame rows, which carries a clamped frame's turn and is zero elsewhere.
+/// A held frame's rows are projected out of every residual, operator output and
+/// preconditioned residual, so its step stays at its seed, and the residual is
+/// formed against the seed, which lifts a clamp's turn into the rows it couples
+/// to as the vertex rows' seed lifts a moving pin.
+///
+/// THE CURVATURE VERDICT IS THE LOCKED SOLVE'S: the Cauchy-Schwarz surrogate
+/// as the round-off scale, so a curvature within the noise of its own sum
+/// truncates and one beyond it is reported as an indefinite matrix.
+///
+/// On return `x` holds the vertex half of the direction and `frames.step` the
+/// frame half.
+///
+/// # Safety
+/// Every handle must name a live allocation sized for the scene, and the
+/// preconditioner must have been built against the matrices `op` applies.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn solve_cosserat<D: Device>(
+    device: &mut D,
+    op: &Operator,
+    frames: &super::cosserat::Blocks,
+    edge_prop: ppf_cts_compute::Handle,
+    vertex_diagonal: ppf_cts_compute::Handle,
+    inverse_diagonal: ppf_cts_compute::Handle,
+    b: ppf_cts_compute::Handle,
+    x: ppf_cts_compute::Handle,
+    work: &mut Workspace,
+    aug: &mut CosseratWorkspace,
+    tolerance: f32,
+    max_iterations: u32,
+) -> super::scene::FatalResult<Report> {
+    use super::kernels::{
+        CosseratApplySiteRowArgs, CosseratApplySlotRowArgs, CosseratChainAddRowArgs,
+        CosseratChainDotRowArgs, CosseratProjectFixedRowArgs, CosseratRollRowArgs,
+        CosseratSchwarzApplyRowArgs, CosseratSchwarzFactorRowArgs, CosseratTorqueScaleRowArgs,
+        CosseratVertexPrecondRowArgs,
+    };
+    let rows = op.rows();
+    let slots = frames.slots;
+    let nx = 3 * rows as usize;
+    let nt = 3 * slots as usize;
+    let dim = nx + nt;
+    let width = size_of::<f32>();
+    let theta_base = nx as u32;
+
+    let CosseratWorkspace {
+        b: aug_b,
+        x: aug_x,
+        r,
+        z,
+        p,
+        ap,
+        product,
+        magnitude,
+        fold,
+        group_norm,
+        coarse_in,
+        coarse_out,
+        coarse_energy,
+        coarse_load,
+        torque_scaled,
+    } = aug;
+    let (coarse_energy, coarse_load) = (coarse_energy.handle(), coarse_load.handle());
+    let Workspace { row_absolute, row_curvature, verdict, verdict_cause, scalar: scalars, .. } =
+        work;
+    let mut terms = DotTerms { product, magnitude };
+    // The apply's per-row magnitude and curvature sums are written and not
+    // read: this path takes its round-off scale from the Cauchy-Schwarz
+    // surrogate, as the locked and reduced solves do.
+    let discard_absolute = row_absolute.handle();
+    let discard_curvature = row_curvature.handle();
+
+    let project = |device: &mut D, vector: ppf_cts_compute::Handle| -> Result<(), Fault> {
+        if !frames.project {
+            return Ok(());
+        }
+        let args = CosseratProjectFixedRowArgs {
+            held: frames.held,
+            vector,
+            theta_base,
+            count: slots,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.project", &args, slots)?;
+        Ok(())
+    };
+
+    // y = K u: the vertex operator on the vertex rows, then the frames' rows
+    // and their share of the vertex rows, then the bend couplings.
+    let apply = |device: &mut D,
+                 input: &Buffer<f32>,
+                 output: &Buffer<f32>|
+     -> Result<(), Fault> {
+        op.apply(
+            device,
+            input.span(0, nx),
+            output.span(0, nx),
+            discard_absolute,
+            discard_curvature,
+        )?;
+        let slot_args = CosseratApplySlotRowArgs {
+            edge_nodes: frames.edge_nodes,
+            self_block: frames.self_block,
+            coupling_from: frames.coupling_from,
+            coupling_to: frames.coupling_to,
+            input: input.handle(),
+            output: output.handle(),
+            output_atomic: output.handle(),
+            theta_base,
+            count: slots,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.apply_slot", &slot_args, slots)?;
+        if frames.sites > 0 {
+            let site_args = CosseratApplySiteRowArgs {
+                bend_slots: frames.bend_slots,
+                site_block: frames.site_block,
+                input: input.handle(),
+                output: output.handle(),
+                theta_base,
+                count: frames.sites,
+                seam_arena_count: 0,
+            };
+            device.launch("cosserat.cg.apply_site", &site_args, frames.sites)?;
+        }
+        project(device, output.handle())
+    };
+
+    // The per-chain dot `e . x` over the frame rows of an augmented vector.
+    let chain_dot = |device: &mut D, x: ppf_cts_compute::Handle, out: ppf_cts_compute::Handle|
+     -> Result<(), Fault> {
+        let args = CosseratChainDotRowArgs {
+            chain_offset: frames.chain_offset,
+            chain_slot: frames.chain_slot,
+            roll: frames.roll,
+            x,
+            dot: out,
+            theta_base,
+            count: frames.chains,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.chain_dot", &args, frames.chains)?;
+        Ok(())
+    };
+
+    // z = M^-1 r: the overlapping edge blocks over the vertices and frames they
+    // cover, block-Jacobi on every other vertex, and the chains' rigid roll
+    // added back as a coarse space.
+    let precondition = |device: &mut D,
+                        residual: &Buffer<f32>,
+                        out: &Buffer<f32>|
+     -> Result<(), Fault> {
+        let vertex_args = CosseratVertexPrecondRowArgs {
+            covered: frames.covered,
+            inverse_diagonal,
+            residual: residual.handle(),
+            output: out.handle(),
+            count: rows,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.precond_vertices", &vertex_args, rows)?;
+        let args = CosseratSchwarzApplyRowArgs {
+            edge_nodes: frames.edge_nodes,
+            factor: frames.factor,
+            residual: residual.handle(),
+            output: out.handle(),
+            output_atomic: out.handle(),
+            theta_base,
+            count: slots,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.precond_edges", &args, slots)?;
+        chain_dot(device, residual.handle(), coarse_load)?;
+        let add = CosseratChainAddRowArgs {
+            chain_offset: frames.chain_offset,
+            chain_slot: frames.chain_slot,
+            roll: frames.roll,
+            numerator: coarse_load,
+            denominator: coarse_energy,
+            output: out.handle(),
+            theta_base,
+            count: frames.chains,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.chain_add", &add, frames.chains)?;
+        project(device, out.handle())
+    };
+
+    // THE RESIDUAL'S NORM IN ONE UNIT: the vertex rows' L1 norm plus each
+    // frame's torque over its edge's length (`cosserat_torque_scale_row`), folded
+    // on the device; only the two floats cross.
+    let mut residual_norm = |device: &mut D, vector: &Buffer<f32>| -> Result<f32, Fault> {
+        let vertex_rows = vector.span(0, nx);
+        let (vertex_out, frame_out) = (group_norm.span(0, 1), group_norm.span(1, 1));
+        if nx > 0 {
+            device.run("cosserat.cg.norm_vertices", |encoder| {
+                // Safety: the vector and the scratch outlive the call.
+                unsafe { encode_fold(encoder, vertex_rows, nx, fold, vertex_out, true) }
+            })?;
+        }
+        let scale = CosseratTorqueScaleRowArgs {
+            slot_edge: frames.slot_edge,
+            edge_prop,
+            residual: vector.handle(),
+            scaled: torque_scaled.handle(),
+            theta_base,
+            count: slots,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.torque_scale", &scale, slots)?;
+        let scaled = torque_scaled.handle();
+        device.run("cosserat.cg.norm_frames", |encoder| {
+            // Safety: as above.
+            unsafe { encode_fold(encoder, scaled, slots as usize, fold, frame_out, false) }
+        })?;
+        group_norm.download(device)?;
+        let host = group_norm.host();
+        Ok(if nx > 0 { host[0] } else { 0.0 } + host[1])
+    };
+
+    // The augmented right-hand side and seed.
+    device.copy(aug_b.handle(), 0, b, 0, nx * width)?;
+    device.copy(aug_b.handle(), nx * width, frames.gradient, 0, nt * width)?;
+    project(device, aug_b.handle())?;
+    device.copy(aug_x.handle(), 0, x, 0, nx * width)?;
+    device.copy(aug_x.handle(), nx * width, frames.prescribed, 0, nt * width)?;
+
+    // THE COARSE SPACE OF THIS SOLVE: each free frame's roll vector, read off
+    // the frames the step has reached and the mask `prescribe` wrote, and each
+    // chain's `e . K e`. The roll vector has no vertex rows, so `K e` is the
+    // frame block applied to it: the two frame halves of the operator suffice.
+    let roll_args = CosseratRollRowArgs {
+        held: frames.held,
+        quat: frames.quat,
+        roll: frames.roll,
+        count: slots,
+        seam_arena_count: 0,
+    };
+    device.launch("cosserat.cg.roll", &roll_args, slots)?;
+    device.copy(coarse_in.handle(), nx * width, frames.roll, 0, nt * width)?;
+    device.fill_zero(coarse_out.handle(), dim * width)?;
+    {
+        let slot_args = CosseratApplySlotRowArgs {
+            edge_nodes: frames.edge_nodes,
+            self_block: frames.self_block,
+            coupling_from: frames.coupling_from,
+            coupling_to: frames.coupling_to,
+            input: coarse_in.handle(),
+            output: coarse_out.handle(),
+            output_atomic: coarse_out.handle(),
+            theta_base,
+            count: slots,
+            seam_arena_count: 0,
+        };
+        device.launch("cosserat.cg.coarse_apply_slot", &slot_args, slots)?;
+        if frames.sites > 0 {
+            let site_args = CosseratApplySiteRowArgs {
+                bend_slots: frames.bend_slots,
+                site_block: frames.site_block,
+                input: coarse_in.handle(),
+                output: coarse_out.handle(),
+                theta_base,
+                count: frames.sites,
+                seam_arena_count: 0,
+            };
+            device.launch("cosserat.cg.coarse_apply_site", &site_args, frames.sites)?;
+        }
+    }
+    chain_dot(device, coarse_out.handle(), coarse_energy)?;
+
+    // THE EDGE BLOCKS' FACTORS, against this iteration's matrix and mask.
+    let factor_args = CosseratSchwarzFactorRowArgs {
+        edge_nodes: frames.edge_nodes,
+        held: frames.held,
+        vertex_diagonal,
+        fixed_index: op.fixed.index,
+        fixed_offset: op.fixed.offset,
+        fixed_value: op.fixed.value,
+        row_count: op.fixed.rows,
+        self_block: frames.self_block,
+        coupling_from: frames.coupling_from,
+        coupling_to: frames.coupling_to,
+        factor: frames.factor,
+        count: slots,
+        seam_arena_count: 0,
+    };
+    device.launch("cosserat.cg.schwarz_factor", &factor_args, slots)?;
+
+    // r = b - K x.
+    apply(device, aug_x, ap)?;
+    combine(device, aug_b.handle(), ap.handle(), r.handle(), 1.0, -1.0, dim)?;
+    project(device, r.handle())?;
+
+    // `x` and the frame step, which every exit takes.
+    let finish = |device: &mut D, aug_x: &Buffer<f32>| -> Result<(), Fault> {
+        device.copy(x, 0, aug_x.handle(), 0, nx * width)?;
+        device.copy(frames.step, 0, aug_x.handle(), nx * width, nt * width)
+    };
+
+    let err0 = residual_norm(device, r)?;
+    if err0 == 0.0 {
+        finish(device, aug_x)?;
+        return Ok(Report {
+            outcome: Outcome::Converged,
+            iterations: 0,
+            relative_residual: 0.0,
+        });
+    }
+    // THE ITERATION RUNS AT UNIT SIZE (`unit_scale`): `r`, and so `z`, `p` and
+    // `Ap`, are held `scale` times the true residual, and the update of the
+    // iterate takes `alpha / scale`. Every ratio below is unchanged, and none of
+    // the products falls out of the normal range however small the residual is.
+    let scale = unit_scale(err0);
+    let err0 = err0 * scale;
+    if scale != 1.0 {
+        combine(device, r.handle(), r.handle(), r.handle(), scale, 0.0, dim)?;
+    }
+
+    precondition(device, r, z)?;
+    let mut rz = terms.dot(device, r.handle(), z.handle(), dim, fold, scalars)?;
+    // The negation traps a NaN, which `<= 0.0` would let through.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(rz > 0.0) {
+        return Ok(Report {
+            outcome: Outcome::NonSpdPreconditioner,
+            iterations: 0,
+            relative_residual: 1.0,
+        });
+    }
+    combine(device, z.handle(), z.handle(), p.handle(), 1.0, 0.0, dim)?;
+
+    for iteration in 1..=max_iterations {
+        apply(device, p, ap)?;
+        let pap = terms.dot(device, p.handle(), ap.handle(), dim, fold, scalars)?;
+        let absolute_dot = terms.norm_product(device, p.handle(), ap.handle(), dim, fold, scalars)?;
+        let scalar = pcg_alpha(device, verdict, verdict_cause, rz, pap, absolute_dot)?;
+        if scalar.cause != PCG_BREAK_NONE {
+            if scalar.cause == PCG_BREAK_PAP {
+                return Ok(Report {
+                    outcome: Outcome::IndefiniteMatrix,
+                    iterations: iteration,
+                    relative_residual: 1.0,
+                });
+            }
+            // Curvature below the round-off of its own reduction: truncate
+            // Steihaug-style with the direction fp32 can still see, which is a
+            // SUCCESS, and say so.
+            finish(device, aug_x)?;
+            let residual = residual_norm(device, r)? / err0;
+            ::log::info!(
+                "* cg truncated: curvature within round-off of its own reduction at iter {} \
+                 (reresid {:.3e})",
+                iteration,
+                residual
+            );
+            return Ok(Report {
+                outcome: Outcome::CurvatureTruncated,
+                iterations: iteration,
+                relative_residual: residual,
+            });
+        }
+        let alpha = scalar.value;
+        let (p_h, x_h, ap_h, r_h) = (p.handle(), aug_x.handle(), ap.handle(), r.handle());
+        device.run("cosserat.cg.update", |encoder| {
+            // Safety: the four vectors are borrowed for the whole call and the
+            // two updates touch disjoint destinations.
+            unsafe {
+                encode_add_scaled(encoder, p_h, x_h, alpha / scale, dim)?;
+                encode_add_scaled(encoder, ap_h, r_h, -alpha, dim)
+            }
+        })?;
+
+        let residual = residual_norm(device, r)? / err0;
+        if residual < tolerance {
+            finish(device, aug_x)?;
+            return Ok(Report {
+                outcome: Outcome::Converged,
+                iterations: iteration,
+                relative_residual: residual,
+            });
+        }
+        if iteration >= max_iterations || !residual.is_finite() {
+            finish(device, aug_x)?;
+            return Ok(Report {
+                outcome: Outcome::MaxIterations,
+                iterations: iteration,
+                relative_residual: residual,
+            });
+        }
+
+        precondition(device, r, z)?;
+        let rz_next = terms.dot(device, r.handle(), z.handle(), dim, fold, scalars)?;
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(rz_next > 0.0) {
+            return Ok(Report {
+                outcome: Outcome::NonSpdPreconditioner,
+                iterations: iteration,
+                relative_residual: residual,
+            });
+        }
+        let beta = rz_next / rz;
+        combine(device, z.handle(), p.handle(), p.handle(), 1.0, beta, dim)?;
+        rz = rz_next;
+    }
+
+    finish(device, aug_x)?;
+    Ok(Report {
+        outcome: Outcome::MaxIterations,
+        iterations: max_iterations,
+        relative_residual: 1.0,
+    })
 }

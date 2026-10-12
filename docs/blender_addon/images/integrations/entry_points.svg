@@ -16,7 +16,7 @@
     validation. A single transport row below that stands in for the
     five connection types. At the bottom, ppf-cts-server runs on whichever
     side of the transport boundary the mode places it. An orange pill
-    on the MCP box reminds the reader that the HTTP server binds
+    on the MCP box notes that the HTTP server binds
     localhost only.
   </desc>
 
@@ -102,7 +102,7 @@
   <text x="480" y="264" text-anchor="middle" class="hdr-title">Blender operators</text>
   <text x="480" y="284" text-anchor="middle" class="hdr-mono">bl_idname = "solver.*"</text>
   <text x="480" y="300" text-anchor="middle" class="hdr-mono">bl_idname = "object.*"</text>
-  <text x="480" y="320" text-anchor="middle" class="hdr-italic">fired by every button in the panel</text>
+  <text x="480" y="320" text-anchor="middle" class="hdr-italic">used by every button in the panel</text>
 
   <!-- Python module -->
   <rect x="650" y="240" width="280" height="100" rx="8" class="box-proto" />

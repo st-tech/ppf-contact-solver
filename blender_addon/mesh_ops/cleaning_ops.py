@@ -1208,7 +1208,7 @@ def _draw_surface(box, defect, report):
                 ),
                 icon="INFO",
             )
-        sub.label(text="Fine for a SHELL; a SOLID needs a closed surface.")
+        sub.label(text="Fine for a SHELL; SOLID and PDRD need a closed surface.")
         sub.label(text="Not repaired automatically: closing a boundary is modeling.")
 
 
@@ -1357,7 +1357,7 @@ def _draw_object_report(layout, obj, report):
 
 
 def draw_mesh_cleaning(layout, context):
-    """Draw the Mesh Cleaning entry of the Utility Tools panel.
+    """Draw the Mesh Cleaning entry of the Mesh Repair panel.
 
     The Scan button is drawn unconditionally and grayed out when its
     precondition fails, with a status label explaining why, so the feature

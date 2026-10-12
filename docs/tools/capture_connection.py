@@ -12,10 +12,8 @@ Passed to ``blender_addon/capture.sh --pre-python`` and steered by
 Why fill anything at all: the connection pages show which fields a given
 transport asks for, and an all-empty panel makes the rows hard to tell
 apart at documentation width. The values below are deliberately generic
-placeholders — a reader should see the SHAPE of the form, not a working
-host, and not whoever regenerated the screenshot last. That matters here
-in particular, because the previous captures went out carrying their
-author's real home directory in the SSH Key field.
+placeholders: a reader should see the SHAPE of the form, not a working
+host, and not whoever regenerated the screenshot last.
 """
 
 import os

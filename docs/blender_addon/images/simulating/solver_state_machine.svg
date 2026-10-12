@@ -185,6 +185,6 @@
   <!-- ============ Footer notes ============ -->
   <text x="20" y="496" class="foot"><tspan class="foot-lbl">Delete Remote Data</tspan> is available from Ready, Complete, and Fetched; it returns the solver to <tspan class="foot-lbl">Connected</tspan>.</text>
   <text x="20" y="514" class="foot"><tspan class="foot-lbl">Abort</tspan> only interrupts an in-flight <tspan class="foot-lbl">Transfer</tspan> or <tspan class="foot-lbl">Fetch</tspan>; it does not stop a running simulation; use <tspan class="foot-lbl">Terminate</tspan> for that.</text>
-  <text x="20" y="532" class="foot">While <tspan class="foot-lbl">Running</tspan>, every Solver-panel button is grayed out so you cannot double-fire an action or tear down state mid-solve.</text>
+  <text x="20" y="532" class="foot">While <tspan class="foot-lbl">Running</tspan>, every Solver-panel button is grayed out so you cannot start a second action or change the state mid-solve.</text>
   <text x="20" y="550" class="foot">† <tspan class="foot-lbl">Terminate</tspan> and <tspan class="foot-lbl">Save and Quit</tspan> are drawn on the Backend Communicator panel above, not on the Solver panel.</text>
 </svg>

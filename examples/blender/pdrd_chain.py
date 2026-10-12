@@ -82,10 +82,11 @@ def make_link_mesh(
             v = center + r_minor * cp * radial + r_minor * sp * axial
             verts.append(tuple(v))
 
-    # Wind quads so the surface normal points outward, which the
-    # frontend's divergence-theorem volume + inertia pass requires.
-    # With the (theta, phi) parameterization above the outward normal
-    # is (b-a) x (d-a), giving the quad order (a, d, c, b).
+    # Wind every quad the same way, which the frontend's
+    # divergence-theorem volume + inertia pass requires of a PDRD
+    # body, and outward by convention. With the (theta, phi)
+    # parameterization above the outward normal is (b-a) x (d-a),
+    # giving the quad order (a, d, c, b).
     faces = []
     for ti in range(n):
         ti2 = (ti + 1) % n

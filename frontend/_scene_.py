@@ -31,12 +31,17 @@ from tqdm.auto import tqdm
 from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
+from ._contact_gap_ import GapParticipant
+from ._contact_gap_limit_ import GapLimit, resolve_gap_limit, validated_fraction
 from ._force_field_ import (
     ForceField,
+    fluid_copies_under as _fluid_copies_under,
+    hold_fluid_frames as _hold_fluid_frames,
     resolve_targets as _resolve_force_field_targets,
     write_session as _write_force_field,
 )
 from ._param_ import ParamHolder
+from ._pdrd_mass_ import enclosed_moments
 from ._plot_ import Plot, PlotManager, _renumber
 from ._render_ import MitsubaRenderer, Rasterizer
 from ._scene_collider_ import Sphere, Wall
@@ -145,6 +150,11 @@ class FixedScene:
     # attribute instead of raising at preview time.
     _invisible_vert: Optional[np.ndarray] = None
     _invisible_static_vert: Optional[np.ndarray] = None
+    # Everything a contact pair can be formed with and the gap it brings, for
+    # the session build's check that the step size can solve the smallest one
+    # (`_contact_gap_.py`). Declared at class scope for the same reason as the
+    # masks above; an empty tuple checks nothing.
+    _contact_gap_participants: tuple = ()
     # Lock Translation axis table, one normalized row per dmap entry, and
     # its mode table beside it, one uint32 per dmap entry: 0 = axis (the
     # center of mass is held on the line through that axis), 1 = all
@@ -168,6 +178,12 @@ class FixedScene:
     # Class-scope defaults for the same unpickling reason.
     _rotation_lock: Optional[np.ndarray] = None
     _rotation_lock_mode: Optional[np.ndarray] = None
+    # Cosserat rods: one uint8 marker per rod edge, aligned with `_rod`, and
+    # one float32 roll per dynamic vertex, aligned with `_vert[1]`. None when
+    # the scene has no Cosserat rod, or no authored roll. Class-scope defaults
+    # for the same unpickling reason.
+    _cosserat_edge: Optional[np.ndarray] = None
+    _cosserat_tilt: Optional[np.ndarray] = None
 
     def __init__(
         self,
@@ -211,6 +227,8 @@ class FixedScene:
         pdrd_vert_index: Optional[np.ndarray] = None,
         pdrd_vert_list: Optional[list[int]] = None,
         pdrd_rest_centered: Optional[np.ndarray] = None,
+        cosserat_edge: Optional[np.ndarray] = None,
+        cosserat_tilt: Optional[np.ndarray] = None,
         sand_param: Optional[dict[str, list[Any]]] = None,
         invisible_vert: Optional[np.ndarray] = None,
         translation_lock: Optional[np.ndarray] = None,
@@ -265,6 +283,8 @@ class FixedScene:
             rest_vert_times (Optional[np.ndarray]): Keyframe times in seconds, length ``n_frames``, aligned to ``rest_vert_anim``.
             bend_rest_vert (Optional[np.ndarray]): Concatenated reference vertices for the bending rest angle, one row per global vertex (unmasked rows equal the initial vert). The solver computes hinge rest angles from these positions for masked objects.
             bend_rest_vert_mask (Optional[np.ndarray]): Per-vertex uint8 mask marking rows of ``bend_rest_vert`` that belong to an object with an enabled reference rest angle.
+            cosserat_edge (Optional[np.ndarray]): Per-rod-edge uint8 marker, aligned with ``rod``: 1 where the edge belongs to a Cosserat rod (:meth:`Object.as_cosserat`), 0 where it belongs to a plain rod. None when the scene has no Cosserat rod.
+            cosserat_tilt (Optional[np.ndarray]): Per-vertex float32 roll in radians of a Cosserat rod's material frame about its tangent (:meth:`Object.tilt`), aligned with the dynamic vertices; 0 on every vertex no Cosserat rod authored a roll for. None when no object authored one.
             invisible_vert (Optional[np.ndarray]): Per-vertex bool mask marking dynamic vertices that belong to an object hidden with :meth:`Object.invisible`. Drawing only; the solver never sees it. None when every object is drawn.
             translation_lock (Optional[np.ndarray]): Per-dmap-entry (n_objects, 3) normalized Lock Translation axis, aligned with ``concat_displacement``. A zero row means either that the object is not locked or that it is locked on all axes, which is decided by ``translation_lock_mode``. None when no object in the scene has Lock Translation enabled in any mode.
             translation_lock_mode (Optional[np.ndarray]): Per-dmap-entry (n_objects,) uint32, aligned with ``translation_lock``: 0 means the center of mass is held on the line through that row's axis (or the row is disabled, its axis being zero); 1 means the center of mass is pinned to its initial point, in which case the axis row carries no direction and is exactly zero. Read together with ``translation_lock``, never alone. None under the same condition as ``translation_lock``.
@@ -314,6 +334,29 @@ class FixedScene:
         self._pdrd_vert_index = pdrd_vert_index
         self._pdrd_vert_list = pdrd_vert_list or []
         self._pdrd_rest_centered = pdrd_rest_centered
+        # Cosserat rods. `_cosserat_edge` marks the rod edges whose segments
+        # carry a material frame and is written as bin/cosserat_edge.bin;
+        # `_cosserat_tilt` is the authored roll per dynamic vertex, written as
+        # bin/cosserat_tilt.bin. Each is None, and its file absent, when the
+        # scene has nothing to say: the solver then reads every rod edge as
+        # plain and every roll as zero.
+        if cosserat_edge is not None:
+            cosserat_edge = np.ascontiguousarray(cosserat_edge, dtype=np.uint8)
+            assert len(cosserat_edge) == len(rod), (
+                f"cosserat_edge has {len(cosserat_edge)} entries but the scene "
+                f"has {len(rod)} rod edges"
+            )
+        if cosserat_tilt is not None:
+            cosserat_tilt = np.ascontiguousarray(cosserat_tilt, dtype=np.float32)
+            assert len(cosserat_tilt) == len(vert[1]), (
+                f"cosserat_tilt has {len(cosserat_tilt)} entries but the scene "
+                f"has {len(vert[1])} dynamic vertices"
+            )
+            assert cosserat_edge is not None, (
+                "cosserat_tilt is set but no rod edge is marked Cosserat"
+            )
+        self._cosserat_edge = cosserat_edge
+        self._cosserat_tilt = cosserat_tilt
         # Lock Translation: one normalized axis per dmap entry (n_objects,
         # 3), aligned with `_displacement`/`concat_displacement`, beside
         # one uint32 mode per dmap entry. None when no object in the
@@ -344,8 +387,9 @@ class FixedScene:
         self._start_links = np.zeros((0, 2), dtype=np.uint32)
         self._n_start_link_pairs = 0
         self._start_link_pairs: list[dict] = []
-        # The resolved force field (`Scene.build`'s dict of grids, scripts and
-        # target mask), or None when the scene carries no force field.
+        # The resolved force field (`Scene.build`'s dict of field objects,
+        # scripts and target mask), or None when the scene carries no force
+        # field.
         self._force_field = force_field
         # `{"weight": per-vertex weight or None, "group_vertices": label ->
         # vertex indices}`, the part of the field that belongs to the scene
@@ -637,6 +681,23 @@ class FixedScene:
         }]
 
     @property
+    def contact_gap_participants(self) -> tuple:
+        """Everything a contact pair can be formed with, and the gap it brings.
+
+        One :class:`~frontend._contact_gap_.GapParticipant` per object and per
+        invisible collider, which the session build checks against the step
+        size.
+
+        Example:
+            List the smallest contact gap each object brings to a pair::
+
+                fixed = scene.build()
+                for participant in fixed.contact_gap_participants:
+                    print(participant.label, participant.gap)
+        """
+        return self._contact_gap_participants
+
+    @property
     def tri_param(self) -> dict[str, list[Any]]:
         """Get the triangle parameters.
 
@@ -890,6 +951,21 @@ class FixedScene:
 
         return self
 
+    def _hold_force_field_frames(self, path: str) -> None:
+        """Before ``path`` is cleared, make every fluid frame this scene's
+        force field reads independent of the files under it (a frame with no
+        copy elsewhere is kept in memory), and check that every frame read
+        back from files can be read at all, raising before anything is
+        cleared when one cannot; the session writer then writes them anew."""
+        if self._force_field is not None:
+            _hold_fluid_frames(self._force_field["fields"], path)
+
+    def _force_field_copies_under(self, path: str) -> bool:
+        """Whether a fluid frame this scene's force field reads was written
+        under ``path``, so a pickle of this scene may name files there."""
+        return self._force_field is not None and _fluid_copies_under(
+            self._force_field["fields"], path)
+
     def export_fixed(
         self, path: str, delete_exist: bool, preserve_output: bool = False
     ) -> "FixedScene":
@@ -919,6 +995,7 @@ class FixedScene:
 
         if os.path.exists(path):
             if delete_exist:
+                self._hold_force_field_frames(path)
                 for item in os.listdir(path):
                     if preserve_output and item == "output":
                         continue
@@ -1167,7 +1244,7 @@ class FixedScene:
                         f"force-field {what} has {len(arr)} entries "
                         f"but the scene has {len(self._vert[1])} dynamic vertices"
                     )
-            _write_force_field(path, ff["grids"], ff["scripts"], weight, ff["mask"])
+            _write_force_field(path, ff["fields"], ff["scripts"], weight, ff["mask"])
         # rest_vert_mask is shared between the static rest_vert and the
         # time-varying rest_vert_anim, so write it whenever either is present.
         if self._rest_vert_mask is not None:
@@ -1291,6 +1368,30 @@ class FixedScene:
         if len(self._rod):
             self._rod.astype(np.uint64).tofile(os.path.join(bin_path, "rod.bin"))
             export_param(self._rod_param, param_path, "rod")
+        # Cosserat rods: one uint8 per rod edge, aligned with rod.bin, marking
+        # the edges whose segments carry a material frame, and one float32 roll
+        # per vertex, aligned with vert.bin. Each is written only when the
+        # scene has something to say; the solver reads an absent marker as
+        # "no Cosserat edge" and an absent roll as zero.
+        if self._cosserat_edge is not None:
+            assert len(self._cosserat_edge) == len(self._rod), (
+                f"cosserat_edge has {len(self._cosserat_edge)} entries but the "
+                f"scene has {len(self._rod)} rod edges"
+            )
+            self._cosserat_edge.astype(np.uint8).tofile(
+                os.path.join(bin_path, "cosserat_edge.bin")
+            )
+        if self._cosserat_tilt is not None:
+            assert self._cosserat_edge is not None, (
+                "cosserat_tilt is set but no rod edge is marked Cosserat"
+            )
+            assert len(self._cosserat_tilt) == len(self._vert[1]), (
+                f"cosserat_tilt has {len(self._cosserat_tilt)} entries but the "
+                f"scene has {len(self._vert[1])} dynamic vertices"
+            )
+            self._cosserat_tilt.astype(np.float32).tofile(
+                os.path.join(bin_path, "cosserat_tilt.bin")
+            )
         pbar.update(1)
 
         if len(self._tri):
@@ -2291,7 +2392,7 @@ class Scene:
         # Empty means no object animates a material, which writes no
         # bin/param_anim and leaves the solver on its build-time tables.
         self._param_anim_times: list[float] = []
-        #: ForceField: The external force field (grids and an exact script).
+        #: ForceField: The external force field (field objects and exact scripts).
         self.force_field = ForceField()
         self.add = ObjectAdder(self)  #: ObjectAdder: The object adder.
         self.info = SceneInfo(name, self)  #: SceneInfo: The scene information.
@@ -2626,6 +2727,147 @@ class Scene:
         notebook's key is already the name it chose.
         """
         return getattr(obj, "_statistics_name", "") or name
+
+    @staticmethod
+    def _flag(obj: "Object", key: str) -> bool:
+        """Whether ``obj`` carries the float-encoded boolean ``key`` set."""
+        return key in obj.param.key_list() and float(obj.param.get(key)) != 0.0
+
+    @staticmethod
+    def _forms_own_pairs(obj: "Object") -> bool:
+        """Whether two elements of ``obj`` can be in contact with each other.
+
+        False for a static object, which is a collision mesh, for a PDRD body,
+        whose elements never move against each other, and for an object that
+        allows its own intersections.
+        """
+        return not (
+            obj.static or obj.pdrd or Scene._flag(obj, "allow-self-intersection")
+        )
+
+    def _contact_gap_limits(self) -> dict[str, GapLimit]:
+        """Each object's ``contact-gap-limit``, resolved onto its elements.
+
+        Keyed by the scene's object key and holding only the objects the limit
+        applies to: one that sets it, has triangles or rod segments to measure,
+        and can be in contact with itself. An object that forms no pair with
+        itself has no mesh neighbor to press on, so nothing bounds its gap.
+        Every object's value is checked all the same, so a fraction that is
+        out of range is refused whether or not it would have applied.
+
+        The room is measured against the LARGEST contact offset the object
+        takes, animated values and a map's target included, so the bound holds
+        at every frame and every element without becoming a schedule itself.
+
+        The rule and the paper it follows, Gomez-Nogales et al., "Unlocking
+        Thickness Modeling for Codimensional Contact Simulation"
+        (arXiv:2510.10256), are stated in ``frontend/_contact_gap_limit_.py``.
+        """
+        limits: dict[str, GapLimit] = {}
+        for name, obj in self._object.items():
+            label = self._label(name, obj)
+            key = "contact-gap-limit"
+            if key in obj.param_anim or key in obj.param_spatial:
+                raise ValueError(
+                    f"'{label}' animates or maps '{key}', which is one "
+                    "fraction per object. Animate or map 'contact-gap' "
+                    "instead; the limit holds every value it takes."
+                )
+            fraction = validated_fraction(obj.param.get(key), label)
+            if fraction == 0.0 or not self._forms_own_pairs(obj):
+                continue
+            elements = obj.get("E") if obj.obj_type == "rod" else obj.get("F")
+            if elements is None or not len(elements):
+                continue
+            offsets = [float(obj.param.get("contact-offset"))] + [
+                float(v) for v in obj.param_anim.get("contact-offset", [])
+            ]
+            mapped = obj.param_spatial.get("contact-offset")
+            if mapped is not None:
+                offsets.append(float(mapped[2]))
+            limits[name] = resolve_gap_limit(
+                fraction, obj.vertex(False), elements, max(offsets)
+            )
+        return limits
+
+    def _contact_gap_participants(
+        self, gap_limits: dict[str, GapLimit]
+    ) -> list[GapParticipant]:
+        """What a contact pair can be formed with in this scene, and its gap.
+
+        An object's gap is the smallest value its ``contact-gap`` takes,
+        animated values and a spatial map included. A map blends each element
+        from the object's value toward its target by a weight, so the smallest
+        blend is reached at one end of the value's range and one end of the
+        weights' range. A contact gap limit lowers an element to its bound, so
+        the smallest gap is the smaller of that and the smallest bound, and
+        the participant records the bound when it is the one that counts. A
+        static object is a collision mesh, which has
+        no pair with itself or with another collider, and neither has a PDRD
+        body with itself. An object that allows its own intersections has no
+        pair with itself, and one that allows intersections with other objects
+        or other groups is left out of the pairs across objects, since which
+        of those the allowance covers is the allowance rule's to say.
+        """
+        flag = self._flag
+
+        def smallest_gap(obj: "Object") -> float:
+            values = [float(obj.param.get("contact-gap"))] + [
+                float(v) for v in obj.param_anim.get("contact-gap", [])
+            ]
+            mapped = obj.param_spatial.get("contact-gap")
+            if mapped is None:
+                return min(values)
+            target = mapped[2]
+            reduced = obj._reduced_weights("contact-gap", obj.map_element_key)
+            weights = (
+                min(float(w.min()) for w in reduced),
+                max(float(w.max()) for w in reduced),
+            )
+            return min(
+                value + (target - value) * weight
+                for value in (min(values), max(values))
+                for weight in weights
+            )
+
+        participants = []
+        for name, obj in self._object.items():
+            gap = smallest_gap(obj)
+            limit = ""
+            bounded = gap_limits.get(name)
+            tightest = bounded.tightest() if bounded is not None else None
+            if tightest is not None and bounded.bound[tightest] < gap:
+                gap = float(bounded.bound[tightest])
+                limit = bounded.describe(tightest)
+            if obj.static:
+                role = "collider"
+            elif obj.pdrd:
+                role = "rigid"
+            else:
+                role = "solved"
+            participants.append(
+                GapParticipant(
+                    label=self._label(name, obj),
+                    gap=gap,
+                    role=role,
+                    own_pairs=self._forms_own_pairs(obj),
+                    cross_pairs=not (
+                        flag(obj, "allow-inter-object-intersection")
+                        or flag(obj, "allow-inter-group-intersection")
+                    ),
+                    limit=limit,
+                )
+            )
+        for kind, colliders in (("wall", self._wall), ("sphere", self._sphere)):
+            for i, collider in enumerate(colliders):
+                participants.append(
+                    GapParticipant(
+                        label=f"invisible {kind} {i + 1}",
+                        gap=float(collider.param.list()["contact-gap"]),
+                        role="analytic",
+                    )
+                )
+        return participants
 
     @staticmethod
     def _check_static_material(name: str, obj: "Object") -> None:
@@ -3150,29 +3392,72 @@ class Scene:
         # kernel, so it never enters the per-element param arrays.
         per_body_only_keys = {"stitch-stiffness"}
 
+        # Each object's contact gap limit as one bound per element, applied
+        # below wherever `contact-gap` is expanded onto those elements.
+        gap_limits = self._contact_gap_limits()
+        # name -> (elements lowered, elements, smallest gap left), for the
+        # summary printed once the tables are assembled.
+        gap_lowered: dict[str, tuple[int, int, float]] = {}
+
+        def _limited_gap(name: str, values, count: int) -> list:
+            """One object's per-element contact gaps, held to its limit.
+
+            `values` is the authored gap of each of the object's `count`
+            elements at one keyframe, or at build time.
+            """
+            limit = gap_limits[name]
+            if len(limit.bound) != count:
+                raise ValueError(
+                    f"the contact gap limit of '{self._label(name, self._object[name])}' "
+                    f"measured {len(limit.bound)} {limit.kind}s but the object "
+                    f"contributes {count} to the scene"
+                )
+            authored = np.asarray(values, dtype=np.float64)
+            held = limit.apply(authored)
+            lowered, _, smallest = gap_lowered.get(name, (0, count, np.inf))
+            gap_lowered[name] = (
+                max(lowered, int(np.count_nonzero(held < authored))),
+                count,
+                min(smallest, float(held.min())),
+            )
+            return held.tolist()
+
         def _extend_param(
             param: ParamHolder,
             concat_param: dict[str, list],
             count: int,
             obj=None,
             element_key: str = "F",
+            limited: Optional[str] = None,
+            fill: Optional[dict[str, float]] = None,
         ):
             """Replicate one object's material across `count` elements.
 
-            `obj` is passed for the passes whose object carries an element
-            table a spatial map can be reduced over, which replaces the
-            replicated scalar with one value per element. `element_key` names
-            that table: "F" for triangles, "T" for tetrahedra. The rod pass
-            passes no object, because a rod has neither.
+            `obj` is the object whose spatial maps are reduced over the
+            element table `element_key` names, which replaces the replicated
+            scalar with one value per element: "F" for triangles, "T" for
+            tetrahedra, "E" for rod segments. `limited` is the object's scene
+            key in the passes whose elements carry its contact gap limit,
+            which are the surface triangles and the rod segments. `fill` maps
+            keys the object does not carry to the value each of its elements
+            takes for them; the table's key set is then the object's keys and
+            these together.
             """
-            param_keys = [k for k in param.key_list() if k not in per_body_only_keys]
+            items = [
+                (k, v) for k, v in param.items() if k not in per_body_only_keys
+            ]
+            if fill:
+                carried = {k for k, _ in items}
+                assert not carried & fill.keys(), (
+                    f"fill names keys the object carries: {sorted(carried & fill.keys())}"
+                )
+                items = sorted(items + list(fill.items()))
+            param_keys = [k for k, _ in items]
             if len(concat_param.keys()):
                 assert param_keys == list(concat_param.keys()), (
                     f"param keys mismatch: {param_keys} vs {list(concat_param.keys())}"
                 )
-            for key, value in param.items():
-                if key in per_body_only_keys:
-                    continue
+            for key, value in items:
                 if key not in concat_param:
                     concat_param[key] = []
                 mapped = (
@@ -3186,9 +3471,51 @@ class Scene:
                         f"'{element_key}' values but the object contributes "
                         f"{count} elements"
                     )
+                if key == "contact-gap" and limited in gap_limits:
+                    concat_param[key].extend(_limited_gap(
+                        limited,
+                        mapped if mapped is not None else np.full(count, float(value)),
+                        count,
+                    ))
+                elif mapped is not None:
                     concat_param[key].extend(mapped.tolist())
                 else:
                     concat_param[key].extend([value] * count)
+
+        # A Cosserat rod's segments share the rod table with a plain rod's,
+        # and its key set is the rod set plus the `cosserat-*` keys, so the
+        # strict key parity of `_extend_param` cannot hold across the two. The
+        # rod table takes the union of the rod objects' keys instead, and a
+        # plain rod contributes 0.0 for each `cosserat-*` key it lacks: it has
+        # no orientation energy, and only the edges `cosserat_edge` marks
+        # build frames. Every key still holds one value per rod edge. A rod
+        # missing any other key of the union is a registry mismatch, refused.
+        rod_param_keys = sorted({
+            key
+            for name, obj in dyn_objects
+            if obj.obj_type == "rod" and int(stats_by_name[name]["rod_added"])
+            for key in obj.param.key_list()
+            if key not in per_body_only_keys
+        })
+
+        def _rod_fill(name: str, obj) -> dict[str, float]:
+            """The rod-table keys `obj` lacks, each mapped to 0.0."""
+            carried = set(obj.param.key_list())
+            missing = [key for key in rod_param_keys if key not in carried]
+            foreign = [key for key in missing if not key.startswith("cosserat-")]
+            if foreign:
+                raise ValueError(
+                    f"rod '{self._label(name, obj)}' carries no {foreign}, which "
+                    "another rod of the scene carries; only the cosserat-* keys "
+                    "may differ between the rods of one scene"
+                )
+            return dict.fromkeys(missing, 0.0)
+
+        # Per-rod-edge Cosserat marker, built in the same pass and order as the
+        # rod table, so the two are aligned by construction. The owner of each
+        # edge in that order is checked against `concat_rod` below.
+        cosserat_edge_runs: list[np.ndarray] = []
+        rod_owner_runs: list[np.ndarray] = []
 
         # Param replication must mirror the Rust kernel's element
         # layout in `concat_tri`: rods first, then pure shells, then
@@ -3201,7 +3528,16 @@ class Scene:
             rod_added = int(stats["rod_added"])
             tet_added = int(stats["tet_added"])
             if obj.obj_type == "rod" and rod_added:
-                _extend_param(obj.param, concat_rod_param, rod_added)
+                _extend_param(
+                    obj.param, concat_rod_param, rod_added, obj,
+                    element_key="E", limited=name, fill=_rod_fill(name, obj),
+                )
+                cosserat_edge_runs.append(
+                    np.full(rod_added, 1 if obj.cosserat else 0, dtype=np.uint8)
+                )
+                rod_owner_runs.append(
+                    np.full(rod_added, dmap[name], dtype=np.int64)
+                )
             if tet_added:
                 _extend_param(
                     obj.param, concat_tet_param, tet_added, obj, element_key="T"
@@ -3214,13 +3550,15 @@ class Scene:
         param_anim_times = list(self._param_anim_times)
         concat_tri_param_anim: dict[str, list[list[float]]] = {}
 
-        def _extend_param_anim(obj, count: int):
+        def _extend_param_anim(name: str, obj, count: int):
             """Replicate one object's animated values across `count` triangles.
 
             An object that animates nothing still has to contribute its CONSTANT
             value to every frame of a key some other object animates, or the
             per-triangle arrays would be short and the two objects' triangles
-            would be misaligned.
+            would be misaligned. A contact gap limit holds every frame of
+            `contact-gap`, the constant ones included, since the solver reads
+            the schedule in place of the build-time table.
             """
             if not param_anim_times:
                 return
@@ -3252,7 +3590,13 @@ class Scene:
                         if key in obj.param_spatial
                         else None
                     )
-                    if mapped is not None:
+                    if key == "contact-gap" and name in gap_limits:
+                        frames[f].extend(_limited_gap(
+                            name,
+                            mapped if mapped is not None else np.full(count, float(v)),
+                            count,
+                        ))
+                    elif mapped is not None:
                         frames[f].extend(mapped.tolist())
                     else:
                         frames[f].extend([v] * count)
@@ -3278,16 +3622,77 @@ class Scene:
             tri_added = int(stats["tri_added"])
             tet_added = int(stats["tet_added"])
             if tri_added and tet_added == 0:
-                _extend_param(obj.param, concat_tri_param, tri_added, obj)
-                _extend_param_anim(obj, tri_added)
+                _extend_param(
+                    obj.param, concat_tri_param, tri_added, obj, limited=name
+                )
+                _extend_param_anim(name, obj, tri_added)
         # Pass B: SOLID surface triangles (objects carrying both tri and tet).
         for name, obj in dyn_objects:
             stats = stats_by_name[name]
             tri_added = int(stats["tri_added"])
             tet_added = int(stats["tet_added"])
             if tri_added and tet_added:
-                _extend_param(obj.param, concat_tri_param, tri_added, obj)
-                _extend_param_anim(obj, tri_added)
+                _extend_param(
+                    obj.param, concat_tri_param, tri_added, obj, limited=name
+                )
+                _extend_param_anim(name, obj, tri_added)
+
+        # One line per object whose gap the limit lowered, since the solve
+        # then runs at a gap the object's `contact-gap` does not state.
+        if not quiet:
+            for name, (lowered, count, smallest) in gap_lowered.items():
+                if not lowered:
+                    continue
+                limit = gap_limits[name]
+                print(
+                    f"contact gap limit: '{self._label(name, self._object[name])}' "
+                    f"lowered on {lowered} of {count} {limit.kind}s to "
+                    f"{100.0 * limit.fraction:g}% of the room between mesh "
+                    f"neighbors, smallest gap {smallest:.3e}"
+                )
+
+        # ----- Cosserat rods: per-rod-edge marker and per-vertex roll -----
+        # The marker holds one byte per rod edge, 1 where the edge belongs to a
+        # Cosserat rod. Every rod edge's owner in the order the rod table was
+        # replicated must be the object `concat_rod` holds there, which is what
+        # makes the marker, the rod table and the rod edges one alignment.
+        cosserat_edge = None
+        if rod_count > 0:
+            rod_owner = np.concatenate(rod_owner_runs)
+            rod_arr = np.asarray(concat_rod, dtype=np.int64).reshape(-1, 2)
+            assert len(rod_owner) == rod_count == len(rod_arr), (
+                f"rod table covers {len(rod_owner)} edges, the scene has "
+                f"{rod_count} rod edges and concat_rod holds {len(rod_arr)}"
+            )
+            held_by = np.asarray(concat_vert_dmap, dtype=np.int64)[rod_arr[:, 0]]
+            assert np.array_equal(held_by, rod_owner), (
+                "the rod table is not in concat_rod's edge order"
+            )
+            marker = np.concatenate(cosserat_edge_runs)
+            if marker.any():
+                cosserat_edge = marker
+
+        # The authored roll, scattered from each Cosserat rod's own vertex
+        # order into the dynamic vertices through its index map, which is the
+        # order vert.bin holds them in. A vertex no Cosserat rod authored a
+        # roll for takes zero. None when no object authored one.
+        cosserat_tilt = None
+        for name, obj in dyn_objects:
+            tilt = obj._cosserat_tilt
+            if tilt is None:
+                continue
+            assert obj.cosserat, (
+                f"'{self._label(name, obj)}' carries a tilt but is not a Cosserat rod"
+            )
+            indices = np.asarray(map_by_name[name], dtype=np.int64)
+            if len(tilt) != len(indices):
+                raise ValueError(
+                    f"the tilt of '{self._label(name, obj)}' has {len(tilt)} "
+                    f"entries but the object has {len(indices)} vertices"
+                )
+            if cosserat_tilt is None:
+                cosserat_tilt = np.zeros(concat_count, dtype=np.float32)
+            cosserat_tilt[indices] = tilt
 
         # ----- SAND (faceless point cloud) scalar params -----
         # A "points" object has no elements, so the per-element replication
@@ -3448,9 +3853,9 @@ class Scene:
         }
         force_field = None
         if not self.force_field.empty:
-            _grids, _scripts, _mask = _resolve_force_field_targets(
+            _fields, _scripts, _mask = _resolve_force_field_targets(
                 self.force_field, _group_vertices, len(concat_vert))
-            force_field = {"grids": _grids, "scripts": _scripts, "mask": _mask}
+            force_field = {"fields": _fields, "scripts": _scripts, "mask": _mask}
 
         # Per-vertex intersection tolerances, resolved from each object's
         # material. Resolved per OBJECT rather than replicated per element on
@@ -3550,6 +3955,7 @@ class Scene:
         pdrd_body_densities: list[float] = []  # one float per body, used to fill mass_per_vertex after volume is known
         pdrd_body_centroids: list[np.ndarray] = []  # rest centroid per body (local frame), used in the inertia pass
         pdrd_body_gram_trace: list[float] = []  # trace(S̄) per body, used to compute I_uniform
+        pdrd_body_labels: list[str] = []  # the name a refusal gives each body
         pdrd_vert_index = np.zeros(concat_count, dtype=np.uint32)
         pdrd_vert_list: list[int] = []
         pdrd_rest_centered_chunks: list[np.ndarray] = []
@@ -3587,6 +3993,7 @@ class Scene:
             pdrd_body_densities.append(density)
             pdrd_body_centroids.append(c_bar.copy())
             pdrd_body_gram_trace.append(float(np.trace(gram)))
+            pdrd_body_labels.append(self._label(name, obj))
             # Row: vertex_start (into pdrd_vert_list, NOT global!),
             # vertex_count, volume (filled by the divergence-theorem
             # pass below), centroid (3), gram_inv (9 row-major),
@@ -3641,12 +4048,11 @@ class Scene:
             else np.zeros((0, 3), dtype=np.float32)
         )
 
-        # Per-body enclosed volume via the divergence theorem AND
-        # volumetric inertia trace via centroid-tet decomposition.
-        # For each surface triangle of a body, form the tetrahedron
-        # (c̄, v0, v1, v2). The signed volumes sum to the body's
-        # enclosed volume; ∫_tet ||r − c̄||² dV summed gives
-        # ∫_body ||r − c̄||² dV, and trace(I_solid) = 2ρ · that.
+        # Per-body enclosed volume AND volumetric inertia trace, both from
+        # the body's surface triangles (`_pdrd_mass_.enclosed_moments`,
+        # which is also where a surface that bounds no solid is refused).
+        # With c̄ the body's vertex centroid, the second moment
+        # ∫_body ||r − c̄||² dV gives trace(I_solid) = 2ρ · that.
         #
         # Per-vertex mass is then scaled so the body's effective
         # rotational inertia matches the volumetric one:
@@ -3669,36 +4075,14 @@ class Scene:
             b2 = pdrd_vert_index[tri_arr[:, 2]]
             same_nonzero = (b0 != 0) & (b0 == b1) & (b1 == b2)
             for bid in range(1, next_body_id + 1):
+                label = pdrd_body_labels[bid - 1]
                 body_tri_mask = same_nonzero & (b0 == bid)
                 body_tris = tri_arr[body_tri_mask]
                 if len(body_tris) == 0:
-                    raise ValueError(f"PDRD body {bid}: no triangles found")
-                c_bar_b = pdrd_body_centroids[bid - 1]
-                va = concat_vert[body_tris[:, 0]].astype(np.float64) - c_bar_b
-                vb = concat_vert[body_tris[:, 1]].astype(np.float64) - c_bar_b
-                vc = concat_vert[body_tris[:, 2]].astype(np.float64) - c_bar_b
-                # Signed tet volumes (each tet = centroid + triangle).
-                vt = np.einsum("ij,ij->i", va, np.cross(vb, vc)) / 6.0
-                vol = float(np.abs(np.sum(vt)))
-                if vol < 1e-10:
-                    raise ValueError(
-                        f"PDRD body {bid}: enclosed volume {vol:.3e} is below the "
-                        "watertight-mesh floor. Mesh may have inverted or unclosed "
-                        "boundary; PDRD requires a closed surface mesh."
-                    )
-                # Second moment ∫_tet ||r||² dV (origin = body
-                # centroid; closed-form for tet with one vertex at
-                # origin):
-                #   V_t/20 · (||v_a+v_b+v_c||² + ||v_a||² + ||v_b||²
-                #             + ||v_c||²)
-                sum_v = va + vb + vc
-                sum_sq = (
-                    np.einsum("ij,ij->i", sum_v, sum_v)
-                    + np.einsum("ij,ij->i", va, va)
-                    + np.einsum("ij,ij->i", vb, vb)
-                    + np.einsum("ij,ij->i", vc, vc)
+                    raise ValueError(f"PDRD body {label!r}: no triangles found")
+                vol, second_moment = enclosed_moments(
+                    label, concat_vert, body_tris, pdrd_body_centroids[bid - 1]
                 )
-                second_moment = float(np.sum(vt / 20.0 * sum_sq))
                 density = pdrd_body_densities[bid - 1]
                 trace_I_solid = 2.0 * density * second_moment
                 row_off = (bid - 1) * PDRD_BODY_ROW_LEN
@@ -3710,14 +4094,15 @@ class Scene:
                 )
                 if trace_I_uniform <= 0.0:
                     raise ValueError(
-                        f"PDRD body {bid}: degenerate rest configuration "
+                        f"PDRD body {label!r}: degenerate rest configuration "
                         "(trace of Σ ȳ ȳᵀ is non-positive)"
                     )
                 scale = trace_I_solid / trace_I_uniform
                 if not (1e-6 < scale < 100.0):
                     raise ValueError(
-                        f"PDRD body {bid}: inertia trace ratio {scale:.3e} out "
-                        "of bounds. Mesh may be non-closed or extremely thin."
+                        f"PDRD body {label!r}: inertia trace ratio {scale:.3e} "
+                        "out of bounds. Its surface is closed and consistently "
+                        "wound, so it may cross itself or be extremely thin."
                     )
                 mass_per_vertex = (total_mass / float(vertex_count)) * scale
                 pdrd_body_rows[row_off + 2] = vol
@@ -3983,9 +4368,12 @@ class Scene:
         # parameter" panic, so every element kind drops them here. They still
         # travel to the solver as the resolved policy, and they are still
         # visible per object in the addon and in the PARAM payload.
+        #
+        # `contact-gap-limit` is per object for the same reason: it is already
+        # resolved into the per-element `contact-gap` values above.
         for key in ["allow-self-intersection", "allow-inter-object-intersection",
                     "allow-inter-group-intersection", "allow-existing-intersection",
-                    "force-field-weight"]:
+                    "force-field-weight", "contact-gap-limit"]:
             concat_tri_param[key] = []
             concat_rod_param[key] = []
             concat_tet_param[key] = []
@@ -4083,6 +4471,8 @@ class Scene:
             pdrd_vert_index=pdrd_vert_index if next_body_id > 0 else None,
             pdrd_vert_list=pdrd_vert_list if next_body_id > 0 else None,
             pdrd_rest_centered=pdrd_rest_centered if next_body_id > 0 else None,
+            cosserat_edge=cosserat_edge,
+            cosserat_tilt=cosserat_tilt,
             sand_param=concat_sand_param if concat_sand_param else None,
             invisible_vert=invisible_vert if invisible_vert.any() else None,
             translation_lock=translation_lock if has_translation_lock else None,
@@ -4143,6 +4533,10 @@ class Scene:
                 concat_stitch_w_arr,
                 concat_stitch_stiffness_arr,
             )
+
+        fixed._contact_gap_participants = tuple(
+            self._contact_gap_participants(gap_limits)
+        )
 
         pbar.update(1)
         advance("Building scene: validating constraints...")

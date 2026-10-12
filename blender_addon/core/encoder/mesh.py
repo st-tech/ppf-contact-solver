@@ -157,7 +157,7 @@ def compute_mesh_hash(context):
                 continue
             from ..uuid_registry import resolve_assigned
             obj = resolve_assigned(assigned)
-            if obj is None or obj.type not in ("MESH", "CURVE"):
+            if obj is None or obj.type not in ("MESH", "CURVE", "CURVES"):
                 continue
 
             if obj.type == "CURVE" and group.object_type == "ROD":
@@ -166,6 +166,14 @@ def compute_mesh_hash(context):
                     n_pts = len(s.bezier_points) if s.type == "BEZIER" else len(s.points)
                     group_hash["vertex_count"] += n_pts
                     group_hash["edge_count"] += max(0, n_pts - 1)
+                continue
+
+            if obj.type == "CURVES":
+                # Hair Curves: a point is a rod vertex, so the original
+                # point and segment counts are the topology.
+                from ..hair_curves import point_count, rod_edges
+                group_hash["vertex_count"] += point_count(obj)
+                group_hash["edge_count"] += len(rod_edges(obj))
                 continue
 
             mesh = obj.data
@@ -243,15 +251,27 @@ def compute_object_bounding_box_diagonal(obj):
     of 8.6 stacked 290 high would otherwise each carry the gap of a 290
     object.
 
-    A mesh is measured over its vertices and a curve over its ``bound_box``,
-    both through ``matrix_world``, so an object scaled in object mode is
-    measured at the size it has in the scene. Anything else, and an object
-    with no extent, yields ``MIN_OBJECT_DIAGONAL``.
+    A mesh is measured over its vertices, a curve over its ``bound_box`` and
+    a Hair Curves object over its points, all through ``matrix_world``, so an
+    object scaled in object mode is measured at the size it has in the scene.
+    Anything else, and an object with no extent, yields
+    ``MIN_OBJECT_DIAGONAL``.
     """
-    if obj is None or obj.type not in ("MESH", "CURVE"):
+    if obj is None or obj.type not in ("MESH", "CURVE", "CURVES"):
         return MIN_OBJECT_DIAGONAL
 
     world_mat = obj.matrix_world
+    if obj.type == "CURVES":
+        # Measured over the points rather than ``bound_box``, which also
+        # counts each strand's display radius.
+        from ..hair_curves import local_positions
+        local = local_positions(obj)
+        if len(local) == 0:
+            return MIN_OBJECT_DIAGONAL
+        mat = np.array(world_mat, dtype=np.float64)
+        world = local.astype(np.float64) @ mat[:3, :3].T + mat[:3, 3]
+        extent = world.max(axis=0) - world.min(axis=0)
+        return max(float(np.linalg.norm(extent)), MIN_OBJECT_DIAGONAL)
     if obj.type == "CURVE":
         points = [world_mat @ Vector(corner) for corner in obj.bound_box]
     else:
@@ -886,6 +906,35 @@ def _encode_obj_inner(context, scene, state, data):
                 uv = []
                 tri = None
                 mesh_ref = None
+            elif obj.type == "CURVES":
+                # Hair Curves: each point is a rod vertex and each pair of
+                # consecutive points of a curve a segment, so the index
+                # space of the pins and of the solver output is the point
+                # index. Shipped in local space at the starting-frame
+                # evaluation, as a mesh ROD is, so a modifier that follows
+                # the scalp in front of the cache reaches the solve.
+                from ..hair_curves import (
+                    local_positions,
+                    refuse_unseen_surface_follow,
+                    refuse_unsimulatable,
+                    rod_edges,
+                )
+                if group.object_type != "ROD":
+                    raise ValueError(
+                        f"Hair Curves '{obj.name}' is in group "
+                        f"'{group.name}', a {group.object_type} group, and "
+                        "is simulated as rods only. Move it to a Rod group."
+                    )
+                refuse_unsimulatable(obj, group.name)
+                refuse_unseen_surface_follow(obj, group.name, context)
+                vert = _shipped_local_verts(
+                    obj, context, state, group, local_positions(obj),
+                )
+                edges_array = rod_edges(obj)
+                stitch_data = None
+                uv = []
+                tri = None
+                mesh_ref = None
             else:
                 mesh = obj.data
                 edges_array = None
@@ -1270,14 +1319,14 @@ def encode_obj_with_hash(context) -> tuple[bytes, str]:
     because ``_build_obj_data`` produces a fixed dict-insertion order
     and ``cbor2.dumps`` preserves that order.
     """
-    from .cbor_encode import dumps_envelope
+    from .cbor_encode import dumps_envelope, payload_digest
     tree = _build_obj_data(context, persist_topology_hash=True)
     encoded = dumps_envelope("Scene", tree)
-    return encoded, hashlib.sha256(encoded).hexdigest()
+    return encoded, payload_digest(encoded)
 
 
 def compute_data_hash(context) -> str:
-    """SHA-256 fingerprint of the encoded scene data.
+    """Fingerprint (``payload_digest``) of the encoded scene data.
 
     Hashes the same CBOR bytes that ``encode_obj`` produces, so the
     upload-time hash and the click-time drift hash always agree.
@@ -1285,6 +1334,6 @@ def compute_data_hash(context) -> str:
     upload path should do that). Raises ``ValueError`` for the same
     duplicate-assignment / encoding errors ``encode_obj`` raises.
     """
-    from .cbor_encode import dumps_envelope
+    from .cbor_encode import dumps_envelope, payload_digest
     tree = _build_obj_data(context, persist_topology_hash=False)
-    return hashlib.sha256(dumps_envelope("Scene", tree)).hexdigest()
+    return payload_digest(dumps_envelope("Scene", tree))

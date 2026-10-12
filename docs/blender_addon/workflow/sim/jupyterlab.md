@@ -1,119 +1,155 @@
 # 📓 JupyterLab
 
-JupyterLab is a first-class way to drive the solver, not just a place to
-export a notebook. Once a scene has been transferred, the same project
-can be simulated, previewed, inspected, and iterated on entirely from
-a notebook on the solver host. Blender itself does not have to stay
-open: you can quit it, run the full simulation from JupyterLab,
-relaunch Blender later, and fetch the finished animation back onto the
-original meshes.
+Once a scene has been transferred, a notebook on the solver host can run
+the simulation, preview it, and inspect it. Blender does not have to stay
+open: quit it, let the notebook run the solve, start Blender again later,
+and fetch the finished animation onto the original meshes.
 
-This page covers the whole loop in one place.
+This page covers the whole loop: exporting the notebook, running the solve
+from it, and fetching the result.
 
 ## When to Reach for JupyterLab
 
-- **Headless simulation.** You have a laptop that you need to close,
-  but the solver host can keep running. Export, quit Blender, and
-  drive `app.session.run()` from a notebook that stays alive on the
-  server.
-- **Parameter sweeps and variant generation.** Scripting
-  `app.session.session.param` edits in a notebook is faster than clicking
-  through the sidebar, and the results stream back as plots instead of
-  viewport redraws.
-- **Inspecting the codebase.** The notebook attaches to the same
-  `frontend` package the add-on talks to, so you can poke at
-  `app.scene`, `app.session`, `app.session.session.param`, the
-  fixed-scene report, and the live solver state interactively. It is a
-  much faster way to learn the API than reading source, and a convenient
-  surface for summarizing what a project contains.
-- **Long runs you want to leave unattended.** Kick off
-  `app.session.run()` in a notebook cell, close the browser tab, and
-  reconnect later to `app.session.stream()` the tail of stdout.
+- **Simulate with Blender closed.** Export the notebook, start the run with
+  `app.session.run()`, then quit Blender or close the laptop while the
+  solver host keeps working.
+- **Leave a long run unattended.** Start `app.session.run()` in a cell and
+  close the browser tab. The solver keeps running on the host. Reopen the
+  notebook and call `app.session.stream()` from the same kernel to see the
+  tail of the solver's output. The kernel is the Python session behind the
+  notebook, which holds the `app` variable; **Kernel → Restart Kernel**
+  starts a new one and discards it.
+- **Inspect a project.** `app.scene` and `app.session` come from the
+  solver's `frontend` package, so you can read them interactively. See
+  [Inspecting a Project from a Notebook](#inspecting-a-project-from-a-notebook).
+- **Set a parameter from Python.** Override it on the session and build
+  again; the *Overriding a Session Parameter* section of the
+  [JupyterLab Python API](../../../jupyterlab_api/index.rst) shows how and
+  why a built session ignores a later change. The rebuild clears the session
+  folder, like the attach cell does (see the warning under
+  [The Generated Notebook](#the-generated-notebook)).
 
 ## The End-to-End Loop
 
 ```{figure} ../../images/jupyterlab/end_to_end_loop.svg
-:alt: Sequence diagram with three lanes. Blender (1) on the left transferring and exporting to JupyterLab, then quitting; JupyterLab in the middle running app.session.run / preview / stream while frames land on disk; Blender (2) on the right launching later and pulling the animation back via Connect and Fetch
+:alt: Sequence diagram with three lanes. Blender (1) on the left transferring the scene and exporting the notebook to JupyterLab, then quitting; JupyterLab in the middle running app.session.run / preview / stream while frames land on disk; Blender (2) on the right launching later and pulling the animation back via Connect and Fetch
 :width: 760px
 
-The three-lane loop. The first Blender session transfers the scene,
-exports the notebook, and optionally starts the solver, then quits.
-JupyterLab drives `run() / preview() / stream()` on the solver host
-while frames land on disk. A later Blender session launches,
-reconnects, and fetches the animation back onto the original meshes.
+The three-lane loop. The first Blender session transfers the scene and
+exports the notebook, then quits. JupyterLab drives
+`run() / preview() / stream()` on the solver host while frames land on
+disk, and the notebook starts the solver itself. A later Blender session
+connects and fetches the animation onto the original meshes. The figure
+draws **Start Server** after the export, but the server has to be running
+before you press **Transfer** and **Export**, so start it first unless it
+is already running (see [Prerequisites](#prerequisites)).
 ```
 
-The thing that makes this work is the solver's on-disk project state:
-mesh / param pickles from **Transfer**, plus whatever frames the solver
-has produced. As long as those live on the solver host, it does not
-matter whether Blender, JupyterLab, or neither is currently attached.
+The loop works because the solver host holds the scene that **Transfer**
+uploaded and the frames the solver writes. While they stay on the host, it
+does not matter whether Blender, JupyterLab, or neither is attached.
 
 :::{note}
-You do not have to switch to JupyterLab just to leave a run unattended.
-A simulation launched from the Blender add-on **Run** button also
-survives **Disconnect** and even quitting Blender; reconnect later and
-**Fetch All Animation** to pull the frames. See
+You do not have to switch to JupyterLab to leave a run unattended. A
+simulation started with the add-on's **Run** button also survives
+**Disconnect** and quitting Blender; reconnect later and press **Fetch All
+Animation**. See
 [Disconnecting while a simulation runs](simulating.md#disconnecting-while-a-simulation-runs).
-Reach for JupyterLab when you want to *drive* the run (parameter
-sweeps, live previews, interactive inspection), not just step away.
+Use JupyterLab when you want to drive the run from Python, preview it live,
+or inspect it, not only to step away.
 :::
 
 ## Prerequisites
 
-- JupyterLab running and reachable from the add-on, by convention on
-  the solver host, on the **JupyterLab Port** (default `8080`).
-- A live connection: **Connect** plus **Start Server on Remote** on the
-  main panel.
-- At least one **Transfer** into the current session so the notebook has
-  something to attach to. Without it, `BlenderApp.open(...)` has no
-  pickles to build from and raises `FileNotFoundError`.
+- **JupyterLab on the solver host.** The solver's launcher or install
+  script starts it and prints its URL; see the
+  [solver README](https://github.com/st-tech/ppf-contact-solver).
+  **Open URL** opens `http://localhost:<Port>/lab/tree/<path>` in the
+  browser on the machine running Blender, and the add-on does not forward
+  ports. When the solver runs on another machine, forward JupyterLab's port
+  yourself, for example `ssh -L 8080:localhost:8080 your-host`, and set
+  **Port** to the local port you forwarded.
+- **A connection and a running server.** Press **Connect** and **Start
+  Server on Remote** on the **Backend Communicator** panel. **Transfer** is
+  grayed out until the server is running. **Export** is enabled once you
+  are connected, and **Delete** once you are connected and have exported a
+  notebook; both send their request to the server, so start it first.
+  **Start Server on Remote** starts the server the add-on talks to; the
+  notebook starts the solver itself when it calls `run()`. See
+  [Connections](../../connections/index.md).
+- **A Transfer of this project** to the solver host, from this connection
+  or an earlier one. Without it, `BlenderApp.open(...)` raises
+  `FileNotFoundError`.
 
-## The Jupyter Row
+## The JupyterLab Box
 
-The Solver panel's **JupyterLab** section holds three notebook buttons
-on one row, a debug row below them, and a **Port** field:
+The **JupyterLab** box sits in the **Solver** panel below the **Export** box.
+It starts collapsed; click the triangle in its header to open it. It holds
+a row of notebook buttons, a row of build buttons, and a **Port** field.
+**Port** is the port **Open URL** uses. It defaults to `8080` and accepts
+1024 to 65535.
 
-| Button       | What it does                                                                  |
-| ------------ | ----------------------------------------------------------------------------- |
-| **Export**   | Write the template notebook onto the solver host                              |
-| **Open URL** | Open `http://localhost:<port>/lab/tree/<path>` in your browser                |
-| **Delete**   | Remove the notebook file from the solver host                                 |
-| **Transfer without Build** | Upload data and parameters without triggering a remote build    |
-| **Build**    | Trigger a remote build without retransferring data                            |
+| Notebook button | What it does |
+| --------------- | ------------ |
+| **Export**      | Writes the template notebook to the solver host. A dialog asks for the path. |
+| **Open URL**    | Opens `http://localhost:<Port>/lab/tree/<path>` in your default browser. |
+| **Delete**      | Removes the last exported notebook from the solver host. |
 
-**Transfer without Build** and **Build** are debug halves of what
-**Transfer** does in one go; **Port** is the **JupyterLab Port** that
-**Open URL** points the browser at.
+| Build button               | What it does | Enabled when |
+| -------------------------- | ------------ | ------------ |
+| **Transfer without Build** | Uploads the scene and parameters and stops there. While the status line reads *Ready to Run* or *Resumable*, it first deletes the project's data on the host, cached results and simulated frames included, and reports *Remote data already exists. Deleting first.* In other states it uploads over what is there. Afterward the status line reads *Waiting for Build* and **Run** is grayed out. | The server is running, an active group of a dynamic type holds an object, and nothing is in progress. |
+| **Build**                  | Builds the uploaded scene on the host without uploading again. | The server is running, the status line reads *Waiting for Build*, *Ready to Run* or *Resumable*, and nothing is in progress. |
+
+The two build buttons are the halves of what **Transfer** does in one click.
+**Transfer** keeps the cached results that still apply; **Transfer without
+Build** deletes all of them when it deletes at all. Simulated frames and
+saved states on the host are removed when **Transfer without Build**
+deletes the data, or otherwise when **Build** runs, so press **Fetch All
+Animation** first for any you want to keep.
 
 ```{figure} ../../images/jupyterlab/jupyterlab_row.png
-:alt: JupyterLab section inside the Solver panel
+:alt: JupyterLab box in the Solver panel showing the notice Connect to server to export/delete, the Export, Open URL and Delete buttons, the Transfer without Build and Build buttons, and the Port field set to 8080, with every button grayed out
 :width: 500px
 
-The JupyterLab section, expanded. The **Export** button writes the
-notebook onto the solver host. **Open URL** points the browser at it
-once an export exists, and **Delete** removes the server-side file.
+The JupyterLab box before a connection exists: the buttons are grayed out
+and a notice reads *Connect to server to export/delete*. The red box marks
+**Export**.
 ```
 
-**Export** pops a dialog for the target path. The default is
-`blender-export/<project_name>.ipynb` (or whatever you exported last).
-The filename must end with `.ipynb`. Writes go through the solver
-connection, not through Jupyter's REST API.
+**Export** needs a connection. Its dialog asks for a notebook path relative
+to JupyterLab's root folder, which is the solver's `examples` folder. The
+dialog starts from the last exported path, or from
+`blender-export/<Project Name>.ipynb` on the first export. The path must
+end with `.ipynb`, and missing subfolders are created. A path that leaves
+the root folder is refused with *Server rejected notebook: ...*. **Export**
+overwrites the file at the path you confirm.
 
-**Open URL** is enabled once an export exists. It does not check that the
-file still exists on the server; if you deleted it manually, you will
-get a 404 in the browser.
+The notebook embeds the **Project Name**, not the file name, so renaming
+the file is harmless. Export again after the **Project Name** changes.
 
-**Delete** removes the server-side file and clears the add-on's record
-of the last export, which disables **Open URL** again.
+**Open URL** is enabled whenever the add-on holds a last-export path, which
+is saved with the `.blend`. It does not check that the file still exists on
+the host; a file removed outside the add-on cannot be opened.
+
+**Delete** needs a connection and a recorded export. It removes the last
+exported notebook from the solver host and clears the add-on's record of it,
+which grays out **Open URL** and **Delete** until the next **Export**.
+
+Each button reports its result in Blender's status bar:
+
+| Button | Report |
+| ------ | ------ |
+| **Export** | Success: *Exported blender-export/shirt.ipynb via solver server* (with the path you confirmed). Errors: *Filepath is empty*, *Filename must end with .ipynb*, *Not connected to solver server. Connect first.*, *Server rejected notebook:* followed by the server's reason (the server answered with an error, for example because the path leaves the root folder), and *Export failed:* followed by the reason (the request did not complete). |
+| **Open URL** | *Opened* followed by the URL, for example `http://localhost:8080/lab/tree/blender-export/shirt.ipynb`. |
+| **Delete** | Success: *Deleted blender-export/shirt.ipynb* (with the recorded path). Errors: *Not connected to solver server. Connect first.*, *Server rejected delete:* followed by the server's reason, and *Delete failed:* followed by the reason. |
 
 ## The Generated Notebook
 
-Three cells, all Python:
+Three code cells:
 
-1. **Banner comment** naming the project, so the notebook is
-   self-identifying when shared.
+1. **Banner.** A comment naming the project.
 
-2. **Attach**:
+2. **Attach.**
 
    ```python
    from frontend import BlenderApp
@@ -123,13 +159,12 @@ Three cells, all Python:
    app.scene.preview()
    ```
 
-   `BlenderApp.open(...)` raises `FileNotFoundError` unless the add-on
-   has already uploaded `data.pickle`, `param.pickle`, and
-   `upload_id.txt` under the project root; with those in place it
-   populates and builds the scene from them. Every call rebuilds, so
-   re-running this cell is safe but not free on a heavy scene.
+   `BlenderApp.open(...)` builds the scene and session from the files that
+   **Transfer** uploaded, and clears the project's session folder on the
+   solver host first (see the warning below). `app.scene.report()` prints
+   element counts, and `app.scene.preview()` shows the scene in 3D.
 
-3. **Run**:
+3. **Run.**
 
    ```python
    app.session.run()
@@ -137,121 +172,126 @@ Three cells, all Python:
    app.session.stream()
    ```
 
-   `run()` starts the solver (or attaches to an existing run, which is
-   useful if you kicked it off from the add-on already).
-   `preview()` gives a
-   live frame playback widget, `stream()` tails stdout in realtime. To
-   pick up a saved state instead, call `app.session.resume()`
-   explicitly.
+   `run()` starts the solver from frame 0, or leaves a running solver
+   alone, for example when the cell is run a second time. `preview()` shows
+   a live frame player. `stream()` shows the tail of the solver's output and
+   draws **Stop Live Stream**, **Terminate Solver**, and **Save and Quit**
+   buttons. To continue from a saved state instead of starting over, call
+   `app.session.resume()`.
+
+:::{warning}
+**Run the attach cell once per kernel, before the Run cell.** It rebuilds
+the project's session folder on the solver host from the uploaded scene,
+and it clears that folder first. The frames and saved states of an earlier
+run live in that folder, so re-running the attach cell discards them.
+
+**Do not attach a notebook to a solve that Blender started with Run.**
+Running the attach cell while a solver is running removes the folder the
+solver is writing to. Wait for the solve to end, then press **Fetch All
+Animation** in Blender to collect that run instead.
+
+To return to a finished or running notebook session, reuse the existing
+`app` variable in the same kernel. Before you re-run the attach cell (for
+example in a restarted kernel), press **Fetch All Animation** in Blender for
+any frames you want to keep. The saved states are cleared as well, so
+`app.session.resume()` finds nothing afterward.
+:::
 
 :::{note}
-The notebook's `BlenderApp` comes from the solver repo's `frontend`
-package, not the add-on. The add-on only writes the file.
+The notebook's `BlenderApp` comes from the solver's `frontend` package, not
+from the add-on. The add-on only writes the notebook file.
 :::
 
 ## Simulating Entirely from JupyterLab
 
-Once the notebook is open, Blender is no longer required. A typical
-"quit Blender and simulate in the notebook" session looks like this:
+Once the notebook is open, Blender is not required. A session that quits
+Blender and simulates in the notebook looks like this:
 
-1. In Blender, finish scene setup, **Transfer**, then **Export**
-   notebook. Optionally press **Start Server on Remote** so a solver is
-   already warm; if not, the notebook will spawn one when `run()` is
-   called.
-2. **Open** the notebook in your browser. Confirm the attach cell
-   brings up the expected scene via `app.scene.report()` and
-   `app.scene.preview()`.
-3. **Quit Blender.** The solver host keeps the pickles and any running
-   server process; closing Blender only drops the add-on's live
-   connection.
-4. From the notebook, run the simulation:
-
-   ```python
-   app.session.run()        # or app.session.resume() to continue
-   app.session.preview()    # live frame widget in the notebook
-   app.session.stream()     # tail solver stdout inline
-   ```
-
-5. Iterate in place. You can tweak parameters through
-   `app.session.session.param.*` (see the
-   [JupyterLab Python API](../../../jupyterlab_api/index.rst)) and re-run without
-   re-exporting. Because the notebook attaches to the pickled scene on
-   disk, you can close the browser tab and reopen it later. The cell
-   outputs may be gone, but rerunning the attach cell puts you right
-   back where you were.
+1. In Blender, finish the scene setup and press **Transfer**. Then press
+   **Export** in the **JupyterLab** box. The server must be running for
+   both buttons (see [Prerequisites](#prerequisites)).
+2. Press **Open URL**. In the notebook, run the attach cell once and check
+   the scene with `app.scene.report()` and `app.scene.preview()`.
+3. Quit Blender. The solver host retains the uploaded scene and any running
+   solver; quitting only ends the add-on's connection.
+4. In the notebook, run the Run cell from
+   [The Generated Notebook](#the-generated-notebook). After a run that saved
+   a state and then stopped, call `app.session.resume()` in the same kernel
+   instead of `run()` to continue from the latest saved state.
+5. To run again from frame 0, call `app.session.run()` once the solver has
+   stopped. To change the scene or its parameters, start Blender, connect
+   again, update them there, and press **Transfer** or **Update Params on
+   Remote** (see [Update Params vs Transfer](simulating.md#update-params-vs-transfer)).
+   Then re-run the attach cell. **Transfer** removes the simulated frames
+   and saved states on the host, and the attach cell removes them after
+   **Update Params on Remote**, so fetch any you want to keep first, as the
+   warning above describes.
 
 ## Returning to Blender and Fetching
 
-When the run is done (or whenever you want the animation back on your
-Blender meshes):
+When the run is done, or whenever you want the animation on your Blender
+meshes:
 
-1. **Launch Blender** and reopen the `.blend` you transferred from.
-2. **Connect** to the same solver host. The session ID baked into the
-   scene is how the add-on recognizes it is the same run.
-3. Press **Fetch All Animation**. The add-on downloads the frames the
-   JupyterLab run produced and wires the downloaded PC2 files up to
-   each simulated mesh, exactly as if Blender had driven the run itself.
-4. Scrub the timeline to confirm, then optionally **Bake** (see
-   [Baking Animation](baking.md)) to turn the fetched animation into
-   plain Blender data.
+1. Start Blender and open the `.blend` you transferred from.
+2. Press **Connect** with the same solver host and **Project Name**
+   settings. If the server is not running, press **Start Server on Remote**.
+   The console may print a `Reconcile: previous session ... differs` line;
+   it is informational and does not block **Fetch All Animation**. See
+   [Sessions and Recovery](simulating.md#sessions-and-recovery).
+3. Press **Fetch All Animation**. It stays grayed out while the solver is
+   running. The add-on downloads the frames and attaches them to each
+   simulated mesh, as if Blender had driven the run itself.
+4. Scrub the timeline to confirm. Then optionally press **Bake Animation**
+   (see [Baking Animation](baking.md)) to turn the fetched animation into
+   plain Blender data, or write it out with
+   [Exporting USD and Alembic Caches](exporting.md).
 
-:::{tip}
-If the reopened `.blend` warns about a session mismatch, it means the
-solver host has a different session stamped than your `.blend`
-remembers. Either reconnect to the run you actually want (matching
-session), or accept the mismatch if you are deliberately attaching to
-a new one; see [Simulating → Sessions and recovery](simulating.md#sessions-and-recovery).
-:::
+## Inspecting a Project from a Notebook
 
-## Inspecting the Codebase from a Notebook
-
-The same notebook is a very natural place to explore what the solver
-understands about a project. Useful idioms:
+The notebook can read the transferred scene and its session while Blender
+is closed:
 
 ```python
-app.scene.report()                       # group summary, counts, flags
-app.scene.preview()                      # 3D preview of the fixed scene
-app.session.session.param                # live param object; tab-complete it
-help(app.session)                        # frontend FixedSession API surface
-app.session.session.param.dyn("gravity") # dynamic-parameter builder
+app.scene.report()                       # element counts: vertices, rods, triangles, tets, pins, stitches
+app.scene.preview()                      # 3D preview of the scene
+app.session.session.param.get("gravity") # read one parameter
+help(app.session)                        # the FixedSession API
 ```
 
-Because `frontend` is just a Python package, `inspect.getsource(...)`,
-`??` magics, and regular `dir()` all work. This makes a notebook a
-good place to summarize a project (what groups exist, what pins are
-bound, what parameters are in play) without clicking through every
-sidebar section in Blender.
+Because `frontend` is a Python package, `inspect.getsource(...)`, the `??`
+magic, and `dir()` work on it. The
+[JupyterLab Python API](../../../jupyterlab_api/index.rst) section lists
+the classes and methods the `frontend` package exports, including
+`FixedScene` and `FixedSession`, which `app.scene` and `app.session`
+return. For a run held at a frame,
+`app.session.update_params()` re-exports the `dyn()` schedules; the same
+page describes it under stepping a run frame by frame.
 
 ## Tips
 
-- **Re-export after major scene changes.** The notebook's
-  `BlenderApp.open(...)` picks up whatever pickles are on disk at the
-  time the cell runs, so you normally do not need to re-export just to
-  iterate on parameters. Re-export when you add or remove objects,
-  rebuild groups, or change the project name.
-- **Repeated exports overwrite.** The filename is derived from the
-  project name, so hitting **Export** twice is safe.
-- **Delete to tidy up.** Useful when flipping between experiments so
-  stale `.ipynb` files do not accumulate under `blender-export/`.
-- **If Open goes to the wrong port**, the add-on uses the **JupyterLab
-  Port** from scene state. Adjust it in the Jupyter preferences row, not
-  via the URL.
-- **Headless-friendly.** `run()`, `preview()`, and `stream()` all work
-  with Blender closed; the notebook does not depend on Blender's
-  Python at all.
+- **Transfer again after scene changes.** The attach cell reads whatever
+  **Transfer** last uploaded. Press **Transfer** after you add or remove
+  objects or rebuild groups, and **Update Params on Remote** after a
+  parameter-only change. Re-export the notebook only when the **Project
+  Name** changes.
+- **Delete to tidy up.** It removes the last exported notebook from the
+  host, so `blender-export/` does not fill with files from old experiments.
+- **If Open URL goes to the wrong port**, change the **Port** field at the
+  bottom of the **JupyterLab** box. **Open URL** always uses that value.
 
 ## See Also
 
-- [Connecting to a solver host](../../connections/index.md): required
-  before Export is enabled.
-- [Simulating](simulating.md): covers **Transfer**, **Start Server on
-  Remote**, and the **Fetch** button you press when you come back to
-  Blender.
+- [Connections](../../connections/index.md): connecting, and **Start Server
+  on Remote**, which **Export** and **Delete** need.
+- [Running the Simulation](simulating.md): covers **Transfer**, **Run**, and
+  **Fetch All Animation**.
 - [Baking Animation](baking.md): converting a fetched animation into
-  standard Blender keyframes once a JupyterLab-driven run is done.
-- [JupyterLab Python API](../../../jupyterlab_api/index.rst): the full
-  surface of `app.scene`, `app.session`, and `app.session.session.param`
-  that the notebook exposes.
+  standard Blender keyframes.
+- [Exporting USD and Alembic Caches](exporting.md): writing the fetched
+  animation to a point cache file.
+- [JupyterLab Python API](../../../jupyterlab_api/index.rst): the classes
+  and methods the `frontend` package exports, including those behind
+  `app.scene`, `app.session`, and `app.session.session.param`.
 
 :::{admonition} Under the hood
 :class: toggle
@@ -262,23 +302,31 @@ sidebar section in Blender.
 :alt: Sequence diagram with three lanes. Blender plus add-on on the left, solver host in the middle, browser on the right. The add-on transfers mesh and parameters and exports the notebook to the solver host, opens the JupyterLab URL in the browser, and the browser attaches back to the solver host via BlenderApp.open
 :width: 760px
 
-Transport topology. The add-on pushes mesh, params, and the notebook
-file through the solver connection, then opens the JupyterLab URL in
-the browser. Once loaded, the notebook attaches back to the solver
-host through `BlenderApp.open(...)`.
+Transport topology. The add-on sends the scene, parameters, and notebook
+file through the solver connection, then opens the JupyterLab URL in the
+browser. Once loaded, the notebook attaches back to the solver host through
+`BlenderApp.open(...)`. **Open URL** launches the browser on the machine
+running Blender at `http://localhost:<Port>/lab/tree/<path>` (the host and
+port drawn in the figure are placeholders), so a remote host needs the
+port forward described under Prerequisites.
 ```
 
-The running JupyterLab process lives on the solver host (or wherever
-the configured port can reach). The add-on never touches JupyterLab's
-REST API directly.
+The add-on never calls JupyterLab's REST API. The JupyterLab process lives
+on the solver host.
+
+**What the notebook reads**
+
+`BlenderApp.open(...)` reads `data.pickle`, `param.pickle`, and
+`upload_id.txt` under the project root on the solver host, which
+**Transfer** writes. It raises `FileNotFoundError` when any of them is
+missing. It then builds the scene and session, which clears the project's
+`session` folder first, including its `output` subfolder with the frames and
+saved states.
 
 **Transport**
 
-Writes go through the solver's control channel as JSON requests; the
-server resolves them under `<src>/examples/` and replies OK or an error.
-This indirection exists because writing through JupyterLab's own
-contents API was making the exported file (and its parent
-`blender-export/` directory) vanish after a while, a suspected
-interaction with JupyterLab's cloned-workspace state. Routing through
-the solver sidesteps that entirely.
+The add-on writes and deletes the notebook through the solver's control
+channel as JSON requests. The server resolves the path under the solver's
+`examples` folder, which is JupyterLab's root, creates missing subfolders,
+and refuses a path that escapes that folder.
 :::

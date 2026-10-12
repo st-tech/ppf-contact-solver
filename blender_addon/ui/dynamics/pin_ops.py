@@ -80,6 +80,13 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
                         break
             if not has_selected:
                 return False
+        elif context.mode == "EDIT_CURVES":
+            obj = context.edit_object
+            if obj is None or obj.type != "CURVES":
+                return False
+            from ...core.hair_curves import selected_point_mask
+            if not selected_point_mask(obj).any():
+                return False
         else:
             return False
         obj = context.edit_object
@@ -148,6 +155,16 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
                         if p.select:
                             selected.append(idx)
                         idx += 1
+        elif obj.type == "CURVES":
+            from ...core.hair_curves import (
+                selected_point_mask,
+                selected_point_weights,
+            )
+            hair_mask = selected_point_mask(obj)
+            # A selection painted in Sculpt Mode is a weight per point, which
+            # the pin keeps: partly selected points become partly held ones.
+            hair_weights = selected_point_weights(obj)
+            selected = [int(i) for i in hair_mask.nonzero()[0]]
         else:
             selected = []
 
@@ -172,6 +189,21 @@ class OBJECT_OT_CreatePinVertexGroup(Operator):
             # Store as custom property for curves (no native vertex group support)
             key = f"_pin_{name}"
             obj[key] = json.dumps(selected)
+        elif obj.type == "CURVES":
+            # A Hair Curves pin is a point attribute, which Blender carries
+            # through edits to the groom the way it carries a vertex group
+            # through edits to a mesh: a boolean one for a plain selection,
+            # a float one for a selection that carries weights.
+            from ...core.hair_curves import store_pin, store_pin_weights
+            try:
+                if hair_weights is not None:
+                    store_pin_weights(obj, name, hair_weights)
+                else:
+                    store_pin(obj, name, hair_mask)
+            except ValueError as e:
+                bpy.ops.object.mode_set(mode="EDIT")
+                self.report({"ERROR"}, str(e))
+                return {"CANCELLED"}
 
         # Add to pin list
         from ...core.uuid_registry import get_or_create_object_uuid, compute_vg_hash
@@ -241,6 +273,9 @@ class OBJECT_OT_AddPinVertexGroup(Operator):
                 # Curves store pins as custom properties, not vertex groups
                 if candidate.type == "CURVE":
                     has_vg = f"_pin_{vg_name}" in candidate
+                elif candidate.type == "CURVES":
+                    from ...core.hair_curves import pin_exists
+                    has_vg = pin_exists(candidate, vg_name)
                 else:
                     has_vg = (
                         hasattr(candidate, "vertex_groups")
@@ -396,6 +431,13 @@ class OBJECT_OT_RenamePinVertexGroup(Operator):
             if key_old in obj:
                 obj[f"_pin_{new_vg}"] = obj[key_old]
                 del obj[key_old]
+        elif obj.type == "CURVES":
+            from ...core.hair_curves import rename_pin
+            try:
+                rename_pin(obj, old_vg, new_vg)
+            except ValueError as e:
+                self.report({"ERROR"}, str(e))
+                return {"CANCELLED"}
 
         # Update pin identifier and hash. The pin-input PC2 cache is
         # keyed by object UUID, so a vertex-group rename does not touch
@@ -446,6 +488,9 @@ def _pin_select(operator, context, select):
         key = f"_pin_{vg_name}"
         raw = obj.get(key)
         pin_indices = set(json.loads(raw)) if raw else set()
+    elif obj.type == "CURVES":
+        from ...core.hair_curves import pin_indices as hair_pin_indices
+        pin_indices = set(hair_pin_indices(obj, vg_name))
     else:
         vg = obj.vertex_groups.get(vg_name)
         if not vg:
@@ -473,6 +518,9 @@ def _pin_select(operator, context, select):
                         p.select = select
                         count += 1
                     idx += 1
+    elif obj.type == "CURVES":
+        from ...core.hair_curves import set_point_selection
+        count = set_point_selection(obj, pin_indices, select)
     else:
         bm = bmesh.from_edit_mesh(obj.data)
         bm.verts.ensure_lookup_table()
@@ -498,7 +546,7 @@ class OBJECT_OT_SelectPinVertices(Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.mode in ("EDIT_MESH", "EDIT_CURVE")
+        return context.mode in ("EDIT_MESH", "EDIT_CURVE", "EDIT_CURVES")
 
     def execute(self, context):
         return _pin_select(self, context, select=True)
@@ -514,7 +562,7 @@ class OBJECT_OT_DeselectPinVertices(Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.mode in ("EDIT_MESH", "EDIT_CURVE")
+        return context.mode in ("EDIT_MESH", "EDIT_CURVE", "EDIT_CURVES")
 
     def execute(self, context):
         return _pin_select(self, context, select=False)
@@ -552,11 +600,11 @@ class OBJECT_OT_MakePinKeyframe(Operator):
             return {"CANCELLED"}
 
         obj = get_object_by_uuid(pin_item.object_uuid)
-        if not obj or obj.type not in ("MESH", "CURVE"):
+        if not obj or obj.type not in ("MESH", "CURVE", "CURVES"):
             self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
 
-        if obj.type == "CURVE":
+        if obj.type in ("CURVE", "CURVES"):
             self.report({"INFO"}, iface_("Keyframing not supported for curve pins"))
             return {"FINISHED"}
 
@@ -687,11 +735,11 @@ class OBJECT_OT_DeletePinKeyframes(Operator):
             return {"CANCELLED"}
 
         obj = get_object_by_uuid(pin_item.object_uuid)
-        if not obj or obj.type not in ("MESH", "CURVE"):
+        if not obj or obj.type not in ("MESH", "CURVE", "CURVES"):
             self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
 
-        if obj.type == "CURVE":
+        if obj.type in ("CURVE", "CURVES"):
             self.report({"INFO"}, iface_("Keyframe deletion not applicable for curve pins"))
             return {"FINISHED"}
 

@@ -251,6 +251,33 @@ pub unsafe fn momentum<D: Device>(
         seam_arena_count: 0,
     };
     device.launch("assemble.momentum", &args, vertices as u32)?;
+    // The field terms evaluated at the iterate join the row just written.
+    let (force, diagonal) = (state.force.handle(), state.diagonal.handle());
+    let (eval_x, current, prop) = (
+        state.eval_x.handle(),
+        state.positions.handle(),
+        state.prop_vertex.handle(),
+    );
+    // THIS step's Playback Speed, read per call: a dynamic one changes it
+    // from step to step, and a fluid's velocity, placed on the scene clock,
+    // is divided by it to meet the physical vertex velocity.
+    let playback = (*param).playback;
+    state
+        .field
+        .implicit(
+            device,
+            eval_x,
+            current,
+            prop,
+            force,
+            diagonal,
+            (*param).time_f32,
+            dt,
+            playback,
+            // The step's end on the scene clock, which advances by
+            // `dt / playback` (step.rs).
+            (*param).time_f32 + dt / playback,
+        )?;
     Ok(())
 }
 
@@ -2442,7 +2469,7 @@ pub unsafe fn stretch_indicator<D: Device>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::driver::launch::host_device;
     use ppf_cts_compute::{AllocLabel, Buffer, HostDevice};
@@ -2703,7 +2730,7 @@ mod tests {
 
     /// The upper-triangle sparsity over `vertices`, every pair stored, plus its
     /// transpose mirror, built the way `builder.rs` builds them.
-    fn install_pattern(data: &mut crate::data::DataSet, vertices: usize) {
+    pub(crate) fn install_pattern(data: &mut crate::data::DataSet, vertices: usize) {
         let rows: Vec<Vec<u32>> = (0..vertices)
             .map(|i| ((i as u32)..(vertices as u32)).collect())
             .collect();
@@ -4363,7 +4390,7 @@ mod tests {
             .collect()
     }
 
-    fn clear_force(device: &mut HostDevice, state: &mut SolverState) {
+    pub(crate) fn clear_force(device: &mut HostDevice, state: &mut SolverState) {
         let n = 3 * state.sizes.vertices;
         let args = crate::driver::kernels::VecFillArgs {
             array: state.force.handle(),
@@ -4377,7 +4404,7 @@ mod tests {
     }
 
     /// The right-hand side, read back off its mirror.
-    fn force_of(device: &mut HostDevice, state: &mut SolverState) -> Vec<f32> {
+    pub(crate) fn force_of(device: &mut HostDevice, state: &mut SolverState) -> Vec<f32> {
         state
             .force
             .download(device)
@@ -5510,7 +5537,7 @@ mod tests {
     /// fixture that omits them has no sites whatever its geometry looks like.
     /// The face table is present and EMPTY rather than absent, which is the
     /// shape `builder.rs` produces for a rod-only mesh.
-    fn install_rod_adjacency(data: &mut crate::data::DataSet, vertices: usize, edges: &[Vec2u]) {
+    pub(crate) fn install_rod_adjacency(data: &mut crate::data::DataSet, vertices: usize, edges: &[Vec2u]) {
         let mut incident: Vec<Vec<u32>> = vec![Vec::new(); vertices];
         for (index, edge) in edges.iter().enumerate() {
             incident[edge[0] as usize].push(index as u32);
@@ -5530,7 +5557,7 @@ mod tests {
     ///
     /// # Safety
     /// `fixed` must borrow a live scene.
-    unsafe fn dense_of(fixed: &FixedCsr<'_>, gathered: usize) -> Vec<f32> {
+    pub(crate) unsafe fn dense_of(fixed: &FixedCsr<'_>, gathered: usize) -> Vec<f32> {
         let width = 3 * gathered;
         let mut dense = vec![0.0f32; width * width];
         for i in 0..gathered {
@@ -5547,7 +5574,7 @@ mod tests {
     }
 
     /// Every vertex's flat position components, which is the shape an iterate has.
-    fn positions_of(scene: &TestScene) -> Vec<f32> {
+    pub(crate) fn positions_of(scene: &TestScene) -> Vec<f32> {
         let curr = scene.data.vertex.curr.as_slice();
         let mut out = Vec::with_capacity(3 * curr.len());
         for position in curr {
@@ -6586,24 +6613,51 @@ mod tests {
     }
 
     #[test]
-    fn a_prescribed_interior_vertex_carries_no_rod_bending() {
-        // The dispatch's own test: the interior vertex's row leaves the
-        // Newton system entirely, so an energy written about it would be
-        // assembled and then eliminated.
+    fn a_prescribed_interior_vertex_still_bends_its_free_neighbors() {
+        // The energy depends on the free neighbors' positions whether or not
+        // the interior vertex is held, so their rows carry the same force
+        // either way; only the interior row is eliminated, by the Dirichlet
+        // pass that runs after assembly. Skipping the site here would make a
+        // rod clamped by fixed pins a hinge at the clamp's last vertex.
+        let mut free = RodBend::strand(FAR_BENT, BEND_2_5);
+        let unpinned = free.assemble(0.01).expect("the site assembles");
         let mut fixture = RodBend::strand(FAR_BENT, BEND_2_5);
         fixture.scene.data.prop.vertex.as_mut_slice()[1].fix_index = 1;
+        let assembled = fixture.assemble(0.01).expect("the site assembles");
+        for vertex in [0, 2] {
+            let force = assembled.vertex_force(vertex);
+            assert!(
+                force.iter().any(|value| *value != 0.0),
+                "a free neighbor of a prescribed interior vertex got no bending force"
+            );
+            assert_close(force, unpinned.vertex_force(vertex), "a free neighbor of a prescribed interior vertex");
+        }
+        assert!(
+            assembled.dense.iter().any(|value| *value != 0.0),
+            "a prescribed interior vertex between free neighbors put no bending block in the matrix"
+        );
+    }
+
+    #[test]
+    fn a_rod_bending_site_with_every_vertex_prescribed_assembles_nothing() {
+        // As a face, an edge or a tet whose vertices are all held: every row
+        // the site would write is eliminated, so it is not assembled at all.
+        let mut fixture = RodBend::strand(FAR_BENT, BEND_2_5);
+        for (vertex, pin) in fixture.scene.data.prop.vertex.as_mut_slice().iter_mut().zip(1..) {
+            vertex.fix_index = pin;
+        }
         let assembled = fixture.assemble(0.01).expect("the site assembles");
         for vertex in 0..3 {
             assert_close(
                 assembled.vertex_force(vertex),
                 [0.0, 0.0, 0.0],
-                "a prescribed interior rod vertex",
+                "a rod bending site whose vertices are all prescribed",
             );
         }
         assert_eq!(
             assembled.dense.iter().filter(|value| **value != 0.0).count(),
             0,
-            "a prescribed interior vertex put a bending block in the matrix"
+            "a site whose vertices are all prescribed put a bending block in the matrix"
         );
     }
 

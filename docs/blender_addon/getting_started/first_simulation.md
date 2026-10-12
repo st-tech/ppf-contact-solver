@@ -1,118 +1,128 @@
 # 🎬 Your First Simulation
 
-This walks a cloth-over-sphere scene through a complete sim end-to-end.
-Adjust parameters later; the goal here is to see a simulated drape play
-back in the timeline.
+This page takes a cloth-over-sphere scene from an empty Blender file to a
+drape playing back in the timeline. You build two objects, connect to a
+solver, transfer the scene, run it, and fetch the result. Tune parameters
+later; the goal here is one complete run.
+
+The default scene settings simulate 180 frames at 60 FPS, which is 3
+seconds. See [Scene Parameters](../workflow/params/scene.md) to change them.
+
+## Before You Start
+
+- The add-on is installed ([Install](install.md)) and a solver is unzipped or
+  built where Blender can reach it ([Connections](../connections/index.md)).
+- Optional: save the `.blend` (**File > Save**) before step 5, so that the
+  copy icon beside **Project Name** can fill in the file name.
+- If the file is still unsaved when you fetch the animation, the animation is
+  kept in a temporary folder and moved into the `data` folder next to the
+  `.blend` when you first save.
 
 ## Build the Scene
 
-Before touching the add-on, lay out the two objects the sim needs: a
-**subdivided plane** to act as the cloth, and a **sphere** underneath as
-a static collider for it to drape over.
+Lay out two objects before you touch the add-on: a subdivided **plane** that
+acts as the cloth, and a **sphere** underneath it that acts as a static
+collider for the cloth to drape over.
 
-1. **Delete the default cube.** A fresh Blender start-up ships one;
-   select it and press <kbd>X</kbd> (or **Object → Delete**).
+1. **Delete the default cube.** A fresh Blender start-up has one. Select it
+   and press <kbd>X</kbd> (or use **Object > Delete**).
 
-2. **Add the static sphere.** **Add → Mesh → Ico Sphere**, then bump
-   **Subdivisions** in the operator redo panel to around **4**
-   (~1200 faces). Prefer an ico-sphere over a UV-sphere: its near-
-   uniform triangulation avoids direction-dependent stiffness at the
-   poles when the cloth starts interacting with it. Shade-smooth the
-   sphere (**Object → Shade Smooth**) so the silhouette stays clean as
-   the cloth wraps it.
+2. **Add the static sphere.** Choose **Add > Mesh > Ico Sphere**, then in the
+   **Adjust Last Operation** panel set **Subdivisions** to **4** (1,280
+   triangles) and leave **Radius** at 1 m. The triangles of an ico sphere are
+   close to uniform in size, unlike those of a UV sphere. Optionally choose
+   **Object > Shade Smooth**, which changes how the sphere is drawn and not
+   its geometry.
 
    ```{figure} ../images/getting_started/step2_sphere.png
-   :alt: Icosphere at origin with subdivisions=4 and shade-smooth
+   :alt: Ico sphere at the origin, drawn with its wireframe
    :width: 280px
 
-   After step 2: the ico-sphere at the origin. The wireframe shows
-   the near-uniform triangulation that keeps contact response
-   direction-independent.
+   After step 2: the ico sphere at the origin, with its wireframe shown.
    ```
 
-3. **Add the cloth plane, well clear of the sphere.** **Add → Mesh →
-   Plane**, scale it up (or pass `size=2.4` in the redo panel), and
-   move it up along **Z** so it sits **above** the sphere with a clear
-   gap; a few centimeters is plenty. The solver rejects self-
-   intersecting rest geometry, so the plane must not touch the sphere
-   in frame 1.
+3. **Add the cloth plane, clear of the sphere.** Choose **Add > Mesh >
+   Plane**, then in the **Adjust Last Operation** panel set **Size** to
+   **2.4 m** and **Location Z** to **1.05 m**. The sphere's top is at Z = 1 m
+   (with the 3D cursor at the origin), so this leaves a gap of 5 cm. By
+   default the solver rejects a scene that starts with overlapping objects, so
+   the plane must not touch the sphere in frame 1.
 
    ```{figure} ../images/getting_started/step3_plane.png
-   :alt: 2.4-unit plane floating above the ico-sphere with a clear gap
+   :alt: Square plane above the ico sphere
    :width: 380px
 
-   After step 3: the plane hovers above the sphere with a visible
-   gap. A single quad for now, with no internal topology to deform.
+   After step 3: the plane above the sphere. It is a single quad, with no
+   internal geometry to deform.
    ```
 
-4. **Subdivide the plane enough to drape.** A 2×2 plane has no
-   flexibility; it will land on the sphere as a rigid slab. Add a
-   **Subdivision Surface** modifier (**Add Modifier → Subdivision
-   Surface**), switch **Type** from the default *Catmull-Clark* to
-   **Simple** (Catmull-Clark rounds corners and can introduce self-
-   intersections), raise **Levels Viewport** to **5**, match **Render**,
-   then **Apply** it so the solver sees the dense topology directly.
-   That gives you a 33×33 grid, which is enough resolution to fold
-   naturally over the sphere.
+4. **Subdivide the plane so it can drape.** A single-quad plane has no
+   flexibility and would fall onto the sphere as a rigid slab. Choose **Add
+   Modifier > Generate > Subdivision Surface**, switch **Type** from
+   *Catmull-Clark* to **Simple** (Simple leaves the plane's outline unchanged,
+   while Catmull-Clark rounds the corners), set **Levels Viewport** to **5**, set
+   **Render** to the same value, and click **Apply** so the solver receives
+   the subdivided mesh. The result is a grid of 32 × 32 quads (33 × 33
+   vertices).
 
    ```{figure} ../images/getting_started/step4_subdiv.png
-   :alt: Plane with 33x33 Simple subdivision above the ico-sphere
+   :alt: Plane subdivided into a 32 by 32 grid of quads above the ico sphere
    :width: 380px
 
-   After step 4: the Simple subdivision bakes into the mesh as a
-   33×33 grid of quads. That is the resolution the solver will see.
+   After step 4: the applied Simple subdivision, a 32 × 32 grid of quads.
+   This is the mesh the solver receives.
    ```
 
    :::{tip}
-   As a rule of thumb, aim for an **average edge length of 1–3 % of
-   the cloth's bounding-box diagonal**. Below ~1 % you pay a large
-   simulation cost without much visual gain; above ~3 % folds and
-   wrinkles get blocky. See
-   [Scene Setup via MCP](../integrations/mcp_scene_setup.md)
-   for the full rationale.
+   Aim for an **average edge length of 1–3 % of the cloth's bounding-box
+   diagonal**. Here the edges are 0.075 m against a diagonal of 3.39 m, which
+   is 2.2 %. Finer meshes cost more to simulate, and coarser ones fold in
+   blocky wrinkles. See [Scene Setup via MCP](../integrations/mcp_scene_setup.md)
+   for the full explanation.
    :::
+
+## Connect to the Solver
+
+5. **Pick a connection type.** In the **Backend Communicator** panel, set
+   **Type** to your own platform's native type: **Windows Native**,
+   **macOS Native**, or **Linux Native**. A native type runs the solver on
+   this machine and has the fewest moving parts. Then fill in the fields:
+
+   - **Solver Path**: the unzipped solver distribution, or your repository
+     checkout. A subfolder is accepted and resolved upward, and a *Solver
+     path valid* line under the field confirms the folder. The per-platform
+     page lists the exact layout ([Windows](../connections/windows.md),
+     [macOS](../connections/macos.md), [Linux](../connections/linux.md)).
+   - The **GPU** / **CPU** toggle (the **Compute Device** setting): leave it
+     on **GPU** unless this machine has no GPU.
+   - **Project Name**: a short name using only letters, digits, `.`, `-`, and
+     `_` (no spaces). When the `.blend` is saved and the field still reads
+     `unnamed`, the copy icon beside it fills in the file name.
+
+   For SSH and Docker connections, see [Connections](../connections/index.md)
+   and the pages for [SSH](../connections/ssh.md) and
+   [Docker](../connections/docker.md).
+
+6. **Connect, then start the server.** Click **Connect**. For a native type
+   this checks that **Solver Path** holds a build for the device you picked,
+   and the status line reads `Status: Waiting for Server Start...`. Click
+   **Start Server on Remote**; the label is the same for every type, and on a
+   native type the server starts on this machine. The button reads **Server
+   Starting...** while the server starts, and the status line changes to
+   `Status: Waiting for Data` once the server answers.
+
+   If the start fails with a port-in-use error, see
+   [Port N is in use](../troubleshooting.md#port-n-is-in-use), which also
+   explains the **Force Terminate Process** button that appears beside the
+   error.
 
 ## Register the Objects with the Add-on
 
-1. **Pick a connection type.** In the **Backend Communicator** panel,
-   choose your own platform's native type -- `Windows Native`,
-   `macOS Native`, or `Linux Native` -- if the solver lives on this
-   machine. Those have the fewest moving parts. Fill **Solver Path**
-   with the solver distribution or checkout (the folder whose
-   `target/release/` contains `ppf-cts-server`), leave **Compute
-   Device** on `GPU` unless this machine has none, and set
-   **Project Name** to something short, using only letters, digits,
-   `.`, `-` and `_` (no spaces). For other backends see
-   [Connections](../connections/index.md) and the per-backend pages
-   ([ssh](../connections/ssh.md), [docker](../connections/docker.md),
-   [windows](../connections/windows.md), [macos](../connections/macos.md),
-   [linux](../connections/linux.md)).
-
-   ```{figure} ../images/getting_started/step1_pick_connection.png
-   :alt: Backend Communicator panel with Linux Native selected, a valid Solver Path, Compute Device on GPU, and Connect highlighted
-   :width: 500px
-
-   Step 1: pick your platform's native type from the **Type** dropdown,
-   fill **Solver Path** and **Project Name**, leave **Compute Device** on
-   `GPU`, then click the highlighted **Connect** button.
-   ```
-
-2. **Connect, then start the server.** Click **Connect**. The status
-   line changes to *Waiting for Server Start...* when the handshake
-   completes. Click **Start Server on Remote**. The add-on launches
-   `ppf-cts-server` on the remote in the background and waits for it
-   to answer. Status advances to *Waiting for Data* once the server
-   responds. If the port is already in use, click **Force Terminate
-   Process** to release it. The three native types first check whether
-   the listener is a `ppf-cts-server` of their own and attach to it if
-   so, so that error means the holder is some other process.
-
-3. **Create the Cloth group (Shell).** In the **Dynamics Groups**
-   panel, click **Create Group**, set the unlabelled type dropdown
-   beside **Name** to **Shell**, and rename it *Cloth*. Select the
-   plane in the 3D viewport, then click **Add Selected Objects** in the
-   group. The add-on tints the plane green (the Shell overlay color) as
-   confirmation.
+7. **Create the Cloth group (Shell).** In the **Dynamics Groups** panel,
+   click **Create Group**, set the unlabeled type dropdown beside **Name** to
+   **Shell**, and rename the group *Cloth*. Select the plane in the 3D
+   Viewport, then click **Add Selected Objects** in the group. The plane is
+   drawn in green, the Shell overlay color.
 
    ```{figure} ../images/getting_started/step3_group_created.png
    :alt: Dynamics Groups panel after Create Group, Add Selected Objects highlighted
@@ -120,90 +130,112 @@ a static collider for it to drape over.
 
    The **Dynamics Groups** panel after **Create Group**. The Assigned
    Objects list is still empty; **Add Selected Objects** (red outline)
-   is the button you press next to attach the currently selected plane
-   to this group.
+   is the button you press next to attach the selected plane to this
+   group.
    ```
 
-4. **Create the Sphere group (Static).** Click **Create Group** again,
-   set that same type dropdown to **Static**, and rename it *Sphere*.
-   Select the sphere, then **Add Selected Objects**. The sphere picks
-   up the blue Static overlay color. At this point the scene should
-   look like the image below: a green cloth sheet floating cleanly
-   above a blue sphere.
+8. **Create the Sphere group (Static).** Click **Create Group** again, set
+   the type dropdown to **Static**, and rename the group *Sphere*. Select the
+   sphere, then click **Add Selected Objects**. The sphere is drawn in blue,
+   the Static overlay color. The scene should look like the image below: a
+   green cloth sheet above a blue sphere.
 
    ```{figure} ../images/getting_started/first_sim_start.png
-   :alt: 3D viewport showing a green subdivided plane above a blue icosphere
+   :alt: 3D viewport showing a green subdivided plane above a blue ico sphere
    :width: 640px
 
-   The starting scene. Green = Shell (cloth), blue = Static (sphere).
-   The wireframe on the plane shows the Simple subdivision the solver
-   will deform; the icosphere's uniform triangles are the contact
-   surface the cloth will drape against.
+   The starting scene. Green is Shell (cloth) and blue is Static (sphere).
+   The wireframe on the plane shows the Simple subdivision the solver will
+   deform.
    ```
 
-   Material defaults (Baraff-Witkin cloth) are fine for a first run.
+   The default material (Baraff-Witkin cloth) is fine for a first run.
 
 ## Transfer, Run, and Play Back
 
-5. **Transfer.** In the **Solver** panel, click **Transfer**. This
-   encodes the mesh and parameters, uploads both, and triggers the
-   remote build stage. The status line advances through
-   *Uploading scene...*, *Building Scene...*, then *Ready to Run*.
+9. **Transfer.** In the **Solver** panel, click **Transfer**. The panel
+   encodes the mesh and the parameters, uploads them, and builds the scene on
+   the solver. A progress bar reads *Encoding scene geometry...*, *Encoding
+   parameters...*, *Uploading scene...*, and *Building Scene...* in turn,
+   and the status line ends at `Status: Ready to Run`.
 
-6. **Run.** Click **Run**. The status reads *Initializing...* while
-   the solver populates its in-process state, then changes to
-   *Simulation Running...* once the server reports it has finished
-   initialization. Realtime statistics appear, and a **Terminate**
-   button stops the run early. Frames are fetched incrementally as
-   they complete.
+10. **Run.** Click **Run**. The status reads *Initializing...* while the
+    solver starts, then *Simulation Running...* once it reports that it has
+    finished initializing. **Realtime Statistics** appear, and the **Save and
+    Quit** and **Terminate** buttons end the run early. The newest frame
+    appears in the viewport as the run proceeds, and the frames in between
+    stay on the solver host until you fetch them in step 11. See
+    [Running the Simulation](../workflow/sim/simulating.md).
 
-   :::{note}
-   If **Run** is grayed out and you see *Clear local animation before
-   running*, click **Clear Local Animation** first. Previous simulation
-   output stays attached to the objects until you do.
-   :::
+    :::{note}
+    If **Run** is grayed out and the panel shows *Clear local animation before
+    running*, click **Clear Local Animation** first. The previous run's
+    animation stays attached to the objects until you do.
+    :::
 
-7. **Fetch and play back.** When the sim finishes, click **Fetch All
-   Animation** to pull any frames the live-fetch missed. The add-on
-   downloads per-object PC2 files into `data/<blend_basename>/` next to
-   the `.blend` file and wires them up to each simulated mesh. Scrub
-   the timeline or press play; Blender reads vertex positions straight
-   from the downloaded PC2 files, and the cloth settles onto the
-   sphere frame-by-frame.
+11. **Fetch and play back.** When the run finishes, click **Fetch All
+    Animation**. If frames are still unfetched, the **Solver** panel says how
+    many, and this downloads them. When the fetch finishes, Blender's frame
+    range is set to the fetched frames and playback starts, and the cloth
+    settles onto the sphere frame by frame. The animation is stored in
+    `data/<blend name>/` next to the `.blend` and plays through a **Mesh
+    Cache** modifier named `ContactSolverCache` on the plane.
 
-   ```{figure} ../images/getting_started/first_sim_end.png
-   :alt: 3D viewport showing green cloth draped over the blue sphere
-   :width: 640px
+    ```{figure} ../images/getting_started/first_sim_end.png
+    :alt: 3D viewport showing green cloth draped over the blue sphere
+    :width: 640px
 
-   The draped end state. The Shell overlay is still green and the
-   Static overlay still blue; the only thing that has changed
-   frame-to-frame is the vertex positions Blender reads out of the
-   downloaded PC2 file.
-   ```
+    The draped end state. The Shell overlay is still green and the Static
+    overlay still blue; only the vertex positions that Blender reads from the
+    fetched animation change from frame to frame.
+    ```
 
-   ```{figure} ../images/simulating/pc2_modifier.png
-   :alt: Blender Properties editor on the Modifier tab showing the ContactSolverCache MESH_CACHE modifier with Format PC2 and File Path //data/project/Cube.pc2
-   :width: 500px
+    ```{figure} ../images/simulating/pc2_modifier.png
+    :alt: Blender Properties editor on the Modifier tab showing the ContactSolverCache Mesh Cache modifier with Format PC2 and a File Path inside the data folder
+    :width: 500px
 
-   What the fetched result looks like in **Properties → Modifier
-   Properties** after the first fetch. The **File Path** points at a
-   `.pc2` file under `<blend_dir>/data/<blend_basename>/`, which
-   Blender reads directly as you scrub the timeline.
-   ```
+    What the fetched result looks like in **Properties > Modifier
+    Properties**. The **File Path** points into the `data/<blend name>/`
+    folder next to the `.blend`. Blender reads that file as you move the
+    playhead.
+    ```
 
-:::{tip}
-Save the `.blend` at this point. The add-on migrates PC2 temp files into
-`data/<basename>/` on save and writes a manifest so the scene reopens with
-its PC2 files intact.
+:::{admonition} Under the hood
+:class: toggle
+
+Each simulated mesh gets one point-cache file in PC2 format. Until the
+`.blend` is first saved, the files are written to a temporary folder, and the
+add-on moves them into `data/<blend name>/` when you save. See
+[How Animation Plays Back](../workflow/sim/simulating.md#how-animation-plays-back).
 :::
 
 :::{tip}
-To hand off the scene without the add-on, convert the fetched animation
-into standard Blender keyframes. See [Bake Animation](../workflow/sim/baking.md).
+Keep the `data/<blend name>/` folder next to the `.blend` when you move or
+share the file. The modifier finds the animation through a path relative to the
+`.blend`, so the scene reloads it from there.
 :::
 
-:::{note}
-Both viewport screenshots on this page were produced end-to-end via
-MCP, no human clicking. See
-[Scene Setup via MCP](../integrations/mcp_scene_setup.md).
+:::{tip}
+To hand off the scene without the add-on, convert the fetched animation into
+standard Blender keyframes. See [Bake Animation](../workflow/sim/baking.md).
 :::
+
+## Where to Go Next
+
+- **Change how the fabric behaves.** [Material Parameters](../workflow/params/material.md)
+  holds density, stiffness, bending and friction for each group, and
+  [Fabric Presets](../workflow/params/fabric_presets.md) starts from a known
+  fabric.
+- **Hold or move parts of an object.** [Pins and Operations](../workflow/constraints/pins.md)
+  anchors vertices and drives them, and
+  [Invisible Colliders](../workflow/constraints/colliders.md) adds walls and
+  spheres without a mesh.
+- **Set the scene.** [Scene Parameters](../workflow/params/scene.md) holds
+  gravity, wind, the time step and the frame count.
+- **Organize groups.** [Object Groups](../workflow/scene/object_groups.md)
+  covers the group types and how objects are assigned.
+- **Keep the result.** [Baking](../workflow/sim/baking.md) and
+  [Exporting](../workflow/sim/exporting.md) turn the fetched animation into
+  standard Blender keyframes, or into files other applications read.
+- **Fix a problem.** [Troubleshooting](../troubleshooting.md) lists the
+  messages the add-on shows and what to do about each.

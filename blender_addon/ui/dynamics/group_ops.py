@@ -185,6 +185,67 @@ class OBJECT_OT_DeleteAllGroups(Operator):
         return {"FINISHED"}
 
 
+def _apply_hair_curves_defaults(group, obj, obj_uuid, is_first_object) -> list:
+    """Set what a Hair Curves object joining a Rod group implies, and return
+    one line per setting made so the operator can report it.
+
+    Three things about hair are already said by the object itself, so the
+    artist is not asked to say them again:
+
+    - Hair attached to a surface (``Curves.surface``) is held at its roots.
+      The ``Roots`` pin joins the pin list, where it can be removed.
+    - A groom is the shape the hair rests in. A group this object is the
+      first member of takes its rest angle from the initial geometry, so the
+      strands do not straighten.
+    - A strand is far thinner than anything a contact offset is meant to
+      describe. A group this object is the first member of takes a zero
+      contact offset, so the contact gap alone keeps a strand off the scalp
+      and off its neighbors. The offset a new Rod group starts with is the
+      radius of a rope, and hair combed closer to the head than that would
+      start inside it.
+
+    A group that already holds objects keeps the settings chosen for them.
+    """
+    from ...core.hair_curves import ROOTS_PIN_NAME
+    from ...core.uuid_registry import compute_vg_hash
+    from ...models.groups import encode_vertex_group_identifier
+    from .pin_ops import pin_already_exists
+
+    made = []
+    if obj.data.surface is not None and not pin_already_exists(
+        group, obj_uuid, ROOTS_PIN_NAME,
+    ):
+        pin = group.pin_vertex_groups.add()
+        pin.name = encode_vertex_group_identifier(obj.name, ROOTS_PIN_NAME)
+        pin.object_uuid = obj_uuid
+        pin.vg_hash = str(compute_vg_hash(obj, ROOTS_PIN_NAME))
+        made.append(
+            iface_(
+                "'{name}' is attached to '{surface}', so its roots are pinned"
+            ).format(name=obj.name, surface=obj.data.surface.name)
+        )
+    if is_first_object and group.bend_rest_angle_source == "FLAT":
+        group.bend_rest_angle_source = "FROM_GEOMETRY"
+        made.append(
+            iface_(
+                "Rest Angle set to From Initial Geometry so '{name}' keeps "
+                "its groom"
+            ).format(name=obj.name)
+        )
+    if is_first_object and (
+        group.contact_offset != 0.0 or group.contact_offset_rat != 0.0
+    ):
+        group.contact_offset = 0.0
+        group.contact_offset_rat = 0.0
+        made.append(
+            iface_(
+                "Contact Offset set to zero: a strand of '{name}' is held "
+                "off other surfaces by the Contact Gap alone"
+            ).format(name=obj.name)
+        )
+    return made
+
+
 class OBJECT_OT_AddObjectsToGroup(Operator):
     """Add selected objects to the active group"""
 
@@ -213,8 +274,11 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                 find_linked_duplicate_siblings,
             )
             for obj in list(context.selected_objects):
+                # A ROD group also takes legacy Curves and Hair Curves,
+                # both of which are simulated as rods.
                 is_acceptable = obj.type == "MESH" or (
-                    obj.type == "CURVE" and group.object_type == "ROD"
+                    obj.type in ("CURVE", "CURVES")
+                    and group.object_type == "ROD"
                 )
                 obj_uid = get_or_create_object_uuid(obj)
                 if not obj_uid:
@@ -288,9 +352,15 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                 if in_other:
                     continue
 
+                is_first_object = len(group.assigned_objects) == 0
                 item = group.assigned_objects.add()
                 item.name = obj.name
                 item.uuid = get_or_create_object_uuid(obj)
+                if obj.type == "CURVES":
+                    for line in _apply_hair_curves_defaults(
+                        group, obj, item.uuid, is_first_object,
+                    ):
+                        self.report({"INFO"}, line)
                 if obj.type == "MESH":
                     obj.show_wire = True
                     obj.show_all_edges = True

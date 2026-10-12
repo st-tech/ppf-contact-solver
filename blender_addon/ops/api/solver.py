@@ -60,7 +60,15 @@ class _Solver:
     Unrecognized attribute access falls through to
     ``bpy.ops.zozo_contact_solver.<name>()``, so every operator
     registered under that namespace (including every MCP handler)
-    can be called as a method on ``solver``.
+    can be called as a method on ``solver``.  The handler receives
+    exactly the keyword arguments given, as an MCP call carries only
+    the arguments it names: one left out keeps the handler's default,
+    and an empty string is passed as given, so
+    ``solver.set_force_field_settings(collection="")`` clears the
+    collection as the MCP tool does.  Such a call returns what a
+    Blender operator returns, ``{'FINISHED'}``, and raises on an
+    error; it never returns the handler's result.  Data is therefore
+    read through the methods below, such as :meth:`get_force_fields`.
 
     Example::
 
@@ -164,11 +172,13 @@ class _Solver:
     def clear(self) -> "_Solver":
         """Reset the entire solver state to defaults.
 
-        Deletes every active group, resets scene parameters to their
-        property defaults, clears merge pairs, invisible colliders,
-        dynamic parameters, previously fetched frames, saved pin
-        keyframes, and any residual ``MESH_CACHE`` modifiers on mesh
-        objects.
+        Deletes every active group, resets scene parameters (vector ones
+        such as ``gravity`` and ``force_field_preview_resolution``
+        included) to their property defaults, clears the force field
+        Collection, Script and every force field target list, merge
+        pairs, invisible colliders, dynamic parameters, previously
+        fetched frames, saved pin keyframes, and any residual
+        ``MESH_CACHE`` modifiers on mesh objects.
         Call this at the top of any script that needs a clean slate.
 
         Returns:
@@ -202,18 +212,20 @@ class _Solver:
         skip = {"bl_rna", "rna_type", "name", "fetched_frame"}
         for prop in bl_props:
             pid = prop.identifier
-            if pid in skip:
+            if pid in skip or not hasattr(state, pid):
                 continue
-            if hasattr(prop, "default") and hasattr(state, pid):
-                try:
-                    setattr(state, pid, prop.default)
-                except Exception:
-                    continue
-            elif hasattr(prop, "default_array") and hasattr(state, pid):
-                try:
-                    setattr(state, pid, tuple(prop.default_array))
-                except Exception:
-                    continue
+            # An array property's `default` is its element's default, a
+            # scalar, so the array takes `default_array`.
+            if getattr(prop, "is_array", False):
+                value = tuple(prop.default_array)
+            elif hasattr(prop, "default"):
+                value = prop.default
+            else:
+                continue
+            try:
+                setattr(state, pid, value)
+            except Exception:
+                continue
 
         # Blender treats CollectionProperty.clear() as a write to the
         # owning ID and blocks it in restricted contexts (load_post,
@@ -252,11 +264,18 @@ class _Solver:
         # Remove MESH_CACHE modifiers, PC2 files, and residual animation data
         from ...core.pc2 import cleanup_mesh_cache
 
+        from ...core.pc2 import has_mesh_cache
+
         for obj in bpy.data.objects:
             if obj.type == "MESH":
                 cleanup_mesh_cache(obj)
                 if obj.data.animation_data:
                     obj.data.animation_data_clear()
+            elif obj.type == "CURVES" and has_mesh_cache(obj):
+                # A Hair Curves object carrying a solve: take back its
+                # playback modifier, attribute and cache. One that never
+                # ran is left untouched, UUID included.
+                cleanup_mesh_cache(obj)
 
         # Collection .clear()/.remove() calls above (assigned_objects and
         # pin_vertex_groups via reset_to_defaults, plus merge_pairs,
@@ -312,6 +331,71 @@ class _Solver:
 
         state = get_addon_data(bpy.context.scene).state
         return targets.target_group_uuids(state, targets.resolve_source(state, source))
+
+    @blender_api
+    def get_force_fields(self) -> list[dict]:
+        """Every force field object Transfer considers, with whether it
+        would be sent: the list the Force Fields panel shows and MCP's
+        ``get_force_field_settings`` returns as ``fields``.
+
+        The objects are those with a force field in
+        ``solver.param.force_field_collection``, or in the whole scene
+        when no collection is chosen.  Nothing is changed.
+
+        Returns:
+            One dict per object, by name:
+
+            * ``object``: the object's name.
+            * ``type``: Blender's ``field.type`` identifier (``"FORCE"``,
+              ``"WIND"``, ``"VORTEX"``, ``"TURBULENCE"``, ``"MAGNET"``,
+              ``"DRAG"``, ``"HARMONIC"``, ``"TEXTURE"`` and ``"FLUID_FLOW"``
+              are sent; ``"CHARGE"``, ``"BOID"``, ``"LENNARDJ"`` and
+              ``"GUIDE"`` are refused), and ``type_name`` the name Blender's
+              Physics tab shows for it (``"Magnetic"``, ``"Fluid Flow"``).
+            * ``refused``: why Transfer refuses the field, or None.  It
+              covers the field's settings, the scene around it (a Wind with
+              Air Density 0, a target group that cannot be used) and a Fluid
+              Flow's source as far as its metadata at the current frame
+              shows.  Transfer reads the source at the solve frames only, so
+              a finding at a current frame outside them is no refusal but
+              ``fluid["note"]``, except for a Volume that is not a sequence,
+              which reads its one file at every frame.  Transfer reads every
+              solve frame and every voxel, so it can still refuse what this
+              cannot see.
+            * ``groups``: the group uuids it is narrowed to, or None when
+              it pushes every group (see :meth:`set_force_field_targets`).
+            * ``pushes``: the names of the simulated objects it reaches;
+              Transfer refuses a field that pushes none.
+            * ``tracked``: whether Transfer samples it at every solve frame
+              (anything can move or animate it, or it is a Fluid Flow).
+            * ``fluid``, for a Fluid Flow only: its Domain Object at the
+              current frame, read from metadata, never from the grid:
+              ``source``, ``kind`` (``"domain"``, ``"volume"`` or None),
+              ``frame`` (the current frame), ``solve_start`` and
+              ``solve_frames`` (the first solve frame and how many there
+              are), ``resolution`` (or None when unknown),
+              ``bytes_per_frame_max`` and ``bytes_max`` (an upper bound on
+              the volume's share of the parameter payload, per frame and
+              over every solve frame: every brick of the box), ``last_read``
+              (what the last parameter encode read of it, its brick
+              ``occupancy`` and ``bytes`` included, or None when no encode
+              has read this source), ``problem`` (the source's part of
+              ``refused``), ``note`` (what the current frame shows wrong
+              when Transfer does not read it, or None), and for a domain
+              ``domain_type``, ``cache_type``, ``baked`` and
+              ``cache_frames``, for a Volume ``file``, ``sequence``,
+              ``velocity_grids`` and ``density_grid``.
+
+        Example::
+
+            for field in solver.get_force_fields():
+                if field["refused"]:
+                    print(field["object"], "is refused:", field["refused"])
+        """
+        from ...ui.dynamics import force_field_status as status
+
+        scene = bpy.context.scene
+        return status.field_rows(scene, get_addon_data(scene).state)
 
     @blender_api
     def get_force_field_builtins(self) -> list:
@@ -833,6 +917,117 @@ class _Solver:
             object_names=list(object_names),
         )
         return self
+
+    def resolve_intersections(
+        self,
+        *object_names: str,
+        max_iterations: int = 50,
+        clearance: float = 1.0,
+    ) -> dict:
+        """Push apart SOLID and PDRD objects that start out overlapping.
+
+        Transfer refuses a scene whose surfaces start through each other.
+        This opens the overlaps without the solver: each object moves as a
+        rigid body, by the smallest motions of all of them that separate
+        every overlapping pair.  Only object transforms are written, so
+        meshes, pins and caches stay valid.
+
+        Only the included mesh objects of active SOLID and PDRD groups take
+        part.  A pinned object, one whose transform is animated, driven or
+        constrained, and one linked from another file stay where they are
+        and the others move around them.  An object whose surface is open, non-manifold or
+        inconsistently wound is left out and named in the result.
+
+        Args:
+            *object_names: The objects allowed to move.  With none given,
+                every free object may move.
+            max_iterations: Passes to spend.  Each finds the overlaps left
+                and moves the objects once.
+            clearance: How far apart to leave surfaces that overlap, beyond
+                their contact offsets, in multiples of each object's contact
+                gap.  Surfaces closer than half of it count as overlapping.
+
+        Returns:
+            The result dict: ``moved`` (object name and largest vertex
+            displacement), ``remaining_pairs`` (name pairs still
+            overlapping), ``held`` (name to reason), ``skipped`` (names),
+            ``iterations`` and the counts.
+
+        Raises:
+            ValueError: If a name is missing or is not a mesh, an argument
+                is out of range, or there are not two closed SOLID or PDRD
+                objects with one of them free to move.
+
+        Example::
+
+            result = solver.resolve_intersections()
+            assert not result["remaining_pairs"]
+        """
+        from ...mcp.handlers import mesh_cleaning
+
+        return _handler_result(
+            mesh_cleaning.resolve_intersections,
+            object_names=list(object_names) if object_names else None,
+            max_iterations=max_iterations,
+            clearance=clearance,
+        )
+
+    def resolve_all_intersections(
+        self,
+        *object_names: str,
+        max_iterations: int = 50,
+        clearance: float = 1.0,
+    ) -> dict:
+        """Open every overlap in the scene, SHELL cloth included.
+
+        Does what :meth:`resolve_intersections` does for the SOLID and PDRD
+        objects, then deforms the SHELL meshes until no triangle of one is
+        within the contact offsets of a triangle of another or of itself,
+        holding the SOLID, PDRD and STATIC objects where they are.  Run
+        Transfer again afterwards.
+
+        The vertex coordinates of the SHELL meshes that moved are edited, and
+        one undo takes it all back.  Every vertex a pin holds stays where it
+        is, and so does a whole object that is linked from another file,
+        shares its mesh with another object, has shape keys, or is deformed at
+        the starting frame by a modifier stack.  The call holds Blender until
+        it finishes: seconds for a few thousand vertices, minutes for ten
+        thousand.
+
+        Args:
+            *object_names: The objects allowed to move.  With none given,
+                every free object may move.
+            max_iterations: Passes the rigid step may spend.
+            clearance: How far apart to leave surfaces that overlap, beyond
+                their contact offsets, in multiples of each object's contact
+                gap.  Surfaces closer than half of it count as overlapping.
+
+        Returns:
+            The result dict: ``rigid`` (as :meth:`resolve_intersections`
+            returns it), and ``shell``: ``resolved``, ``moved`` (object name
+            and largest vertex displacement), ``held`` (name to reason),
+            ``pinned_vertices``, ``skipped``, the pair counts and ``detail``,
+            which says why a run that did not resolve the cloth did not.
+
+        Raises:
+            ValueError: If a name is missing or is not a mesh, an argument
+                is out of range, or there is no SHELL object that may deform
+                and not two closed SOLID or PDRD objects with one of them
+                free to move.
+
+        Example::
+
+            result = solver.resolve_all_intersections()
+            assert result["shell"]["resolved"]
+        """
+        from ...mcp.handlers import mesh_cleaning
+
+        return _handler_result(
+            mesh_cleaning.resolve_all_intersections,
+            object_names=list(object_names) if object_names else None,
+            max_iterations=max_iterations,
+            clearance=clearance,
+        )
 
     # -- Particle mesh -------------------------------------------------------
 

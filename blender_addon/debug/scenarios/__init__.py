@@ -29,12 +29,24 @@ from . import rig_force_field_script
 from . import rig_frame_step
 from . import rig_force_field_targets
 from . import rig_force_field_noise
+from . import rig_force_field_fluid
+from . import rig_force_field_fluid_shortfall
+from . import rig_force_field_laws
+from . import bl_force_field_blender_parity
 from . import bl_force_field_encode
+from . import bl_force_field_fluid_encode
+from . import bl_force_field_fluid_parity
+from . import bl_force_field_fluid_scaling
+from . import bl_force_field_fluid_solve
+from . import bl_force_field_fluid_transfer_size
+from . import bl_force_field_fluid_volume_solve
 from . import bl_force_field_solve
 from . import bl_force_field_objects_only
 from . import bl_force_field_check
+from . import bl_force_field_panel
 from . import bl_force_field_visualize
 from . import bl_force_field_visualize_draws
+from . import bl_fluid_bake_retry
 from . import bl_force_field_targets
 from . import bl_mcp_force_field
 from . import rig_lock_axes_projector
@@ -48,9 +60,13 @@ from . import rig_existing_intersection_run
 from . import bl_existing_intersection
 from . import bl_existing_intersection_draws
 from . import bl_server_stop_is_real
+from . import bl_server_ping_keeps_it_up
+from . import rig_server_idle_stop
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
 from . import rig_collider_free_edge
+from . import rig_rod_fixed_clamp
+from . import rig_cosserat
 from . import rig_sand_rod_point_edge
 from . import rig_collider_vertex_rigid_body
 from . import rig_degenerate_rest_shape
@@ -180,6 +196,14 @@ from . import bl_server_unknown_recovery
 from . import bl_launch_error_unsticks
 from . import bl_build_worker_faulthandler
 from . import bl_profile_load_batch
+from . import bl_hair_curves_fur
+from . import bl_hair_curves_pins
+from . import bl_hair_curves_run
+from . import bl_hair_curves_scalp
+from . import bl_hair_curves_still_head
+from . import bl_hair_curves_weights
+from . import bl_hair_pin_hints_draw
+from . import bl_mcp_hair_pin_weights
 from . import bl_pin_rod_curve
 from . import bl_static_deform_anim
 from . import bl_static_deform_first_frame
@@ -199,12 +223,14 @@ from . import bl_stitch_merge
 from . import bl_blender_examples
 from . import bl_static_transform_sampling
 from . import bl_encode_refusals
+from . import bl_api_force_field
 from . import bl_api_stale_pin_proxy
 from . import bl_solid_loose_edge_stitch
 from . import bl_pin_track_lead_in_and_spin_axis
 from . import bl_pin_resolution_refusals
 from . import bl_timing_refusals
 from . import bl_fallback_refusals
+from . import bl_precond_multigrid
 from . import bl_animation_and_units
 from . import bl_merge_pair_no_stitch_rejection
 from . import bl_post_snap_toggle
@@ -245,6 +271,12 @@ from . import bl_world_scaling_resume
 from . import bl_world_scaling_pdrd
 
 from . import bl_pdrd_hinge
+from . import bl_pdrd_surface_winding
+from . import bl_contact_gap_unsolvable
+from . import bl_build_refusal_survives_polls
+from . import bl_resolve_intersections
+from . import bl_resolve_all_intersections
+from . import bl_contact_gap_limit
 from . import bl_lock_translation
 from . import bl_lock_rotation
 from . import bl_lock_rotation_solve
@@ -379,12 +411,24 @@ REGISTRY = {
     "rig_frame_step": rig_frame_step,
     "rig_force_field_targets": rig_force_field_targets,
     "rig_force_field_noise": rig_force_field_noise,
+    "rig_force_field_fluid": rig_force_field_fluid,
+    "rig_force_field_fluid_shortfall": rig_force_field_fluid_shortfall,
+    "rig_force_field_laws": rig_force_field_laws,
+    "bl_force_field_blender_parity": bl_force_field_blender_parity,
     "bl_force_field_encode": bl_force_field_encode,
+    "bl_force_field_fluid_encode": bl_force_field_fluid_encode,
+    "bl_force_field_fluid_parity": bl_force_field_fluid_parity,
+    "bl_force_field_fluid_scaling": bl_force_field_fluid_scaling,
+    "bl_force_field_fluid_solve": bl_force_field_fluid_solve,
+    "bl_force_field_fluid_transfer_size": bl_force_field_fluid_transfer_size,
+    "bl_force_field_fluid_volume_solve": bl_force_field_fluid_volume_solve,
     "bl_force_field_solve": bl_force_field_solve,
     "bl_force_field_objects_only": bl_force_field_objects_only,
     "bl_force_field_check": bl_force_field_check,
+    "bl_force_field_panel": bl_force_field_panel,
     "bl_force_field_visualize": bl_force_field_visualize,
     "bl_force_field_visualize_draws": bl_force_field_visualize_draws,
+    "bl_fluid_bake_retry": bl_fluid_bake_retry,
     "bl_force_field_targets": bl_force_field_targets,
     "bl_mcp_force_field": bl_mcp_force_field,
     "rig_lock_axes_projector": rig_lock_axes_projector,
@@ -410,6 +454,8 @@ REGISTRY = {
     # #144). `bl_degenerate_tessellation_rejection` covers the addon-side gate
     # that refuses the same geometry a step earlier; both grant the same set.
     "bl_server_stop_is_real": bl_server_stop_is_real,
+    "bl_server_ping_keeps_it_up": bl_server_ping_keeps_it_up,
+    "rig_server_idle_stop": rig_server_idle_stop,
     # Force Terminate Process: ends the local server from the refused, disconnected
     # state, which is the one state Stop Server cannot reach.
     "bl_force_terminate_port": bl_force_terminate_port,
@@ -421,6 +467,8 @@ REGISTRY = {
     # SAND grains dropped onto the interior of a dynamic rod segment rest on
     # it. Only the point-edge line-search sweep can bound that pair: the grain
     # owns no edge and the rod edge has no face (issue #154).
+    "rig_rod_fixed_clamp": rig_rod_fixed_clamp,
+    "rig_cosserat": rig_cosserat,
     "rig_sand_rod_point_edge": rig_sand_rod_point_edge,
     # The same contract for the collider vertex against dynamic face pass: a
     # rigid body dropped onto the APEX of a collision mesh rests on it, and a
@@ -596,6 +644,14 @@ REGISTRY = {
     # primitive (rod curve, static op, multi-group, collider keyframe,
     # stitch, velocity keyframe, bake) and verifies the encoded /
     # simulated round-trip end-to-end.
+    "bl_hair_curves_fur": bl_hair_curves_fur,
+    "bl_hair_curves_pins": bl_hair_curves_pins,
+    "bl_hair_curves_run": bl_hair_curves_run,
+    "bl_hair_curves_scalp": bl_hair_curves_scalp,
+    "bl_hair_curves_still_head": bl_hair_curves_still_head,
+    "bl_hair_curves_weights": bl_hair_curves_weights,
+    "bl_hair_pin_hints_draw": bl_hair_pin_hints_draw,
+    "bl_mcp_hair_pin_weights": bl_mcp_hair_pin_weights,
     "bl_pin_rod_curve": bl_pin_rod_curve,
     "bl_static_deform_anim": bl_static_deform_anim,
     "bl_static_deform_first_frame": bl_static_deform_first_frame,
@@ -615,12 +671,14 @@ REGISTRY = {
     "bl_blender_examples": bl_blender_examples,
     "bl_static_transform_sampling": bl_static_transform_sampling,
     "bl_encode_refusals": bl_encode_refusals,
+    "bl_api_force_field": bl_api_force_field,
     "bl_api_stale_pin_proxy": bl_api_stale_pin_proxy,
     "bl_solid_loose_edge_stitch": bl_solid_loose_edge_stitch,
     "bl_pin_track_lead_in_and_spin_axis": bl_pin_track_lead_in_and_spin_axis,
     "bl_pin_resolution_refusals": bl_pin_resolution_refusals,
     "bl_timing_refusals": bl_timing_refusals,
     "bl_fallback_refusals": bl_fallback_refusals,
+    "bl_precond_multigrid": bl_precond_multigrid,
     "bl_animation_and_units": bl_animation_and_units,
     "bl_merge_pair_no_stitch_rejection": bl_merge_pair_no_stitch_rejection,
     "bl_post_snap_toggle": bl_post_snap_toggle,
@@ -658,6 +716,26 @@ REGISTRY = {
     "bl_world_scaling_pdrd": bl_world_scaling_pdrd,
 
     "bl_pdrd_hinge": bl_pdrd_hinge,
+    # What a PDRD body's surface has to be for Transfer to accept it: closed
+    # and consistently wound, facing either way, at any size.
+    "bl_pdrd_surface_winding": bl_pdrd_surface_winding,
+    # A contact gap the step size cannot solve is refused at Transfer, with
+    # the two things that fix it.
+    "bl_contact_gap_unsolvable": bl_contact_gap_unsolvable,
+    # A refused Transfer still reads as failed after more status queries
+    # and after the ping, and its refusal is in the Console once.
+    "bl_build_refusal_survives_polls": bl_build_refusal_survives_polls,
+    # Resolve Intersections pushes overlapping SOLID and PDRD objects apart
+    # as rigid bodies, so Transfer accepts a scene it refused.
+    "bl_resolve_intersections": bl_resolve_intersections,
+    # Resolve All Intersections does that, then deforms SHELL meshes until no
+    # triangle is inside the contact offsets of another or of itself, writing
+    # the cloth's vertex coordinates.
+    "bl_resolve_all_intersections": bl_resolve_all_intersections,
+    # The local gap limit caps a contact gap at a share of the room between
+    # mesh neighbors, element by element, for the group types whose objects
+    # can touch themselves.
+    "bl_contact_gap_limit": bl_contact_gap_limit,
     "bl_lock_translation": bl_lock_translation,
     "bl_lock_rotation": bl_lock_rotation,
     "bl_lock_rotation_solve": bl_lock_rotation_solve,

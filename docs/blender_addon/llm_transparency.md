@@ -2,50 +2,54 @@
 
 This page describes how LLMs were (and continue to be) used on this
 project, so that readers can weigh the documentation and the add-on's
-code with the right context in mind.
+code in context. For the README, docstrings, notebooks, and paper, see the
+repository-wide
+[LLM Transparency](https://github.com/st-tech/ppf-contact-solver/blob/main/articles/llm_transparency.md)
+article.
 
-## Documentation and Media
+## Documentation, Screenshots, and Diagrams
 
-All text, screenshots, diagrams, and the test simulations behind them
-were produced by an LLM under iterative human direction and then
-reviewed. The LLM drives Blender and the solver through the add-on's
-bundled [MCP server](integrations/mcp.md).
+All text, screenshots, and diagrams in this documentation, and the test
+simulations behind them, were produced by an LLM under iterative human
+direction and then reviewed. The LLM drives Blender and the solver through
+the add-on's bundled [MCP server](integrations/mcp.md).
 
-We kindly note that planning, steering, and verifying claims against
-the running add-on still take real human effort. The LLM is used as an
-authoring tool, **not a fully autonomous author**.
+Planning, steering, and checking claims against the running add-on still
+take human effort. The LLM is used as an authoring tool, **not a fully
+autonomous author**.
 
-A significant effort has been poured into setting up a semi-automatic
-pipeline for LLM-assisted documentation authoring rather than
-generating the docs in one shot. That pipeline still depends on
-noticeable human attention and involvement at every iteration, and it
-is not meant to imply that the output is written without careful
-review.
+The documentation is written through a semi-automatic pipeline rather than
+generated in one pass. The pipeline needs human attention at every
+iteration, and its output is reviewed carefully.
+
+The two MCP clips in the [Gallery](gallery.md#from-prompt-to-simulation-via-mcp)
+show an LLM agent driving Blender through the same server, and the prompts
+that produced them are published there. The other Gallery scenes and the
+[Video Tutorials](tutorial.md) are not covered by this page.
 
 ## Add-on Code
 
-The Blender add-on itself was first developed with GitHub Copilot in
-its early stages. Later, essentially all direct coding has been
-carried out by Claude Code and Codex under the author's direction.
+The add-on was started with GitHub Copilot. Nearly all later coding was
+done by Claude Code and Codex under the author's direction. The author
+reviews the code before it is made public, but UI logic and glue code are not
+reviewed with the same depth as the solver's algorithms.
 
-The add-on's internal algorithms have not been scrutinized to the
-same depth as the academic papers associated with the underlying
-solver engine. Readers relying on the add-on for research or
-production work should treat the add-on's code with that context in
-mind; the solver engine itself remains backed by the peer-reviewed
-publications it ships with. Day-to-day behavior of the add-on is
-verified by a semi-automated test suite that exercises it end to end.
+The add-on's internal algorithms have not been scrutinized to the same
+depth as the academic papers associated with the underlying solver engine.
+Keep that in mind if you rely on the add-on for research or production
+work. The solver engine itself is backed by the peer-reviewed publications
+it ships with.
 
 ## Code Quality and Testing
 
-Code quality is verified through an automated test suite, and
-the coding agents themselves are a significant help in writing and
-maintaining those tests. That said, exhaustively hunting down every
-edge-case bug (which would be possible with more effort) is not a
-hard requirement of the project, so occasional rough edges should be
-expected.
+An automated test suite that runs in CI verifies the add-on's day-to-day
+behavior. It exercises the add-on's UI flows; see Blender CI under
+[GitHub Actions](https://github.com/st-tech/ppf-contact-solver#-github-actions)
+in the README. The coding agents also help write and maintain these tests.
+Hunting down every edge-case bug is not a hard requirement of the project,
+so occasional bugs remain.
 
-If you run into a bug, please feel free to
-[open an issue on GitHub](https://github.com/st-tech/ppf-contact-solver/issues).
-Reports with a reproduction path are especially helpful and are the
-main way the add-on's rough edges get smoothed out over time.
+If you run into a bug,
+[open an issue on GitHub](https://github.com/st-tech/ppf-contact-solver/issues);
+[Reaching the Author](reaching_the_author.md#reporting-a-bug) lists what to
+attach. Reports with a reproduction path are the most useful.

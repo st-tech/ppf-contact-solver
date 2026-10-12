@@ -754,6 +754,286 @@ operator_apply_symmetric_folded(
     unsigned count);
 
 
+// ---------------------------------------------------------------------------
+// THE DIFFERENCE FORM: `(A x)_i = S_i x_i + sum_j A_ij (x_j - x_i)`, with
+// `S_i = sum_j A_ij` the row's blocks summed once per Newton step.
+//
+// IT IS THE SAME PRODUCT, AND IT EXISTS FOR A VECTOR THE PLAIN FORM CANNOT
+// RESOLVE. An elastic row sums to nearly nothing against a vector that varies
+// slowly across it: every block multiplies a value of the vector's full size
+// and the row's answer is what is left after they cancel, so in single precision
+// the answer carries round-off of the size of the terms rather than of itself.
+// A block-diagonal preconditioner never hands the conjugate gradient such a
+// vector, each of its directions being rough at the scale of one row. A
+// multigrid's coarse correction is exactly such a vector, a whole piece of mesh
+// moving together, and measured on a solid beam the curvature `p . A p` of its
+// first direction is 5e-6 of the magnitudes summed to form it, below the 3e-5 a
+// curvature has to clear to be believed. Here each block multiplies the
+// DIFFERENCE of two neighbors, which is small where the vector is smooth, and
+// the same curvature is 2e-3 of its own magnitudes.
+//
+// THE MAGNITUDE SUM IS THIS FORM'S OWN, block by block as the plain form takes
+// its own, so the bound the curvature is judged against is the round-off of the
+// sum that was actually computed.
+//
+// `S_i` IS COMPUTED BY `operator_row_sum` AND NOT HERE, because it is the same
+// for every vector the operator is applied to in a solve. Its own round-off is
+// a fixed perturbation of the row's diagonal block of the order of single
+// precision's epsilon times the row's blocks, which changes the system being
+// solved by that much and no iteration by anything.
+
+[[seam::device_fn]] inline Vec3f
+mat3_mul_vector(const float *matrix, const Vec3f &vector) {
+    Vec3f result;
+    result[0] =
+        matrix[0] * vector[0] + matrix[3] * vector[1] + matrix[6] * vector[2];
+    result[1] =
+        matrix[1] * vector[0] + matrix[4] * vector[1] + matrix[7] * vector[2];
+    result[2] =
+        matrix[2] * vector[0] + matrix[5] * vector[1] + matrix[8] * vector[2];
+    return result;
+}
+
+[[seam::device_fn]] inline Vec3f
+mat3_transpose_mul_vector(const float *matrix, const Vec3f &vector) {
+    Vec3f result;
+    result[0] =
+        matrix[0] * vector[0] + matrix[1] * vector[1] + matrix[2] * vector[2];
+    result[1] =
+        matrix[3] * vector[0] + matrix[4] * vector[1] + matrix[5] * vector[2];
+    result[2] =
+        matrix[6] * vector[0] + matrix[7] * vector[1] + matrix[8] * vector[2];
+    return result;
+}
+
+// `x_other - own`, the one vector every block of a row multiplies.
+[[seam::device_fn]] inline Vec3f
+spmv_difference(const float *x, unsigned other, const Vec3f &own) {
+    Vec3f difference;
+    difference[0] = x[3 * other + 0] - own[0];
+    difference[1] = x[3 * other + 1] - own[1];
+    difference[2] = x[3 * other + 2] - own[2];
+    return difference;
+}
+
+// One row of the operator in the difference form, and its magnitude sum.
+//
+// THE FOUR SPANS IN THE PLAIN FORM'S ORDER, contact first, then the row's own
+// term last where the plain form adds the block diagonal. A block whose column
+// is the row itself multiplies a zero difference, so the diagonal blocks the
+// two matrices store need no test: their whole contribution is inside `S_i`.
+[[seam::device_fn]] inline Vec3f spmv_difference_row(
+    const unsigned *dyn_index,
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_index,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *index,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *row_sum,
+    const float *x, unsigned row,
+    Vec3f &abssum) {
+    Vec3f own;
+    own[0] = x[3 * row + 0];
+    own[1] = x[3 * row + 1];
+    own[2] = x[3 * row + 2];
+    Vec3f result = Vec3f::Zero();
+    for (unsigned slot = dyn_offset[row]; slot < dyn_offset[row + 1]; ++slot) {
+        const Vec3f block = mat3_mul_vector(
+            dyn_value + 9 * slot, spmv_difference(x, dyn_index[slot], own));
+        result += block;
+        spmv_accumulate_magnitude(abssum, block);
+    }
+    for (unsigned slot = dyn_reference_offset[row];
+         slot < dyn_reference_offset[row + 1]; ++slot) {
+        const Vec3f block = mat3_transpose_mul_vector(
+            dyn_global_value + 9 * dyn_reference_value[slot],
+            spmv_difference(x, dyn_reference_index[slot], own));
+        result += block;
+        spmv_accumulate_magnitude(abssum, block);
+    }
+    for (unsigned slot = offset[row]; slot < offset[row + 1]; ++slot) {
+        const Vec3f block = mat3_mul_vector(
+            value + 9 * slot, spmv_difference(x, index[slot], own));
+        result += block;
+        spmv_accumulate_magnitude(abssum, block);
+    }
+    for (unsigned entry = transpose_offset[row];
+         entry < transpose_offset[row + 1]; ++entry) {
+        const Vec3f block = mat3_transpose_mul_vector(
+            value + 9 * transpose_pair[2 * entry + 1],
+            spmv_difference(x, transpose_pair[2 * entry], own));
+        result += block;
+        spmv_accumulate_magnitude(abssum, block);
+    }
+    const Vec3f diagonal = mat3_mul_vector(row_sum + 9 * row, own);
+    result += diagonal;
+    spmv_accumulate_magnitude(abssum, diagonal);
+    return result;
+}
+
+// `S_i`: the block diagonal plus every block the row's four spans store, the
+// transposed ones transposed.
+[[seam::entry(row)]]
+[[seam::device_fn]] inline void operator_row_sum(
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *diagonal,
+    float *row_sum,
+    unsigned row) {
+    float sum[9];
+    for (unsigned entry = 0; entry < 9; ++entry) {
+        sum[entry] = diagonal[9 * row + entry];
+    }
+    for (unsigned slot = dyn_offset[row]; slot < dyn_offset[row + 1]; ++slot) {
+        for (unsigned entry = 0; entry < 9; ++entry) {
+            sum[entry] += dyn_value[9 * slot + entry];
+        }
+    }
+    for (unsigned slot = dyn_reference_offset[row];
+         slot < dyn_reference_offset[row + 1]; ++slot) {
+        const unsigned source = dyn_reference_value[slot];
+        for (unsigned r = 0; r < 3; ++r) {
+            for (unsigned c = 0; c < 3; ++c) {
+                sum[3 * c + r] += dyn_global_value[9 * source + 3 * r + c];
+            }
+        }
+    }
+    for (unsigned slot = offset[row]; slot < offset[row + 1]; ++slot) {
+        for (unsigned entry = 0; entry < 9; ++entry) {
+            sum[entry] += value[9 * slot + entry];
+        }
+    }
+    for (unsigned entry = transpose_offset[row];
+         entry < transpose_offset[row + 1]; ++entry) {
+        const unsigned source = transpose_pair[2 * entry + 1];
+        for (unsigned r = 0; r < 3; ++r) {
+            for (unsigned c = 0; c < 3; ++c) {
+                sum[3 * c + r] += value[9 * source + 3 * r + c];
+            }
+        }
+    }
+    for (unsigned entry = 0; entry < 9; ++entry) {
+        row_sum[9 * row + entry] = sum[entry];
+    }
+}
+
+// The difference form with one float per row for each of the two scalars, as
+// `operator_apply` writes them.
+[[seam::entry(row)]]
+[[seam::device_fn]] inline void operator_apply_difference(
+    const unsigned *dyn_index,
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_index,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *index,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *row_sum,
+    const float *x, float *result,
+    float *absolute, float *curvature,
+    unsigned row) {
+    float magnitude = 0.0f;
+    float signed_sum = 0.0f;
+    Vec3f abssum = Vec3f::Zero();
+    const Vec3f product = spmv_difference_row(
+        dyn_index, dyn_value, dyn_offset, dyn_reference_index,
+        dyn_reference_value, dyn_reference_offset, dyn_global_value, index,
+        offset, value, transpose_pair, transpose_offset, row_sum, x, row,
+        abssum);
+    map<Vec3f>(result + 3 * row) = product;
+    spmv_row_bound(product, abssum, x, row, signed_sum, magnitude);
+    absolute[row] = magnitude;
+    curvature[row] = signed_sum;
+}
+
+// The same with the two scalars folded per group, one row a lane, which is the
+// shape `operator_apply_folded` has and for the reasons stated there.
+[[seam::device_fn]] inline void operator_apply_difference_folded(
+    const unsigned *dyn_index,
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_index,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *index,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *row_sum,
+    const float *x, float *result,
+    float *scratch,
+    float *curvature_total,
+    float *absolute_total, unsigned rows, unsigned lane,
+    unsigned threads, unsigned block) {
+    const unsigned row = block * threads + lane;
+    float magnitude = 0.0f;
+    float signed_sum = 0.0f;
+    if (row < rows) {
+        Vec3f abssum = Vec3f::Zero();
+        const Vec3f product = spmv_difference_row(
+            dyn_index, dyn_value, dyn_offset, dyn_reference_index,
+            dyn_reference_value, dyn_reference_offset, dyn_global_value, index,
+            offset, value, transpose_pair, transpose_offset, row_sum, x, row,
+            abssum);
+        map<Vec3f>(result + 3 * row) = product;
+        spmv_row_bound(product, abssum, x, row, signed_sum, magnitude);
+    }
+    const float curvature_folded =
+        compute::block_sum(signed_sum, scratch, lane, threads);
+    const float absolute_folded =
+        compute::block_sum(magnitude, scratch + 32, lane, threads);
+    if (compute::is_block_writer(lane, threads)) {
+        curvature_total[block] = curvature_folded;
+        absolute_total[block] = absolute_folded;
+    }
+}
+
+[[seam::entry(count, block)]] [[seam::group]] void
+operator_apply_difference_folded(
+    const unsigned *dyn_index,
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_index,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *index,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *row_sum,
+    const float *x,
+    float *result,
+    [[seam::scratch(64)]] float *scratch,
+    float *curvature_total,
+    float *absolute_total,
+    unsigned rows,
+    [[seam::lane]] unsigned lane,
+    [[seam::width]] unsigned threads,
+    unsigned block,
+    unsigned count);
+
 // The entry point for the block-diagonal apply, declared once and rendered for
 // four targets: the `__global__` nvcc compiles, the `kernel void` the Metal
 // shader compiler compiles, the `mat3_mul_entry` shim a host C++

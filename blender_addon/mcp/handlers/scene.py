@@ -283,6 +283,12 @@ def _geometry_counts(obj) -> dict:
                 for spline in data.splines
             ),
         }
+    if obj.type == "CURVES" and data is not None:
+        # Hair Curves: each point is a rod vertex once it is in a ROD group.
+        return {
+            "curve_count": len(data.curves),
+            "point_count": len(data.points),
+        }
     return {}
 
 

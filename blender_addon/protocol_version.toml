@@ -47,6 +47,31 @@
 #         successful build exempted, read back from build_exemptions.json on a
 #         reconnect. A stale server would reject the key at build, so the bump
 #         stops it at the handshake instead.
+#   0.24: The server stops itself after `--idle-timeout` seconds (3600 by
+#         default, 0 for never) in which no request arrived and no solve or
+#         build ran, and the status response gains `idle_timeout_s`. The add-on
+#         starts its servers with its own value (60 s by default) and pings a
+#         server it is connected to from a thread of its own, which is what
+#         keeps that server up while Blender is connected. An add-on that does
+#         not ping would lose its server a minute into an idle connection, and
+#         an older server rejects the flag at launch, so the bump keeps the two
+#         from pairing.
+#   0.25: force fields as field objects. The PARAM payload's `force_field`
+#         carries `fields`, one entry per Blender field object (its settings
+#         and a track of per-frame samples, which the solver evaluates exactly
+#         at every vertex), and `scripts`, in place of the sampled `grids`; a
+#         Fluid Flow field carries its fluid volume as per-frame brick tables
+#         and bricks, and a Texture field its image and `z_up`. Large byte
+#         strings (a fluid frame's table and bricks, a texture's image) travel
+#         as a LIST of byte chunks of at most 1 MiB, which the decoder joins.
+#         A frontend that predates this reads none of it, so the bump stops a
+#         stale server at the handshake.
+#   0.26: contact gap limit. A SOLID, SHELL or ROD group's params gain
+#         `contact-gap-limit`, the fraction of the room between mesh neighbors
+#         that each element's contact gap may take, which the frontend applies
+#         when it expands `contact-gap` onto the elements. A frontend that
+#         predates the key refuses it as an unknown parameter at build, so the
+#         bump stops a stale server at the handshake instead.
 #   0.20: spatial material maps gain a time axis, a tetrahedral path, and one
 #         unit conversion shared with the values they blend against. A map row
 #         in "material-maps" carries either "weights" ({object UUID: [w per
@@ -196,4 +221,4 @@
 #         on shutdown(SHUT_WR) as the end-of-input signal. Windows tokio did not
 #         deliver that half-close to the server's AsyncRead, so the server hung
 #         in its read loop and connections piled up in FIN_WAIT_2.
-protocol = "0.23"
+protocol = "0.26"

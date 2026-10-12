@@ -180,6 +180,25 @@ class _DynParamBuilder:
 # Scene proxy
 # ---------------------------------------------------------------------------
 
+# Scene keys published scripts name that are not settings of this add-on,
+# each with the reason. A force field is evaluated exactly at every vertex,
+# so nothing sizes, spaces, samples or bounds it; a script naming one of
+# these is told so rather than stopped by a bare "not found".
+RETIRED_SCENE_PARAMS = {
+    key: ("force fields are evaluated exactly at every vertex, with no sampled box, "
+          "spacing, time samples or size limit, and an animated or parented field is "
+          "sampled at every solve frame; delete the line")
+    for key in ("force_field_padding", "force_field_spacing",
+                "force_field_time_samples", "force_field_max_mb")
+}
+
+
+def _refuse_retired(key: str) -> None:
+    why = RETIRED_SCENE_PARAMS.get(key)
+    if why is not None:
+        raise AttributeError(f"solver.param.{key} is not a setting: {why}")
+
+
 @blender_api
 class _SceneProxy:
     """Attribute proxy for scene and SSH/connection parameters.
@@ -191,10 +210,20 @@ class _SceneProxy:
 
     ``gravity`` is an alias for ``gravity_3d``.
 
+    A datablock setting, the force field's ``force_field_collection`` and
+    ``force_field_script``, takes the Collection or Text itself or its
+    name, and None clears it.  ``force_field_padding``,
+    ``force_field_spacing``, ``force_field_time_samples`` and
+    ``force_field_max_mb`` are not settings: a force field is evaluated
+    exactly at every vertex, so naming one raises ``AttributeError``
+    saying so.
+
     Example::
 
         solver.param.step_size = 0.004
         print(solver.param.gravity)
+        solver.param.force_field_collection = bpy.data.collections["Fields"]
+        solver.param.force_field_preview_resolution = (8, 8, 8)
 
     Dynamic (keyframed) parameters are accessed via :meth:`dyn`::
 
@@ -222,8 +251,9 @@ class _SceneProxy:
         return _DynParamBuilder(key)
 
     def __setattr__(self, key, value):
-        # A datablock (the force field's Collection, Domain or script Text)
-        # travels by name, and None clears the pointer.
+        _refuse_retired(key)
+        # A datablock (the force field's Collection or script Text) travels
+        # by name, and None clears the pointer.
         if isinstance(value, bpy.types.ID):
             value = value.name
         elif value is None:
@@ -231,6 +261,7 @@ class _SceneProxy:
         bpy.ops.zozo_contact_solver.set(key=str(key), value=str(value))
 
     def __getattr__(self, key):
+        _refuse_retired(key)
         key = SCENE_PARAM_ALIASES.get(key, key)
         scene = bpy.context.scene
         addon_data = get_addon_data(scene)

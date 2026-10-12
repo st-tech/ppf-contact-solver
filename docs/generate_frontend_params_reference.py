@@ -60,7 +60,8 @@ def _render_global(param_mod: ModuleType) -> str:
         title,
         "=" * (len(title) + 4),
         "",
-        ".. This file is auto-generated from ``frontend/_param_.py``.",
+        ".. This file is auto-generated from "
+        "``crates/ppf-cts-core/src/datamodel/params.rs``.",
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Application-wide simulation parameters. Accessed via "
@@ -94,12 +95,13 @@ def _render_objects(param_mod: ModuleType) -> str:
                 seen.add(name)
                 all_names.append(name)
 
-    title = "🧪 Material Parameters"
+    title = "🔑 Material Parameter Keys"
     lines: list[str] = [
         title,
         "=" * (len(title) + 4),
         "",
-        ".. This file is auto-generated from ``frontend/_param_.py``.",
+        ".. This file is auto-generated from "
+        "``crates/ppf-cts-core/src/datamodel/params.rs``.",
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Per-object material parameters. Set via ``object.param.set(key, "
@@ -158,8 +160,8 @@ def _render_logs(parse_mod: ModuleType) -> str:
         ".. Regenerate via: python docs/generate_frontend_params_reference.py",
         "",
         "Named log streams emitted by the solver "
-        "(``SimpleLog`` / ``logging.push`` / ``logging.mark`` in the "
-        "C++/Rust sources). Pull a channel out of a finished session with "
+        "(the ``log::mark`` calls in the solver's Rust sources). Pull a "
+        "channel out of a finished session with "
         "``session.get.log.numbers(name)`` for ``(x, y)`` pairs or "
         "``session.get.log.number(name)`` for the latest scalar; "
         "``session.get.log.stdout()`` / ``stderr()`` return the raw text "
@@ -215,7 +217,7 @@ def main() -> int:
     ext = _ilu.module_from_spec(_spec)  # noqa: PLC0415
     _loader.exec_module(ext)
 
-    class param_mod:  # noqa: N801 — mimics module shape for renderers below
+    class param_mod:  # noqa: N801: mimics module shape for renderers below
         app_param = staticmethod(ext.app_param_dict)
         object_param = staticmethod(ext.object_param_dict)
 

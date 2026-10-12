@@ -22,16 +22,18 @@
 //     reference (see CancelHandle in ppf-cts-core::cancel).
 
 use std::sync::{Arc, OnceLock, Weak};
+use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
 use ppf_cts_core::cancel::CancelHandle;
 use ppf_cts_core::effects::Effect;
 use ppf_cts_core::events::Event;
-use ppf_cts_core::state::ServerState;
+use ppf_cts_core::state::{Build, ServerState, Solver};
 use ppf_cts_core::transitions::transition;
 
 use crate::config::EngineConfig;
 use crate::executor::EffectExecutor;
+use tokio::time::Instant;
 
 #[derive(Clone)]
 pub struct ServerEngine {
@@ -59,6 +61,29 @@ struct EngineInner {
     /// for the process lifetime so the upgrade is expected to
     /// succeed during normal operation.
     executor: OnceLock<Weak<dyn EffectExecutor>>,
+    /// When the server last had a client: the moment its last request
+    /// ended, and how many requests are open now. `serve::stop_when_idle`
+    /// reads it, and work in progress restarts it (`mark_busy`).
+    activity: Mutex<ActivityClock>,
+}
+
+struct ActivityClock {
+    last: Instant,
+    open: usize,
+}
+
+/// One request in flight, from `ServerEngine::request_started`. Dropping it
+/// records the request ending, which is when the idle clock starts.
+pub struct RequestGuard {
+    engine: ServerEngine,
+}
+
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        let mut clock = self.engine.inner.activity.lock();
+        clock.open = clock.open.saturating_sub(1);
+        clock.last = Instant::now();
+    }
 }
 
 #[derive(Default)]
@@ -80,6 +105,7 @@ impl ServerEngine {
                 config,
                 cancel: Mutex::new(CancelState::default()),
                 executor: OnceLock::new(),
+                activity: Mutex::new(ActivityClock { last: Instant::now(), open: 0 }),
             }),
         }
     }
@@ -134,6 +160,39 @@ impl ServerEngine {
         let mut guard = self.inner.state.write();
         guard.name = name.to_string();
         guard.root = root.to_string();
+    }
+
+    // --- Idle clock ---------------------------------------------------
+
+    /// Record a request arriving. The guard records it ending.
+    pub fn request_started(&self) -> RequestGuard {
+        let mut clock = self.inner.activity.lock();
+        clock.open += 1;
+        clock.last = Instant::now();
+        RequestGuard { engine: self.clone() }
+    }
+
+    /// How long the server has had no request, or `None` while one is open.
+    pub fn idle_for(&self) -> Option<Duration> {
+        let clock = self.inner.activity.lock();
+        if clock.open > 0 {
+            return None;
+        }
+        Some(clock.last.elapsed())
+    }
+
+    /// Restart the idle clock, so that an idle stop counts from now.
+    pub fn mark_busy(&self) {
+        self.inner.activity.lock().last = Instant::now();
+    }
+
+    /// Whether a solve or a build is in progress: the work an idle stop must
+    /// never end. A solve the monitor adopted (one a notebook started) is
+    /// `Running` too.
+    pub fn work_in_progress(&self) -> bool {
+        let state = self.inner.state.read();
+        matches!(state.solver, Solver::Running | Solver::Saving)
+            || state.build == Build::Building
     }
 
     // --- Cancellation token plumbing --------------------------------

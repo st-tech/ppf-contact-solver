@@ -27,6 +27,19 @@ def _group_from_slot(context, slot: int):
     return getattr(root, f"object_group_{slot}", None)
 
 
+def _holds_only_hair(group) -> bool:
+    """True when `group` holds objects and every one is a Hair Curves object."""
+    from ...core.hair_curves import is_hair_curves
+    from ...core.uuid_registry import get_object_by_uuid
+
+    objects = [
+        get_object_by_uuid(assigned.uuid)
+        for assigned in group.assigned_objects
+        if assigned.uuid
+    ]
+    return bool(objects) and all(is_hair_curves(obj) for obj in objects)
+
+
 class OBJECT_OT_AddMaterialMap(Operator):
     """Add a spatial material map to this group"""
 
@@ -41,7 +54,11 @@ class OBJECT_OT_AddMaterialMap(Operator):
         if group is None:
             self.report({"ERROR"}, "No group in that slot")
             return {"CANCELLED"}
-        group.material_maps.add()
+        entry = group.material_maps.add()
+        if _holds_only_hair(group):
+            # Hair Curves have no vertex groups, so the one source such a
+            # group can read is a point attribute.
+            entry.source_type = "ATTRIBUTE"
         group.material_maps_index = len(group.material_maps) - 1
         return {"FINISHED"}
 

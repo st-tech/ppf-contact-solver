@@ -146,6 +146,17 @@ pub fn init(output_dir: &str, launch_id: String, resumable_initial: bool) {
 /// (idempotent: a clean run leaves the code 0 and a terminal record
 /// already present, so this is a no-op then).
 extern "C" fn atexit_fatal_hook() {
+    stamp_fatal();
+}
+
+/// Write the terminal `Crashed{kind}` record for the fatal code the backend
+/// stamped, or do nothing when it stamped none.
+///
+/// A path that exits from Rust calls this itself rather than relying on the
+/// `atexit` hook: `std::process::exit` is `libc::exit` on Unix, which runs the
+/// hook, and `ExitProcess` on Windows, which does not, so a fatal exit there
+/// would leave `status.cbor` with no outcome at all.
+pub fn stamp_fatal() {
     let code = unsafe { fatal_code() };
     if code != 0 {
         let kind = crash_kind_from_error_code(code).unwrap_or(CrashKind::UnknownAbrupt);

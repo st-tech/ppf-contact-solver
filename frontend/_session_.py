@@ -31,6 +31,8 @@ from tqdm.auto import tqdm
 
 from . import _rust  # type: ignore[attr-defined]
 
+from ._contact_gap_ import refuse_unsolvable_scene
+from ._preconditioner_ import refuse_unsolvable_preconditioner
 from ._scene_ import FixedScene
 from ._session_inspect_ import (
     CONSOLE_STYLE,
@@ -339,6 +341,10 @@ class FixedSession:
             "stitch": False,
         }
         if self.fixed_scene is not None:
+            # A fluid the scene reads back from this session's files must
+            # outlive the directory being cleared, and one that no copy holds
+            # any more fails here, before the session is deleted.
+            self.fixed_scene._hold_force_field_frames(self.info.path)
             self.delete(preserve_output=preserve_output)
             self.fixed_scene.export_fixed(
                 self.info.path, True, preserve_output=preserve_output
@@ -346,6 +352,14 @@ class FixedSession:
         else:
             raise ValueError("Scene and param must be initialized")
         self._cmd_path = self.export.shell_command(self._param)
+
+    def __getstate__(self):
+        # The solver's process handle belongs to the Python process that
+        # started it and does not pickle; a session read back finds a running
+        # solver through `is_running`'s fallback.
+        state = self.__dict__.copy()
+        state["_process"] = None
+        return state
 
     @property
     def info(self) -> SessionInfo:
@@ -945,6 +959,12 @@ class FixedSession:
     def save_and_quit(self):
         """Save the session and quit the solver.
 
+        The solver saves before its next step, and the checkpoint is named
+        for the last frame written. A held run (:meth:`run_until_frame`)
+        saves its held state, the state at the end of the step that crossed
+        the held frame's time, which lies up to one step past it, and a
+        resume continues from exactly that state.
+
         Example:
             Ask a running solver to checkpoint and exit gracefully::
 
@@ -959,9 +979,11 @@ class FixedSession:
     # A HELD run keeps its process, its device and every buffer alive and
     # waits between two steps; nothing is checkpointed. The solver stops once
     # it has written the frame asked for, writes `output/held`, and continues
-    # when the hold grows, is released, or is saved and quit. While it is held
-    # the caller may rewrite the force field and the scene-wide `dyn()`
-    # schedule, and the solver takes both before its next step.
+    # when the hold grows, is released, or is saved and quit. It writes frame
+    # F after the step that crosses F / fps, so the held state is that step's
+    # end, up to one step past F / fps. While it is held the caller may
+    # rewrite the force field and the scene-wide `dyn()` schedule, and the
+    # solver takes both before its next step.
 
     def held_frame(self) -> Optional[int]:
         """The frame the solver is held at, or ``None`` when it is not held.
@@ -996,6 +1018,18 @@ class FixedSession:
         Starts the solver when it is not running, and continues a held one.
         Returns once the solver is held at ``frame``, or once the run has
         finished when ``frame`` is at or past its last frame.
+
+        The solver writes frame F once a step has crossed its time F / fps,
+        interpolating the pose back to that time, and holds between that
+        step and the next. The HELD STATE is therefore the end of the step
+        that wrote the frame, up to one step (``dt`` of the scene clock) past
+        F / fps. Anything given to the held run (:meth:`update_force_field`,
+        :meth:`update_params`) applies from the next step, which starts at
+        the held state, so frame F + 1 is the first written frame it can
+        change. With ``dt`` at the solver's cap, just below 1 / fps (where a
+        ``dt`` of a frame or more lands), the held state lies just before
+        frame F + 1's time, frame F + 1 is written from it almost unchanged,
+        and the change shows from frame F + 2 on.
 
         Args:
             frame (int): The frame to stop after.
@@ -1058,6 +1092,21 @@ class FixedSession:
         """Advance a held run by ``count`` frames and hold it again.
 
         Starts the run and holds it at frame ``count`` when it is not running.
+        Anything given to the held run in between (:meth:`update_force_field`,
+        :meth:`update_params`) applies from the first of these steps on, which
+        starts at the held state, up to one step past the held frame's time
+        (see :meth:`run_until_frame`).
+
+        Args:
+            count (int): How many frames to advance.
+            timeout (float): As for :meth:`run_until_frame`.
+
+        Returns:
+            FixedSession: This session, held at the new frame (or finished, when
+            that frame is at or past the run's last).
+
+        Raises:
+            RuntimeError: As for :meth:`run_until_frame`.
 
         Example:
             ::
@@ -1119,12 +1168,44 @@ class FixedSession:
     def update_force_field(self, field) -> "FixedSession":
         """Replace the force field of a held run from the next step on.
 
+        The next step starts at the held state, up to one step past the held
+        frame's time (see :meth:`run_until_frame`), so frame ``held + 1`` is
+        the first written frame the new field can change, and frame
+        ``held + 2`` with ``dt`` at the solver's cap, just below a frame.
+
+        Every source may be replaced: field objects of any kind, a Fluid and
+        the implicitly solved kinds included, and scripts alike. A track's
+        ``start`` and ``step`` and a :class:`FluidVolume`'s ``start`` are times
+        on the run's own clock, which began at frame 0, so a ramp meant to
+        begin now takes ``start=`` the held frame's time, ``held / fps``; the
+        first step to read it starts up to one step later, at the held
+        state. With the default ``start=0`` it would hold its last sample
+        from the first step.
+
+        The update steers this run only: the session's saved state, which
+        :meth:`App.recover` reads and a rebuild exports, keeps the scene as
+        built. When the update replaces files the built scene's fluid was
+        read from, that state is saved again, so it can still be rebuilt.
+
         Args:
             field (ForceField): The field to use, typically ``scene.force_field``
-                after editing it. The per-object weights stay as built.
+                after editing it. The per-object weights stay as built, and a
+                source's ``groups=`` names the groups the scene was built with.
+
+        Returns:
+            FixedSession: This session, for chaining.
+
+        Raises:
+            RuntimeError: The run is not held.
+            ValueError: A source names a group no object is in, or a fluid
+                frame (the new field's or the built scene's) read back from
+                files has no copy left that holds it; raised before anything
+                is replaced.
+            FileNotFoundError: Such a frame's every copy is gone.
 
         Example:
-            ::
+            Swap the script for a steady push, then add a vortex that ramps up
+            from the held frame on::
 
                 scene.force_field.clear().script('''
                 def eval(x, y, z, t):
@@ -1132,8 +1213,15 @@ class FixedSession:
                 ''')
                 session.update_force_field(scene.force_field)
                 session.step_frame()
+
+                # The held frame's time, fps being the session's "fps".
+                now = session.held_frame() / fps
+                scene.force_field.add("vortex", strength=[0.0, 4.0], start=now,
+                                      step=1.0)
+                session.update_force_field(scene.force_field)
+                session.step_frame()
         """
-        from ._force_field_ import FIELD_DIR, resolve_targets
+        from ._force_field_ import FIELD_DIR, hold_fluid_frames, resolve_targets
         from ._force_field_ import write_session as _write_force_field
 
         self._require_held("update_force_field")
@@ -1143,13 +1231,25 @@ class FixedSession:
         # replaces the sources, and they target the groups the scene was built
         # with.
         context = fixed._force_field_context
-        grids, scripts, mask = resolve_targets(field, context["group_vertices"], n_vert)
+        fields, scripts, mask = resolve_targets(field, context["group_vertices"], n_vert)
         weight = context["weight"]
         directory = os.path.join(self.info.path, FIELD_DIR)
+        built = fixed._force_field["fields"] if fixed._force_field is not None else []
+        # The saved state (fixed_session.pickle) may name the built scene's
+        # fluid files here, which the update replaces.
+        resave = fixed._force_field_copies_under(directory)
+        # A fluid read back from the files about to be removed, the new
+        # field's or the built scene's, must outlive them; every frame is
+        # checked before anything is removed.
+        hold_fluid_frames(list(fields) + list(built), directory)
         if os.path.isdir(directory):
             shutil.rmtree(directory)
-        _write_force_field(self.info.path, grids, scripts, weight, mask)
+        _write_force_field(self.info.path, fields, scripts, weight, mask)
         self._mark_inputs_updated()
+        if resave:
+            # Each built frame now refers to a copy that holds it, or travels
+            # in the saved state itself.
+            self._session._save_fixed_session(self)
         return self
 
     def update_params(self) -> "FixedSession":
@@ -1806,6 +1906,13 @@ class Session:
         Returns:
             FixedSession: The newly built fixed session.
 
+        Raises:
+            ValueError: The scene cannot be solved under the session's
+                parameters, and nothing has been written: its smallest
+                contact gap is below what the step size can solve, or
+                ``precond`` names no preconditioner, or it names
+                ``"multigrid"`` and the scene holds a rigid body.
+
         Example:
             Finalize a configured session and start it::
 
@@ -1813,6 +1920,13 @@ class Session:
                 fixed_session = session.build()
                 fixed_session.start(blocking=True)
         """
+        if self._fixed_scene is not None:
+            # Before anything is written: a gap the step cannot solve is a
+            # refusal of the session, not a session to be found broken later.
+            refuse_unsolvable_scene(self._fixed_scene, self._param)
+            # The same for a preconditioner the scene cannot be solved with,
+            # or one that is not a preconditioner at all.
+            refuse_unsolvable_preconditioner(self._fixed_scene, self._param)
         self._fixed_session = FixedSession(self, preserve_output=preserve_output)
         symlink_name = _rust.session_build_symlink_name(
             self._app_name,

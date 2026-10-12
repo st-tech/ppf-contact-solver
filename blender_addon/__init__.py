@@ -184,6 +184,23 @@ def _request_cache_heal_on_load(*_args):
 
 
 @persistent
+def _release_force_field_cache_on_load(*_args):
+    """load_post hook: drop the force field's remembered volumes, drawn
+    records and size report.
+
+    ``core.force_field`` keeps each Fluid Flow's last encoded volume and each
+    field's Visualize record, which hold as much memory as the payload, so
+    that a drift check on an unchanged fluid does not read it again, and the
+    size of what the last encode sent, which the panel, MCP and the Python
+    API list. All of them describe the file that was open; the new file
+    reads and reports its own sources.
+    """
+    from .core.force_field import release_encode_cache
+
+    release_encode_cache()
+
+
+@persistent
 def _reconcile_pin_captured_anim_on_load(*_args):
     """load_post hook: sync ``pin_item.has_captured_anim`` flags with
     on-disk ``_pindeform.pc2`` files.
@@ -415,6 +432,11 @@ def _register_body():
     ):
         bpy.app.handlers.load_post.append(_request_cache_heal_on_load)
     if not any(
+        getattr(h, "__name__", "") == "_release_force_field_cache_on_load"
+        for h in bpy.app.handlers.load_post
+    ):
+        bpy.app.handlers.load_post.append(_release_force_field_cache_on_load)
+    if not any(
         getattr(h, "__name__", "") == "_disconnect_on_load"
         for h in bpy.app.handlers.load_pre
     ):
@@ -566,6 +588,7 @@ def unregister():
                 "_reconcile_manifest_on_load",
                 "_reconcile_pin_captured_anim_on_load",
                 "_request_cache_heal_on_load",
+                "_release_force_field_cache_on_load",
             ):
                 bpy.app.handlers.load_post.remove(h)
         for h in list(bpy.app.handlers.load_pre):

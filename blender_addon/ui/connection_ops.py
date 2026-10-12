@@ -453,11 +453,22 @@ class REMOTE_OT_StartServer(AsyncOperator):
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
+        from ..core.connection import ping_outlasts_idle_stop
+
+        # A server stopping sooner than the next ping would stop under a
+        # connected Blender, which reads as a crash rather than a setting.
+        if ping_outlasts_idle_stop(props.server_idle_timeout, props.ping_interval):
+            self.report({"ERROR"}, iface_(
+                "Ping Interval ({ping} s) must be shorter than Stop Idle Server "
+                "After ({idle} s), or the server stops while connected"
+            ).format(ping=props.ping_interval, idle=props.server_idle_timeout))
+            return {"CANCELLED"}
         com.start_server(
             selected,
             props.solver_gpu_uuid,
             props.native_device,
             props.native_gpu_backend,
+            idle_timeout=props.server_idle_timeout,
         )
         self.setup_modal(context)
         return {"RUNNING_MODAL"}

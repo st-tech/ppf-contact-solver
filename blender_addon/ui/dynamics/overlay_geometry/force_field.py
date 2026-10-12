@@ -3,22 +3,30 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# The force field's Visualize overlay: arrows at a sparse PREVIEW grid over the
-# same box Transfer samples, for the field at the current frame.
+# The force field's Visualize overlay: arrows at a sparse PREVIEW grid around
+# the simulated objects, for the field at the current frame.
 #
-# DRAWN FROM THE ENCODER'S OWN EVALUATOR (`core.force_field.evaluate`), so the
-# arrows are what Transfer sends, not a second reading of the settings. The
-# preview resolution is separate from the transfer resolution: a readable
-# overlay wants a few hundred arrows, a faithful solve may want 32^3 samples.
+# DRAWN FROM THE SOLVER'S OWN LAWS (`core.force_field.evaluate`, through
+# `core/field_eval.py`, the frontend's reference evaluator byte for byte), in
+# the record Transfer sends, so the arrows are what the solver computes at
+# those points, not a second reading of the settings. The preview resolution
+# is for drawing only: the solver evaluates a field at every vertex exactly.
 #
 # Arrow length is the local magnitude over the largest one drawn, times one
 # preview cell, so the field's SHAPE reads at any strength; the panel does not
 # claim a scale for them.
 #
-# The drawn box covers every simulated object at the DRAWN frame, grown by
-# Padding; Transfer's boxes cover each field's own objects at the starting
-# frame, so they lie inside the drawn one there.
+# The drawn box covers every simulated object at the DRAWN frame, grown by a
+# tenth of its largest extent (`core.force_field.objects_box`).
+#
+# A FIELD WHOSE SOURCE CANNOT BE READ is left out of the drawing and named in
+# the panel (`preview_errors`), and the other fields and the script still
+# draw (`core.force_field.evaluate`'s ``errors``). The core keeps each field's
+# record under its `field_key`, so a zoom, which changes only the arrow
+# thickness, does not read a fluid or an image again; the script's arrows are
+# kept here the same way.
 
+import hashlib
 import math
 
 import numpy as np
@@ -33,25 +41,39 @@ from .primitives import _line_to_tris, _orthonormal_basis
 _MAX_ARROWS = 48 * 48 * 48
 
 
+# Why each field left out of the last drawing was left out, each message
+# naming its field.
+_preview_errors: list = []
+# The script's arrows under the key they were evaluated for: (key, vectors).
+_script_memo: list = [None, None]
+
+
+def preview_errors() -> list:
+    """The message of each field the last drawing left out because its
+    source could not be read, each naming the field; empty while Visualize
+    is off."""
+    return list(_preview_errors)
+
+
 def force_field_key(scene, state):
     """What the drawn arrows depend on, so the overlay rebuilds exactly when
-    one of them changes: the settings, every field object's transform and
-    field, the script text, and the frame."""
+    one of them changes: the settings, every field object's field
+    (`core.force_field.field_key`: its transform, settings, texture and
+    fluid source) and whether it is refused, the simulated objects, the
+    script text, and the frame."""
     from ....core import force_field as ff
+    from .. import force_field_status as status
 
     if not state.force_field_visualize:
         return None
     parts = [
         tuple(state.force_field_preview_resolution),
         scene.frame_current,
-        float(state.force_field_padding),
     ]
     for obj in ff.field_objects(scene, state):
-        f = obj.field
-        parts.append((obj.name, tuple(tuple(r) for r in obj.matrix_world), f.type,
-                      f.shape, f.falloff_type, f.strength, f.falloff_power,
-                      f.use_min_distance, f.distance_min, f.use_max_distance,
-                      f.distance_max, f.size, f.seed, f.z_direction))
+        # The refusal decides whether a field is drawn at all, and can turn
+        # on the scene (a Fluid Flow's baked range against the solve's).
+        parts.append((ff.field_key(obj), status.static_refusal(obj)))
     for obj in ff.dynamic_objects(scene):
         parts.append((obj.name, tuple(tuple(r) for r in obj.matrix_world)))
     text = state.force_field_script
@@ -67,16 +89,20 @@ def _drawn_time(scene, state) -> float:
                          resolve_start_frame(state))
 
 
-def _script_vectors(state, points, t):
+def _script_vectors(state, points, t, digest):
     """The exact script at ``points`` at time ``t``, or ``None`` without one
-    or on error."""
+    or on error. ``digest`` names the points, for the memo."""
     from ....core import force_field as ff
 
     text = state.force_field_script
     if text is None:
         return None
+    source = text.as_string()
+    key = (source, digest, t)
+    if _script_memo[0] == key:
+        return _script_memo[1]
     try:
-        fn = ff.local_script(text.as_string())
+        fn = ff.local_script(source)
     except Exception as e:  # the script's own top level failed
         print(f"[ppf] force field script cannot be drawn: {e}")
         return None
@@ -90,6 +116,7 @@ def _script_vectors(state, points, t):
             # domain error) is left undrawn; the solver would stop the run
             # there, which Compile and Check and the run itself report.
             out[i] = np.nan
+    _script_memo[:] = [key, out]
     return out
 
 
@@ -101,26 +128,34 @@ def preview_fields(scene, state):
     a GPU context.
     """
     from ....core import force_field as ff
+    from .. import force_field_status as status
 
     if not state.force_field_visualize:
+        _preview_errors.clear()
         return None
-    objs = [o for o in ff.field_objects(scene, state) if ff.refusal(o) is None]
+    objs = [o for o in ff.field_objects(scene, state) if status.static_refusal(o) is None]
     pushed = ff.dynamic_objects(scene)
     if not pushed:
+        _preview_errors.clear()
         return None
     # One box over every simulated object, which holds each field's own box.
-    lo, hi = ff.objects_box(pushed, float(state.force_field_padding))
+    lo, hi = ff.objects_box(pushed)
     res = [max(2, int(v)) for v in state.force_field_preview_resolution]
     while res[0] * res[1] * res[2] > _MAX_ARROWS:
         res = [max(2, v // 2) for v in res]
     pts = ff.grid_points(lo, hi, res).reshape(-1, 3)
     cell = float(np.min((hi - lo) / (np.array(res) - 1)))
     fields = []
+    time = _drawn_time(scene, state)
+    errors: list = []
     if objs:
-        acc, air = ff.evaluate(ff.snapshot(objs), pts)
-        fields.append((acc, ff.COLOR_ACCELERATION))
-        fields.append((air, ff.COLOR_AIR))
-    script = _script_vectors(state, pts, _drawn_time(scene, state))
+        acc, air = ff.evaluate(objs, pts, time, errors=errors)
+        if len(errors) < len(objs):
+            fields.append((acc, ff.COLOR_ACCELERATION))
+            fields.append((air, ff.COLOR_AIR))
+    _preview_errors[:] = errors
+    digest = hashlib.sha1(np.ascontiguousarray(pts, dtype=np.float64).tobytes()).hexdigest()
+    script = _script_vectors(state, pts, time, digest)
     if script is not None:
         fields.append((script, ff.COLOR_SCRIPT))
     return pts, cell, fields

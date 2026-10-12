@@ -69,5 +69,5 @@
   <!-- server traffic: loopback socket -->
   <path d="M 300 168 Q 430 220 560 168" class="arr-data" marker-end="url(#wn-arrow-p)" />
   <text x="430" y="217" text-anchor="middle" class="lbl-data">socket to localhost:9090</text>
-  <text x="430" y="233" text-anchor="middle" class="note">no SSH, no Docker -- everything stays on this machine</text>
+  <text x="430" y="233" text-anchor="middle" class="note">no SSH, no Docker: everything stays on this machine</text>
 </svg>

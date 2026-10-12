@@ -68,7 +68,7 @@
 
   <!-- ==================== LEFT: Tree ==================== -->
   <text x="20" y="88" class="col-title">Group → Pins → Operations</text>
-  <text x="20" y="106" class="col-sub">Same nesting as the UI: pins live in a group, operations stack on a pin.</text>
+  <text x="20" y="106" class="col-sub">Same nesting as the UI: a group holds pins, and a pin holds a stack of operations.</text>
 
   <!-- Group root -->
   <rect x="20" y="120" width="180" height="36" rx="6" class="grp-box" />

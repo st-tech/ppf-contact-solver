@@ -79,12 +79,22 @@ class Object:
     # from an app saved before per-object visibility existed still answers
     # the attribute instead of raising the first time a scene is built.
     _visible: bool = True
+    # Declared at class scope for the same reason: an Object unpickled from an
+    # app saved before Cosserat rods existed reads as a plain object with no
+    # authored roll.
+    _is_cosserat: bool = False
+    _cosserat_tilt: Optional[np.ndarray] = None
 
     def __init__(self, asset: AssetManager, name: str):
         self._asset = asset
         self._name = name
         self._static = False
         self._is_pdrd = False
+        self._is_cosserat = False
+        # Per-vertex roll of a Cosserat rod's material frame about its tangent,
+        # in radians and this object's own vertex order, or None. Set by
+        # `tilt`, which only a Cosserat rod accepts.
+        self._cosserat_tilt = None
         self._param = ParamHolder(object_param(self.obj_type))
         # Per-key animated material values, one entry per keyframe in the
         # scene's shared `param_anim_times`. Empty for an object whose
@@ -142,6 +152,22 @@ class Object:
         return self._is_pdrd
 
     @property
+    def cosserat(self) -> bool:
+        """Get whether the object is a Cosserat rod.
+
+        A Cosserat rod is a Rod-asset strand whose segments each carry an
+        orientation frame, coupled to the vertex positions by stretch,
+        shear, bending and twist energies. Set via :meth:`as_cosserat`.
+
+        Example:
+            Flag a rope as a Cosserat rod and inspect the result::
+
+                obj = scene.add("rope").as_cosserat()
+                assert obj.cosserat
+        """
+        return self._is_cosserat
+
+    @property
     def visible(self) -> bool:
         """Get whether the object is drawn.
 
@@ -169,11 +195,11 @@ class Object:
                 f"'{key}' already carries a spatial map on this object; each "
                 "parameter takes at most one"
             )
-        if self.get("F") is None and self.get("T") is None:
+        if self.map_element_key is None:
             raise ValueError(
                 f"a spatial map for '{key}' needs an object with elements to "
-                f"reduce over; a '{self.obj_type}' object has neither faces "
-                "nor tetrahedra"
+                f"reduce over; a '{self.obj_type}' object has neither faces, "
+                "tetrahedra nor rod segments"
             )
 
     def _validated_weights(self, key: str, weights, where: str = "") -> np.ndarray:
@@ -196,6 +222,23 @@ class Object:
             )
         return w
 
+    @property
+    def map_element_key(self) -> Optional[str]:
+        """The connectivity array a spatial map on this object is reduced
+        over: "F" for an object with faces, "T" for one with tetrahedra only,
+        "E" for a rod, or None for an object with no elements.
+
+        A tetrahedralized object answers "F", its surface, which is the table
+        a contact parameter is read from; the build reduces a map over its
+        tetrahedra as well, by naming "T" itself.
+        """
+        for element_key in ("F", "T"):
+            if self.get(element_key) is not None:
+                return element_key
+        if self.obj_type == "rod" and self.get("E") is not None:
+            return "E"
+        return None
+
     def set_param_spatial(self, key: str, weights, target: float) -> "Object":
         """Vary one material parameter across this object's elements.
 
@@ -209,6 +252,10 @@ class Object:
         gradient of any energy, and its Hessian stop being the one the PSD
         projection was derived for, so the reduction to one value per element
         happens here rather than being left to the solver.
+
+        A rod's elements are its segments, so a segment takes the mean of its
+        two ends. Bending acts at the vertex between two segments, and the
+        solver gives that vertex the mean of the two segments' values.
 
         Args:
             key (str): The material parameter key. Must exist on this object.
@@ -244,6 +291,13 @@ class Object:
             Object: This object, for chaining.
         """
         self._claim_param_spatial(key)
+        if self.obj_type == "rod":
+            raise ValueError(
+                f"a spatial map for '{key}' on a rod cannot change over time: "
+                "the per-frame material tables are written for triangles, so "
+                "a rod segment keeps the value it was built with. Give the "
+                "rod one weight array with set_param_spatial."
+            )
         t = [float(x) for x in times]
         if len(weight_frames) != len(t):
             raise ValueError(
@@ -612,6 +666,102 @@ class Object:
             raise ValueError("as_pdrd() cannot be applied to a static object")
         self._is_pdrd = True
         self._param = ParamHolder(object_param("pdrd"))
+        return self
+
+    def as_cosserat(self) -> "Object":
+        """Switch the object to a Cosserat rod.
+
+        The object must reference a Rod asset. A Cosserat rod keeps the
+        strand's segments, and each segment additionally carries an
+        orientation frame, so it resists shear, bending and twist where a
+        plain rod has stretch and a position-only bending term. Swaps the
+        parameter set to the Cosserat defaults: the rod keys, with stretch
+        on ``young-mod`` and the usual contact and friction keys, plus the
+        keys below (set with ``obj.param.set(key, value)``).
+
+        - ``cosserat-shear`` (default 1000): resistance to a segment
+          shearing away from its frame's axis.
+        - ``cosserat-bend`` (default 10000): isotropic bending stiffness
+          between neighboring frames, in the units of the rod key ``bend``:
+          the flexural rigidity is this value times the linear density
+          times (1 cm)^2, whatever the segment length.
+        - ``cosserat-twist`` (default 10000): torsional stiffness between
+          neighboring frames, in the same units.
+        - ``cosserat-rest-twist`` (default 0): intrinsic rest twist rate in
+          radians per unit length; the sign selects the handedness.
+        - ``cosserat-fix-ends`` (default 0): 1 holds the frames of the first
+          and last segment fixed. With a rest twist and pinned ends, the
+          stored twist can buckle the rod into a helix instead of unwinding.
+        - ``cosserat-end-twist-rate`` (default 0): rate in radians per second
+          at which the held end frames turn, the two ends in opposite senses,
+          like a cable whose clamps are turned against each other. Requires
+          ``cosserat-fix-ends``.
+        - ``cosserat-straight-rest`` (default 0): 1 takes a straight,
+          untwisted rest state instead of the authored shape.
+
+        The stiffnesses are density normalized, like ``young-mod``, and
+        resolution independent: refining a rod's segments leaves its
+        rigidities unchanged. The rod
+        key ``bend`` defaults to 0 here, since the frames carry the bending.
+        A Cosserat rod and a static collider are mutually exclusive.
+
+        Returns:
+            Object: ``self``, to allow chaining with placement and
+            velocity builders.
+
+        Example:
+            Pre-twist a rope and hold its end frames to set up a helical
+            perversion::
+
+                rope = scene.add("rope").as_cosserat()
+                rope.param.set("cosserat-rest-twist", 10.0)
+                rope.param.set("cosserat-fix-ends", 1.0)
+        """
+        if self.obj_type != "rod":
+            raise ValueError(
+                f"as_cosserat() requires a Rod asset; got {self.obj_type!r}"
+            )
+        if self._static:
+            raise ValueError("as_cosserat() cannot be applied to a static object")
+        self._is_cosserat = True
+        self._param = ParamHolder(object_param("cosserat"))
+        return self
+
+    def tilt(self, tilt) -> "Object":
+        """Set a Cosserat rod's roll about its tangent, per vertex.
+
+        One angle in radians per vertex, in this object's vertex order. Each
+        segment's material frame is rolled by the mean of its two vertices'
+        angles, so a varying tilt authors a twist profile along the rod,
+        where ``cosserat-rest-twist`` is one uniform rate for the whole
+        object. The scene decoder fills it from a COSSERAT object's ``tilt``.
+
+        Args:
+            tilt: array-like of per-vertex angles in radians.
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Example:
+            Author a rod whose frames turn half a revolution along it::
+
+                rod = scene.add("rope").as_cosserat()
+                rod.tilt(np.linspace(0.0, np.pi, len(rod.get("V"))))
+        """
+        if not self._is_cosserat:
+            raise ValueError(
+                "tilt() requires a Cosserat rod; call as_cosserat() first"
+            )
+        arr = np.ascontiguousarray(tilt, dtype=np.float32).reshape(-1)
+        n_vert = len(self.get("V"))
+        if len(arr) != n_vert:
+            raise ValueError(
+                f"tilt has {len(arr)} entries but the object has {n_vert} "
+                "vertices; it takes exactly one roll angle per vertex"
+            )
+        if not np.all(np.isfinite(arr)):
+            raise ValueError("tilt contains non-finite angles")
+        self._cosserat_tilt = arr
         return self
 
     def report(self):
@@ -1270,10 +1420,14 @@ class Object:
     def group(self, label: str) -> "Object":
         """Put the object in a named group.
 
-        A group matters only to the ``allow-inter-group-intersection``
-        parameter: an object that sets it passes through every object in a
-        DIFFERENT group (no contact force, no line-search stop, no intersection
-        report), while objects of one group still collide with each other.
+        A group matters to two things. One is the
+        ``allow-inter-group-intersection`` parameter: an object that sets it
+        passes through every object in a DIFFERENT group (no contact force, no
+        line-search stop, no intersection report), while objects of one group
+        still collide with each other. The other is which force-field sources
+        reach the object: a source given ``groups=[...]``
+        (``scene.force_field.add`` or ``scene.force_field.script``) reaches
+        only the objects in those groups.
         Objects never given a group share one default group. A static collider
         that becomes a collision mesh counts as another group from every
         object, whatever label it was given. The Blender add-on puts each

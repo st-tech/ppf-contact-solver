@@ -654,6 +654,7 @@ __all__ = [
     "ObjectAdder",
     "FixedScene",
     "ForceField",
+    "FluidVolume",
     "ForceFieldScriptError",
     "noise",
     "curl_noise",
@@ -692,7 +693,7 @@ from ._app_ import App
 from ._asset_ import AssetFetcher, AssetManager, AssetUploader
 from ._decoder_ import BlenderApp
 from ._extra_ import Extra
-from ._force_field_ import ForceField, ForceFieldScriptError, curl_noise, noise
+from ._force_field_ import FluidVolume, ForceField, ForceFieldScriptError, curl_noise, noise
 from ._mesh_ import CreateManager, MeshManager, Rod, TetMesh, TriMesh
 from ._parse_ import CppRustDocStringParser
 from ._plot_ import Plot, PlotManager

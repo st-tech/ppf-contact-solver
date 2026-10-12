@@ -36,9 +36,10 @@ def _coerce_value(prop_group, key, value_str):
     elif prop_type == "INT":
         return int(value_str)
     elif prop_type == "POINTER":
-        # A datablock pointer (the force field's Collection, Domain object and
-        # script Text) is named; an empty name clears it. A name that resolves
-        # to nothing is refused rather than read as clearing.
+        # A datablock pointer (the force field's Collection or script Text;
+        # the Object entry serves any Object pointer) is named; an empty name
+        # clears it. A name that resolves to nothing is refused rather than
+        # read as clearing.
         if value_str in ("", "None"):
             return None
         collections = {

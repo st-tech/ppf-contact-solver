@@ -26,8 +26,8 @@
 #      and there is none for any other text.
 #   G. panel_draws_each_state: the Force Fields box, drawn into a recording
 #      stand-in layout, shows the connection reason while disconnected, the
-#      estimate line, the check's answer for the text it was given, and asks
-#      for a new check once the text is edited.
+#      field object's row, the check's answer for the text it was given, and
+#      asks for a new check once the text is edited.
 #   H. python_api_sets_every_kind: solver.param takes the force field's
 #      vector, datablock (by object and by name) and scalar settings, the
 #      group proxy takes force_field_weight, and check_force_field_script
@@ -78,9 +78,11 @@ try:
     root = dh.configure_state(project_name="force_field_check", frame_count=5)
     state = root.state
     dh.api.solver.create_group("Cloth", "SHELL").add(sheet.name)
-    # A field object, so the panel has a grid to estimate.
+    # A field object, so the panel draws its row.
     bpy.ops.object.effector_add(type="TURBULENCE", location=(0.0, 0.0, 0.5))
     turb = bpy.context.object
+    # A new Turbulence has Size 0, which is refused.
+    turb.field.size = 1.0
     text = bpy.data.texts.new("ff_check.py")
     text.from_string(GOOD)
     state.force_field_script = text
@@ -117,8 +119,6 @@ try:
     api.param.force_field_preview_resolution = (5, 4, 3)
     api.param.force_field_collection = coll
     api.param.force_field_script = "ff_check.py"
-    api.param.force_field_spacing = 0.05
-    api.param.force_field_time_samples = 5
     grp = api.get_groups()[0]
     grp.param.force_field_weight = 0.5
     try:
@@ -132,14 +132,11 @@ try:
               tuple(state.force_field_preview_resolution) == (5, 4, 3)
               and state.force_field_collection == coll
               and state.force_field_script == text
-              and abs(state.force_field_spacing - 0.05) < 1e-6
-              and state.force_field_time_samples == 5
               and abs(raw_group.force_field_weight - 0.5) < 1e-6
               and refused is not None and "Connect" in refused,
               {"preview_resolution": list(state.force_field_preview_resolution),
                "collection": state.force_field_collection.name
                if state.force_field_collection else None,
-               "spacing": state.force_field_spacing,
                "script": state.force_field_script.name if state.force_field_script else None,
                "weight": raw_group.force_field_weight, "refused": refused})
 
@@ -186,7 +183,7 @@ try:
     labels_edited = [e[1] for e in drawn_edited if e[0] == "label"]
     dh.record("G_panel_draws_each_state",
               any("Connect" in l for l in labels_off)
-              and any("MB estimated" in l for l in labels_on)
+              and any(l.endswith(": Turbulence") for l in labels_on)
               and any(l.startswith("Line 3:") for l in labels_on)
               and any("Not checked" in l for l in labels_edited),
               {"disconnected": labels_off, "connected": labels_on,

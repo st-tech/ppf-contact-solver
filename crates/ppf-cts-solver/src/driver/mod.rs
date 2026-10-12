@@ -124,6 +124,7 @@ mod collision_window;
 pub(crate) mod force_field;
 pub mod contact;
 mod constraint;
+mod cosserat;
 mod dirichlet;
 mod dump_linsys;
 /// The aggregate lock's projector: the dispatches that build the feasible
@@ -144,6 +145,8 @@ mod rigid_map;
 mod devsort;
 mod scan;
 mod schwarz;
+mod multigrid;
+mod multigrid_grid;
 mod scene;
 mod seed;
 mod state;
@@ -313,12 +316,16 @@ pub(crate) fn set_fatal(code: u8, detail: impl Into<String>) {
 
 /// Stop the run where the invariant broke, the way the C++ backends do.
 ///
-/// `exit`, not `abort` or a panic: the host's terminal crash record is written
-/// by a `libc::atexit` hook (`crate::status_writer`), which `abort()` does not
-/// run and which an unwind out of an `extern "C"` function would not reach
-/// either. Both channels carry the message, because `initialize()` can fail
-/// before the frontend has a logger attached and stderr is what a terminal
-/// sees.
+/// `exit`, not `abort` or a panic: `abort()` skips the exit handlers and an
+/// unwind out of an `extern "C"` function would not reach them either. Both
+/// channels carry the message, because `initialize()` can fail before the
+/// frontend has a logger attached and stderr is what a terminal sees.
+///
+/// THE TERMINAL RECORD IS STAMPED HERE, NOT LEFT TO THE `atexit` HOOK. Rust's
+/// `process::exit` is `ExitProcess` on Windows, which never runs the C runtime's
+/// `atexit` handlers, so a hook-only path leaves `status.cbor` with no outcome
+/// and the server reads a named refusal as a crash by absence. The stamp is
+/// first-writer-wins, so the hook running afterward on Unix changes nothing.
 fn fatal_exit(fatal: Fatal) -> ! {
     // NO BACKEND NAME. This driver is shared by all three, so naming one here
     // is wrong on two of them: a CUDA run and a Metal run both reported
@@ -328,6 +335,7 @@ fn fatal_exit(fatal: Fatal) -> ! {
     ::log::error!("### FATAL: {}", fatal.detail);
     eprintln!("### FATAL: {}", fatal.detail);
     set_fatal(fatal.code, fatal.detail);
+    crate::status_writer::stamp_fatal();
     std::process::exit(1);
 }
 
@@ -1465,22 +1473,70 @@ pub(crate) fn install_force_field(field: &crate::force_field::ForceFieldData, wo
     }
 }
 
-/// How many free vertices the last step found outside every force-field grid,
-/// or `None` when the scene carries no grid.
-pub(crate) fn force_field_outside_count() -> Option<usize> {
+/// Lay the multigrid preconditioner's hierarchy over the scene's authored
+/// positions, when the scene names that preconditioner.
+///
+/// ONCE A RUN, STRAIGHT AFTER `initialize()` ACCEPTS THE SCENE AND BEFORE THE
+/// FIRST STEP, beside the collision windows and the force field. It is a host
+/// pass over the whole mesh plus every allocation the preconditioner makes, so
+/// it does not belong inside a Newton step: a solve only asks whether the
+/// hierarchy is there and fails by name when it is not.
+///
+/// THE POSITIONS COME FROM THE HOST'S MESH, NOT FROM THE SCENE RECORD, which is
+/// why this is a call of its own rather than part of `initialize()`. The
+/// record's `vertex.curr` is the pose the run starts from: `fetch()` rewrites
+/// it every frame and a resumed run is handed the saved pose in it. The mesh's
+/// own positions are the authored ones on a fresh run and on a resumed one
+/// alike, so a run and its continuation are preconditioned by the same
+/// hierarchy. `multigrid::install` says what a hierarchy laid over a later
+/// pose would cost.
+pub(crate) fn install_multigrid(authored: &nalgebra::Matrix3xX<f32>) {
+    let live = SCENE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|scene| (scene.is_live(), scene.dataset, scene.param)));
+    let Some((true, dataset, param)) = live else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: install_multigrid was called before initialize() succeeded",
+        ));
+    };
+    // Safety: `backend.rs` owns both records for the whole run and calls one
+    // backend entry point at a time.
+    if unsafe { (*param).precond } != crate::data::PrecondMode::Multigrid {
+        return;
+    }
     let Ok(mut guard) = SOLVER.lock() else {
         fatal_exit(Fatal::invariant(
             "solver driver: the solver state is poisoned, so an earlier failure went unreported",
         ));
     };
-    let state = guard.as_mut()?;
-    match with_device(|device| state.field.outside_count(device)) {
-        Ok(count) => count,
-        Err(fatal) => {
-            drop(guard);
-            fatal_exit(fatal);
-        }
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: install_multigrid was called before initialize()",
+        ));
+    };
+    let laying = std::time::Instant::now();
+    // The coordinates, three a vertex, in the matrix's own column order.
+    let positions: Vec<f32> = authored.iter().copied().collect();
+    let vertices = state.sizes.vertices;
+    // Safety: the scene is the live one this state was sized for.
+    if let Err(fatal) = with_device(|device| unsafe {
+        multigrid::install(device, &mut state.multigrid, &*dataset, &positions, vertices)
+    }) {
+        drop(guard);
+        fatal_exit(fatal);
     }
+    // Name: Multigrid Hierarchy Build Time
+    // Format: list[(time, ms)]
+    // Description:
+    // Wall-clock time in milliseconds to lay the geometric multigrid
+    // preconditioner's hierarchy at the start of the simulation: the
+    // grids over each connected piece of mesh, the interpolations, the
+    // coarse operators' block patterns and their device buffers. Only a
+    // single record is expected, and only when the preconditioner is
+    // the multigrid.
+    log::mark("initialize", "multigrid_build", laying.elapsed());
 }
 
 /// Install the scene's collision-window table.

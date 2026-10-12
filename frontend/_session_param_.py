@@ -296,6 +296,30 @@ class ParamManager:
         else:
             return self._param.get(key)
 
+    def values(self, key: str) -> list[Any]:
+        """Every value ``key`` takes over the run.
+
+        The value it starts with, followed by each one a :meth:`dyn` schedule
+        changes it to.
+
+        Args:
+            key (str): The parameter key.
+
+        Returns:
+            list[Any]: The values, in the order they take effect.
+
+        Example:
+            Read a step size that is scheduled to grow::
+
+                session.param.set("dt", 0.001)
+                session.param.dyn("dt").time(0.5).change(0.01)
+                assert session.param.values("dt") == [0.001, 0.01]
+        """
+        scheduled = self._dyn_param.get(key)
+        if scheduled is None:
+            return [self._param.get(key)]
+        return [value for _, value in scheduled]
+
     def items(self):
         """Get all parameter items.
 

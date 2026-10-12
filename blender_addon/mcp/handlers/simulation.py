@@ -42,7 +42,14 @@ def _require_operator_poll(op_cls, action: str) -> None:
 
 @simulation_handler
 def transfer_data():
-    """Transfer data to the solver."""
+    """Transfer data to the solver.
+
+    The scene's geometry and its parameters are encoded and uploaded. The
+    force fields travel in the parameters: a field that anything moves or
+    animates, and every Fluid Flow, is sampled at every solve frame, so the
+    encode steps the timeline through them, and a Fluid Flow's volume
+    travels for every one (get_force_field_settings bounds its size).
+    """
     from ...ui.solver import SOLVER_OT_Transfer
 
     _require_operator_poll(SOLVER_OT_Transfer, "transfer data")
@@ -104,7 +111,12 @@ def save_and_quit_simulation():
 
 @simulation_handler
 def update_params():
-    """Update the parameters of the solver."""
+    """Update the parameters of the solver.
+
+    The parameters are encoded again and uploaded, the force fields
+    included, so a Fluid Flow's volume is sent again, as at Transfer, and
+    read again at every solve frame when its source changed.
+    """
     from ...ui.solver import SOLVER_OT_UpdateParams
 
     _require_operator_poll(SOLVER_OT_UpdateParams, "update parameters")

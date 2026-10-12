@@ -223,6 +223,21 @@ def humanize(name: str) -> str:
     return " ".join([words[0].capitalize(), *words[1:]])
 
 
+# Parameter kinds that name no argument of their own.
+_VARIADIC = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+
+
+def accepts_undeclared_arguments(func: Callable) -> bool:
+    """Whether a handler takes arguments it does not name (``**kwargs``).
+
+    One test serves the schema and the call: a handler without ``**kwargs``
+    advertises a closed ``inputSchema`` and refuses an undeclared argument by
+    name when called.
+    """
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in inspect.signature(func).parameters.values())
+
+
 def generate_tool_schema(
     func: Callable,
     description: str,
@@ -254,8 +269,8 @@ def generate_tool_schema(
     required = []
 
     for param_name, param in sig.parameters.items():
-        # Skip 'self' parameter
-        if param_name == "self":
+        # Skip 'self', and *args / **kwargs, which name no argument
+        if param_name == "self" or param.kind in _VARIADIC:
             continue
 
         # Get parameter type
@@ -280,6 +295,12 @@ def generate_tool_schema(
 
     if required:
         input_schema["required"] = required
+
+    # The schema states the refusal `validate_and_convert_args` makes: a tool
+    # that takes no **kwargs refuses every argument it does not declare, so a
+    # client validating against the schema sees the same closed set.
+    if not accepts_undeclared_arguments(func):
+        input_schema["additionalProperties"] = False
 
     name = func.__name__
     schema: dict[str, Any] = {
@@ -315,8 +336,23 @@ def validate_and_convert_args(func: Callable, args: dict[str, Any]) -> dict[str,
     type_hints = get_type_hints(func)
     validated_args = {}
 
+    # AN ARGUMENT THE TOOL DOES NOT TAKE IS REFUSED BY NAME, never dropped: a
+    # dropped one reports success for a setting that went nowhere, which is
+    # what a client still sending a retired argument would otherwise see. The
+    # tool's inputSchema says so with additionalProperties false.
+    named = [n for n, p in sig.parameters.items()
+             if n != "self" and p.kind not in _VARIADIC]
+    if not accepts_undeclared_arguments(func):
+        unknown = sorted(set(args) - set(named))
+        if unknown:
+            known = ", ".join(named) or "none"
+            raise ValidationError(
+                f"{func.__name__} takes no argument {', '.join(unknown)}; "
+                f"its arguments are: {known}"
+            )
+
     for param_name, param in sig.parameters.items():
-        if param_name == "self":
+        if param_name == "self" or param.kind in _VARIADIC:
             continue
 
         value = args.get(param_name)
@@ -404,6 +440,8 @@ def validate_and_convert_args(func: Callable, args: dict[str, Any]) -> dict[str,
 
         validated_args[param_name] = value
 
+    if accepts_undeclared_arguments(func):
+        validated_args.update({k: v for k, v in args.items() if k not in named})
     return validated_args
 
 
@@ -508,6 +546,11 @@ def mcp_handler(
 def connection_handler(func: Callable) -> Callable:
     """Decorator for handlers that require an active connection.
 
+    The arguments are checked BEFORE the connection, so such a tool refuses
+    an argument it does not take by name whether or not a server is
+    connected, as every other tool does; only a well-formed call is told
+    that it needs a connection.
+
     Args:
         func: Function to decorate
 
@@ -518,18 +561,20 @@ def connection_handler(func: Callable) -> Callable:
 
     @functools.wraps(decorated)
     def wrapper(args: dict[str, Any]) -> dict[str, Any]:
-        # Import here to avoid circular imports
         try:
-            from ..core.client import communicator as com
+            validate_and_convert_args(func, args)
+        except MCPError as e:
+            return {"status": "error", "message": str(e)}
+        # Imported at call time: this module imports nothing of Blender's,
+        # which keeps it loadable on a plain interpreter, and core.client
+        # imports bpy.
+        from ..core.client import communicator as com
 
-            if not com.is_connected():
-                return {
-                    "status": "error",
-                    "message": "Not connected to server. Please establish a connection first.",
-                }
-        except ImportError:
-            pass  # Skip validation if communicator not available
-
+        if not com.is_connected():
+            return {
+                "status": "error",
+                "message": "Not connected to server. Please establish a connection first.",
+            }
         return decorated(args)
 
     # mcp_handler already registered the inner wrapper; re-point the registry

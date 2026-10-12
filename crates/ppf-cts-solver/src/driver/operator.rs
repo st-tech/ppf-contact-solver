@@ -33,8 +33,9 @@
 
 use ppf_cts_compute::{Device, Encoder, EncoderExt, Fault};
 use super::kernels::{
-    OperatorApplyArgs, OperatorApplyDynamicArgs, OperatorApplyDynamicFoldedArgs,
-    OperatorApplyFoldedArgs, OperatorApplySymmetricFoldedArgs, PrecondDiagonalArgs,
+    OperatorApplyArgs, OperatorApplyDifferenceArgs, OperatorApplyDifferenceFoldedArgs,
+    OperatorApplyDynamicArgs, OperatorApplyDynamicFoldedArgs, OperatorApplyFoldedArgs,
+    OperatorApplySymmetricFoldedArgs, OperatorRowSumArgs, PrecondDiagonalArgs,
     PrecondDiagonalDynamicArgs, VecFillArgs,
 };
 use super::spmv::FixedCsrView;
@@ -123,6 +124,24 @@ pub struct DynamicView {
     pub transpose_value: ppf_cts_compute::Handle,
 }
 
+/// What the operator needs to be applied in its DIFFERENCE form,
+/// `(A x)_i = S_i x_i + sum_j A_ij (x_j - x_i)`.
+///
+/// `solver/spmv.kernel.cpp` states why the form exists: a vector that varies
+/// slowly across a row, which is what a multigrid's coarse correction is,
+/// cancels in the plain product down to its own round-off, and here it does
+/// not. A solve that will be handed such vectors carries this; every other
+/// solve leaves it out and applies the operator exactly as it always has.
+#[derive(Clone, Copy)]
+pub struct DifferenceView {
+    /// `S_i`, each row's blocks summed, `9 * rows` floats, filled by
+    /// [`Operator::sum_rows`].
+    pub row_sum: ppf_cts_compute::Handle,
+    /// A zero offset array of `rows + 1`, which stands in for the contact
+    /// matrix's two offset arrays on a scene that has none.
+    pub empty_offset: ppf_cts_compute::Handle,
+}
+
 /// The assembled Newton operator over one Newton iteration.
 pub struct Operator {
     /// `A`, the dynamic (contact) matrix, absent on a contact-free scene.
@@ -131,6 +150,8 @@ pub struct Operator {
     pub fixed: FixedCsrView,
     /// `C`, one 3x3 block per row, column-major, `9 * rows` floats.
     pub diagonal: ppf_cts_compute::Handle,
+    /// The difference form, when the solve asks for it.
+    pub difference: Option<DifferenceView>,
 }
 
 impl Operator {
@@ -265,7 +286,79 @@ impl Operator {
         if rows == 0 {
             return Ok(());
         }
+        if let Some(difference) = self.difference {
+            let args = OperatorApplyDifferenceArgs {
+                dyn_index: self.dynamic.map_or(difference.empty_offset, |d| d.index),
+                dyn_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+                dyn_offset: self.dynamic.map_or(difference.empty_offset, |d| d.offset),
+                dyn_reference_index: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_index),
+                dyn_reference_value: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_value),
+                dyn_reference_offset: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_offset),
+                dyn_global_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+                index: self.fixed.index,
+                offset: self.fixed.offset,
+                value: self.fixed.value,
+                transpose_pair: self.fixed.transpose_pair,
+                transpose_offset: self.fixed.transpose_offset,
+                row_sum: difference.row_sum,
+                x,
+                result,
+                absolute,
+                curvature,
+                count: rows,
+                seam_arena_count: 0,
+            };
+            return encoder.elements(&args, rows);
+        }
         self.dispatch_apply(encoder, rows, x, result, absolute, curvature)
+    }
+
+    /// Fill the difference form's `S_i` from the operator as it stands.
+    ///
+    /// ONCE PER SOLVE, after the last pass that writes the operator and before
+    /// the first apply: the sums are of the same blocks every apply reads, so a
+    /// block changed afterwards would leave the two forms describing different
+    /// matrices.
+    ///
+    /// # Panics
+    /// If the operator carries no difference form, which is a caller defect.
+    pub fn sum_rows<D: Device>(&self, device: &mut D) -> Result<(), Fault> {
+        let difference = self
+            .difference
+            .expect("sum_rows was called on an operator with no difference form");
+        let rows = self.fixed.rows;
+        if rows == 0 {
+            return Ok(());
+        }
+        let args = OperatorRowSumArgs {
+            dyn_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+            dyn_offset: self.dynamic.map_or(difference.empty_offset, |d| d.offset),
+            dyn_reference_value: self
+                .dynamic
+                .map_or(difference.empty_offset, |d| d.transpose_value),
+            dyn_reference_offset: self
+                .dynamic
+                .map_or(difference.empty_offset, |d| d.transpose_offset),
+            dyn_global_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+            offset: self.fixed.offset,
+            value: self.fixed.value,
+            transpose_pair: self.fixed.transpose_pair,
+            transpose_offset: self.fixed.transpose_offset,
+            diagonal: self.diagonal,
+            row_sum: difference.row_sum,
+            count: rows,
+            seam_arena_count: 0,
+        };
+        // Safety: every handle names a live allocation of the operator's own
+        // arrays or of the difference form's two, each sized for `rows`.
+        unsafe { device.launch("operator.row_sum", &args, rows) }?;
+        Ok(())
     }
 
     /// Append `result = (A + B + C) x` with the curvature and its bound folded
@@ -299,6 +392,47 @@ impl Operator {
             return Ok(0);
         }
         let groups = rows.div_ceil(APPLY_GROUP);
+        if let Some(difference) = self.difference {
+            // ONE ROW A LANE, as the contact-free apply is, so the group count
+            // is the plain one whether or not the scene carries contact.
+            assert!(
+                curvature_total.size >= groups && absolute_total.size >= groups,
+                "the partial arrays must hold one float per group: {groups} groups \
+                 against {} and {}",
+                curvature_total.size,
+                absolute_total.size
+            );
+            let args = OperatorApplyDifferenceFoldedArgs {
+                dyn_index: self.dynamic.map_or(difference.empty_offset, |d| d.index),
+                dyn_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+                dyn_offset: self.dynamic.map_or(difference.empty_offset, |d| d.offset),
+                dyn_reference_index: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_index),
+                dyn_reference_value: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_value),
+                dyn_reference_offset: self
+                    .dynamic
+                    .map_or(difference.empty_offset, |d| d.transpose_offset),
+                dyn_global_value: self.dynamic.map_or(difference.row_sum, |d| d.value),
+                index: self.fixed.index,
+                offset: self.fixed.offset,
+                value: self.fixed.value,
+                transpose_pair: self.fixed.transpose_pair,
+                transpose_offset: self.fixed.transpose_offset,
+                row_sum: difference.row_sum,
+                x,
+                result,
+                curvature_total,
+                absolute_total,
+                rows,
+                count: groups,
+                seam_arena_count: 0,
+            };
+            encoder.groups(&args, groups, APPLY_GROUP)?;
+            return Ok(groups);
+        }
         // THE DYNAMIC APPLY RUNS EIGHT LANES PER ROW, so its extent is eight
         // times the row count and it fills eight times as many groups. The
         // partial arrays are sized at one float per ROW and this is
@@ -611,6 +745,7 @@ mod tests {
                 rows: 2,
             },
             diagonal: diagonal_in.handle(),
+            difference: None,
         };
         let x_host = vec![1.0f32, 0.0, 0.0, 2.0, 0.0, 0.0];
         let x = device_in(&mut device, &x_host, "test.x");
@@ -676,6 +811,7 @@ mod tests {
                 rows: 1,
             },
             diagonal: diagonal_in.handle(),
+            difference: None,
         };
 
         let x_host = vec![1.0f32, 1.0, 0.0];
@@ -739,6 +875,7 @@ mod tests {
                     rows: rows as u32,
                 },
                 diagonal: diagonal_in.handle(),
+                difference: None,
             };
             let x_in = device_in(&mut device, &x, "test.x");
             let mut result = device_out(&mut device, 3 * rows, "test.result");
@@ -795,6 +932,7 @@ mod tests {
                 rows: 2,
             },
             diagonal: diagonal_in.handle(),
+            difference: None,
         };
         // A DEVICE ALLOCATION, because the pass writes through a handle now, and
         // a mirror to read the eighteen floats back out of.

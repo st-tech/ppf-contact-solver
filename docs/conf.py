@@ -81,11 +81,10 @@ language = "en"
 
 # The frontend package has a handful of same-named attributes across
 # classes (``path``, ``scene``, ``name``) that autodoc cannot
-# disambiguate when a docstring mentions them unqualified.  These warnings
-# predate the ``-W`` switch in build.sh; suppressing the category lets
-# docstring-level warnings (napoleon parse errors, bad RST in
-# ``Example:`` blocks, etc.) still fail the build while this known
-# ambiguity does not.
+# disambiguate when a docstring mentions them unqualified.  Suppressing the
+# ``ref.python`` category lets docstring-level warnings (napoleon parse errors,
+# bad RST in ``Example:`` blocks, etc.) still fail the ``-W`` build while this
+# known ambiguity does not.
 suppress_warnings = ["ref.python"]
 
 # -- Options for HTML output -------------------------------------------------
@@ -93,7 +92,7 @@ suppress_warnings = ["ref.python"]
 
 html_theme = "shibuya"
 html_theme_options = {
-    # Shibuya ships with light / dark / auto colour modes and a header
+    # Shibuya ships with light / dark / auto color modes and a header
     # toggle; no extra options needed to enable them.
     "github_url": "https://github.com/st-tech/ppf-contact-solver",
     "accent_color": "blue",
@@ -112,14 +111,13 @@ html_static_path = ["_static"]
 # path mirroring its source location. blender_addon/images/gallery/crumple.webp
 # is therefore served as /crumple.webp, which is why gallery.md refers to it as
 # ``../crumple.webp`` from /blender_addon/gallery.html. That reference looks
-# broken when checked against the source tree — nothing sits beside gallery.md
-# by that name — and "correcting" it to images/gallery/crumple.webp breaks the
+# broken when checked against the source tree (nothing sits beside gallery.md
+# by that name), and "correcting" it to images/gallery/crumple.webp breaks the
 # built page instead: those files are reachable only from the root. The gallery
 # cards are raw <img> in HTML, which Sphinx does not track or copy the way it
 # does an image directive, so html_extra_path is what puts them in the output at
 # all. Check this page in docs/_build, not in docs/.
-html_extra_path = ["blender_addon/images/gallery", "blender_addon/gallery_blends",
-                   "static_html"]
+html_extra_path = ["blender_addon/images/gallery", "static_html"]
 html_css_files = ["custom.css"]
 
 # -- Options for todo extension ----------------------------------------------

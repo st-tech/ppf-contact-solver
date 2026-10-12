@@ -5,15 +5,20 @@
 #
 # Reads a group's spatial material maps into per-vertex weight arrays.
 #
-# A map varies one parameter across the surface: the effective value at a
-# vertex is lerp(base, target, weight), with `base` the group's own slider (or
-# that frame's animated value, so a parameter can be animated and mapped at
-# once). Weight 0 reproduces the unmapped result exactly, which is what keeps
-# the calibrated presets meaningful.
+# A map varies one parameter across the surface, or along a rod: the effective
+# value at a vertex is lerp(base, target, weight), with `base` the group's own
+# slider (or that frame's animated value, so a parameter can be animated and
+# mapped at once). Weight 0 reproduces the unmapped result exactly, which is
+# what keeps the calibrated presets meaningful.
 
 import math
 
-from ...models.material_maps import base_property, gate_reason, to_solver_value
+from ...models.material_maps import (
+    MAP_OBJECT_TYPES,
+    base_property,
+    gate_reason,
+    to_solver_value,
+)
 
 
 def _weights_from_vertex_group(obj, name):
@@ -186,13 +191,54 @@ def _sample_sources(group, entry, start_frame):
     return sources
 
 
+def _weights_from_hair(obj, source_type, name, context):
+    """Per-point weights of a Hair Curves object, whose points are its rod
+    vertices.
+
+    Hair Curves have no vertex groups, so a map on one reads a point
+    attribute. It is read where the shipped pose is read
+    (`hair_curves.eval_point_weights`): the groom's own attribute, or one a
+    Geometry Nodes modifier in front of the solver's cache stores.
+    """
+    if source_type == "VERTEX_GROUP":
+        raise ValueError(
+            f"Hair Curves '{obj.name}' has no vertex groups, so its material "
+            f"map cannot read vertex group '{name}'. Set the map's Source to "
+            "Attribute and name a float point attribute."
+        )
+    from ..hair_curves import eval_point_weights
+
+    return eval_point_weights(obj, name, context).tolist()
+
+
 def _read_weights(obj, source_type, source_name, context):
     """One weight per vertex of `obj`, clamped into [0, 1]."""
-    if source_type == "VERTEX_GROUP":
+    if obj.type == "CURVES":
+        w = _weights_from_hair(obj, source_type, source_name, context)
+    elif source_type == "VERTEX_GROUP":
         w = _weights_from_vertex_group(obj, source_name)
     else:
         w = _weights_from_attribute(obj, source_name, context)
     return _clamped_weights(w, obj.name, source_name)
+
+
+def _refuse_unmappable_object(group, key, assigned, obj):
+    """Raise unless `obj` is an object a map on `group` can read weights from."""
+    if obj is not None and obj.type in MAP_OBJECT_TYPES.get(group.object_type, ()):
+        return
+    if obj is not None and obj.type == "CURVE":
+        raise ValueError(
+            f"group '{group.name}' has a '{key}' map but its object "
+            f"'{assigned.name}' is a Curve, whose rod vertices are sampled "
+            "along the curve and are not points a weight can be authored "
+            "on. Convert it to a mesh or to Hair Curves, or remove it from "
+            "the group."
+        )
+    raise ValueError(
+        f"group '{group.name}' has a '{key}' map but its object "
+        f"'{assigned.name}' is missing or is not an object a map can read "
+        "weights from. Re-pick the object, or remove it from the group."
+    )
 
 
 def encode_material_maps(context, groups, fps, start_frame):
@@ -291,12 +337,7 @@ def encode_material_maps(context, groups, fps, start_frame):
                 # too. A name lookup would lose the map of a renamed object
                 # while still shipping its uuid as the key.
                 obj = get_object_by_uuid(assigned.uuid)
-                if obj is None or obj.type != "MESH":
-                    raise ValueError(
-                        f"group '{group.name}' has a '{key}' map but its "
-                        f"object '{assigned.name}' is missing or is not a "
-                        "mesh. Re-pick the object, or remove it from the group."
-                    )
+                _refuse_unmappable_object(group, key, assigned, obj)
                 per_object[assigned.uuid] = [
                     _read_weights(obj, source_type, source_name, context)
                     for _frame, source_type, source_name in sources

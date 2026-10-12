@@ -86,6 +86,7 @@
 #include "main/dx_norm.entry.cpp"
 #include "main/dump_linsys.entry.cpp"
 #include "schwarz/schwarz.entry.cpp"
+#include "multigrid/multigrid.entry.cpp"
 
 // The accept lerp: commit the fraction of the proposed motion the CCD line
 // search certified. Two positions in, one position out.
@@ -150,6 +151,7 @@
 // rather than a buffer because every thread reads the same vector.
 #include "main/target.entry.cpp"
 #include "energy/external_field.entry.cpp"
+#include "energy/external_field_implicit.entry.cpp"
 
 // The LBVH's Morton codes, from centroids already in SoA form. Three element
 // gathers, the scene box as six scalars, one element scatter. A Morton code
@@ -223,6 +225,7 @@
 // and the force and the Hessian are non-const gathers, which is what a body
 // that returns one value and writes two more through references renders as.
 #include "energy/model/shell_bend.entry.cpp"
+#include "energy/model/cosserat.entry.cpp"
 #include "energy/model/pdrd_rigid.entry.cpp"
 #include "energy/model/pdrd_lock_projector.entry.cpp"
 

@@ -46,6 +46,23 @@
 #      ``destructiveHint`` and ``openWorldHint`` true. Neither name falls in a
 #      family, and no naming rule can imply what they do: they run unsandboxed
 #      code and reach outside Blender, so the hints have to be declared.
+#   K. ``input_schemas_are_closed`` -- every ``inputSchema`` carries
+#      ``additionalProperties: false``, and no registered handler takes
+#      ``**kwargs``: a call refuses an argument its handler does not declare
+#      (L), so the schema a client validates against says the same.
+#   L. ``undeclared_arguments_are_refused_by_name`` -- an argument no tool
+#      declares is refused naming it, with the tool's own arguments listed:
+#      over the wire for every tool that requires an argument or is in the
+#      read-only family, and for every connection-gated tool (a call that
+#      could not act even if the refusal were lost: the rig is not
+#      connected), and in process, through the validator every call runs,
+#      for every registered handler. The run's notes give how many went over
+#      the wire.
+#   M. ``gated_tools_check_arguments_before_the_connection`` -- a
+#      connection-gated tool, disconnected, refuses an undeclared argument
+#      by name rather than answering that it needs a connection (L reads
+#      that refusal), and a well-formed call to it still answers "Not
+#      connected".
 
 from __future__ import annotations
 
@@ -292,6 +309,107 @@ try:
         escape,
     )
 
+    # ----- K. every input schema is closed ----------------------------
+    # A tool refuses an argument it does not declare (L below), so its
+    # schema must say so, or a client validating against the schema sends
+    # a misspelled argument that the call then refuses.
+    decorators = __import__(pkg + ".mcp.decorators", fromlist=["get_handler_registry"])
+    registry = decorators.get_handler_registry()
+    open_schemas = [
+        name for name, tool in zip(names, entries)
+        if (tool.get("inputSchema") or {}).get("additionalProperties") is not False
+    ]
+    takes_any = sorted(
+        name for name, entry in registry.items()
+        if decorators.accepts_undeclared_arguments(
+            getattr(entry["func"], "_original_func", entry["func"]))
+    )
+    mcp_check(
+        result, "K_input_schemas_are_closed",
+        listed and not open_schemas and not takes_any,
+        {"tool_count": len(entries), "open": offenders(open_schemas),
+         "handlers_taking_any_argument": takes_any},
+    )
+
+    # ----- L. an undeclared argument is refused by name ----------------
+    # Over the wire for every tool whose call cannot act even if the refusal
+    # were lost: one that requires an argument (the probe supplies none), one
+    # in the read-only family, and one behind the connection check, which on
+    # this rig, not connected, could only answer that it needs one. Every
+    # tool is also held to the refusal in process, through the validator the
+    # call path runs.
+    PROBE = "zz_undeclared_probe"
+    gated = sorted(
+        name for name, entry in registry.items()
+        if getattr(entry["func"], "__wrapped__", None) is not None
+        and getattr(entry["func"], "__wrapped__") is not getattr(
+            entry["func"], "_original_func", None)
+    )
+    wire = [
+        name for name, tool in zip(names, entries)
+        if name in gated
+        or (tool.get("inputSchema") or {}).get("required")
+        or name.startswith(READ_ONLY_PREFIXES)
+    ]
+    not_refused = []
+    request_id = 100
+    for name in wire:
+        request_id += 1
+        env_t, _ = mcp_call(pkg, url, "tools/call",
+                            {"name": name, "arguments": {PROBE: 1}},
+                            request_id=request_id)
+        res = env_t.get("result") or {}
+        text = str(env_t.get("error")) if "error" in env_t else (
+            str(res.get("content")) if res.get("isError") else "")
+        if PROBE not in text or "its arguments are" not in text:
+            not_refused.append([name, text[:160]])
+    in_process = []
+    for name, entry in sorted(registry.items()):
+        func = getattr(entry["func"], "_original_func", entry["func"])
+        try:
+            decorators.validate_and_convert_args(func, {PROBE: 1})
+            in_process.append([name, "accepted"])
+        except decorators.ValidationError as e:
+            if PROBE not in str(e):
+                in_process.append([name, str(e)[:160]])
+    result["coverage"] = {"L_called_over_the_wire": len(wire), "L_gated": gated,
+                          "L_in_process": len(registry)}
+    mcp_check(
+        result, "L_undeclared_arguments_are_refused_by_name",
+        listed and len(wire) > 0.5 * len(entries) and not not_refused
+        and not in_process and len(registry) == len(entries),
+        {"called_over_the_wire": len(wire), "gated": gated,
+         "not_refused": offenders(not_refused), "in_process": offenders(in_process),
+         "registry": len(registry), "listed": len(entries)},
+    )
+
+    # ----- M. a gated tool checks its arguments before the connection ---
+    schemas = {name: (tool.get("inputSchema") or {}) for name, tool in zip(names, entries)}
+    answers = {}
+    for name in gated:
+        request_id += 1
+        env_p, _ = mcp_call(pkg, url, "tools/call",
+                            {"name": name, "arguments": {PROBE: 1}}, request_id=request_id)
+        res = env_p.get("result") or {}
+        probed = str(env_p.get("error")) if "error" in env_p else str(res.get("content"))
+        plain = None
+        if not schemas.get(name, {}).get("required"):
+            request_id += 1
+            env_w, _ = mcp_call(pkg, url, "tools/call", {"name": name, "arguments": {}},
+                                request_id=request_id)
+            res_w = env_w.get("result") or {}
+            plain = str(env_w.get("error")) if "error" in env_w else str(res_w.get("content"))
+        answers[name] = {"undeclared": probed[:200], "well_formed": plain and plain[:200]}
+    well_formed = [n for n, a in answers.items() if a["well_formed"] is not None]
+    mcp_check(
+        result, "M_gated_tools_check_arguments_before_the_connection",
+        len(gated) >= 1 and len(well_formed) >= 1
+        and all(PROBE in a["undeclared"] and "Not connected" not in a["undeclared"]
+                for a in answers.values())
+        and all("Not connected" in answers[n]["well_formed"] for n in well_formed),
+        {"answers": answers},
+    )
+
     mcp_mod.stop_mcp_server()
 
 except Exception as exc:
@@ -311,4 +429,6 @@ def run(ctx: r.ScenarioContext) -> dict:
     result, err = r.wait_blender_result(ctx, timeout=max(ctx.timeout, 180.0))
     if err is not None:
         return err
-    return r.report_named_checks(result.get("checks", {}))
+    verdict = r.report_named_checks(result.get("checks", {}))
+    verdict.setdefault("notes", []).append(f"coverage: {result.get('coverage')}")
+    return verdict

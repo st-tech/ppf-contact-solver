@@ -64,6 +64,8 @@ class DoLaunchServer(Effect):
     cuda_device_uuid: str = ""
     device: str = ""
     gpu_backend: str = ""
+    # `--idle-timeout` for the launch; see ``StartServerRequested``.
+    idle_timeout: int | None = None
 
 
 @dataclass(frozen=True)

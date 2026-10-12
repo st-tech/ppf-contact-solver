@@ -85,6 +85,7 @@ class ObjectInfo:
     * ``SOLID``  populates ``vert``, ``V``, ``F``.
     * ``SHELL``  populates ``vert``, ``V`` (== ``vert``), ``F``.
     * ``ROD``    populates ``vert`` only; ``V`` and ``F`` stay ``None``.
+    * ``COSSERAT`` populates ``vert`` only, as ``ROD`` does.
     * ``SAND``   populates ``vert`` only (a faceless point cloud); ``V``
       and ``F`` stay ``None``.
 
@@ -479,9 +480,8 @@ class BlenderApp:
         envelopes; this is the only intentional raw-pickle write in
         :mod:`frontend.`
         """
-        # _process holds a subprocess Popen with non-picklable locks.
-        if self._fixed_session is not None:
-            self._fixed_session._process = None
+        # A FixedSession pickles without its solver process handle
+        # (`FixedSession.__getstate__`), so the live one keeps it.
         paths = _rust.app_state_persist_paths(self._root)
         os.makedirs(self._root, exist_ok=True)
         with open(paths["tmp_path"], "wb") as f:
@@ -529,6 +529,57 @@ class BlenderApp:
             ".populate().make() first."
         )
         return self._fixed_session
+
+
+def _joined_bytes(value, what: str) -> bytes:
+    """A byte string the add-on sends whole or, to keep each CBOR item small
+    (``_cbor_bridge_.PICKLE_CHUNK_BYTES``), as a list of chunks."""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, list):
+        for i, chunk in enumerate(value):
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise ValueError(f"{what}: chunk {i} is {type(chunk).__name__}, not bytes")
+        return b"".join(value)
+    raise ValueError(f"{what} is {type(value).__name__}; expected bytes or a list of bytes")
+
+
+def _fluid_frames(volume: dict, what: str):
+    """A Fluid Flow payload's per-frame tables and bricks as arrays over the
+    joined bytes, each frame's chunks released from the payload once joined."""
+    import numpy as np
+
+    tables, bricks = volume["tables"], volume["bricks"]
+    if len(tables) != len(bricks):
+        raise ValueError(f"{what}: {len(tables)} brick tables and {len(bricks)} brick sets")
+    out_tables, out_bricks = [], []
+    for k in range(len(tables)):
+        for name, column, out, dtype in (("table", tables, out_tables, "<u4"),
+                                         ("bricks", bricks, out_bricks, "<f4")):
+            data = _joined_bytes(column[k], f"{what}: fluid frame {k}'s {name}")
+            if isinstance(column, list):
+                column[k] = None
+            if len(data) % 4:
+                raise ValueError(
+                    f"{what}: fluid frame {k}'s {name} is {len(data)} bytes, not a "
+                    "whole number of 4-byte values"
+                )
+            out.append(np.frombuffer(data, dtype=dtype))
+    return out_tables, out_bricks
+
+
+def _fluid_cells(volume: dict, what: str):
+    """A Fluid Flow payload's cell sizes, one ``(cx, cy, cz)`` per frame."""
+    import numpy as np
+
+    cell = np.asarray(volume["cell"], dtype=np.float64)
+    frames = len(volume["tables"])
+    if cell.shape != (frames, 3):
+        raise ValueError(
+            f"{what}: the fluid's cell sizes have shape {cell.shape}; the add-on sends "
+            f"one (cx, cy, cz) per frame, ({frames}, 3)"
+        )
+    return cell
 
 
 class ParamDecoder:
@@ -1094,11 +1145,12 @@ class ParamDecoder:
                     # For solid objects, use stored Blender indices for config lookup
                     lookup_indices = getattr(pin_holder._data, '_blender_pin_indices', None) or pin_holder.index
                     # Every holder spans one pin group by now, and a group's
-                    # cfg entries differ only in each vertex's own ``pin_anim``
-                    # track, so the first entry found is the group's cfg. One
-                    # field is deliberately not read off this cfg: the
-                    # intersection allowance, which ``_apply_pin_cfg_entry``
-                    # reduces over every vertex of the holder instead.
+                    # cfg entries differ only in what is each vertex's own, its
+                    # ``pin_anim`` track and its ``pull_weight``, so the first
+                    # entry found is the group's cfg. Two things are read
+                    # over every vertex of the holder by
+                    # ``_apply_pin_cfg_entry`` instead of off this cfg: the
+                    # pull weights, and the intersection allowance.
                     chosen_vi = None
                     chosen_cfg = None
                     for vi in lookup_indices:
@@ -1842,6 +1894,19 @@ class ParamDecoder:
                 pin_holder.pull_per_vertex(
                     float(cfg["pull_strength"]) * np.asarray(sp_weights)
                 )
+            else:
+                # A weighted pin: every vertex of the group carries its own
+                # weight, and is pulled with the strength times that.
+                pull = self._weighted_pull(
+                    pin_holder, dyn_name, cfg, obj_cfg,
+                )
+                if pull is not None:
+                    pin_holder.pull_per_vertex(pull)
+                    if verbose:
+                        print(
+                            f"  {dyn_name}[{vi}]: weighted pull in "
+                            f"[{float(pull.min()):.6g}, {float(pull.max()):.6g}]"
+                        )
         if "pin_group_id" in cfg:
             pin_holder.set_pin_group_id(cfg["pin_group_id"])
             if verbose:
@@ -1912,6 +1977,65 @@ class ParamDecoder:
             pin_holder.track_rest_shape()
         if verbose:
             print(f"  {dyn_name}[{vi}]: operations={len(pin_holder.operations)}")
+
+    @staticmethod
+    def _weighted_pull(pin_holder, dyn_name, cfg, obj_cfg):
+        """The pull of each vertex of a weighted pin, aligned to
+        ``pin_holder.index``, or ``None`` for a pin that carries no weights.
+
+        A weighted pin's cfg entries each carry the ``pull_weight`` of their
+        own vertex, in ``(0, 1]``, and the vertex is pulled with the pin's
+        ``pull_strength`` times it. A holder spans one pin group, so either
+        every vertex carries a weight or none does; anything between is a
+        defect in the payload and raises.
+
+        A strength of zero makes the pin an exact hold, which the scalar
+        ``pull(0.0)`` already says, so the weights are not applied to it.
+        Otherwise every product has to stay above zero in the single precision
+        it is exported in, because a per-vertex pull of exactly zero is how
+        the solver spells an exact hold: a weight small enough to underflow
+        would turn a barely held vertex into a fixed one, and is refused.
+        """
+        import numpy as np
+
+        pin = str(cfg.get("pin_group_id", "")).removeprefix(f"{dyn_name}:")
+        entries = [obj_cfg.get(int(v)) or {} for v in pin_holder.index]
+        weighted = ["pull_weight" in entry for entry in entries]
+        if not any(weighted):
+            return None
+        if not all(weighted):
+            missing = int(pin_holder.index[weighted.index(False)])
+            raise ValueError(
+                f"pin '{pin}' on '{dyn_name}' carries a pull weight for some "
+                f"of its vertices and none for vertex {missing}"
+            )
+        weights = np.array(
+            [float(entry["pull_weight"]) for entry in entries], dtype=np.float64
+        )
+        bad = np.flatnonzero(
+            ~np.isfinite(weights) | (weights <= 0.0) | (weights > 1.0)
+        )
+        if bad.size:
+            raise ValueError(
+                f"pin '{pin}' on '{dyn_name}': the pull weight of vertex "
+                f"{int(pin_holder.index[bad[0]])} is {weights[bad[0]]}, and a "
+                "held vertex takes a weight above 0 and at most 1"
+            )
+        strength = float(cfg["pull_strength"])
+        if strength == 0.0:
+            return None
+        pull = (strength * weights).astype(np.float32)
+        lost = np.flatnonzero(pull == 0.0)
+        if lost.size:
+            raise ValueError(
+                f"pin '{pin}' on '{dyn_name}': vertex "
+                f"{int(pin_holder.index[lost[0]])} has a pull weight of "
+                f"{weights[lost[0]]}, and {strength} times that is too small "
+                "to export. A pull of exactly zero is an exact hold, so the "
+                "vertex would be fixed where it was meant to be nearly free. "
+                "Raise the weight, or leave the vertex out of the pin."
+            )
+        return pull
 
     @staticmethod
     def _build_embedded_move_ops(pin_holder, obj_cfg):
@@ -2352,14 +2476,19 @@ class ParamDecoder:
         )
 
     def apply_force_field(self, scene, verbose: bool = False):
-        """Give the scene the add-on's force field: its sampled grids and its
-        exact script, through the public ``scene.force_field`` API.
+        """Give the scene the add-on's force field: its field objects and its
+        exact scripts, through the public ``scene.force_field`` API.
 
         Must be called BEFORE ``scene.build()``, and after ``apply_to_objects``,
-        whose group labels a source's ``groups`` name. The add-on sends grids
-        already in the solver's axes and scene units, zlib-compressed, and
+        whose group labels a source's ``groups`` name. The add-on sends each
+        field object as the keyword arguments of ``ForceField.add``, already
+        in the solver's axes and scene units with one value per frame, and
         each script as source text written in Blender's Z-up axes, which is
-        compiled here with ``z_up=True``.
+        compiled here with ``z_up=True``. A Texture's image and a Fluid Flow's
+        per-frame tables and bricks arrive as byte strings, each whole or as a
+        list of chunks; they leave this decoder's payload as they are decoded,
+        so the decoder, which is saved with the app's state, does not keep a
+        second copy, and the payload is applied once.
 
         Example:
             ::
@@ -2368,13 +2497,26 @@ class ParamDecoder:
                 decoder.apply_force_field(scene)
                 fixed_scene = scene.build()
         """
-        import zlib
-
         import numpy as np
 
         ff = self._data.get("force_field")
         if not ff:
             return
+        if "grids" in ff:
+            # An add-on that still samples its fields onto grids; reading
+            # past the key would leave every field doing nothing, unsaid.
+            raise ValueError(
+                "the force field arrived as sampled grids, which this solver no "
+                "longer takes; update the add-on to the version that ships with "
+                "this solver, which sends field objects"
+            )
+        if getattr(self, "_force_field_applied", False):
+            raise RuntimeError(
+                "this decoder already gave its force field to a scene, and released "
+                "the image and volume bytes as it did; read param.pickle again with "
+                "a new ParamDecoder"
+            )
+        self._force_field_applied = True
 
         def labels(groups):
             # The add-on names a target group by its position in the payload's
@@ -2383,23 +2525,44 @@ class ParamDecoder:
                 return None
             return [f"addon-group-{int(pos)}" for pos in groups]
 
-        for g in ff.get("grids", []):
-            shape = tuple(int(v) for v in g["shape"])
-            values = np.frombuffer(zlib.decompress(g["data"]), dtype=np.float32)
-            expected = int(np.prod(shape))
-            if values.size != expected:
-                raise ValueError(
-                    f"force field grid carries {values.size} floats for shape {shape}"
-                )
-            scene.force_field.grid(
-                values.reshape(shape), g["min"], g["max"],
-                times=g["times"], kind=g["kind"], groups=labels(g.get("groups")),
-            )
+        for index, f in enumerate(ff.get("fields", [])):
+            # A field object travels as the keyword arguments of the public
+            # `ForceField.add`, its continuous settings one value per frame.
+            # The byte payloads are taken out of the payload itself.
+            image = f.pop("image", None)
+            volume = f.pop("fluid", None)
+            args = dict(f)
+            kind = args.pop("type")
+            groups = args.pop("groups", None)
+            what = f"force field {index} ({kind})"
+            if image is not None:
+                # A Texture's image travels as float32 bytes and a shape.
+                shape = tuple(int(v) for v in args.pop("image_shape"))
+                data = _joined_bytes(image, f"{what}: the image")
+                image = None
+                if len(data) != 4 * int(np.prod(shape)):
+                    raise ValueError(
+                        f"{what}: the image is {len(data)} bytes, not the "
+                        f"{4 * int(np.prod(shape))} of {shape} float32 values"
+                    )
+                args["image"] = np.frombuffer(data, dtype="<f4").reshape(shape)
+            if volume is not None:
+                from ._force_field_ import FluidVolume
+
+                cells = _fluid_cells(volume, what)
+                tables, bricks = _fluid_frames(volume, what)
+                args["fluid"] = FluidVolume.from_bricks(
+                    volume["resolution"], tables, bricks, cell=cells,
+                    has_density=bool(args.get("use_density", False)),
+                    corner=volume["corner"], axes=volume["axes"], start=volume["start"],
+                    step=volume["step"] if len(volume["tables"]) > 1 else None)
+                volume = tables = bricks = None
+            scene.force_field.add(kind, groups=labels(groups), **args)
         for script in ff.get("scripts", []):
             scene.force_field.script(script["source"], z_up=True,
                                      groups=labels(script.get("groups")))
         if verbose:
-            print(f"=== Force field: {len(ff.get('grids', []))} grid(s), "
+            print(f"=== Force field: {len(ff.get('fields', []))} field object(s), "
                   f"{len(ff.get('scripts', []))} script(s) ===")
 
     def apply_invisible_colliders(self, scene, verbose: bool = False):
@@ -3094,7 +3257,7 @@ class SceneDecoder:
     def populate_objects(self, scene: Scene, verbose: bool = False, progress_callback=None, ftetwild_by_uuid: dict | None = None, soft_constraint_by_uuid: dict | None = None, stitch_endpoint_uuids: set | None = None, solver_fps: float | None = None, time_scale: float | None = None) -> Scene:
         """Populate ``scene`` with objects from the decoder's pickle data.
 
-        Handles STATIC, SOLID, SHELL, ROD, PDRD, and SAND groups, including canonical
+        Handles STATIC, SOLID, SHELL, ROD, COSSERAT, PDRD, and SAND groups, including canonical
         mesh deduplication by UUID, per-instance transforms, cached
         tetrahedralization (with per-UUID fTetWild overrides), pin
         registration with Blender-to-sim surface mapping, and stitches.
@@ -3196,6 +3359,11 @@ class SceneDecoder:
                 elif group_type == "ROD":
                     _obj = self._populate_rod(
                         scene, name, obj_uuid, local_vert, edge, transform, vert,
+                    )
+                elif group_type == "COSSERAT":
+                    _obj = self._populate_cosserat(
+                        scene, name, obj_uuid, local_vert, edge, transform, vert,
+                        obj.get("tilt"),
                     )
                 elif group_type == "PDRD":
                     _obj = self._populate_pdrd(
@@ -3896,6 +4064,31 @@ class SceneDecoder:
         if transform is not None:
             _obj.mat4x4(transform)
         self._object_info[obj_uuid] = ObjectInfo(type="ROD", vert=vert, name=name)
+        return _obj
+
+    def _populate_cosserat(
+        self, scene, name, obj_uuid, local_vert, edge, transform, vert, tilt,
+    ):
+        """COSSERAT group dispatcher: register the rod asset (a Cosserat rod
+        keeps the strand's edge topology), add the scene instance, flag it as
+        a Cosserat rod, apply its authored roll when the object carries one,
+        and record an ``ObjectInfo`` entry. Returns the Scene Object for the
+        pin / stitch passes.
+
+        ``tilt`` is the object's per-vertex roll in radians, in ``vert``
+        order, or None for an object that authored none.
+        """
+        _rust.validate_rod_has_edges(name, edge is not None)
+        self._asset.add.rod(name, local_vert, edge)
+        _obj = scene.add(name, obj_uuid)
+        _obj.as_cosserat()
+        if tilt is not None:
+            _obj.tilt(tilt)
+        if transform is not None:
+            _obj.mat4x4(transform)
+        self._object_info[obj_uuid] = ObjectInfo(
+            type="COSSERAT", vert=vert, name=name,
+        )
         return _obj
 
     def _populate_sand(self, scene, name, obj_uuid, local_vert, transform, vert):

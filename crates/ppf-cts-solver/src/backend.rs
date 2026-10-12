@@ -245,6 +245,15 @@ fn interp_material_params(
             bend_rest_from_geometry: a.bend_rest_from_geometry,
             deform_damping: f(a.deform_damping, b.deform_damping),
             bend_damping: f(a.bend_damping, b.bend_damping),
+            cosserat_shear: f(a.cosserat_shear, b.cosserat_shear),
+            cosserat_bend: f(a.cosserat_bend, b.cosserat_bend),
+            cosserat_twist: f(a.cosserat_twist, b.cosserat_twist),
+            // Read once, by the frame builder at the scene's build, so a key
+            // holds the build's value as `bend_rest_from_geometry` does.
+            cosserat_rest_twist: a.cosserat_rest_twist,
+            cosserat_fix_ends: a.cosserat_fix_ends,
+            cosserat_end_twist_rate: a.cosserat_end_twist_rate,
+            cosserat_straight_rest: a.cosserat_straight_rest,
         })
         .collect();
 
@@ -934,6 +943,11 @@ impl Backend {
                     );
                 }
             }
+            // THE MULTIGRID'S HIERARCHY, laid over the mesh's own positions,
+            // which are the authored ones whether this run is fresh or
+            // resumed; `dataset.vertex` holds the saved pose on a resume. A
+            // no-op unless the scene names that preconditioner.
+            crate::driver::install_multigrid(&self.mesh.vertex);
             // THE EXTERNAL FORCE FIELD, read, verified and installed once. A
             // malformed field stops the run here, naming the file and the
             // field, rather than reaching a dispatch; a session with none
@@ -1386,16 +1400,6 @@ let _wphase = crate::driver::phase::start("solver.write_frame");
 drop(_wphase);
                 }
                 self.state.curr_frame = new_frame;
-                // A FIELD GRID IS ZERO OUTSIDE ITS BOX, so a cloth blown out of
-                // the domain stops being pushed. Said once per frame while it
-                // is true, so the log shows it rather than the motion hiding it.
-                if let Some(outside) = crate::driver::force_field_outside_count() {
-                    if outside > 0 {
-                        info!(
-                            "force field: {outside} free vertices are outside every grid at frame {new_frame}"
-                        );
-                    }
-                }
                 crate::status_writer::progress(Phase::Running, new_frame, self.state.time);
                 // Fire the crash injection once on the final frame, preserving
                 // the existing per-advance crash semantics.

@@ -33,6 +33,7 @@ from .pc2 import (
     has_static_deform_animation,
     get_static_deform_cache,
     load_curve_cache,
+    load_hair_cache,
     mark_real_frame,
     needs_cache_visibility_keys,
     object_pc2_key,
@@ -237,9 +238,17 @@ def _validate_curve_mapping(display_name, map_indices, vert, spline_meta):
         )
 
 
+def _simulated_point_count(obj):
+    """Number of positions a solve writes back to *obj*: a mesh's vertices,
+    or a Hair Curves object's points, each of which is a rod vertex."""
+    if obj.type == "CURVES":
+        return len(obj.data.points)
+    return len(obj.data.vertices)
+
+
 def _validate_mesh_mapping(display_name, obj, map_indices, surface_map, vert):
     # display_name is used ONLY for human-readable error text.
-    n_verts = len(obj.data.vertices)
+    n_verts = _simulated_point_count(obj)
     mi = numpy.asarray(map_indices)
     if surface_map is None:
         if len(mi) < n_verts:
@@ -298,6 +307,15 @@ def _gap_fill_poses(obj, n_verts):
     if obj.type == "CURVE":
         from .curve_rod import get_curve_rest_cvs
         return get_curve_rest_cvs(obj), None
+
+    if obj.type == "CURVES":
+        # The groom, or the pose its stack gives it in front of the cache.
+        # The caller re-reads that pose at each gap frame's own frame.
+        from .hair_curves import eval_local_positions, local_positions
+        pose = eval_local_positions(obj)
+        if pose is None or len(pose) != n_verts:
+            pose = local_positions(obj)
+        return pose.astype(numpy.float64), None
 
     rest_co = numpy.empty(n_verts * 3, dtype=numpy.float64)
     obj.data.vertices.foreach_get("co", rest_co)
@@ -363,7 +381,7 @@ def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
         return
     rest_co, sd_cache_world = _gap_fill_poses(obj, n_verts)
     if sd_cache_world is None:
-        if obj.type != "MESH":
+        if obj.type not in ("MESH", "CURVES"):
             # CURVE gap frames use the rest CVs; rod playback has no
             # depsgraph-evaluated per-frame local pose to draw from.
             for _ in range(frame_idx):
@@ -435,7 +453,10 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
     pre-real-frame display matches the depsgraph-baked pose at each
     gap frame, not the undeformed rest mesh.
     """
-    n_verts = n_verts_override if n_verts_override is not None else len(obj.data.vertices)
+    n_verts = (
+        n_verts_override if n_verts_override is not None
+        else _simulated_point_count(obj)
+    )
     key = object_pc2_key(obj)
     pc2_path = get_pc2_path(key)
     # PC2 index 0 is the solve's first frame, which plays back at Blender frame
@@ -486,6 +507,18 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
             # Curves use persistent handlers (MESH_CACHE doesn't work with curves)
             load_curve_cache(key)
             ensure_curve_handler()
+        elif obj.type == "CURVES":
+            # Hair Curves play back through the same handler, which writes
+            # the frame to a point attribute; the ContactSolverCache placed
+            # here is the Geometry Nodes modifier that sets the positions
+            # from it. Same defensive try/except as the mesh bind below.
+            load_hair_cache(key)
+            ensure_curve_handler()
+            try:
+                from .hair_curves import setup_cache_modifier
+                setup_cache_modifier(obj)
+            except Exception:
+                pass
         else:
             # Defensive try/except: if ID-write is momentarily denied,
             # the next PPF_OT_FramePump tick heals the modifier.
@@ -509,6 +542,9 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
             overwrite_pc2_frame(pc2_path, frame_idx, map_vert, n_verts)
         if obj.type == "CURVE":
             load_curve_cache(key)
+            ensure_curve_handler()
+        elif obj.type == "CURVES":
+            load_hair_cache(key)
             ensure_curve_handler()
         mark_real_frame(key, frame_idx)
 
@@ -643,7 +679,7 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             # carries local-space length units; mixing it with world-space
             # corners would inject a scale-dependent rest-pose offset.
             tri_indices_arr, coefs_arr, surf_tri_arr = surface_map
-            n_verts = len(obj.data.vertices)
+            n_verts = _simulated_point_count(obj)
             ti = numpy.asarray(tri_indices_arr[:n_verts])
             c = numpy.asarray(coefs_arr[:n_verts], dtype=numpy.float64)
             tris = numpy.asarray(surf_tri_arr)[ti]
@@ -666,7 +702,9 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             mat_to_world = numpy.linalg.inv(numpy.array(mat, dtype=numpy.float64))
             world_vert = _apply_matrix_np(mat_to_world, map_vert_local)
         else:
-            n_verts = len(obj.data.vertices)
+            # A Hair Curves object takes this branch too: its points are the
+            # rod vertices, one to one.
+            n_verts = _simulated_point_count(obj)
             world_vert = numpy.array(vert[map[:n_verts]], dtype=numpy.float64)
         # A vertex an exact pin holds goes where its script puts it. The
         # solver evaluated that script at this frame's time
@@ -724,6 +762,40 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
 _heal_logged: set = set()
 
 
+def _heal_hair_cache(obj):
+    """Guarantee a Hair Curves object with a solve on disk carries a bound
+    ContactSolverCache at the cut of its stack.
+
+    The Hair Curves half of :func:`heal_mesh_caches_if_stale`: a modifier the
+    artist deleted comes back, and a stack that gained or lost a modifier in
+    front of the cache gets the cache re-placed, so no modifier in front of it
+    deforms the solver output a second time. A solve recorded with another
+    point count is left alone; the next fetch replaces its file.
+    """
+    key = object_pc2_key_readonly(obj)
+    if not key:
+        return
+    pc2 = get_pc2_path(key)
+    if not os.path.exists(pc2):
+        return
+    from .hair_curves import cache_modifier_is_bound, setup_cache_modifier
+    if cache_modifier_is_bound(obj):
+        return
+    try:
+        if read_pc2_n_verts(pc2) != len(obj.data.points):
+            return
+        setup_cache_modifier(obj)
+    except Exception as e:
+        log_key = (pc2, type(e).__name__)
+        if log_key not in _heal_logged:
+            _heal_logged.add(log_key)
+            from ..models.console import console
+            console.write(
+                f"[heal_mesh_caches] skipping {obj.name}: could not bind "
+                f"its cache: {e}"
+            )
+
+
 def heal_mesh_caches_if_stale():
     """For every assigned object in an active group, guarantee that a
     correctly-configured `ContactSolverCache` MESH_CACHE modifier exists
@@ -758,6 +830,9 @@ def heal_mesh_caches_if_stale():
                 if not assigned.included:
                     continue
                 obj = resolve_assigned(assigned)
+                if obj is not None and obj.type == "CURVES":
+                    _heal_hair_cache(obj)
+                    continue
                 if obj is None or obj.type != "MESH":
                     continue
                 # Read-only key: this timer fires every 0.1s, and the
@@ -946,7 +1021,9 @@ def apply_animation():
                         if assigned.uuid in map_by_uuid:
                             from .uuid_registry import get_object_by_uuid
                             obj = get_object_by_uuid(assigned.uuid)
-                            if obj is None or obj.type not in ("MESH", "CURVE"):
+                            if obj is None or obj.type not in (
+                                "MESH", "CURVE", "CURVES",
+                            ):
                                 continue
                             # ROD sims fold faces freely, so the Wireframe
                             # modifier's even-offset compensation produces
@@ -972,7 +1049,7 @@ def apply_animation():
                             # appeared to penetrate it by exactly one frame
                             # of root motion during live fetch.
                             needs_per_frame = (
-                                obj.type == "MESH"
+                                obj.type in ("MESH", "CURVES")
                                 and _needs_per_frame_matrix(obj)
                             )
                             constant_inv = (

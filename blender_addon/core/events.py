@@ -105,6 +105,9 @@ class StartServerRequested(Event):
     cuda_device_uuid: str = ""
     device: str = ""
     gpu_backend: str = ""
+    # Seconds with no request and nothing running after which the server stops
+    # itself (`--idle-timeout`), 0 for never, None for the server's default.
+    idle_timeout: int | None = None
 
 
 @dataclass(frozen=True)
@@ -362,6 +365,17 @@ class ErrorOccurred(Event):
     """An error happened in a background operation."""
     error: str = ""
     source: str = ""   # which subsystem raised it
+
+
+@dataclass(frozen=True)
+class ViolationsDismissed(Event):
+    """An edit moved the geometry the violation overlay points at.
+
+    The violations a refused build reports are positions in the scene AS IT
+    WAS UPLOADED. Once the artist moves those objects, by Resolve
+    Intersections, the highlights mark places the surfaces have left, so they
+    are taken down until the next upload reports its own.
+    """
 
 
 # ---------------------------------------------------------------------------

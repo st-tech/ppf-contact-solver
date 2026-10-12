@@ -4,9 +4,9 @@
 # License: Apache v2.0
 #
 # Capture Deformation for SHELL/SOLID/ROD pins. Walks the scene frame
-# range on a modal timer, samples the depsgraph-evaluated mesh per
-# frame, extracts only the pinned vertices, and stores them as a
-# ``_pindeform.pc2`` cache. The encoder's pin path consumes this cache
+# range on a modal timer, samples the depsgraph-evaluated mesh (or the
+# points of a Hair Curves object) per frame, extracts only the pinned
+# vertices, and stores them as a ``_pindeform.pc2`` cache. The encoder's pin path consumes this cache
 # in preference to the manual Make-Keyframe vertex-co fcurves
 # (implicit PC2-wins).
 #
@@ -36,11 +36,23 @@ from ...core.pc2 import (
 )
 from ...core.transform import zup_to_yup
 from ...core.utils import (
+    _may_move,
     eval_deform_local_positions,
     has_deforming_modifier_stack,
     redraw_all_areas,
 )
 from .utils import get_group_from_index
+
+# Object types whose pins can carry a captured deformation: a mesh's
+# vertices, and a Hair Curves object's points, which are its rod vertices.
+_CAPTURABLE_TYPES = ("MESH", "CURVES")
+
+
+def _point_count(obj) -> int:
+    """Number of positions *obj*'s pose evaluates to."""
+    if obj.type == "CURVES":
+        return len(obj.data.points)
+    return len(obj.data.vertices)
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +172,8 @@ def _build_entry(scene, group_index, pin_index, error_collector: list):
     except ValueError as exc:
         error_collector.append(str(exc))
         return None
-    if obj is None or obj.type != "MESH":
-        error_collector.append(iface_("Pin capture: only mesh pins can be captured"))
+    if obj is None or obj.type not in _CAPTURABLE_TYPES:
+        error_collector.append(iface_("Pin capture: only mesh and Hair Curves pins can be captured"))
         return None
     _, vg_name = decode_vertex_group_identifier(pin_item.name)
     if not vg_name:
@@ -224,7 +236,7 @@ def _process_one_frame(scene, depsgraph, entry, frame: int) -> tuple[bool, str]:
     obj = get_object_by_uuid(entry["obj_uuid"])
     if obj is None:
         return False, iface_("'{name}' disappeared during capture").format(name=entry['obj_name'])
-    n_verts_total = len(obj.data.vertices)
+    n_verts_total = _point_count(obj)
     pin_idx = entry["pin_indices"]
     if int(pin_idx.max(initial=-1)) >= n_verts_total:
         return False, (
@@ -457,13 +469,14 @@ class OBJECT_OT_CapturePinDeformation(Operator):
                 _pin_obj = _rp(pin_item)
             except ValueError:
                 _pin_obj = None
-            if _pin_obj is None or _pin_obj.type != "MESH" or not has_deforming_modifier_stack(_pin_obj):
+            if _pin_obj is None or not pin_object_supports_capture(_pin_obj):
                 self.report(
                     {"WARNING"},
                     iface_(
                         "Pin object has no deforming modifier stack "
-                        "(Armature, Lattice, Mesh Deform, Shape Keys, ...); "
-                        "Capture Deformation has nothing to record"
+                        "(Armature, Lattice, Mesh Deform, Shape Keys, ...), "
+                        "and a Hair Curves object nothing that moves it "
+                        "either; Capture Deformation has nothing to record"
                     ),
                 )
                 return {"CANCELLED"}
@@ -598,7 +611,7 @@ class OBJECT_OT_ClearPinDeformation(Operator):
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        if obj is None or obj.type != "MESH":
+        if obj is None or obj.type not in _CAPTURABLE_TYPES:
             self.report({"ERROR"}, iface_("Pin object not found"))
             return {"CANCELLED"}
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
@@ -662,8 +675,17 @@ def pin_object_supports_capture(obj) -> bool:
     capture; the predicate exists only to grey-out the button when
     nothing in the modifier stack will produce different positions
     between frames.
+
+    A Hair Curves object also qualifies when anything can move it as a
+    whole (``utils._may_move``). Blender parents hair to the surface it is
+    attached to, so a head that only turns carries the roots with it, and
+    the capture, which records world positions, is what tells the solver.
     """
-    return has_deforming_modifier_stack(obj)
+    if obj is None or obj.type not in _CAPTURABLE_TYPES:
+        return False
+    if has_deforming_modifier_stack(obj):
+        return True
+    return obj.type == "CURVES" and _may_move(obj)
 
 
 def pin_has_captured_anim(pin_item) -> bool:
@@ -679,7 +701,7 @@ def pin_has_captured_anim(pin_item) -> bool:
         from ...core.uuid_registry import resolve_pin
         from ...models.groups import decode_vertex_group_identifier
         obj = resolve_pin(pin_item)
-        if obj is None or obj.type != "MESH":
+        if obj is None or obj.type not in _CAPTURABLE_TYPES:
             return False
         _, vg_name = decode_vertex_group_identifier(pin_item.name)
         if not vg_name:
@@ -701,7 +723,7 @@ def pin_captured_frame_count(pin_item) -> int:
         obj = resolve_pin(pin_item)
     except ValueError:
         return 0
-    if obj is None or obj.type != "MESH":
+    if obj is None or obj.type not in _CAPTURABLE_TYPES:
         return 0
     _, vg_name = decode_vertex_group_identifier(pin_item.name)
     if not vg_name:
@@ -801,7 +823,7 @@ def collect_capturable_pins(context, *, cheap: bool = False) -> list:
                 obj = resolve_pin(pin_item)
             except ValueError:
                 continue
-            if obj is None or obj.type != "MESH":
+            if obj is None or obj.type not in _CAPTURABLE_TYPES:
                 continue
             if not pin_object_supports_capture(obj):
                 continue
@@ -883,7 +905,7 @@ def clear_captured_pin(context, group_index: int, pin_index: int) -> bool:
         obj = resolve_pin(pin_item)
     except ValueError:
         return False
-    if obj is None or obj.type != "MESH":
+    if obj is None or obj.type not in _CAPTURABLE_TYPES:
         return False
     _, vg_name = decode_vertex_group_identifier(pin_item.name)
     if not vg_name:

@@ -100,6 +100,9 @@ class OBJECT_UL_PinVertexGroupsList(UIList):
                     has_pin = True
                 elif obj.type == "CURVE" and obj.get(f"_pin_{vg_name}"):
                     has_pin = True
+                elif obj.type == "CURVES":
+                    from ...core.hair_curves import pin_exists
+                    has_pin = pin_exists(obj, vg_name)
                 if has_pin:
                     row.label(text=f"[{obj.name}][{vg_name}]", icon="GROUP_VERTEX")
                 else:

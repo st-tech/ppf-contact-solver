@@ -6,6 +6,7 @@
 mod args;
 mod backend;
 mod builder;
+mod cosserat;
 // The neutral driver: the Newton loop, the linear solve, the assembly order and
 // every dispatch decision, written once and driven through the `Device` seam.
 // It defines the `extern "C"` surface the unconditional declarations in
@@ -222,6 +223,19 @@ fn main() {
             program_args.output,
             ppf_cts_formats::files::DATASET
         )));
+        // A SCENE WITH COSSERAT RODS IS NOT RESUMED. Its material frames are
+        // run state the checkpoint does not carry: the dataset holds them as
+        // built, so a resume would restart every frame at its authored
+        // orientation under a pose that has moved on, and the first step would
+        // spend its shear and twist energy snapping them back.
+        if dataset.cosserat_edge.size > 0 {
+            panic!(
+                "this scene carries {} Cosserat rod frames, which a checkpoint does not \
+                 save yet, so it cannot be resumed from {}; run it from the start",
+                dataset.cosserat_edge.size,
+                ppf_cts_formats::files::state_filename(program_args.load)
+            );
+        }
         // The dataset's rest shape (the `inv_rest*` matrices and rest angles)
         // is the build-time one, because the dataset is written once. A scene
         // whose rest shape creeps also writes it per frame, so overwrite those
@@ -394,6 +408,10 @@ fn main() {
             rotation_modes: scene.rotation_lock_modes(),
             vert_dmap: scene.vert_dmap(),
         };
+        let cosserat_data = builder::CosseratSceneData {
+            edge: scene.cosserat_edge(),
+            tilt: scene.cosserat_tilt(),
+        };
         let dataset = builder::build(
             &sim_args,
             mesh,
@@ -402,6 +420,7 @@ fn main() {
             temp_constraint,
             pdrd_data,
             lock_data,
+            cosserat_data,
         );
         info!("Dataset built successfully");
 

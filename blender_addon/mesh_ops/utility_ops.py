@@ -3,7 +3,7 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# General mesh utilities exposed in the "Utility Tools" panel.
+# General mesh utilities exposed in the "Mesh Repair" panel.
 #
 # Symmetric triangulate: poke every face (insert a center vertex and fan
 # it into triangles). For a quad that is a 4-triangle fan, which is

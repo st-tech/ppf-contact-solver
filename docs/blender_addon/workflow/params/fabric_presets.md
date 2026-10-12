@@ -1,42 +1,86 @@
 # 🧵 Fabric Presets
 
-The add-on includes a set of ready-to-use **fabric presets** for **Shell**
-groups, each calibrated against real textile measurements so it drapes, bends,
-and stretches like the named fabric:
+The **Preset** dropdown applies a bundled material to a group in one click.
+**Shell** groups list six fabrics, calibrated against published fabric drape
+measurements. **Solid** groups list five soft solids. **Rod**, **PDRD**,
+**Static** and **Sand** groups have no presets and no **Preset** row.
 
-- **Silk** and **Flag** (lightweight banner cloth): light and very drapey.
+## Applying a Preset
+
+1. Set the group's **Type** to **Shell** or **Solid**.
+2. Find the **Preset** dropdown in the group's **Material Params** box, above
+   the profile row. It reads **Select Preset...** and stays visible while the
+   box is collapsed.
+3. Pick a preset. The values apply at once, and the dropdown returns to
+   **Select Preset...**.
+
+A preset sets only the rows named in the tables below, and it turns on
+**Density-Normalized (Pa/ρ)**. It never changes the group's **Type**. A row
+with a closed padlock keeps its value; see
+[Padlocks](material.md#padlocks).
+
+From a script, the MCP tools `list_material_presets` and
+`apply_material_preset` list and apply the same presets; see
+[MCP Scene Setup](../../integrations/mcp_scene_setup.md). A preset made for
+another **Type** than the group's is refused. The result of
+`apply_material_preset` lists the rows that hold the preset's values under
+`written` and the rows a closed padlock left alone under `kept_locked`.
+
+## Shell Presets
+
+Every fabric preset sets **Model** to **Baraff-Witkin**, **Density** to
+1.0 kg/m², **Enable Strain Limit** on, and the values in this table:
+
+| Preset      | Young's Modulus (Pa/ρ) | Poisson's Ratio | Bend Stiffness | Friction | Strain Limit (%) |
+| ----------- | ---------------------- | --------------- | -------------- | -------- | ---------------- |
+| **Silk**    | 500                    | 0.4             | 1.42           | 0.25     | 6                |
+| **Flag**    | 1000                   | 0.4             | 0.83           | 0.30     | 4                |
+| **Cotton**  | 5500                   | 0.35            | 4.3            | 0.35     | 5                |
+| **Wool**    | 2000                   | 0.4             | 3.67           | 0.40     | 8                |
+| **Denim**   | 10000                  | 0.25            | 10.0           | 0.50     | 3                |
+| **Leather** | 13000                  | 0.4             | 1.8            | 0.50     | 2                |
+
+- **Silk** and **Flag**: very drapey, with low friction. **Flag** models a
+  lightweight synthetic banner cloth.
 - **Cotton** and **Wool**: medium stiffness and drape.
 - **Denim**: stiff and the least drapey of the set, so it holds its shape.
-- **Leather**: heavy and barely stretchy, but it drapes with the medium
-  fabrics and droops further than either of them.
+- **Leather**: barely stretchy. It droops more than Cotton or Wool in the
+  cantilever test.
 
-## Solid presets
+The six fabrics share one **Density**, so they differ in stiffness, Poisson's
+ratio, bending, strain limit and friction, not in mass. **Density** can be
+changed freely: while **Density-Normalized (Pa/ρ)** is on, it changes inertia
+and contact and does not change the draped shape.
 
-**Solid** groups get their own list in the same **Preset** dropdown — the menu
-is filtered by the group's Type, so a Solid group never sees the fabrics and a
-Shell group never sees these:
+A fabric's **Young's Modulus** is a calibrated membrane stiffness in the
+density-normalized convention (Pa/ρ), not a textbook modulus in Pa. On a
+**Shell** group whose **Shrink X** or **Shrink Y** is not `1`, the strain limit
+that a fabric preset turns on has no effect. The panel shows *Shrink/extend
+disables strain limiting*.
 
-- **Rubber**: vulcanized rubber (real E ~3 MPa), near-incompressible and
-  grippy (friction 0.85).
-- **Silicone**: silicone elastomer / PDMS (~2 MPa), very soft and
-  near-incompressible.
-- **Foam**: flexible polyurethane foam (~50 kPa), light and springy.
-- **Sponge**: dry cellulose sponge (~0.3 MPa), soft and porous.
-- **Jelly**: gelatin / ballistic gel (~150 kPa), very soft, wobbly and
-  slippery (friction 0.10).
+## Solid Presets
 
-Unlike the fabrics, these are not calibrated by simulation: each carries the
-real material's Young's modulus, entered density-normalized (the real E
-divided by the real density), which is the form the solver consumes. Their
-**Density** ships at a uniform 100 kg/m³, deliberately — density only affects
-inertia and contact, not the static deformed shape, so a uniform value avoids
-the mass-ratio conditioning problems that real volumetric densities cause in
-mixed-material scenes. Change it freely.
+Every solid preset sets **Model** to **ARAP**, **Density** to 100 kg/m³,
+**Density-Normalized (Pa/ρ)** on, and the values in this table:
 
-Applying a preset never changes the group's Type, and a row with its padlock
-engaged keeps its current value.
+| Preset                                  | Young's Modulus (Pa/ρ) | Real Young's modulus | Poisson's Ratio | Friction |
+| --------------------------------------- | ---------------------- | -------------------- | --------------- | -------- |
+| **Rubber** (vulcanized rubber)          | 2727.3                 | about 3 MPa          | 0.49            | 0.85     |
+| **Silicone** (silicone elastomer, PDMS) | 1941.7                 | about 2 MPa          | 0.49            | 0.45     |
+| **Foam** (flexible polyurethane foam)   | 1111.1                 | about 50 kPa         | 0.30            | 0.50     |
+| **Sponge** (dry cellulose sponge)       | 3000.0                 | about 0.3 MPa        | 0.20            | 0.50     |
+| **Jelly** (gelatin or ballistic gel)    | 144.2                  | about 150 kPa        | 0.49            | 0.10     |
 
-## Calibration report
+Unlike the fabrics, the solid presets are not calibrated by simulation. Each
+**Young's Modulus** is the real material's modulus divided by its real
+density, which is the density-normalized form. The five presets share one
+**Density** instead of each material's real density, because a wide spread
+of masses among materials mixed in one scene makes the system
+ill-conditioned. **Density** can be changed freely: while
+**Density-Normalized (Pa/ρ)** is on, it changes inertia and contact and does
+not change the static deformed shape.
+
+## Calibration Report
 
 The report linked below shows, for every fabric, how it behaves in standard
 fabric tests, rendered from simulations:
@@ -51,8 +95,8 @@ fabric tests, rendered from simulations:
 :::
 
 :::{note}
-The report opens as a standalone page. Each fabric is shown with a top-down and
-an angled view of its drape, a side view of its cantilever bend, and a summary
-table of its parameters. The drape values follow the standard Cusick drape test;
-the bending follows the ASTM D1388 cantilever test.
+The report opens as a standalone page. Each fabric is shown with a top-down
+and an angled view of its drape, a side view of its cantilever bend, and a
+summary table of its parameters. The drape values follow the Cusick drape
+method, and the cantilever bend follows ASTM D1388.
 :::

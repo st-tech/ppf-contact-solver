@@ -100,7 +100,11 @@ pub async fn serve_with_listener(
                     Ok((stream, peer)) => {
                         let engine = engine.clone();
                         let executor = executor.clone();
+                        // Taken here rather than in the task, so a request is
+                        // counted from the moment it is accepted.
+                        let request = engine.request_started();
                         tokio::spawn(async move {
+                            let _request = request;
                             wire::handle_connection(stream, peer, engine, executor).await;
                         });
                     }
@@ -111,5 +115,125 @@ pub async fn serve_with_listener(
                 }
             }
         }
+    }
+}
+
+/// Resolve once the server has gone `timeout` with no request open or
+/// arriving and no solve or build in progress, so that the host can stop it.
+///
+/// The idle time counts from when the last request ended, and work in
+/// progress restarts it, so a solve that runs for hours with no client
+/// attached is never ended, and the server stops `timeout` after it finishes.
+/// The add-on pings a server it is connected to (a status query every few
+/// seconds), so a Blender that is connected and idle keeps its server up, and
+/// one that closed or disconnected lets it go.
+pub async fn stop_when_idle(engine: ServerEngine, timeout: std::time::Duration) {
+    // While a request is open or work is running, look again this often.
+    let recheck = timeout.min(std::time::Duration::from_secs(5));
+    loop {
+        let Some(idle) = engine.idle_for() else {
+            tokio::time::sleep(recheck).await;
+            continue;
+        };
+        if idle < timeout {
+            tokio::time::sleep(timeout - idle).await;
+            continue;
+        }
+        if engine.work_in_progress() {
+            engine.mark_busy();
+            tokio::time::sleep(recheck).await;
+            continue;
+        }
+        log::info!(
+            target: "ppf::serve",
+            "idle stop: no request for {} s and no solve or build running; stopping",
+            timeout.as_secs_f64(),
+        );
+        return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::EngineConfig;
+    use ppf_cts_core::events::Event;
+    use std::time::Duration;
+    use tokio::time::{advance, Instant};
+
+    const TIMEOUT: Duration = Duration::from_secs(3);
+
+    fn engine() -> ServerEngine {
+        ServerEngine::new(EngineConfig::default())
+    }
+
+    /// Let spawned tasks run at the current (paused) instant.
+    async fn settle() {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_untouched_server_stops_at_the_timeout() {
+        let start = Instant::now();
+        stop_when_idle(engine(), TIMEOUT).await;
+        assert_eq!(start.elapsed(), TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_request_restarts_the_clock_when_it_ends() {
+        let engine = engine();
+        let stop = tokio::spawn(stop_when_idle(engine.clone(), TIMEOUT));
+        advance(Duration::from_secs(2)).await;
+        let request = engine.request_started();
+        // Open far past the timeout: an open request is a client.
+        advance(Duration::from_secs(30)).await;
+        settle().await;
+        assert!(!stop.is_finished(), "stopped with a request open");
+        drop(request);
+        let ended = Instant::now();
+        advance(Duration::from_millis(2_900)).await;
+        settle().await;
+        assert!(!stop.is_finished(), "stopped before the timeout after the request ended");
+        stop.await.unwrap();
+        let waited = ended.elapsed();
+        assert!(waited >= TIMEOUT, "stopped {waited:?} after the request ended");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_running_solve_holds_the_server_up() {
+        let engine = engine();
+        engine.set_project_context("p", "/tmp/p");
+        engine.dispatch(Event::ExternalSolverAdopted { has_data_on_disk: true });
+        assert!(engine.work_in_progress(), "the adopted solve should read as running");
+        let stop = tokio::spawn(stop_when_idle(engine.clone(), TIMEOUT));
+        advance(Duration::from_secs(600)).await;
+        settle().await;
+        assert!(!stop.is_finished(), "stopped under a running solve");
+        engine.dispatch(Event::SolverFinished { resumable: false });
+        assert!(!engine.work_in_progress());
+        let finished = Instant::now();
+        stop.await.unwrap();
+        // Counted from the last time the solve was seen running, which is at
+        // most one recheck before it finished.
+        let waited = finished.elapsed();
+        assert!(waited <= TIMEOUT, "stopped {waited:?} after the solve");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_build_in_progress_holds_the_server_up() {
+        let engine = engine();
+        engine.set_project_context("p", "/tmp/p");
+        engine.dispatch(Event::upload_landed("uid"));
+        engine.dispatch(Event::BuildRequested { preserve_output: false });
+        assert!(engine.work_in_progress(), "the build should read as in progress");
+        let stop = tokio::spawn(stop_when_idle(engine.clone(), TIMEOUT));
+        advance(Duration::from_secs(600)).await;
+        settle().await;
+        assert!(!stop.is_finished(), "stopped under a build");
+        engine.dispatch(Event::BuildCompleted { exemptions: Vec::new() });
+        assert!(!engine.work_in_progress());
+        stop.await.unwrap();
     }
 }

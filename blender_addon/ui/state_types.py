@@ -1102,7 +1102,8 @@ class MaterialMapItem(PropertyGroup):
         description=(
             "Where the per-vertex weights come from. A vertex group is what "
             "weight paint writes; a float attribute is read off the evaluated "
-            "mesh, which is where Geometry Nodes writes one"
+            "mesh, which is where Geometry Nodes writes one. Hair Curves have "
+            "no vertex groups and read a point attribute"
         ),
         options=set(),
     )  # pyright: ignore
@@ -1178,7 +1179,11 @@ class PinVertexGroupItem(PropertyGroup):
         min=0.0,
         soft_max=1000.0,
         precision=2,
-        description="Pull force strength (0=no pull, 1=default)",
+        description=(
+            "Pull force strength (0=no pull, 1=default). A Hair Curves pin "
+            "stored as a float point attribute pulls each point with this "
+            "strength times the point's weight"
+        ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
     fix_weight_threshold: FloatProperty(

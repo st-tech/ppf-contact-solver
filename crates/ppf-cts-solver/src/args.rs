@@ -60,7 +60,8 @@ pub struct SimArgs {
     pub include_face_mass: bool,
     pub fix_xz: f32,
     pub fake_crash_frame: i32,
-    /// Linear-solve preconditioner: "block-jacobi" (default) or "schwarz".
+    /// Linear-solve preconditioner: "block-jacobi" (default), "schwarz" or
+    /// "multigrid".
     /// Block-Jacobi is the default since the PCG inner loop became
     /// device-resident: its many cheap iterations beat Schwarz's few expensive
     /// ones, and it does not OOM on heavy-contact scenes. Parsed in `make_param`

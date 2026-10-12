@@ -640,6 +640,27 @@ class ObjectGroup(PropertyGroup):
         precision=5,
         description="Contact gap as ratio of each object's own bounding box diagonal",
     )  # pyright: ignore
+    # Stored and displayed as a percentage, like `strain_limit_percent`. The
+    # encoder converts to the wire fraction (value / 100) at the solver
+    # boundary. Read once per transfer, so it offers no keyframe. The rule it
+    # sets follows Gomez-Nogales et al., "Unlocking Thickness Modeling for
+    # Codimensional Contact Simulation" (arXiv:2510.10256).
+    contact_gap_limit_percent: FloatProperty(
+        name="Local Gap Limit",
+        default=OBJECT_GROUP_DEFAULTS["contact_gap_limit_percent"],
+        min=1.0,
+        max=50.0,
+        precision=1,
+        subtype="PERCENTAGE",
+        description=(
+            "Caps the contact gap at this percentage of the room between mesh "
+            "neighbors: the smallest triangle height or rod segment length "
+            "nearby, less twice the contact offset. A wider gap makes "
+            "neighboring vertices push each other apart, which swells a fine "
+            "mesh and stiffens it against bending"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
     contact_offset: FloatProperty(
         name="Contact Offset",
         default=OBJECT_GROUP_DEFAULTS["contact_offset"],

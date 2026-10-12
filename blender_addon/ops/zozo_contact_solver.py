@@ -92,7 +92,6 @@ def _build_operator_class(name: str, handler_info: dict[str, Any]) -> type:
 
     # Get param descriptions from schema
     schema_props = schema.get("inputSchema", {}).get("properties", {})
-    required_params = set(schema.get("inputSchema", {}).get("required", []))
 
     # Build class attributes
     annotations = {}
@@ -105,7 +104,7 @@ def _build_operator_class(name: str, handler_info: dict[str, Any]) -> type:
 
     # Add properties. Blender takes property descriptors from __annotations__,
     # not from plain class attributes.
-    for param_name, (python_type, default, is_json) in params_info.items():
+    for param_name, (python_type, default, _) in params_info.items():
         desc = schema_props.get(param_name, {}).get("description", param_name)
         prop = _make_property(python_type, default, desc)
         annotations[param_name] = prop
@@ -113,30 +112,23 @@ def _build_operator_class(name: str, handler_info: dict[str, Any]) -> type:
     # Capture in closure
     _wrapper = wrapper
     _params_info = params_info
-    _required_params = required_params
 
     def execute(self, context):
-        # Build args dict from operator properties
+        # THE HANDLER RECEIVES EXACTLY THE ARGUMENTS THE CALLER GAVE, as an
+        # MCP call carries only the ones it names. An operator property always
+        # reads a value (False, 0 or "" when nobody set it), so passing every
+        # one would hand the handler a value nobody gave: an
+        # `Optional[bool] = None` would arrive as False and act, and an
+        # explicit "" could not be told from an omitted string. So a
+        # property is passed only when set: one left out takes the handler's
+        # default, or is refused by name when the handler requires it.
         args = {}
-        for p_name, (p_type, p_default, p_is_json) in _params_info.items():
+        for p_name, (_, _, p_is_json) in _params_info.items():
+            if not self.properties.is_property_set(p_name):
+                continue
             value = getattr(self, p_name)
-            # Handle empty strings for optional params
-            if (
-                isinstance(value, str)
-                and value == ""
-                and p_name not in _required_params
-                and p_default is inspect.Parameter.empty
-            ):
-                continue  # Skip unset optional params
-            if (
-                isinstance(value, str)
-                and value == ""
-                and p_default is not inspect.Parameter.empty
-                and p_default is None
-            ):
-                continue  # Skip None-defaulted optional params left empty
-            # JSON decode for list/dict types
-            if p_is_json and isinstance(value, str) and value:
+            # A list or dict travels as its JSON text.
+            if p_is_json:
                 try:
                     value = json.loads(value)
                 except json.JSONDecodeError:

@@ -232,6 +232,9 @@ def create_pin(group_uuid: str, object_name: str, vertex_group_name: str) -> dic
     Mesh objects must have a vertex group named ``vertex_group_name``.
     Curve objects must have a ``_pin_<vertex_group_name>`` custom
     property holding a JSON-encoded list of control-point indices.
+    Hair Curves objects must have a boolean or float point attribute of
+    that name, or the name must be ``Roots``, which holds the first segment
+    of every curve and needs no attribute.
     """
     import bpy  # pyright: ignore
 
@@ -255,9 +258,19 @@ def create_pin(group_uuid: str, object_name: str, vertex_group_name: str) -> dic
                 raise MutationError(
                     f"curve pin '_pin_{vertex_group_name}' not found on '{object_name}'"
                 )
+        elif obj.type == "CURVES":
+            from .hair_curves import ROOTS_PIN_NAME, pin_exists
+            if not pin_exists(obj, vertex_group_name):
+                raise MutationError(
+                    f"hair pin '{vertex_group_name}' not found on "
+                    f"'{object_name}': it has no boolean or float point "
+                    f"attribute of that name that can store a pin, and only "
+                    f"'{ROOTS_PIN_NAME}' is derived"
+                )
         else:
             raise MutationError(
-                f"object '{object_name}' is type {obj.type!r}; expected MESH or CURVE"
+                f"object '{object_name}' is type {obj.type!r}; expected "
+                "MESH, CURVE or CURVES (Hair Curves)"
             )
         try:
             _raw_create_pin(group_uuid, object_name, vertex_group_name)

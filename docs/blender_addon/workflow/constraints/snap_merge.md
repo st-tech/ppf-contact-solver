@@ -1,261 +1,354 @@
 # 🧲 Snap and Merge
 
-Two separate steps that work together:
+**Snap A to B** moves one object onto another and joins the two with a soft
+stitch. Use it to sew a garment panel to a body, to join two cloth pieces
+along a seam, or to attach a rod to a cloth edge. One click:
 
-- **Snap** is a one-shot alignment: it translates object A in world space
-  so that its closest vertex lines up with the nearest point on object B's
-  surface (the nearest triangle for a mesh or solid target, the nearest
-  segment for a rod), leaving just enough contact gap to avoid
-  interpenetration. In the same pass it also captures stitch anchors for
-  **every A-vertex within reach of B**, not just the single closest one.
-- **Merge** is a solver-side soft stitch between two objects. At transfer
-  time it becomes a cross-object stitch force that holds the two meshes
-  together during the simulation. It is a force, not a weld: stitched
-  vertices are pulled toward their targets but never share the same point,
-  so a small contact gap always remains.
+1. Moves object A next to object B, so that the closest pair ends the
+   applied gap apart (see [Gap Rules](#gap-rules)). When A is a **Static**
+   collider, object B moves instead. Objects whose closest points already
+   coincide are not moved.
+2. Records a stitch for every vertex of the source object (see
+   [Which Pairs Can Be Stitched](#which-pairs-can-be-stitched)) that ends
+   up within reach of the other object (see
+   [What a Snap Records](#what-a-snap-records)).
+3. Registers the two objects as a **merge pair**.
 
-You typically snap *and* merge in sequence (the snap operator creates the
-merge pair automatically), but the two concepts are independent and can be
-used separately.
+At **Transfer**, the solver turns the pair's stitches into a soft spring
+force between the two objects. It is a spring, not a weld: its rest length
+comes from the two objects' **Contact Gap**, and the two objects stay
+separate meshes.
+
+The merge pair is what the solver turns into stitch forces, and a snap is
+what gives the pair its stitch points. A pair registered from Python or MCP
+without a snap has no stitch points and is refused at **Transfer** (see
+[Merge Pairs Without Snapping](#merge-pairs-without-snapping)).
 
 :::{important}
-**Snap is a set-level operation, not a single-vertex operation.**  The
-feature is designed for meshes whose geometry already coincides (fully or
-partly) so that *many* A-vertices have a matching counterpart on B.  A
-canonical example is duplicating a subdivided square patch and snapping
-the copy onto the original: every edge (or interior) vertex on the copy
-has a one-to-one counterpart on the original, so the whole set stitches
-in a single operation.
+**Snap is a set-level operation, not a single-vertex operation.** It
+stitches every vertex of the source object that is within reach of the
+other object, so it works best on meshes whose geometry already lines up
+along the seam. For example, take two identically subdivided square
+patches that lie side by side with a gap between them: every vertex along
+the edge of one patch has a counterpart on the other patch, and the whole
+seam is stitched in one click.
 
-If only one isolated vertex on A happens to be close to B while the rest
-of the mesh is far away, only that one pair is recorded. The solver
-won't magically stitch meshes whose topologies don't align.  Author the
-meshes so the intended stitch region coincides before snapping.
+If only one vertex is within reach, only that one is stitched. A vertex is
+stitched when the other object's surface is within reach, whether or not a
+vertex of the other mesh lies there. A rod target is the exception: it is
+measured to the nearest sampled point of the rod, so rod points must line
+up. Author the meshes so that the intended seam lines up before you snap.
 :::
 
 ```{figure} ../../images/snap_merge/snap_set_level.svg
-:alt: Two side-by-side panels. Left, "Edges aligned": a 4x4 patch A in blue on the left and patch B in green on the right, with A's right edge and B's left edge at the same four row heights; four short red dashed lines pair the seam vertices; a badge reads "4 / 4 edge pairs recorded". Right, "Edges misaligned": the same two patches with B shifted down so only A's bottom-right corner shares a row with B's top-left; one red dashed line connects that pair, three A-edge vertices are labeled as having no B match, and a badge reads "1 / 4 edge pairs recorded". A footer reminds the reader that snap is a geometric alignment step, not a topology repair.
+:alt: Two side-by-side panels. Left, "Edges aligned": a 4x4 patch A in blue on the left and patch B in green on the right, with A's right edge and B's left edge at the same four row heights; four short red dashed lines pair the seam vertices; a badge reads "4 / 4 edge pairs recorded". Right, "Edges misaligned": the same two patches with B shifted down so only A's bottom-right corner shares a row with B's top-left; one red dashed line connects that pair, three A-edge vertices are labeled as having no B match, and a badge reads "1 / 4 edge pairs recorded". A footer states that snap is a geometric alignment step, not a topology repair.
 :width: 820px
 
-Snap records a stitch pair for every A-vertex already within B's
-contact gap, and nothing else. Left: matching subdivided patches
-produce a full set of stitches in one pass. Right: a patch whose only
-one corner coincides with B yields a single stitch; the rest of the
-mesh stays unattached even after **Merge**. Author the meshes so the
-intended stitch region coincides before snapping.
+Snap records a stitch for every source vertex within reach of the other
+object, and for no other vertex. Left: matching subdivided patches produce
+a full set of stitches in one pass. Right: a patch with only one corner
+lining up with the other patch yields a single stitch, and the rest of the
+seam stays unattached. In this schematic A is blue and B is green. The
+reach is defined under [What a Snap Records](#what-a-snap-records).
 ```
 
 ## Snap and Merge Panel
 
 Open the sidebar (`N`) in the 3D viewport and switch to the add-on tab.
 The **Snap and Merge** panel sits below **Scene Configuration** and
-**Dynamics Groups**, and is **collapsed by default**. Click the header
-to expand it.
+**Dynamics Groups**, and is **collapsed by default**. Click the header to
+expand it. The panel has three parts:
 
-When expanded, the panel contains a single box titled **Snap To Nearby
-Vertices**:
+- A **Snap To Nearby Vertices** box with the **Object A (moves):** and
+  **Object B (target):** pickers and the **Snap A to B** button.
+- A **Merge Pairs** box, drawn once at least one pair exists.
+- The **Post Snap Exactly** checkbox, always drawn below the boxes.
 
-- An **Object A** dropdown (the source; this is the object that will
-  move) with an eyedropper button on the right for picking from the
-  viewport.
-- An **Object B** dropdown (the target; this stays put) with its own
-  eyedropper.
-- A **Snap A to B** button with a snap icon.
+### Snap Two Objects
 
-To snap two objects together, pick A and B with the dropdowns or
-eyedroppers, then press **Snap A to B**. The add-on finds the source
-vertex whose closest point on the target's surface is globally nearest,
-translates A (in world space, parent-safe) so that pair lines up,
-applies the contact-gap rules below, and records per-vertex barycentric
-anchor data for a later stitch. It also registers a merge pair
-automatically.
+Before you snap:
+
+- Add both objects to dynamics groups whose types form a supported pair
+  (see [Which Pairs Can Be Stitched](#which-pairs-can-be-stitched)). The
+  pickers list a mesh once it has been added to a group, and a curve only
+  while it is in a **Rod** group. A pair of unsupported types, or an object
+  in no group, is refused with *This object pair does not support
+  stitching*.
+- Use writable objects. Snap and merge reject library-linked objects,
+  because the add-on cannot write to them. Make them local first.
+- Put the timeline on the **Starting Frame**. Snap reads each object's
+  shape at the current frame, with its modifiers and rig applied, while
+  **Transfer** reads it at the starting frame. Snapping there records the
+  stitch against the pose the solver starts from.
+
+To snap:
+
+1. Choose **Object A (moves):** in the first dropdown. Alternatively,
+   select the object in the viewport or the Outliner and click the
+   eyedropper button beside the dropdown. The button sets the field to the
+   active object. If the active object is not in the dropdown, the add-on
+   reports *'name' is not a snap-eligible object*.
+2. Choose **Object B (target):** the same way.
+3. Click **Snap A to B**. The button stays disabled until two different
+   objects are chosen. The status bar reports, for example, *Stitched PatchA
+   to PatchB (was 0.5000 apart, positioned at gap 0.00221)*. The message
+   appears even when no stitch was recorded.
+4. Check the stitch lines in the viewport and the **Merge Pairs** box. If
+   the box shows a line with an error icon saying the pair has no stitch
+   points, the snap found no vertex of the source within reach of the
+   target (for a rod target, of a sampled point of the rod). Edit the
+   geometry so that a vertex of the source lies closer to the target, then
+   click **Re-snap**, or remove the pair.
+5. Click **Transfer**. The snap moved one of the two objects, and the
+   solver needs the moved geometry together with the new pair.
+
+Snap moves an object by changing its location, so the mesh data is
+untouched, and it also works when the object has a parent.
 
 ```{figure} ../../images/snap_merge/panel.png
-:alt: Snap and Merge panel with Object A set to PatchA (moves) and Object B set to PatchB (target), the Snap A to B button, and an empty Merge Pairs box ready to receive the new pair.
+:alt: Snap and Merge panel expanded. The Snap To Nearby Vertices box shows Object A (moves) set to PatchA and Object B (target) set to PatchB, each with an eyedropper button, above the Snap A to B button.
 :width: 500px
 
-Snap and Merge panel with the two plane sheets below picked as A
-and B. **PatchA** is the one that will move (magenta); **PatchB** is
-the target that stays put (blue). Clicking **Snap A to B** runs the
-operator on whatever pair you've set here.
+The **Snap To Nearby Vertices** box with **PatchA** chosen as Object A
+(the object that moves) and **PatchB** as Object B (the target).
+Clicking **Snap A to B** runs the snap on the pair set here.
 ```
 
 ```{figure} ../../images/snap_merge/snap_before.png
-:alt: Before Snap A to B. Two identically-subdivided square shell patches in the 3D viewport with PatchB (blue) at the origin and PatchA (magenta) shifted along the +X axis only, same Y and same Z plane. A clear gap is visible along the X axis between PatchB's right edge and PatchA's left edge; the patches have not yet been joined.
+:alt: Before Snap A to B. Two identically subdivided square shell patches in the 3D viewport. PatchB (blue) sits at the origin and PatchA (magenta, selected) is shifted along the X axis only, with the same Y and the same Z plane. A clear gap separates PatchB from PatchA, and the patches are not joined.
 :width: 520px
 
-**Before.** Two identically-subdivided shell patches assigned to Shell
-groups: **PatchB** (blue, at the origin, stays put) and **PatchA**
-(magenta, shifted along the **+X axis only**; same Y, same Z). There
-is a clear gap along the shared edge; the two patches are not yet
-joined.
+**Before.** Two identically subdivided patches, each in a **Shell**
+group: **PatchB** (blue, at the origin, stays put) and **PatchA**
+(magenta, shifted along the X axis only, same Y and same Z). A clear gap
+separates them.
 ```
 
 ```{figure} ../../images/snap_merge/snap_after.png
-:alt: After Snap A to B. The magenta PatchA has translated along the X axis and now sits a small contact gap from the blue PatchB, left-edge to right-edge, in the same plane. Together they read as a single 2x1 rectangle, with each seam vertex on PatchA tied to its counterpart on PatchB rather than merged into one point.
+:alt: After Snap A to B. The magenta PatchA has moved along the X axis and lies edge to edge with the blue PatchB in the same plane, so the two read as one 2x1 rectangle. The gap between them is too small to see at this scale.
 :width: 520px
 
-**After `Snap A to B`.** PatchA has translated along the X axis in
-world space until its nearest vertex sits a small contact gap from
-PatchB. The two patches are not welded: every seam vertex on PatchA
-is tied to its counterpart on PatchB by a recorded soft stitch, and
-the stitch force together with the contact barrier settle into
-balance across that small gap, so the patches read as a single 2x1
-rectangle while staying separate meshes. The merge pair is
-registered automatically and the per-vertex stitch anchors are
-captured behind the scenes.
+**After Snap A to B.** PatchA has moved along the X axis until its nearest
+vertex sits the applied gap from PatchB (see [Gap Rules](#gap-rules)). The
+patches are not welded: every seam vertex on PatchA is stitched to its
+counterpart on PatchB by a recorded soft stitch, and the two stay separate
+meshes. The gap is too small to see at this scale.
 ```
 
-As soon as at least one merge pair exists, a second box labeled
-**Merge Pairs** appears below the snap box, containing:
+### The Merge Pairs Box
 
-- A UIList showing each pair, with both object names per row.
-- A **Re-snap** button below the list (disabled unless a row is
-  selected). It re-runs the snap on the selected pair and rebuilds its
-  stitch anchors. When the selected pair cannot stitch, the panel says
-  why in a line with an error icon, the same reason **Transfer** gives
-  (see [Merge Pairs Without Snapping](#merge-pairs-without-snapping)).
-- A **Remove** button below that, likewise disabled unless a row is
-  selected.
-- A **Stitch Stiffness** slider, shown for **every supported pair**.
-  All stitches are soft, so the slider applies to Shell-Shell and
-  Rod-Rod pairs the same way it applies to the Solid-involved pairs.
-  Raise it to hold a seam together more firmly.
+The **Merge Pairs** box appears below the snap box once at least one pair
+exists. It contains:
 
-A separate **Visualization** panel further down the sidebar exposes a
-**Hide all snaps** toggle that hides or shows the merge-pair / stitch
-overlay in the viewport.
+- A list with one row per pair, showing the two object names as
+  *A ↔ B*. The eye icon at the right end of a row is **Show Stitch**: it
+  shows or hides that pair's stitch lines. An error icon in front of the
+  names means one of the two objects is missing from the file.
+- **Re-snap**, below the list. It repeats the whole snap on the selected
+  pair: it moves the pair's Object A (or the non-Static object) to the
+  applied gap again and records the stitch points again. Put the objects
+  where you want them before you click it. Use it after you edit either
+  mesh, or when the box reports a problem (see
+  [Pairs That Cannot Stitch](#pairs-that-cannot-stitch)). It is disabled
+  until a row is selected.
+- **Remove**, below that. It deletes the selected pair and moves nothing.
+  It is disabled until a row is selected.
+- **Stitch Stiffness**, a numeric field for the selected pair. It is drawn
+  when the pair's two types form a supported pair.
+- When the selected pair cannot stitch, a line with an error icon that
+  gives the reason, the same reason **Transfer** gives.
 
-### Gap Rules
+| UI control | Key | Default | Description |
+| --- | --- | --- | --- |
+| **Stitch Stiffness** field | `stitch_stiffness` | 1.0 | Scales the pair's soft stitch force directly. Minimum 0 (the pair is kept but applies no force), soft maximum 10000. Raise it to hold the seam together more firmly. Separate from the group's **Stitch Stiffness** in [Material Parameters](../params/material.md), which applies to loose edges inside one object. Send a change with **Update Params on Remote**. |
+| Eye icon in the pair's row (**Show Stitch**) | `show_stitch` | on | Shows or hides this pair's stitch lines in the viewport. It does not affect the solve. |
 
-The solver needs a small separation between the two meshes at rest,
-otherwise contact barriers start flagging penetration on frame 1. Because
-every stitch is a soft force rather than a weld, the snap operator always
-leaves a positive gap; stitched vertices are never coincident. The same
-rule applies to **all supported pairs**:
+The keys are the Blender property names, and the MCP tool
+`set_merge_pair_properties` takes the same names. It and
+`resnap_merge_pair` also take `object_a` and `object_b`, the names of the
+pair's two objects in either order (see
+[Blender Python API and MCP](#blender-python-api-and-mcp)).
 
-| A type ↔ B type          | Applied gap                                                                             |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| Any supported pair       | The sum of both groups' **Contact Gap** and **Contact Offset** values, plus a small safety margin so the closest pair starts just outside the contact band. |
-
-The gap is in scene units and is read from the two groups' current
-settings at the moment you click **Snap A to B**: the absolute
-**Contact Gap** and **Contact Offset**, or, on a group that uses
-**Use Object Bounding Box Diagonal**, the two ratios times that object's
-own bounding-box diagonal. **World Scaling** does not change it, and
-neither does anything transferred earlier.
-
-### Cross-Stitch Anchors
-
-For every snap, the add-on also stores **per-vertex barycentric anchor
-data** on the resulting merge pair.  Every A-vertex that ends up within
-a small reach-threshold of B after alignment becomes its own anchor, so a
-single snap typically produces **many stitches, one per coincident
-vertex pair**, not just one.  Conceptually each source vertex is tied to
-a target triangle (or a single target vertex for rod pairs) with
-barycentric weights, so the stitch survives later mesh edits until the
-topology itself changes.
-
-The reach-threshold is derived from the applied gap (a small multiple of
-it), which is why coinciding geometries work best: vertices that are
-already on top of each other are well within threshold, while distant
-vertices are ignored.  You can see the captured set as **yellow dots
-connected by thin yellow lines** in the viewport overlay (toggle with
-**Hide all snaps** in the Visualization panel).
+The overlay draws each stitch as a yellow line from the stitched vertex
+(orange dot) to the point on the other object it is stitched to (yellow
+dot). When a fetched result is shown, the lines follow the fetched
+positions. A pair's lines are drawn only while its eye icon is on and
+**Hide all snaps** is off. That toggle is in the **Visualization** panel
+and hides the lines of every pair at once.
 
 ```{figure} ../../images/snap_merge/stitch_overlay.png
-:alt: Yellow stitch-pair overlay between the two subdivided plane patches. PatchA (magenta) has been pulled straight down in Z after the snap, exposing vertical yellow stitch lines connecting every seam vertex of PatchA to the matching seam vertex of PatchB (blue). The two patches were originally shifted along the X axis only, so every vertex along PatchB's right edge has a counterpart on PatchA's left edge.
+:alt: Yellow stitch lines between the two subdivided patches. PatchA (magenta) has been moved straight down in Z after the snap, which stretches vertical yellow lines from every seam vertex of PatchA to the matching point on PatchB (blue). The patches were first shifted along the X axis only, so every vertex along PatchB's right edge has a counterpart on PatchA's left edge.
 :width: 720px
 
-After `Snap A to B`, every A-vertex within reach-threshold of B
-becomes a stitch anchor. For this X-axis-only shift, the entire
-shared seam qualifies, so the overlay draws one yellow stitch per
-seam-vertex pair. **PatchA has been pulled straight down in Z after
-the snap** to make the pairs visible; the stitches themselves stay
-tied to the original seam positions, separated by the small contact
-gap rather than coincident.
+The stitch overlay after **Snap A to B**. **PatchA** was moved straight
+down in Z afterward so the lines are long enough to see. Each stitch stays
+attached to the same vertex of PatchA and the same point on PatchB, so
+moving PatchA stretches the lines.
 ```
 
-### Stitching to a Static collider
-
-A dynamic **Shell**, **Solid**, or **Rod** can be stitched onto a
-**Static** collider, which lets you pin part of a moving mesh to a piece
-of fixed geometry (for example tacking a sleeve to a static mannequin
-panel). Pick the dynamic object as one side and the Static as the other,
-then snap as usual.
-
-The Static side is treated as the target that stays put: snap never moves
-a Static collider, even if you set it as **Object A**. Instead, the
-dynamic object is the one translated into place, and the contact gap is
-left between them just as for any other pair. The stitch force then holds
-the dynamic mesh against the fixed surface during the solve.
+A pair is removed automatically when either of its objects leaves its
+group: through **Remove Object**, **Delete Group**, **Delete All Groups**,
+**Bake Animation** or **Bake Single Frame** (baking moves the baked
+objects out of their groups), or by deleting the object. Otherwise a pair
+stays until you click **Remove**.
 
 ### Post Snap Exactly
 
-**Post Snap Exactly** is a global toggle (not per-pair), found below the
-**Merge Pairs** box. It is **on by default**.
+**Post Snap Exactly** is a global checkbox (not per pair), drawn below the
+boxes. It is **on by default**. It only changes what you see after
+fetching and does not change how the solver computes the simulation.
 
-Because stitches are soft forces, the simulated result keeps a small
-contact gap at every seam. When **Post Snap Exactly** is on, fetching a
-frame moves each stitched vertex exactly onto its stitch target, so seams
-read as fully joined in the viewport. When it is off, the raw simulated
-gap is kept, showing the true soft-stitch separation between the parts.
+- **On:** fetching a frame moves each stitched vertex exactly onto its
+  stitch target, so seams read as fully joined in the viewport. The same
+  toggle closes the loose-edge seams inside a **Shell** or **Solid**
+  object: the two ends of a seam that are closer than the object's
+  **Contact Offset** plus twice its **Contact Gap** are moved to their
+  midpoint.
+  **Rod** groups are not affected by this part.
+- **Off:** fetched frames show the simulated positions, including the
+  separation the soft stitch leaves.
 
-The toggle applies to **all stitch pairs at once**, and it only affects
-what you see after fetching; it does not change how the solver computes
-the simulation.
+From a script or an MCP client, set it as `post_snap_exactly` (see
+[Blender Python API and MCP](#blender-python-api-and-mcp)).
+
+## Snap Rules
+
+### Which Pairs Can Be Stitched
+
+The supported pairs are **Shell** and **Shell**, **Solid** and **Solid**,
+**Rod** and **Rod**, **Shell** and **Solid**, **Rod** and **Shell**,
+**Rod** and **Solid**, and a **Static** collider with a **Shell**, a
+**Solid** or a **Rod**. **PDRD** and **Sand** groups, two **Static**
+colliders, and objects that are in no group cannot be stitched.
+
+The group types decide which object moves, which object supplies the
+stitched vertices (the source), and which one they are stitched to (the
+target):
+
+| Object A and Object B | Moves | Source (its vertices are stitched) | Target |
+| --- | --- | --- | --- |
+| **Shell** and **Shell** | A | A | B |
+| **Solid** and **Solid** | A | A | B |
+| **Rod** and **Rod** | A | A | B |
+| **Shell** and **Solid**, either order | A | the Shell | the Solid |
+| **Rod** and **Shell**, either order | A | the Rod | the Shell |
+| **Rod** and **Solid**, either order | A | the Rod | the Solid |
+| **Shell**, **Solid** or **Rod** with a **Static**, either order | the object that is not Static | the object that is not Static | the Static |
+
+Object A moves unless it is a **Static** collider, in which case object B
+moves. When both objects have the same type, Object A is the source and
+Object B the target. Otherwise the group types decide, as the table shows.
+
+### Gap Rules
+
+The snap moves the closest pair to the applied gap, so the pair starts
+outside the combined **Contact Gap** and **Contact Offset** of the two
+objects. The one exception is a pair whose closest points already coincide
+(closer than 1e-9 Blender units): the snap does not move it and applies no
+gap, so separate such objects slightly before you snap. The applied gap is
+the same for every supported pair: 1.1 times the sum of both objects'
+**Contact Gap** and **Contact Offset**, plus 0.00001, in Blender units. The
+factor puts the closest pair strictly outside that range, and the added
+floor prevents the objects from coinciding when both values are 0.
+
+The values are read from the two groups when you click **Snap A to B**:
+the absolute **Contact Gap** and **Contact Offset**, or, on a group with
+**Use Object Bounding Box Diagonal** on, **Contact Gap Ratio** and
+**Contact Offset Ratio** times that object's own bounding-box diagonal.
+**World Scaling** does not change them, because the snap works in Blender
+units. A group's [Local Gap Limit](../params/material.md#local-gap-limit),
+which can lower an element's gap on a fine mesh when the scene is built,
+does not change them either: the snap uses the gap you authored.
+
+### What a Snap Records
+
+After the move, the snap stitches every source vertex that lies within the
+**stitch reach** of the other object: 2.5 times the applied gap, and at
+least 0.0001 Blender units. The distance is measured to the nearest point
+on the target's surface. For a rod target it is measured to the nearest
+sampled point of the rod. A mesh target needs no vertex where the source
+vertex lands: the stitch is attached to the nearest point of a target
+triangle. Vertices that coincide with the other object are well inside the
+reach, and distant vertices are ignored, which is why coinciding geometry
+works best (see the figure at the top of the page).
+
+Each stitch stores the point on the other object that its vertex is
+attached to, so the stitch stays attached to the same vertices when the
+objects move. It stays valid while both meshes keep their vertex count.
+After you add or delete vertices on either object, click **Re-snap**.
+Reordering vertices keeps the count and is not detected, so click
+**Re-snap** after that too. The count is checked for mesh objects only.
+
+### Stitching to a Static Collider
+
+A dynamic **Shell**, **Solid** or **Rod** can be stitched to a **Static**
+collider, which holds part of a dynamic mesh against the collider (for
+example a sleeve tacked to a mannequin panel). Choose the dynamic object as
+one side and the Static as the other, then snap as usual.
+
+The Static is always the target, and snap never moves it, even when it is
+Object A. The dynamic object moves into place and keeps the applied gap
+from the Static. The stitch force then holds the dynamic mesh against the
+Static during the solve. If the Static is animated, it keeps following its
+own motion and the stitch follows it.
 
 ## Merge Pairs Without Snapping
 
-A merge pair on its own only *registers* two objects; it does not yet
-carry the stitch anchors the solver sews with. Those are captured by
-**Snap A to B** (or **Re-snap** on an existing pair). A pair whose
-stitch cannot reach the solver is kept as it is, with its stored stitch
-untouched: **Transfer** stops with *Merge pair(s) that cannot stitch*,
-naming each such pair and its reason, **Update Params on Remote**
-refuses the same pairs, and the **Merge Pairs** box shows the same
-reason under the selected pair. The reasons are:
+A pair registered without a snap (from Python or MCP) has no stitch
+points, and **Transfer** refuses it. Click **Re-snap** on the pair (see
+[The Merge Pairs Box](#the-merge-pairs-box)) to record its stitch points,
+or remove the pair. A pair that has stitch points can also be unable to
+stitch, for the reasons listed next.
 
-- **No stitch points**: the pair was added without ever snapping, or
-  the snap recorded none. Click **Re-snap** or remove the pair.
-- **A mesh changed since the snap**: an object's vertex count differs
-  from when the pair was snapped. Click **Re-snap**.
-- **The stored stitch cannot be read**, or its rows are malformed.
+### Pairs That Cannot Stitch
+
+The same refusal covers every state in which a pair's stitch cannot reach
+the solver. The pair and its stored stitch stay as they are. **Transfer**
+stops with *Merge pair(s) that cannot stitch*, naming each pair and its
+reason, **Update Params on Remote** refuses the same pairs, and the
+**Merge Pairs** box shows the reason under the selected pair. The reasons
+are:
+
+- **No stitch points**: the pair was added without a snap, or the snap
+  found no vertex of the source within reach of the target. A rod target
+  is measured to the nearest sampled point of the rod, so a rod whose
+  points are far apart can leave every vertex out of reach. Click
+  **Re-snap**, or remove the pair.
+- **A mesh changed since the snap**: an object's vertex count differs from
+  when the pair was snapped. Click **Re-snap**.
+- **The stored stitch is damaged**: it cannot be read, it is incomplete or
+  inconsistent, or it names an object that is in no active dynamics group.
   Click **Re-snap**.
-- **A Solid side snapped before it recorded its stitch points**: a
-  **Solid** side is placed on its tetrahedralized surface from points
-  recorded at snap time, and a pair snapped without them cannot be.
-  Click **Re-snap**.
-- **An object is in no active dynamics group**: one of the pair's
-  objects is not assigned to any existing group. Add it to a group
-  again or remove the pair.
+- **A Solid side has no recorded stitch points**: the pair was snapped
+  before a **Solid** side recorded its stitch points, so that side cannot
+  be placed. Click **Re-snap**.
+- **An object has no UUID**, the unique ID the add-on stores on each
+  object: remove the pair and snap again.
+- **An object is in no active dynamics group**: one of the pair's objects
+  is not assigned to any group. Add it to a group again or remove the
+  pair.
 
-A merge pair is removed at one moment only: when one of its objects
-leaves its group, through **Remove Object**, **Delete Group**, or by
-being deleted from the scene. Nothing scans for pairs and removes them
-later. Each pair has:
+## Blender Python API and MCP
 
-| UI label              | Python / TOML key   | Description                                                                                                                               |
-| --------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Object A / B**      | `object_a` / `object_b` | The two mesh objects.                                                                                                                 |
-| **Stitch Stiffness**  | `stitch_stiffness`  | Per-pair stiffness of the soft stitch force. Shown for every supported pair; raise it to hold the seam together more firmly. |
-| **Show Stitch**       | `show_stitch`       | Overlay toggle for the viewport stitch preview.                                                                                           |
-
-## Blender Python API
-
-The same workflow is available from Python:
+The same workflow is available from Python. Both objects must already be
+in groups that form a supported pair. The import below works for an
+add-on in the **User Default** repository. For an add-on installed from a
+remote repository, use the lookup under
+[Blender Python API: Import](../../integrations/python_api.md#import).
 
 ```python
 from bl_ext.user_default.ppf_contact_solver.ops.api import solver
 
-# Make the shirt hug the mannequin at its closest pair of verts, with the
-# right contact gap for the SHELL <-> STATIC pairing. Also registers a
-# merge pair with cross-stitch anchor data.
+solver.create_group("Shirt", type="SHELL").add("Shirt")
+solver.create_group("Mannequin", type="STATIC").add("Mannequin")
+
+# Move the shirt next to the mannequin, leave the applied gap and record
+# the stitch points. Also registers the merge pair.
 solver.snap("Shirt", "Mannequin")
 
-# Or register a merge pair without moving anything. Snap / Re-snap must
-# still run before Transfer, or the pair is refused (no stitch points).
-solver.add_merge_pair("Shirt", "Mannequin")
+# Register a pair without moving anything. It forms no stitch until a snap
+# records stitch points, and Transfer refuses it until then.
+solver.add_merge_pair("SleeveLeft", "BodyLeft")
 
 # Iterate existing pairs.
 for a, b in solver.get_merge_pairs():
@@ -266,57 +359,65 @@ solver.remove_merge_pair("Shirt", "Mannequin")
 solver.clear_merge_pairs()
 ```
 
-:::{note}
-Snapping and merging both reject library-linked (non-writable) objects
-because the solver needs to persist UUIDs on them. Make them local first if
-you hit that error.
-:::
+Calling `solver.snap` again on an existing pair records its stitch points
+again. An object name that does not resolve raises `ValueError`, and a snap
+the add-on refuses (an unsupported pair, for example) raises
+`RuntimeError` carrying the message the button shows.
+
+Over MCP, `snap_to_vertices(object_a, object_b)` is **Snap A to B**: it
+moves object A (object B when A is in a **Static** group), records the
+stitch points and registers the pair, with the same gap as the button.
+`add_merge_pair` and `remove_merge_pair` register and remove a pair
+without moving anything, `clear_merge_pairs` removes every pair, and
+`resnap_merge_pair`, `list_merge_pairs` and `set_merge_pair_properties`
+(per-pair **Stitch Stiffness** and **Show Stitch**) cover the rest of the
+**Merge Pairs** box. See the
+[MCP Tool Reference](../../integrations/mcp_reference.rst).
+
+**Post Snap Exactly** is `solver.param.post_snap_exactly` in Python and the
+`post_snap_exactly` argument of the MCP tool `set_scene_parameters`.
+Changing it takes effect on the next fetch and needs no new run.
 
 :::{admonition} Under the hood
 :class: toggle
 
-**What Snap does**
+**Closest pair and move**
 
-Snap is a one-shot alignment:
+Snap finds the source vertex whose closest point on the target's nearest
+triangle (or rod segment) is globally minimal. The search is feature-based:
+it measures to the closest point on a triangle or segment, not to the
+nearest vertex. The moving object is translated along the approach
+direction by changing its location, so the closest pair ends the applied
+gap apart. When the moving object is the target of the stitch (Object A is
+a Solid stitched to a Shell, for example), the translation is inverted so
+the target is pulled toward the source.
 
-1. Finds the source vertex whose closest point on the other object's
-   nearest triangle (or rod segment) is globally minimal.
-2. Translates the moving object in world space (parent-safe) along the
-   approach direction so the closest pair ends a small positive gap apart:
-   the summed `contact_gap + contact_offset` of both groups, scaled by a
-   safety factor (1.1x) plus a tiny floor so the pair starts just outside
-   the contact barrier's activation band and never coincident. A Static
-   collider is never the moved object; the dynamic side moves instead.
-3. Records per-vertex barycentric anchor data for every A-vertex close
-   enough to B to participate in a stitch (within a small multiple of the
-   applied gap).
+**Stored stitch**
 
-**Cross-stitch anchor data**
+Each merge pair carries the captured payload:
 
-Each merge pair carries the captured anchor payload:
-
-- Source and target object UUIDs.
+- Source and target object identifiers.
 - Per source vertex, a six-wide row: indices `[si, si, si, t0, t1, t2]`
   (a degenerate source barycentric plus the target triangle) and weights
   `[1.0, 0.0, 0.0, α, β, γ]`.
-- Target positions at snap time.
-- Vertex counts at snap time, so stale entries can be detected if you
-  edit the topology later.
+- Source and target positions at snap time, one per row. A **Solid** side
+  needs them to be placed on its tetrahedral surface.
+- Vertex counts at snap time for mesh objects, so a changed mesh can be
+  detected.
 
 The full barycentric anchor is what reaches the solver: each stitch row
-keeps its three target vertices and their weights, remapped into the
-assembled scene's index space. Only a rod *target* degenerates to a
-single vertex with weight 1, which is the rod-to-rod case; a rod paired
-with a shell or a solid is the source side, and still anchors to a
-target triangle.
+stores its three target vertices and their weights. Only a rod *target*
+degenerates to a single vertex with weight 1, which is the rod-to-rod case;
+a rod paired with a shell or a solid is the source side and still anchors to
+a target triangle.
 
 **Merge-pair encoding**
 
-Merge pairs are tracked by UUID, so renaming either object preserves the
-link. The **Transfer** check, the parameter encoder, and the panel line
-all ask one function why a pair cannot stitch, so none of them can pass
-a pair another refuses, and none of them writes to the pair. A pair
-with a **Solid** side needs the six-wide rows and the snap-time surface
-points, so a pair stored with four-wide rows is upgraded to six-wide
-rows at encode time only when neither side is a **Solid**.
+Merge pairs are tracked by object identifier, so renaming either object
+preserves the link. The **Transfer** check, the parameter encoder and the
+panel line all call one function that returns the reason a pair cannot
+stitch, so they accept and reject the same pairs, and none of them writes
+to the pair. A pair with a **Solid** side needs the six-wide rows and the
+snap-time positions, so a pair stored with four-wide rows is upgraded to
+six-wide rows at encode time only when neither side is a **Solid**.
 :::

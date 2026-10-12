@@ -81,6 +81,11 @@ pub struct Object {
     /// transform shared by all vertices. Only valid for Tri assets;
     /// mutually exclusive with `is_static`.
     pub is_pdrd: bool,
+    /// True when the object is a Cosserat rod: a Rod-asset strand whose
+    /// edges carry an SO(3) orientation coupled to the node positions by
+    /// stretch, shear, bending and twist energies. Only valid for Rod
+    /// assets; mutually exclusive with `is_static`.
+    pub is_cosserat: bool,
     /// Per-object material parameters; defaulted from
     /// `object_param(kind)` at construction.
     pub param: ParamHolder,
@@ -188,6 +193,7 @@ impl Object {
             asset_kind: kind,
             is_static: false,
             is_pdrd: false,
+            is_cosserat: false,
             param,
             transform: identity4(),
             color: ObjectColor::None,
@@ -232,6 +238,26 @@ impl Object {
         }
         self.is_pdrd = true;
         self.param = object_param(ObjectKind::Pdrd);
+        Ok(self)
+    }
+
+    /// Switch this object to a Cosserat rod. The body must reference a Rod
+    /// asset: a Cosserat rod keeps the strand's edge topology, and each edge
+    /// additionally carries an SO(3) orientation. Swaps the parameter set to
+    /// the Cosserat defaults, which are the rod keys plus the `cosserat-*`
+    /// keys (stretch stays on `young-mod`).
+    ///
+    /// Errors if the object is already flagged static, since a Cosserat rod
+    /// and a static collider are mutually exclusive.
+    pub fn as_cosserat(&mut self) -> Result<&mut Self, ObjectError> {
+        if self.asset_kind != AssetKind::Rod {
+            return Err(ObjectError::CosseratRequiresRodAsset);
+        }
+        if self.is_static {
+            return Err(ObjectError::CosseratConflictsStatic);
+        }
+        self.is_cosserat = true;
+        self.param = object_param(ObjectKind::Cosserat);
         Ok(self)
     }
 
@@ -567,6 +593,10 @@ pub enum ObjectError {
     PdrdRequiresTriAsset,
     #[error("PDRD cannot be applied to a static object")]
     PdrdConflictsStatic,
+    #[error("a Cosserat rod requires a Rod asset")]
+    CosseratRequiresRodAsset,
+    #[error("a Cosserat rod cannot be applied to a static object")]
+    CosseratConflictsStatic,
     #[error("lock translation axis must be finite")]
     LockTranslationNonFinite,
     #[error("lock translation axis must be non-zero")]
@@ -747,6 +777,49 @@ mod tests {
         let err = o.as_pdrd().unwrap_err();
         assert!(matches!(err, ObjectError::PdrdConflictsStatic));
         assert!(!o.is_pdrd);
+    }
+
+    #[test]
+    fn as_cosserat_switches_kind_and_params_on_rod_asset() {
+        let mut o = Object::new("strand", AssetKind::Rod);
+        assert!(!o.is_cosserat);
+        o.as_cosserat().unwrap();
+        assert!(o.is_cosserat);
+        // A Cosserat rod keeps the edge-based arap model and young-mod
+        // stretch, and gains the orientation keys.
+        assert_eq!(
+            o.param.get("model").unwrap(),
+            &super::super::params::ParamValue::String("arap".into())
+        );
+        assert_eq!(
+            o.param.get("young-mod").unwrap(),
+            &super::super::params::ParamValue::Float(1e4)
+        );
+        assert!(o.param.get("cosserat-shear").is_ok());
+        assert!(o.param.get("cosserat-bend").is_ok());
+        assert!(o.param.get("cosserat-twist").is_ok());
+        assert!(o.param.get("cosserat-fix-ends").is_ok());
+    }
+
+    #[test]
+    fn as_cosserat_rejects_non_rod_assets() {
+        for kind in [AssetKind::Tri, AssetKind::Tet] {
+            let mut o = Object::new("body", kind);
+            let err = o.as_cosserat().unwrap_err();
+            assert!(matches!(err, ObjectError::CosseratRequiresRodAsset));
+            // Object is unchanged.
+            assert!(!o.is_cosserat);
+            assert!(o.param.get("cosserat-shear").is_err());
+        }
+    }
+
+    #[test]
+    fn as_cosserat_rejects_static_object() {
+        let mut o = Object::new("rail", AssetKind::Rod);
+        o.is_static = true;
+        let err = o.as_cosserat().unwrap_err();
+        assert!(matches!(err, ObjectError::CosseratConflictsStatic));
+        assert!(!o.is_cosserat);
     }
 
     #[test]

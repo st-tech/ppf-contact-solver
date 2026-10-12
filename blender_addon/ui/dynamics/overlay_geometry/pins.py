@@ -341,6 +341,40 @@ def _build_pin_data(scene, depsgraph):
                                         color,
                                     ))
 
+                elif obj.type == "CURVES":
+                    # Hair Curves: a pin holds points, and a dot sits where
+                    # the viewport shows the point (the frame being played
+                    # back, or the groom before any solve).
+                    from ....core.hair_curves import (
+                        displayed_local_positions,
+                        pin_indices as hair_pin_indices,
+                    )
+                    world_matrix = obj.matrix_world
+                    hair_local = displayed_local_positions(obj)
+                    for pin_ref in group.pin_vertex_groups:
+                        if not pin_ref.show_overlay:
+                            continue
+                        if pin_ref.use_pin_duration and current_frame >= pin_ref.pin_duration:
+                            continue
+                        resolve_pin(pin_ref)
+                        _, pin_vg_name = decode_vertex_group_identifier(
+                            pin_ref.name
+                        )
+                        if pin_ref.object_uuid != _obj_uuid:
+                            continue
+                        moves = pin_ref.has_captured_anim or any(
+                            op.op_type in ("SPIN", "SCALE", "MOVE_BY", "TORQUE")
+                            for op in pin_ref.operations
+                        )
+                        color = (0.5, 0.5, 1.0, 0.8) if moves else (1.0, 1.0, 1.0, 0.8)
+                        for point in hair_pin_indices(obj, pin_vg_name):
+                            if point < len(hair_local):
+                                pin_data.append((
+                                    world_matrix @ Vector(hair_local[point]),
+                                    group.pin_overlay_size,
+                                    color,
+                                ))
+
                 elif obj.type == "CURVE":
                     world_matrix = obj.matrix_world
                     for pin_ref in group.pin_vertex_groups:

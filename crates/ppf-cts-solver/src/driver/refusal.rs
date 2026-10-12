@@ -23,8 +23,6 @@
 //!    never before and never separately.
 
 use crate::data::{DataSet, FaceParam, FaceProp, Model, ParamSet, TetParam, TetProp};
-// Named only where the tests below select a preconditioner to be refused.
-#[cfg(test)]
 use crate::data::PrecondMode;
 
 /// One reason this scene is refused, with the count that was found.
@@ -51,23 +49,38 @@ impl Refusal {
 /// scene with no elements at all. The list is deliberately exhaustive rather
 /// than short-circuiting on the first hit: a user retargeting a scene wants to
 /// know everything that would have to change, not the first thing.
-// `_param` IS UNREAD, AND THAT IS THE NEWS RATHER THAN AN OVERSIGHT. Every
-// refusal that survives is a property of the SCENE: a solid naming a membrane
-// model, a PDRD face asking for shear stiffness. None is a property of how the
-// solve was configured, so no solver parameter can now put a scene outside this
-// backend. The argument stays because a future refusal may read it, and because
-// `advance()` re-runs this per step precisely so a schedule cannot introduce a
-// refused capability partway through a run.
-pub fn scene_refusals(data: &DataSet, _param: &ParamSet) -> Vec<Refusal> {
-    // THIS LIST IS EMPTY, AND IT RETURNS A VEC RATHER THAN NOTHING BECAUSE THE
-    // EMPTINESS IS A MEASUREMENT, NOT A DESIGN. Every capability this backend
-    // once refused has been implemented; the comments below are what each
-    // retirement rested on, kept because rule 2 at the top of this file is that
-    // an entry comes off only in the change that implements what it refused,
-    // and the argument for each is what a reader needs to check that it did.
-    // A future capability arrives here the same way.
-    let _ = data;
-    let out = Vec::new();
+// `param` IS READ FOR COMBINATIONS, never for a capability: the multigrid
+// preconditioner beside a rigid body, and the Schwarz or the multigrid
+// preconditioner beside Cosserat rods. `advance()` re-runs this per step
+// precisely so a schedule cannot introduce a refused capability partway
+// through a run.
+pub fn scene_refusals(data: &DataSet, param: &ParamSet) -> Vec<Refusal> {
+    // EVERY CAPABILITY THIS BACKEND ONCE REFUSED ON ITS OWN HAS BEEN
+    // IMPLEMENTED; the comments below are what each retirement rested on, kept
+    // because rule 2 at the top of this file is that an entry comes off only in
+    // the change that implements what it refused, and the argument for each is
+    // what a reader needs to check that it did. What remains are COMBINATIONS:
+    // a preconditioner beside a solve path it has no form for, and Cosserat
+    // rods beside a solve path whose operator has no frame rows.
+    let mut out = Vec::new();
+
+    // THE MULTIGRID PRECONDITIONER IS REFUSED BESIDE A RIGID BODY. A scene that
+    // carries one routes its whole solve, cloth rows included, through the
+    // reduction over the bodies' six degrees of freedom, and that solve is
+    // preconditioned in the reduced coordinates by a block factor of its own.
+    // The multigrid's hierarchy is laid over vertices and has no reduced form,
+    // so the choice could only be honored by not honoring it, and a run that
+    // asked for one preconditioner and was given another has nothing in its
+    // output to say so.
+    let bodies = data.prop.pdrd_body.size as u64;
+    if param.precond == PrecondMode::Multigrid && bodies > 0 {
+        out.push(Refusal {
+            feature: "the multigrid preconditioner in a scene with rigid (PDRD) bodies, whose \
+                      reduced solve it cannot precondition; use block-jacobi",
+            count: bodies,
+            unit: "rigid bodies",
+        });
+    }
 
     // `mesh.face` is NOT the shell count. A solid's surface triangles live in
     // that same array, with the shell faces occupying its HEAD, so
@@ -259,6 +272,51 @@ pub fn scene_refusals(data: &DataSet, _param: &ParamSet) -> Vec<Refusal> {
     // decision D1 is direct addressing and the four arrays the creep writes are
     // the host's own.
 
+    // COSSERAT RODS COMPOSE WITH NONE OF THE OTHER SOLVE PATHS YET, and each
+    // combination is refused by name rather than run through the wrong system.
+    // A scene with Cosserat frames solves the AUGMENTED system, the vertex rows
+    // and three rows per frame together (`pcg::solve_cosserat`); the PDRD
+    // reduced solve, the projected lock, the Schwarz hierarchy and the
+    // multigrid's each define their own operator over the vertex rows alone,
+    // so taking any of them would drop the frames, and taking the augmented
+    // solve would drop them.
+    let frames = data.cosserat_edge.size as u64;
+    if frames > 0 {
+        if bodies > 0 {
+            out.push(Refusal {
+                feature: "PDRD rigid bodies in a scene with Cosserat rods, whose augmented \
+                          solve has no reduced-body form",
+                count: bodies,
+                unit: "bodies",
+            });
+        }
+        if lock_groups > 0 {
+            out.push(Refusal {
+                feature: "projected translation or rotation locks in a scene with Cosserat \
+                          rods, whose augmented solve has no projected form",
+                count: lock_groups,
+                unit: "lock groups",
+            });
+        }
+        if param.precond == crate::data::PrecondMode::Schwarz {
+            out.push(Refusal {
+                feature: "the Schwarz preconditioner in a scene with Cosserat rods, whose \
+                          augmented solve preconditions its frame rows by a local Schur \
+                          complement over block-Jacobi; use precond = block-jacobi",
+                count: frames,
+                unit: "Cosserat frames",
+            });
+        }
+        if param.precond == PrecondMode::Multigrid {
+            out.push(Refusal {
+                feature: "the multigrid preconditioner in a scene with Cosserat rods, whose \
+                          augmented solve preconditions its frame rows by a local Schur \
+                          complement over block-Jacobi; use precond = block-jacobi",
+                count: frames,
+                unit: "Cosserat frames",
+            });
+        }
+    }
 
     out
 }
@@ -879,6 +937,59 @@ mod tests {
                 "levels={levels} must be accepted, got {refusals:?}"
             );
         }
+    }
+
+    /// THE MULTIGRID PRECONDITIONER IS ACCEPTED ON A SCENE OF VERTICES AND
+    /// REFUSED BESIDE A RIGID BODY AND BESIDE COSSERAT RODS, by name and with
+    /// the count of what it cannot solve.
+    ///
+    /// The refusals are the half that matters. A scene with a body is solved
+    /// in reduced coordinates, and one with Cosserat frames in an augmented
+    /// system, each under a preconditioner of that solve's own, so a run that
+    /// asked for the multigrid there would be given something else and print
+    /// nothing about it.
+    #[test]
+    fn multigrid_is_refused_beside_a_rigid_body_and_beside_cosserat_rods() {
+        let (mut data, mut param) = empty_contactless_scene();
+        param.precond = PrecondMode::Multigrid;
+        let without = scene_refusals(&data, &param);
+        assert!(
+            !without.iter().any(|r| r.feature.contains("multigrid")),
+            "a scene with no rigid body must be accepted, got {without:?}"
+        );
+        data.prop.pdrd_body.size = 3;
+        let with = scene_refusals(&data, &param);
+        let hit = with
+            .iter()
+            .find(|r| r.feature.contains("multigrid"))
+            .unwrap_or_else(|| panic!("the rigid bodies must be refused, got {with:?}"));
+        assert_eq!((hit.count, hit.unit), (3, "rigid bodies"));
+        // the same scene under the default preconditioner is accepted
+        param.precond = PrecondMode::BlockJacobi;
+        let default = scene_refusals(&data, &param);
+        assert!(
+            !default.iter().any(|r| r.feature.contains("multigrid")),
+            "block-Jacobi with a rigid body is not this refusal, got {default:?}"
+        );
+        data.prop.pdrd_body.size = 0;
+
+        // Cosserat frames, and no body.
+        param.precond = PrecondMode::Multigrid;
+        data.cosserat_edge.size = 5;
+        let frames = scene_refusals(&data, &param);
+        let hit = frames
+            .iter()
+            .find(|r| r.feature.contains("multigrid"))
+            .unwrap_or_else(|| panic!("the Cosserat frames must be refused, got {frames:?}"));
+        assert_eq!((hit.count, hit.unit), (5, "Cosserat frames"));
+        assert!(hit.feature.contains("Cosserat rods"), "{}", hit.feature);
+        param.precond = PrecondMode::BlockJacobi;
+        let default = scene_refusals(&data, &param);
+        assert!(
+            default.is_empty(),
+            "Cosserat rods under block-Jacobi are solved, got {default:?}"
+        );
+        data.cosserat_edge.size = 0;
     }
 
     #[test]

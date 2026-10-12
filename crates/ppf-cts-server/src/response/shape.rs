@@ -14,7 +14,8 @@ use ppf_cts_core::state::{Build, ServerState, Solver};
 
 /// Build the always-present base fields: status, data, frame,
 /// initialized, error, crash_kind, violations, exemptions, root, upload_id, hashes,
-/// protocol_version, hardware, git_branch, solver_target_dir, solver_backend.
+/// protocol_version, hardware, git_branch, solver_target_dir, solver_backend,
+/// idle_timeout_s.
 pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value> {
     let mut m: Map<String, Value> = Map::new();
     m.insert("status".into(), Value::String(state.status_string().into()));
@@ -64,6 +65,9 @@ pub fn base_map(state: &ServerState, config: &EngineConfig) -> Map<String, Value
         "solver_backend".into(),
         Value::String(config.solver_backend.clone()),
     );
+    // How long this server waits, with no request and nothing running,
+    // before stopping itself; 0 when it never does.
+    m.insert("idle_timeout_s".into(), json!(config.idle_timeout_s));
     m
 }
 

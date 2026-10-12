@@ -117,8 +117,9 @@ def _add_pin_vertex_group_impl(
     group_uuid: str,
     vertex_group_identifier: str,
     indices: list[int] | None,
+    weights: list[float] | None = None,
 ) -> dict:
-    """Shared implementation for mesh and curve pin registration."""
+    """Shared implementation for mesh, curve and Hair Curves pin registration."""
     group = get_active_group_by_uuid_helper(group_uuid)
     obj_name, vg_name = _parse_pin_identifier(vertex_group_identifier)
 
@@ -127,10 +128,22 @@ def _add_pin_vertex_group_impl(
     # indices are supplied. Existence/type/vertex-group/curve-pin validation is
     # owned by mutation.create_pin so the LLM sees one unified error text.
     obj = bpy.data.objects.get(obj_name)
-    if obj is not None and indices is not None:
-        if obj.type != "CURVE":
+    if weights is not None:
+        if obj is None or obj.type != "CURVES":
             raise ValidationError(
-                f"'indices' is only valid for curve objects; "
+                "'weights' is only valid for a Hair Curves object, whose pin "
+                f"is a point attribute that can hold them; '{obj_name}' is "
+                f"{obj.type if obj is not None else 'missing'}"
+            )
+        if indices is None:
+            raise ValidationError(
+                "'weights' gives one weight per entry of 'indices', and no "
+                "indices were given"
+            )
+    if obj is not None and indices is not None:
+        if obj.type not in ("CURVE", "CURVES"):
+            raise ValidationError(
+                f"'indices' is only valid for curve and Hair Curves objects; "
                 f"'{obj_name}' is {obj.type}. A mesh pin names a vertex "
                 "group that already holds the vertices: create it with "
                 "create_vertex_group, then pin it by name."
@@ -143,7 +156,28 @@ def _add_pin_vertex_group_impl(
             raise ValidationError(
                 "indices must be a list of integers for curve pins"
             ) from exc
-        obj[f"_pin_{vg_name}"] = json.dumps(encoded_indices)
+        if obj.type == "CURVES":
+            # A Hair Curves pin is a point attribute of that name: a boolean
+            # one, or a float one when the points carry weights.
+            from ...core.hair_curves import store_pin_indices
+
+            try:
+                encoded_weights = (
+                    None if weights is None
+                    else [float(weight) for weight in weights]
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(
+                    "weights must be a list of numbers for a Hair Curves pin"
+                ) from exc
+            try:
+                store_pin_indices(
+                    obj, vg_name, encoded_indices, encoded_weights,
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        else:
+            obj[f"_pin_{vg_name}"] = json.dumps(encoded_indices)
 
     from ...core import mutation
 
@@ -406,6 +440,23 @@ def get_active_groups():
 def add_objects_to_group(group_uuid: str, object_names: list[str]):
     """Add objects to a dynamics group.
 
+    Every group type takes MESH objects. A ROD group also takes CURVE
+    objects and Hair Curves objects (type CURVES), both simulated as rods;
+    any other pairing is reported as a warning and the object is left out.
+
+    A Hair Curves point is a rod vertex, so point i of the object is vertex
+    i everywhere a pin or a result names one. Every curve needs at least two
+    points and has to be Catmull Rom or Poly; a Bezier or NURBS curve is
+    refused at transfer. When hair is the first object of its group the
+    group's Rest Angle becomes From Initial Geometry, so the groom keeps its
+    shape, and its Contact Offset becomes zero, so a strand is held off
+    other surfaces by the Contact Gap alone. Hair attached to a surface gets
+    a pin named "Roots" that holds the first segment of every curve. When
+    that surface moves, run capture_pin_deformation on the pin so the roots
+    follow it. A stack that generates children is simulated at its guides:
+    the solve is played back in front of the first modifier that changes the
+    point count, and that modifier builds the children from the result.
+
     Args:
         group_uuid: UUID of target group
         object_names: List of object names to add
@@ -443,10 +494,11 @@ def add_objects_to_group(group_uuid: str, object_names: list[str]):
 
         # Mirror the UI operator's acceptance rule
         # (ui/dynamics/group_ops.py::OBJECT_OT_AddObjectsToGroup): a
-        # ROD group also accepts Bezier curves; every other group type
-        # is mesh-only.
+        # ROD group also accepts curves and Hair Curves; every other
+        # group type is mesh-only.
         is_acceptable = obj.type == "MESH" or (
-            obj.type == "CURVE" and target_group.object_type == "ROD"
+            obj.type in ("CURVE", "CURVES")
+            and target_group.object_type == "ROD"
         )
         if not is_acceptable:
             warnings.append(
@@ -917,8 +969,9 @@ def _resolve_mesh_object(object_name: str):
     """Return the named object, raising unless it exists and is a MESH.
 
     Vertex groups are a mesh property. A curve carries its pinned control
-    points in a ``_pin_<name>`` custom property instead, written by
-    add_pin_vertex_group's ``indices`` argument.
+    points in a ``_pin_<name>`` custom property instead, and a Hair Curves
+    object its pinned points in a boolean or float point attribute, both
+    written by add_pin_vertex_group's ``indices`` argument.
     """
     obj = bpy.data.objects.get(object_name)
     if obj is None:
@@ -926,8 +979,9 @@ def _resolve_mesh_object(object_name: str):
     if obj.type != "MESH":
         raise MCPError(
             f"Object '{object_name}' is type {obj.type}; only a MESH carries "
-            "vertex groups. A curve pins control points instead: pass 'indices' "
-            "to add_pin_vertex_group."
+            "vertex groups. A curve pins control points and a Hair Curves "
+            "object pins points instead: pass 'indices' to "
+            "add_pin_vertex_group."
         )
     return obj
 
@@ -1067,7 +1121,9 @@ def list_vertex_groups(object_name: str):
     to the group at any weight; a group holding zero vertices pins nothing.
 
     Only a MESH carries vertex groups. A curve's pinned control points live on
-    the curve object and are reported by list_pins once they are pinned.
+    the curve object, a Hair Curves object's pinned points in its boolean
+    or float point attributes, and both are reported by list_pins once they
+    are pinned.
 
     Refuses an object that is in Edit Mode. That session holds the geometry
     and the weights in a BMesh the mesh datablock does not receive until the
@@ -1155,6 +1211,7 @@ def add_pin_vertex_group(
     group_uuid: str,
     vertex_group_identifier: str,
     indices: list[int] | None = None,
+    weights: list[float] | None = None,
 ):
     """Add a vertex group to the pin list of a dynamics group.
 
@@ -1167,12 +1224,38 @@ def add_pin_vertex_group(
     control points are defined: they are written onto the curve as
     "_pin_<vertex_group_name>" and pinned in the same call.
 
+    For Hair Curves (object type CURVES), which has no vertex groups either,
+    a pin is a point attribute of that name: a boolean one holds the points
+    it marks, a float one every point with a weight above zero. 'indices'
+    writes one from point indices, where point i is the i-th point over all
+    curves in order, and pins it in the same call. Without 'indices' the name
+    has to be an attribute the object already carries, or "Roots", which
+    holds the first segment of every curve (its first two points) and is
+    derived from the curves each time it is read, so it follows a groom
+    through any edit. Roots keeps a strand on the scalp but does not fix the
+    direction it leaves in: a rod does not resist bending at a point that is
+    held exactly, so a strand turns about its second point. Hair attached to
+    a surface gets its Roots pin when it joins the group.
+
+    'weights' makes a Hair Curves pin a weighted one: one weight per entry of
+    'indices', each above 0 and at most 1. Once the pin pulls (use_pull on
+    set_pin_settings), each point is pulled with pull_strength times its own
+    weight, so a pull can fade along a strand. A pin that holds exactly holds
+    every listed point alike. Where two pins share a point the later pin in
+    the list wins it, so list a pin that holds the roots exactly AFTER a
+    weighted pin that covers them (move_pin_vertex_group reorders).
+
     Args:
         group_uuid: UUID of group
         vertex_group_identifier: Identifier in format "object_name::vertex_group_name"
-        indices: Curve control-point indices, for CURVE objects only
+        indices: Control-point indices of a CURVE, or point indices of a
+            Hair Curves object; refused for a mesh
+        weights: One weight per entry of indices, above 0 and at most 1,
+            for a Hair Curves object; refused for anything else
     """
-    return _add_pin_vertex_group_impl(group_uuid, vertex_group_identifier, indices)
+    return _add_pin_vertex_group_impl(
+        group_uuid, vertex_group_identifier, indices, weights,
+    )
 
 
 def _find_pin(group, group_uuid: str, vertex_group_identifier: str):
@@ -1250,7 +1333,12 @@ def remove_pin_vertex_group(group_uuid: str, vertex_group_identifier: str):
 
 @group_handler
 def list_pins(group_uuid: str):
-    """List all pins in a dynamics group.
+    """List all pins in a dynamics group, in list order.
+
+    Where two pins share a vertex the later one in this order wins it. A pin
+    reported as ``weighted`` is a Hair Curves pin stored as a float point
+    attribute: once it pulls, each point is pulled with ``pull_strength``
+    times its own weight.
 
     Args:
         group_uuid: UUID of group
@@ -1269,16 +1357,33 @@ def list_pins(group_uuid: str):
                 "pin_duration": int(pin_item.pin_duration),
                 "use_pull": bool(pin_item.use_pull),
                 "pull_strength": float(pin_item.pull_strength),
+                "weighted": _pin_is_weighted(pin_item, vg_name),
                 "operation_count": len(pin_item.operations),
             }
         )
     return {"group_uuid": group_uuid, "pins": pins, "pin_count": len(pins)}
 
 
+def _pin_is_weighted(pin_item, vg_name: str) -> bool:
+    """Whether a pin carries a weight per point, which scales its pull.
+
+    Only a Hair Curves pin stored as a float point attribute does. A mesh
+    pin holds every vertex of its group alike, whatever weight it was
+    painted with.
+    """
+    from ...core.hair_curves import is_hair_curves, pin_is_weighted
+    from ...core.uuid_registry import get_object_by_uuid
+
+    obj = get_object_by_uuid(pin_item.object_uuid) if pin_item.object_uuid else None
+    return is_hair_curves(obj) and pin_is_weighted(obj, vg_name)
+
+
 def _pin_membership_name(obj, vg_name: str) -> str:
     """Where a pin's vertices live on *obj*, named for an error message."""
     if obj.type == "CURVE":
         return f"custom property '_pin_{vg_name}'"
+    if obj.type == "CURVES":
+        return f"point attribute '{vg_name}'"
     return f"vertex group '{vg_name}'"
 
 
@@ -1340,10 +1445,36 @@ def _check_pin_rename_target(obj, obj_name: str, vg_name: str, new_name: str):
         # name longer than it can store, naming the limit, and the curve keeps
         # its indices. Only the mesh field above truncates instead.
         return
+    if obj.type == "CURVES":
+        from ...core.hair_curves import ROOTS_PIN_NAME, pin_exists
+
+        attribute = obj.data.attributes.get(vg_name)
+        if attribute is None and vg_name == ROOTS_PIN_NAME:
+            raise MCPError(
+                f"The '{ROOTS_PIN_NAME}' pin on Hair Curves '{obj_name}' is "
+                "derived from its curves and stored nowhere, so there is "
+                "nothing to rename. To pin another set of points, pass their "
+                "'indices' to add_pin_vertex_group under the name you want."
+            )
+        if attribute is None or not pin_exists(obj, vg_name):
+            raise MCPError(
+                f"Hair Curves '{obj_name}' carries no boolean or float point "
+                f"attribute named '{vg_name}' that can store a pin, so the "
+                f"pin '{obj_name}::{vg_name}' holds no points to rename. "
+                "Re-add the pin with add_pin_vertex_group and its indices."
+            )
+        if obj.data.attributes.get(new_name) is not None:
+            raise MCPError(
+                f"Hair Curves '{obj_name}' already carries an attribute named "
+                f"'{new_name}'. Blender would keep both by giving the renamed "
+                "one a numbered suffix, which is not the name asked for, so "
+                "pick a name the object does not already carry."
+            )
+        return
     raise MCPError(
         f"Object '{obj_name}' is type {obj.type}; a pin names a mesh vertex "
-        "group or a curve control-point set, so there is nothing to rename on "
-        "this object."
+        "group, a curve control-point set or a Hair Curves point attribute, "
+        "so there is nothing to rename on this object."
     )
 
 
@@ -1356,8 +1487,10 @@ def rename_pin_vertex_group(
     """Rename the vertex group a pin names, on the object and in the pin list.
 
     This renames the membership as well as the pin entry: on a mesh the
-    object's vertex group is renamed, and on a curve the "_pin_<name>"
-    property holding the pinned control points is. Anything else that names
+    object's vertex group is renamed, on a curve the "_pin_<name>"
+    property holding the pinned control points is, and on Hair Curves the
+    point attribute storing the pin is. The derived "Roots" pin of a Hair Curves
+    object has no stored membership and is refused. Anything else that names
     that vertex group, an armature or a modifier for instance, refers to it by
     name and stops finding it, so rename a group only the solver pin uses.
 
@@ -1434,6 +1567,8 @@ def rename_pin_vertex_group(
     _, kept = decode_vertex_group_identifier(group.pin_vertex_groups[index].name)
     if obj.type == "MESH":
         stored = obj.vertex_groups.get(kept) is not None
+    elif obj.type == "CURVES":
+        stored = obj.data.attributes.get(kept) is not None
     else:
         stored = f"_pin_{kept}" in obj
     if not stored:
@@ -1623,6 +1758,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "contact_offset",
         "contact_gap_rat",
         "contact_offset_rat",
+        "contact_gap_limit_percent",
         "use_group_bounding_box_diagonal",
     },
     "SOLID": {
@@ -1651,6 +1787,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "contact_offset",
         "contact_gap_rat",
         "contact_offset_rat",
+        "contact_gap_limit_percent",
         "use_group_bounding_box_diagonal",
     },
     "ROD": {
@@ -1683,6 +1820,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "contact_offset",
         "contact_gap_rat",
         "contact_offset_rat",
+        "contact_gap_limit_percent",
         "use_group_bounding_box_diagonal",
     },
     "STATIC": {
@@ -1930,6 +2068,10 @@ def get_group_material_properties(group_uuid: str):
     use_group_bounding_box_diagonal currently selects. The relative pair is a
     fraction of each assigned object's OWN bounding-box diagonal, so in that
     mode the objects of one group are solved at different distances.
+    contact_gap_limit_percent (SHELL, SOLID and ROD) then caps the gap the
+    selected pair gives: an element is solved at the smaller of that gap and
+    this percentage of the room between its mesh neighbors, so the gap an
+    element is solved at can be below the authored one.
 
     Per-object state (inclusion, locks, hinge, bending reference,
     tetrahedralizer) is reported by get_group_objects, and a parameter driven
@@ -2056,6 +2198,17 @@ def set_group_material_properties(group_uuid: str, properties: dict):
       The box is the object's and never the one around the group, whatever
       the flag's name says: how far apart the objects of a group were placed
       does not enter.
+
+    contact_gap_limit_percent (SHELL, SOLID and ROD; 1 to 50, default 25)
+    belongs to neither mode and combines with both. It caps each element's
+    contact gap at that percentage of the room its own mesh leaves between
+    neighbors: the smallest altitude among a triangle and the triangles
+    sharing a vertex with it, or the shortest among a rod segment and the
+    segments sharing a vertex with it, less twice the contact offset. A gap
+    wider than that room starts the solve with mesh neighbors pressing on
+    each other, which swells the mesh and stiffens it against bending, so the
+    cap is what lets one gap serve a fine mesh and a coarse one. A STATIC
+    collider, a PDRD body and a SAND group take no cap.
 
     Returns:
         Dict with success message and properties set

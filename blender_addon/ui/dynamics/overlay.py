@@ -830,7 +830,7 @@ def apply_object_overlays():
     # group (no UUID, or a UUID not in any active group) are not
     # touched.
     for obj in bpy.data.objects:
-        if obj.type not in ("MESH", "CURVE"):
+        if obj.type not in ("MESH", "CURVE", "CURVES"):
             continue
         uid = get_object_uuid(obj)
         if not uid:

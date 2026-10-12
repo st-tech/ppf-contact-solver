@@ -15,9 +15,9 @@ objects" until something is assigned.  Screenshotting the empty state
 documents the add-on as if it did nothing, so the pages that show those
 panels need a scene behind them.
 
-The scene is deliberately tiny and generic — a draped sheet over a
+The scene is deliberately tiny and generic: a draped sheet over a
 sphere, the smallest setup that produces one deformable group and one
-collider — so the screenshots stay legible at documentation width and do
+collider, so the screenshots stay legible at documentation width and do
 not date as fast as a scene tied to a specific example would.
 
 Two environment variables let one fixture serve pages that name their
@@ -80,7 +80,7 @@ def _add_top_edge_vertex_group(name: str) -> None:
     """Put the cloth's +Y edge in a vertex group called *name*.
 
     A pin has to name a vertex group that already exists on the mesh, and
-    an edge is the shape a reader recognises as "hung from the top".
+    an edge is the shape a reader recognizes as "hung from the top".
     """
     obj = bpy.data.objects[CLOTH]
     max_y = max(v.co.y for v in obj.data.vertices)

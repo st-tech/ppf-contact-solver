@@ -6543,22 +6543,22 @@
     "yarn": {
       "backend": "cuda",
       "status": "measured",
-      "recorded_utc": "2026-09-02T23:26:07Z",
-      "host": "dev-4",
-      "wall_s": 22.3,
-      "vertices": 28560,
+      "recorded_utc": "2026-10-06T12:26:47Z",
+      "host": "dev-3",
+      "wall_s": 20.6,
+      "vertices": 19895,
       "frames": 121,
       "streams": {
         "iter": {
-          "count": 530,
-          "mean": 285.00754716981135,
-          "median": 314.5,
-          "p90": 370.0,
-          "min": 16.0,
-          "max": 462.0,
-          "sum": 151054.0,
+          "count": 637,
+          "mean": 208.9403453689168,
+          "median": 219.0,
+          "p90": 318.0,
+          "min": 45.0,
+          "max": 346.0,
+          "sum": 133095.0,
           "t_first": 0.0,
-          "t_last": 1.994928,
+          "t_last": 1.999913,
           "integral": true,
           "histogram": null,
           "window_s": 0.25,
@@ -6566,127 +6566,127 @@
             {
               "bin": 0,
               "t_start": 0.0,
-              "n": 84,
-              "mean": 314.45238095238096
+              "n": 109,
+              "mean": 184.09174311926606
             },
             {
               "bin": 1,
               "t_start": 0.25,
-              "n": 50,
-              "mean": 372.36
+              "n": 86,
+              "mean": 178.72093023255815
             },
             {
               "bin": 2,
               "t_start": 0.5,
-              "n": 60,
-              "mean": 324.53333333333336
+              "n": 109,
+              "mean": 185.44954128440367
             },
             {
               "bin": 3,
               "t_start": 0.75,
-              "n": 97,
-              "mean": 271.8556701030928
+              "n": 55,
+              "mean": 216.07272727272726
             },
             {
               "bin": 4,
               "t_start": 1.0,
-              "n": 52,
-              "mean": 252.53846153846155
+              "n": 54,
+              "mean": 226.94444444444446
             },
             {
               "bin": 5,
               "t_start": 1.25,
-              "n": 68,
-              "mean": 236.66176470588235
+              "n": 69,
+              "mean": 226.8985507246377
             },
             {
               "bin": 6,
               "t_start": 1.5,
-              "n": 67,
-              "mean": 250.82089552238807
+              "n": 69,
+              "mean": 242.92753623188406
             },
             {
               "bin": 7,
               "t_start": 1.75,
-              "n": 52,
-              "mean": 272.11538461538464
+              "n": 86,
+              "mean": 242.88372093023256
             }
           ],
           "appended_runs": 1,
-          "time_groups": 264
+          "time_groups": 311
         },
         "newton_steps": {
-          "count": 264,
-          "mean": 1.0075757575757576,
+          "count": 311,
+          "mean": 1.0482315112540193,
           "median": 1.0,
           "p90": 1.0,
           "min": 1.0,
           "max": 2.0,
-          "sum": 266.0,
+          "sum": 326.0,
           "t_first": 0.0,
-          "t_last": 1.994928,
+          "t_last": 1.999913,
           "integral": true,
           "histogram": {
-            "1": 262,
-            "2": 2
+            "1": 296,
+            "2": 15
           },
           "window_s": 0.25,
           "windows": [
             {
               "bin": 0,
               "t_start": 0.0,
-              "n": 42,
-              "mean": 1.0
+              "n": 50,
+              "mean": 1.18
             },
             {
               "bin": 1,
               "t_start": 0.25,
-              "n": 25,
+              "n": 43,
               "mean": 1.0
             },
             {
               "bin": 2,
               "t_start": 0.5,
-              "n": 30,
-              "mean": 1.0
+              "n": 54,
+              "mean": 1.0185185185185186
             },
             {
               "bin": 3,
               "t_start": 0.75,
-              "n": 48,
-              "mean": 1.0208333333333333
+              "n": 27,
+              "mean": 1.037037037037037
             },
             {
               "bin": 4,
               "t_start": 1.0,
-              "n": 26,
+              "n": 27,
               "mean": 1.0
             },
             {
               "bin": 5,
               "t_start": 1.25,
               "n": 34,
-              "mean": 1.0
+              "mean": 1.0294117647058822
             },
             {
               "bin": 6,
               "t_start": 1.5,
-              "n": 33,
-              "mean": 1.0303030303030303
+              "n": 34,
+              "mean": 1.0294117647058822
             },
             {
               "bin": 7,
               "t_start": 1.75,
-              "n": 26,
-              "mean": 1.0
+              "n": 42,
+              "mean": 1.0476190476190477
             }
           ],
           "appended_runs": 1
         }
       },
-      "advances_from_iter": 264,
-      "advances_from_newton": 264,
-      "solves_per_advance": 2.007575757575758
+      "advances_from_iter": 311,
+      "advances_from_newton": 311,
+      "solves_per_advance": 2.0482315112540195
     },
     "force-field": {
       "backend": "cuda",

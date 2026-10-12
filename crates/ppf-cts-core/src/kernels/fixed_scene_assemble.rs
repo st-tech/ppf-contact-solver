@@ -268,12 +268,16 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             input.vert_policy,
             input.vert_pin_allow,
         );
+        // A pinned rod segment against a collider triangle has nothing free
+        // to move, so the solver forms no contact for it and there is no
+        // clearance to keep, exactly as for a pair an allowance covers.
         let allowed = |ri: usize, ti: usize| {
-            !policy.is_inert()
-                && policy.tolerated(
-                    &policy.side_of(&input.rod[2 * ri..2 * ri + 2]),
-                    &policy.side_of(&input.tri[3 * ti..3 * ti + 3]),
-                )
+            (input.rod_is_collider[ri] && input.tri_is_collider[ti])
+                || (!policy.is_inert()
+                    && policy.tolerated(
+                        &policy.side_of(&input.rod[2 * ri..2 * ri + 2]),
+                        &policy.side_of(&input.tri[3 * ti..3 * ti + 3]),
+                    ))
         };
         let exempt = |ri: usize, ti: usize| match links.as_mut() {
             Some(links) => links.link_if_covered(&rods_u32[ri], &tris_u32[ti]),
@@ -371,6 +375,9 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
             tris: &combined_tris,
             is_collider: Some(&combined_is_collider),
             rod_edges: rod_for_check.as_deref(),
+            // A rod segment with both vertices pinned is prescribed, as a
+            // collider triangle is, so the two are not a pair to report.
+            rod_is_collider: rod_for_check.as_ref().map(|_| input.rod_is_collider),
             tri_body_id: Some(&combined_body_id),
             vert_object_id: extend_object_id.as_deref(),
             vert_group_id: extend_group_id.as_deref(),
@@ -1202,6 +1209,77 @@ mod tests {
         assert!(!out.has_contact_offset_violation);
         assert!(out.area.is_empty(), "no triangles ⇒ no area output");
         assert!(out.combined_message.is_empty());
+    }
+
+    /// One triangle in the xy plane and one rod segment that starts ON it and
+    /// leaves along +z: a strand rooted on a surface. Both checks that can
+    /// refuse it are armed, the crossing by the geometry and the clearance by
+    /// the rod's offset.
+    fn rooted_segment(
+        tri_collider: bool,
+        rod_collider: bool,
+    ) -> Result<AssembleOutput, AssembleError> {
+        let vert_local: [f64; 15] = [
+            0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0,
+            0.5, 1.0, 0.0,
+            0.5, 0.3, 0.0,
+            0.5, 0.3, 0.2,
+        ];
+        let vert_dmap: [u32; 5] = [0; 5];
+        let displacement: [f64; 3] = [0.0; 3];
+        let tri: [i32; 3] = [0, 1, 2];
+        let rod: [i32; 2] = [3, 4];
+        fixed_scene_assemble(AssembleInput {
+            vert_dmap: &vert_dmap,
+            vert_local: &vert_local,
+            displacement: &displacement,
+            tri: &tri,
+            rod: &rod,
+            tri_is_collider: &[tri_collider],
+            tri_body_id: &[],
+            rod_is_collider: &[rod_collider],
+            tri_offset: &[0.0],
+            rod_offset: &[0.01],
+            static_verts: None,
+            static_tris: None,
+            pinned_vertices: &[],
+            walls: &[],
+            spheres: &[],
+            has_dyn_color: false,
+            vert_object_id: None,
+            vert_group_id: None,
+            vert_policy: None,
+            vert_pin_allow: None,
+            vert_allow_existing: None,
+        })
+    }
+
+    #[test]
+    fn pinned_segment_rooted_on_a_collider_is_no_pair() {
+        // Both prescribed: the solver forms no contact for the pair, so there
+        // is neither a crossing to report nor a clearance to keep.
+        let out = rooted_segment(true, true).expect("a prescribed pair is not refused");
+        assert!(!out.has_self_intersection);
+        assert!(!out.has_contact_offset_violation);
+        assert!(out.combined_message.is_empty());
+    }
+
+    #[test]
+    fn rooted_segment_with_a_free_side_is_still_refused() {
+        // A free segment on a collider, and a pinned segment on a free
+        // triangle: either way one side can move, so the pair is a contact
+        // pair and starting inside its clearance is refused by name.
+        for (tri_collider, rod_collider) in [(true, false), (false, true), (false, false)] {
+            match rooted_segment(tri_collider, rod_collider) {
+                Err(AssembleError::RodTriOffset(_)) => {}
+                other => panic!(
+                    "tri collider {tri_collider}, rod collider {rod_collider}: \
+                     expected the rod-triangle clearance refusal, got {:?}",
+                    other.map(|out| out.combined_message)
+                ),
+            }
+        }
     }
 
     #[test]

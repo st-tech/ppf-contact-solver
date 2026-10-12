@@ -35,30 +35,41 @@ def _resolve_solver():
     return importlib.import_module(f"{name}.ops.api").solver
 
 
+def resample(xyz: np.ndarray, count: int) -> np.ndarray:
+    # ``count`` points at equal arc length along the traced curve ``xyz``.
+    steps = np.linalg.norm(np.diff(xyz, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(steps)])
+    at = np.linspace(0.0, arc[-1], count)
+    return np.stack([np.interp(at, arc, xyz[:, k]) for k in range(3)], axis=1)
+
+
 def make_strands(offset: float, width: float, res: float):
     offset = 1.3 * offset
     n_vertical_yarns = int(res * 0.28 / offset)
-    n_points_per_seg = int(res * 20)
+    n_points_per_seg = int(res * 14)
+    n_ring_points = int(res * 11)
     n_segs = int(width * n_vertical_yarns)
-    n_points = n_segs * n_points_per_seg
-    dx = 1.0 / (n_points - 1)
+    n_points = n_segs * n_points_per_seg + 1
     strands = []
 
-    # Vertical (warp) yarns with a sinusoidal weave displacement.
+    # Vertical (warp) yarns with a sinusoidal weave displacement. Each one is
+    # traced finely and then sampled at equal arc length, so that all of its
+    # segments are the same length and clearly longer than twice the contact
+    # offset set in ``build``: two neighboring points of a strand then start
+    # outside each other's contact range.
+    u = np.linspace(0.0, n_segs, 64 * n_segs + 1)
+    t = 2.0 * np.pi * u
     for k in range(n_vertical_yarns):
         y_base = (k / (n_vertical_yarns - 1) - 0.5
                   if n_vertical_yarns > 1 else 0.0)
-        j_vals = np.arange(n_points)
-        x_mod = (j_vals % n_points_per_seg) / n_points_per_seg
-        t = 2.0 * np.pi * x_mod
         x_disp = -width * (0.5 / n_segs) * np.sin(2.0 * t)
         y_disp = (0.85 / n_vertical_yarns) * np.sin(t)
         z_disp = 0.75 * offset * np.cos(2.0 * t)
-        xyz = np.zeros((n_points, 3))
-        xyz[:, 0] = width * (2.0 * dx * j_vals - 1.0) + x_disp
+        xyz = np.zeros((len(u), 3))
+        xyz[:, 0] = width * (2.0 * u / n_segs - 1.0) + x_disp
         xyz[:, 1] = y_base + y_disp
         xyz[:, 2] = z_disp
-        strands.append((xyz, False))
+        strands.append((resample(xyz, n_points), False))
 
     # Horizontal selvedge loops along the two long edges.
     for pos_index in range(2):
@@ -70,12 +81,12 @@ def make_strands(offset: float, width: float, res: float):
             x_center = dx_local * (k + 0.77) - width
             if pos_index == 1:
                 x_center += 0.5 * dx_local
-            j_vals = np.arange(n_points_per_seg)
-            t = 2.0 * np.pi * j_vals / n_points_per_seg
+            j_vals = np.arange(n_ring_points)
+            t = 2.0 * np.pi * j_vals / n_ring_points
             r = 0.78 * width / n_segs
             z_val = r * np.cos(t)
             theta = 0.25 * np.pi
-            xyz = np.zeros((n_points_per_seg, 3))
+            xyz = np.zeros((n_ring_points, 3))
             xyz[:, 0] = x_center + r * np.sin(t)
             if pos_index == 0:
                 xyz[:, 1] = y_base + z_val * np.sin(theta)

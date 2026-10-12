@@ -11,10 +11,9 @@
     add invisible colliders (infinite walls, spheres, bowls). Row
     two covers steps 6 through 9: optionally snap and merge
     overlapping meshes across group boundaries; then Transfer and
-    Build (encode geometry and parameters to the solver); then Run
-    and Fetch (solve on the GPU and download frames as PC2 animation
-    on the Blender meshes); and optionally Bake the fetched cache
-    into standard Blender shape keys and fcurves, dropping the
+    Build (send geometry and parameters to the solver); then Run
+    and Fetch (solve on the GPU and download frames as animation on the Blender meshes); and optionally Bake the fetched cache
+    into standard Blender shape keys and keyframes, dropping the
     ContactSolverCache modifier. Boxes for scene-setup steps are
     blue, solve steps are orange, and the handoff bake step is
     green. Optional steps have dashed borders. A single forward
@@ -64,7 +63,7 @@
 
   <!-- Title -->
   <text x="20" y="30" class="title">The day-to-day loop</text>
-  <text x="20" y="50" class="sub">Steps 1–6 live in Blender, 7–8 run on the solver, 9 hands off to standalone Blender animation. Dashed boxes are optional.</text>
+  <text x="20" y="50" class="sub">Steps 1–6 are done in Blender, 7–8 run on the solver, 9 hands off to standalone Blender animation. Dashed boxes are optional.</text>
 
   <!-- Phase labels (top) -->
   <text x="25"  y="82" class="band-lbl">Scene setup (in Blender)</text>
@@ -116,7 +115,7 @@
   <rect x="825" y="96" width="180" height="114" rx="8" class="box-scene-o" />
   <circle cx="845" cy="116" r="11" class="num-scene" />
   <text x="845" y="120" text-anchor="middle" class="num-tx">5</text>
-  <text x="863" y="120" class="box-ttl">Invisible colliders</text>
+  <text x="863" y="120" class="box-ttl">Colliders</text>
   <text x="998" y="120" text-anchor="end" class="opt-tag">optional</text>
   <text x="835" y="146" class="box-sub">Parametric boundaries.</text>
   <text x="835" y="162" class="box-mono">walls · spheres · bowls</text>
@@ -151,9 +150,9 @@
   <circle cx="245" cy="270" r="11" class="num-solve" />
   <text x="245" y="274" text-anchor="middle" class="num-tx">7</text>
   <text x="263" y="274" class="box-ttl">Transfer + Build</text>
-  <text x="235" y="300" class="box-sub">Encode the scene for the solver.</text>
+  <text x="235" y="300" class="box-sub">Send the scene to the solver.</text>
   <text x="235" y="316" class="box-mono">mesh + params → solver</text>
-  <text x="235" y="330" class="box-mono">build BVH, constraints</text>
+  <text x="235" y="330" class="box-mono">set up the run</text>
   <text x="235" y="350" class="opt-tag">"Update Params" for param-only edits</text>
 
   <!-- Step 8: Run + Fetch -->
@@ -162,7 +161,7 @@
   <text x="445" y="274" text-anchor="middle" class="num-tx">8</text>
   <text x="463" y="274" class="box-ttl">Run + Fetch</text>
   <text x="435" y="300" class="box-sub">Solve on GPU, pull frames back.</text>
-  <text x="435" y="316" class="box-mono">PC2 per-frame vertex data</text>
+  <text x="435" y="316" class="box-mono">per-frame mesh data</text>
   <text x="435" y="330" class="box-mono">ContactSolverCache modifier</text>
   <text x="435" y="350" class="opt-tag">survives Blender quit / reconnect</text>
 
@@ -173,9 +172,9 @@
   <text x="663" y="274" class="box-ttl">Bake</text>
   <text x="798" y="274" text-anchor="end" class="opt-tag">optional</text>
   <text x="635" y="300" class="box-sub">Freeze into plain Blender anim.</text>
-  <text x="635" y="316" class="box-mono">meshes: shape keys + fcurves</text>
-  <text x="635" y="330" class="box-mono">curves: per-CV keyframes</text>
-  <text x="635" y="350" class="opt-tag">cache modifier + .pc2 removed</text>
+  <text x="635" y="316" class="box-mono">meshes: shape keys</text>
+  <text x="635" y="330" class="box-mono">curves: keyframes</text>
+  <text x="635" y="350" class="opt-tag">cache modifier and file removed</text>
 
   <!-- Forward arrows row 2 -->
   <line x1="205" y1="307" x2="225" y2="307" class="arr" marker-end="url(#wf-arrow)" />

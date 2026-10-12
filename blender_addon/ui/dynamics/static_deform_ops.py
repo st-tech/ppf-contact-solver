@@ -149,8 +149,9 @@ def _collect_influencing_actions(obj, _seen=None) -> list:
     """Every Action that can change *obj*'s depsgraph-evaluated mesh.
 
     Walks (1) the object's own animation_data, (2) its shape-keys
-    animation_data, (3) every parent in the chain, (4) every modifier's
-    ``.object`` target recursively. Cycle-protected via ``_seen``
+    animation_data, (3) every parent in the chain, (4) the surface a Hair
+    Curves object is attached to, (5) every modifier's ``.object`` target
+    recursively. Cycle-protected via ``_seen``
     (id-keyed). Covers the common deformers: Armature on a parent or
     self, MeshDeform / SurfaceDeform / Lattice / Hook with their own
     animated cages, shape keys driven by an action. Does NOT walk
@@ -177,6 +178,11 @@ def _collect_influencing_actions(obj, _seen=None) -> list:
     parent = getattr(obj, "parent", None)
     if parent is not None:
         out.extend(_collect_influencing_actions(parent, _seen))
+    # A Hair Curves object follows the surface it is attached to, which is
+    # usually its parent as well but does not have to be.
+    surface = getattr(data, "surface", None) if data is not None else None
+    if surface is not None:
+        out.extend(_collect_influencing_actions(surface, _seen))
     for mod in getattr(obj, "modifiers", []) or []:
         target = getattr(mod, "object", None)
         if target is not None:

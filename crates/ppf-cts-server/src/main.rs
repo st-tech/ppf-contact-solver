@@ -20,7 +20,7 @@ use std::sync::Arc;
 use clap::Parser;
 use ppf_cts_server::{
     config::EngineConfig,
-    serve::{bind_listener, serve_with_listener},
+    serve::{bind_listener, serve_with_listener, stop_when_idle},
     DefaultExecutor, EffectExecutor, ServerEngine,
 };
 
@@ -67,6 +67,13 @@ struct Args {
     /// `SERVER_READY`; default is `progress.log` relative to CWD.
     #[arg(long, default_value = "progress.log")]
     progress_file: PathBuf,
+
+    /// Stop after this many seconds in which no client sent a request and
+    /// no solve or build ran. 0 keeps the server up until it is stopped.
+    /// The Blender add-on passes its own value at Start Server and pings the
+    /// server while it is connected.
+    #[arg(long, default_value_t = 3600)]
+    idle_timeout: u64,
 }
 
 /// Append a single line to the progress file. Best-effort: a write
@@ -164,6 +171,16 @@ async fn main() -> anyhow::Result<()> {
     );
     config.solver_target_dir = solver.target_dir;
     config.solver_backend = solver.backend;
+    config.idle_timeout_s = args.idle_timeout;
+    if args.idle_timeout == 0 {
+        log::info!(target: "ppf::serve", "idle stop: off");
+    } else {
+        log::info!(
+            target: "ppf::serve",
+            "idle stop: after {} s with no request and no solve or build running",
+            args.idle_timeout,
+        );
+    }
     let src_roots: Vec<std::path::PathBuf> = if let Ok(override_paths) =
         std::env::var("PPF_CTS_LOG_SRC_DIR")
     {
@@ -234,6 +251,16 @@ async fn main() -> anyhow::Result<()> {
 
     let engine = ServerEngine::new(config);
     let executor: Arc<dyn EffectExecutor> = Arc::new(DefaultExecutor::new());
+    let idle = {
+        let engine = engine.clone();
+        let timeout = args.idle_timeout;
+        async move {
+            if timeout == 0 {
+                std::future::pending::<()>().await;
+            }
+            stop_when_idle(engine, std::time::Duration::from_secs(timeout)).await;
+        }
+    };
 
     // Bind first, then publish SERVER_READY: the launcher polls this
     // file and dispatches ServerLaunched only after seeing the marker
@@ -243,9 +270,10 @@ async fn main() -> anyhow::Result<()> {
     log::info!(target: "ppf::serve", "ppf-cts-server listening on {bound}");
     write_progress(&args.progress_file, "SERVER_READY");
 
-    // Cancel on SIGINT or SIGTERM (Unix). Windows only delivers
-    // Ctrl-C through `tokio::signal::ctrl_c()`; SIGTERM doesn't apply.
-    let cancel = async {
+    // Cancel on SIGINT or SIGTERM (Unix), or when the server has been idle
+    // for `--idle-timeout`. Windows only delivers Ctrl-C through
+    // `tokio::signal::ctrl_c()`; SIGTERM doesn't apply.
+    let signals = async {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
@@ -263,6 +291,13 @@ async fn main() -> anyhow::Result<()> {
         {
             let _ = tokio::signal::ctrl_c().await;
             log::info!(target: "ppf::serve", "Ctrl-C received, shutting down");
+        }
+    };
+
+    let cancel = async {
+        tokio::select! {
+            _ = signals => {}
+            _ = idle => {}
         }
     };
 

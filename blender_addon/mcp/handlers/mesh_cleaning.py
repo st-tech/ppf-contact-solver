@@ -1,6 +1,6 @@
 """Mesh cleaning and mesh utility handlers (scan, repair, triangulate).
 
-These wrap the Utility Tools panel's Mesh Cleaning operators. Two shapes are
+These wrap the Mesh Cleaning operators of the Mesh Repair panel. Two shapes are
 deliberate here.
 
 Every tool driving a selection-based operator takes explicit ``object_names``
@@ -26,6 +26,7 @@ to be re-taken, and can shift which vertices a pin group holds;
 """
 
 import contextlib
+from typing import Optional
 
 import bpy  # pyright: ignore
 
@@ -559,8 +560,8 @@ def symmetric_triangulate(object_names: list[str]):
     shows up as a lopsided drape under bending. Poking inserts a center vertex
     and fans the face into triangles instead, so it ADDS one vertex per face
     and therefore invalidates a captured deformation and the display cache,
-    exactly as the count-changing repairs do. It is a Utility Tools operation
-    rather than a repair, so it takes no acknowledgement and deletes nothing
+    exactly as the count-changing repairs do. It sits in the Mesh Repair panel
+    but is not a repair, so it takes no acknowledgement and deletes nothing
     it invalidates: the vertex deltas come back in the result, and Transfer
     and Capture Deformation are what re-take the stale caches.
 
@@ -603,6 +604,230 @@ def _object_mode():
         if saved_mode != "OBJECT":
             with contextlib.suppress(RuntimeError, ReferenceError):
                 bpy.ops.object.mode_set(mode=saved_mode)
+
+
+@mcp_handler
+def resolve_intersections(
+    object_names: Optional[list[str]] = None,
+    max_iterations: int = 50,
+    clearance: float = 1.0,
+):
+    """Push apart SOLID and PDRD objects that start out overlapping.
+
+    Transfer refuses a scene whose surfaces start through each other. This
+    opens the overlaps without the solver: each object moves as a rigid body,
+    by the smallest motions of all of them that separate every overlapping
+    pair. Only object transforms are written, so meshes, pins and caches stay
+    valid. Run Transfer again afterwards.
+
+    Only the included mesh objects of active SOLID and PDRD groups take part,
+    since those are the types whose surface encloses a volume. Three kinds of
+    object are held in place and listed under ``held`` with the reason; they
+    still push the others, which then move around them: ``pinned`` (one of
+    its group's pins holds it), ``driven`` (its transform is animated, driven,
+    constrained, or parented to something that is) and ``linked`` (an object
+    linked from another file). With ``object_names`` given, every other object is
+    held as ``unselected``. An object whose surface is open, non-manifold or
+    inconsistently wound has no inside to push out of and is listed under
+    ``skipped``: ``scan_meshes`` reports those defects and
+    ``recalculate_normals_outside`` repairs the winding.
+
+    Two overlaps are beyond it. An object lying wholly inside another crosses
+    no surface and is not found. An object that passes clean through another
+    has no single way out, and is only pushed correctly when the overlap is
+    shallow. ``remaining_pairs`` names every pair still overlapping at the
+    end, which includes two held objects that overlap each other.
+
+    Args:
+        object_names: The objects allowed to move; omit to let every free one move
+        max_iterations: Passes to spend, each of which finds the overlaps left and moves the objects once
+        clearance: How far apart to leave surfaces that overlap, beyond their contact offsets, in multiples of each object's contact gap; surfaces closer than half of it count as overlapping
+    """
+    from ...mesh_ops.intersection_ops import clear_last_report, get_last_report
+
+    if max_iterations < 1:
+        raise ValidationError("max_iterations must be at least 1")
+    if clearance < 0.1:
+        raise ValidationError("clearance must be at least 0.1 contact gaps")
+
+    clear_last_report()
+    arguments = {"max_iterations": max_iterations, "clearance": clearance}
+    if object_names is None:
+        with _object_mode():
+            status = bpy.ops.object.resolve_intersections(
+                "EXEC_DEFAULT", selected_only=False, **arguments
+            )
+    else:
+        with _selected_exactly(_resolve_meshes(object_names)):
+            status = bpy.ops.object.resolve_intersections(
+                "EXEC_DEFAULT", selected_only=True, **arguments
+            )
+    report = get_last_report()
+    if report is None:
+        raise MCPError(
+            "Nothing to resolve: this needs two or more closed objects in "
+            "active SOLID or PDRD groups, at least one of them free to move."
+        )
+
+    moved = [
+        {"object_name": name, "distance": distance}
+        for name, distance in sorted(report["moved"].items())
+    ]
+    left = report["remaining_pairs"]
+    if not report["initial_pairs"]:
+        message = "No overlapping objects found."
+    elif left:
+        message = (
+            f"Moved {len(moved)} object(s); {len(left)} pair(s) still overlap "
+            f"after {report['iterations']} pass(es)."
+        )
+    else:
+        message = (
+            f"Moved {len(moved)} object(s) in {report['iterations']} pass(es); "
+            "no overlap is left. Run Transfer again before the next simulation."
+        )
+    return {
+        "message": message,
+        "object_count": report["objects"],
+        "initial_pair_count": len(report["initial_pairs"]),
+        "remaining_pairs": [list(pair) for pair in left],
+        "iterations": report["iterations"],
+        "moved": moved,
+        "held": dict(sorted(report["held"].items())),
+        "skipped": sorted(report["skipped"]),
+        "operator_status": sorted(status),
+    }
+
+
+# The name implies no hint, and this one rewrites the artist's cloth geometry
+# (one undo takes it back, which a client cannot know), so it says so.
+@mcp_handler(annotations={"destructiveHint": True})
+def resolve_all_intersections(
+    object_names: Optional[list[str]] = None,
+    max_iterations: int = 50,
+    clearance: float = 1.0,
+):
+    """Open every overlap in the scene, SHELL cloth included.
+
+    Transfer refuses a scene whose surfaces start through each other or closer
+    than their contact offsets. ``resolve_intersections`` handles the SOLID and
+    PDRD objects alone, by moving them as rigid bodies. This does that first,
+    then deforms the SHELL meshes until no triangle of one is within the
+    contact offsets of a triangle of another or of itself, with the SOLID,
+    PDRD and STATIC objects held where they are. Run Transfer again afterwards.
+
+    It EDITS THE VERTEX COORDINATES of the SHELL meshes that moved (and the
+    transforms of the rigid objects, as ``resolve_intersections`` does); one
+    undo takes all of it back. Nothing else of a mesh changes, so vertex
+    indices, vertex groups, pins and UVs stay valid. The call runs in line and
+    holds Blender until it finishes: seconds for a few thousand vertices,
+    minutes for ten thousand. The Resolve All Intersections button runs the
+    same work in the background and can be canceled.
+
+    Held in place, and listed with the reason; each still pushes the cloth:
+    every vertex a pin of its group holds (``pinned_vertices`` counts them per
+    object); a whole SHELL object that is ``linked`` from another file,
+    ``shared mesh`` (its mesh datablock has another user), has ``shape keys``,
+    is ``deformed`` at the starting frame by a modifier stack (the pose Transfer
+    ships is then not the stored mesh), or has a singular ``transform``; and,
+    with ``object_names`` given, every other object (``unselected``). A SHELL
+    object with no triangles is listed under ``skipped``.
+
+    A single tangle that no attempt can clear is left as it was, and the
+    reason is in ``shell.detail``. A scene of separate tangles, or a very large
+    one, keeps what it did clear: ``shell.resolved`` is then false and
+    ``shell.remaining_pair_count`` says how many pairs are left. Two pairs of
+    held triangles that overlap (a collider through a collider) cannot be moved
+    and are counted in ``shell.held_pair_count``. Existing intersection
+    allowances are ignored: every overlap is opened.
+
+    Args:
+        object_names: The objects allowed to move; omit to let every free one move
+        max_iterations: Passes the rigid step may spend, each of which finds the overlaps left and moves the objects once
+        clearance: How far apart to leave surfaces that overlap, beyond their contact offsets, in multiples of each object's contact gap; surfaces closer than half of it count as overlapping
+    """
+    from ...mesh_ops.intersection_ops import clear_last_report as clear_rigid
+    from ...mesh_ops.shell_intersection_ops import clear_last_report, get_last_report
+
+    if max_iterations < 1:
+        raise ValidationError("max_iterations must be at least 1")
+    if clearance < 0.1:
+        raise ValidationError("clearance must be at least 0.1 contact gaps")
+
+    clear_rigid()
+    clear_last_report()
+    arguments = {"max_iterations": max_iterations, "clearance": clearance}
+    if object_names is None:
+        with _object_mode():
+            status = bpy.ops.object.resolve_all_intersections(
+                "EXEC_DEFAULT", selected_only=False, **arguments
+            )
+    else:
+        with _selected_exactly(_resolve_meshes(object_names)):
+            status = bpy.ops.object.resolve_all_intersections(
+                "EXEC_DEFAULT", selected_only=True, **arguments
+            )
+    report = get_last_report()
+    if report is None:
+        raise MCPError(
+            "Nothing to resolve: this needs a SHELL object that may deform, "
+            "or two or more closed objects in active SOLID or PDRD groups, "
+            "at least one of them free to move."
+        )
+
+    rigid, shell = report["rigid"], report["shell"]
+    result = {"operator_status": sorted(status)}
+    parts = []
+    if rigid is not None:
+        left = rigid["remaining_pairs"]
+        result["rigid"] = {
+            "object_count": rigid["objects"],
+            "initial_pair_count": len(rigid["initial_pairs"]),
+            "remaining_pairs": [list(pair) for pair in left],
+            "iterations": rigid["iterations"],
+            "moved": [
+                {"object_name": name, "distance": distance}
+                for name, distance in sorted(rigid["moved"].items())
+            ],
+            "held": dict(sorted(rigid["held"].items())),
+            "skipped": sorted(rigid["skipped"]),
+        }
+        if rigid["initial_pairs"]:
+            parts.append(
+                f"Rigid: moved {len(rigid['moved'])} object(s); "
+                f"{len(left)} pair(s) still overlap."
+            )
+    if shell is not None:
+        result["shell"] = {
+            "object_count": shell["objects"],
+            "collider_count": shell["colliders"],
+            "initial_pair_count": shell["initial"],
+            "remaining_pair_count": shell["remaining"],
+            "resolved": bool(shell["converged"] and not shell["remaining"]),
+            "moved": [
+                {"object_name": name, "distance": distance}
+                for name, distance in sorted(shell["moved"].items())
+            ],
+            "mean_move": shell["mean_move"],
+            "held": dict(sorted(shell["held"].items())),
+            "pinned_vertices": dict(sorted(shell["pinned"].items())),
+            "skipped": sorted(shell["skipped"]),
+            "held_pair_count": shell["held_pairs"],
+            "seconds": shell["seconds"],
+            "detail": shell["message"],
+        }
+        if not shell["initial"]:
+            parts.append("No overlapping surfaces found among the shells.")
+        elif result["shell"]["resolved"]:
+            parts.append(
+                f"Shells: opened {shell['initial']} overlapping pair(s), "
+                f"moved {len(shell['moved'])} object(s). "
+                "Run Transfer again before the next simulation."
+            )
+        else:
+            parts.append(f"Shells not resolved: {shell['message']}")
+    result["message"] = " ".join(parts) or "No overlapping objects found."
+    return result
 
 
 def _degenerate_offenders() -> list:

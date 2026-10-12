@@ -146,7 +146,7 @@ OPTIONS
     --open-closed-panels
                         Re-register DEFAULT_CLOSED panels without that flag
                         so they draw a body.  Needed for Snap and Merge,
-                        Utility Tools, Visualization and Object Statistics,
+                        Mesh Repair, Visualization and Object Statistics,
                         which are otherwise captured as empty.  Distinct
                         from --expand, which opens sections WITHIN a panel
                         that is already open.
@@ -205,7 +205,7 @@ AVAILABLE PANELS
     SSH_PT_ObjectGroupsManager       "Scene Configuration"
     DYNAMICS_PT_Groups               "Dynamics Groups"
     SNAPMERGE_PT_SnapAndMerge        "Snap and Merge"          (closed)
-    UTILITY_PT_UtilityTools          "Utility Tools"           (closed)
+    UTILITY_PT_UtilityTools          "Mesh Repair"             (closed)
     VISUALIZATION_PT_Visualization   "Visualization"           (closed)
     STATISTICS_PT_Statistics         "Object Statistics"       (closed)
 
