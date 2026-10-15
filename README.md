@@ -100,6 +100,7 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
   - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🤝 Community Response](#-community-response)
   - [📺 YouTube](#-youtube)
+  - [🎬 Shorts and Reels](#-shorts-and-reels)
   - [📰 Articles](#-articles)
   - [🧩 Blender Add-ons](#-blender-add-ons)
   - [📣 Sharing Your Work](#-sharing-your-work)
@@ -907,11 +908,24 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*Testing ZoZo's contact solver in blender*](https://www.youtube.com/watch?v=DkIWXsxFJLs) by [Colin T](https://www.youtube.com/@ManiacalV).
 - [*Zozo's Contact Solver | Blender Test*](https://www.youtube.com/watch?v=EcTBUaeOu2U) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
 - [*Zozo's Multi-Cloth Simulation | Blender Test*](https://www.youtube.com/watch?v=VVphAZokcjs) by [YEETboys_666](https://www.youtube.com/@YEETboys_555).
+
+### 🎬 Shorts and Reels
+
 - [*Testing the new ZOZO Physics Contact Solver Addon for Blender*](https://www.youtube.com/shorts/50dQrbSYoWk) by [Max Grob](https://www.youtube.com/@maxgrob1412).
 - [*Will the Steel Ball Pass Through?*](https://www.youtube.com/shorts/-s57o9FHM9c) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 - [*Will the Minecraft Slime Block Drop?*](https://www.youtube.com/shorts/H2ncgaLnU6s) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 - [*Will the Slime Block Make It Down?*](https://www.youtube.com/shorts/yPJKib9Smzc) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 - [*Will the Squishy Balls Fit Through?*](https://www.youtube.com/shorts/qvGMO8czEAA) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
+- https://www.youtube.com/shorts/l84D9OJNJ8U by [Arslan Ashraf](https://www.youtube.com/@ArslanCreates3D).
+- https://www.instagram.com/reel/DdpRXR5SfSR/ by [avril.studios](https://www.instagram.com/avril.studios/).
+- https://www.instagram.com/reel/DeRXEnVNqL2/ by [ohonkanen](https://www.instagram.com/ohonkanen/).
+- https://www.instagram.com/reel/Debyir-oTZH/ by [fatdog3d](https://www.instagram.com/fatdog3d/).
+- https://www.instagram.com/reel/DeWQeBZCf1y/ by [blenderhub7](https://www.instagram.com/blenderhub7/).
+- https://www.instagram.com/reel/DY1RyzftwCC/ by [imhere_imj](https://www.instagram.com/imhere_imj/).
+- https://www.instagram.com/reel/DYzoS9mRbHc/ by [alanmsyarif](https://www.instagram.com/alanmsyarif/).
+- https://www.instagram.com/reel/DY9kzq6g7qk/ by [motionfig.studio](https://www.instagram.com/motionfig.studio/).
+- https://www.instagram.com/reel/DZLNAgyP0GV/ by [4ntho3d](https://www.instagram.com/4ntho3d/).
+- https://www.instagram.com/reel/DboXtShx8f1/ by [femto_gd](https://www.instagram.com/femto_gd/).
 
 ### 📰 Articles
 
