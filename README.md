@@ -926,6 +926,8 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - https://www.instagram.com/reel/DY9kzq6g7qk/ by [motionfig.studio](https://www.instagram.com/motionfig.studio/).
 - https://www.instagram.com/reel/DZLNAgyP0GV/ by [4ntho3d](https://www.instagram.com/4ntho3d/).
 - https://www.instagram.com/reel/DboXtShx8f1/ by [femto_gd](https://www.instagram.com/femto_gd/).
+- https://www.instagram.com/reel/DbnwIr1KHBG/ by [mathisrigolle](https://www.instagram.com/mathisrigolle/).
+- https://www.instagram.com/reel/DeIUtg1FcdB/ by [billy.coder](https://www.instagram.com/billy.coder/).
 
 ### 📰 Articles
 
