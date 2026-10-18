@@ -78,6 +78,7 @@ from .intersection_ops import (
     HELD_UNSELECTED,
     abort_requested,
     clear_abort,
+    clearance_note,
     get_busy,
     push_undo_before,
     request_abort,
@@ -587,15 +588,18 @@ class OBJECT_OT_ResolveAllIntersections(Operator):
         moved, left = len(rigid["moved"]), len(rigid["remaining_pairs"])
         if not rigid["initial_pairs"]:
             return iface_("No overlapping objects found")
+        note = clearance_note(rigid)
         if left:
-            return iface_(
+            line = iface_(
                 "Moved {moved} object(s); {left} pair(s) still overlap "
                 "after {passes} pass(es)"
             ).format(moved=moved, left=left, passes=rigid["iterations"])
-        return iface_(
-            "Moved {moved} object(s) in {passes} pass(es); no overlap is left. "
-            "Run Transfer again"
-        ).format(moved=moved, passes=rigid["iterations"])
+        else:
+            line = iface_(
+                "Moved {moved} object(s) in {passes} pass(es); no overlap is "
+                "left. Run Transfer again"
+            ).format(moved=moved, passes=rigid["iterations"])
+        return line + (f". {note}" if note else "")
 
     # -- Finish --------------------------------------------------------------
 
@@ -966,6 +970,9 @@ def draw_shell_intersection_correction(layout, context):
             ),
             icon="ERROR" if rigid["remaining_pairs"] else "CHECKMARK",
         )
+        note = clearance_note(rigid)
+        if note:
+            result.label(text=note, icon="INFO")
     if shell is None:
         return
     if shell["canceled"]:

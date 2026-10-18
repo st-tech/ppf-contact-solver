@@ -276,6 +276,7 @@ from . import bl_contact_gap_unsolvable
 from . import bl_build_refusal_survives_polls
 from . import bl_resolve_intersections
 from . import bl_resolve_all_intersections
+from . import bl_resolve_intersections_threaded_chain
 from . import bl_contact_gap_limit
 from . import bl_lock_translation
 from . import bl_lock_rotation
@@ -732,6 +733,10 @@ REGISTRY = {
     # triangle is inside the contact offsets of another or of itself, writing
     # the cloth's vertex coordinates.
     "bl_resolve_all_intersections": bl_resolve_all_intersections,
+    # A chain threaded tight through itself stays threaded: the rigid step
+    # opens its overlaps without carrying a link through its neighbor's wire,
+    # and lowers a clearance the holes cannot fit.
+    "bl_resolve_intersections_threaded_chain": bl_resolve_intersections_threaded_chain,
     # The local gap limit caps a contact gap at a share of the room between
     # mesh neighbors, element by element, for the group types whose objects
     # can touch themselves.

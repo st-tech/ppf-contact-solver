@@ -638,9 +638,16 @@ def resolve_intersections(
     shallow. ``remaining_pairs`` names every pair still overlapping at the
     end, which includes two held objects that overlap each other.
 
+    The clearance is fitted to the objects. Links threaded through each
+    other may have less room than the clearance asks on every side; then the
+    run is repeated from the start at half the clearance, down to what
+    single precision resolves where the objects are, and
+    ``clearance_scale`` is the fraction of the setting the result used (1.0
+    when it fit as given).
+
     Args:
         object_names: The objects allowed to move; omit to let every free one move
-        max_iterations: Passes to spend, each of which finds the overlaps left and moves the objects once
+        max_iterations: Passes each run may spend, each of which finds the overlaps left and moves the objects once
         clearance: How far apart to leave surfaces that overlap, beyond their contact offsets, in multiples of each object's contact gap; surfaces closer than half of it count as overlapping
     """
     from ...mesh_ops.intersection_ops import clear_last_report, get_last_report
@@ -692,6 +699,7 @@ def resolve_intersections(
         "initial_pair_count": len(report["initial_pairs"]),
         "remaining_pairs": [list(pair) for pair in left],
         "iterations": report["iterations"],
+        "clearance_scale": report["clearance_scale"],
         "moved": moved,
         "held": dict(sorted(report["held"].items())),
         "skipped": sorted(report["skipped"]),
@@ -741,9 +749,13 @@ def resolve_all_intersections(
     and are counted in ``shell.held_pair_count``. Existing intersection
     allowances are ignored: every overlap is opened.
 
+    The rigid step fits its clearance to the objects as
+    ``resolve_intersections`` does, and ``rigid.clearance_scale`` is the
+    fraction of the setting it used.
+
     Args:
         object_names: The objects allowed to move; omit to let every free one move
-        max_iterations: Passes the rigid step may spend, each of which finds the overlaps left and moves the objects once
+        max_iterations: Passes each run of the rigid step may spend, each of which finds the overlaps left and moves the objects once
         clearance: How far apart to leave surfaces that overlap, beyond their contact offsets, in multiples of each object's contact gap; surfaces closer than half of it count as overlapping
     """
     from ...mesh_ops.intersection_ops import clear_last_report as clear_rigid
@@ -785,6 +797,7 @@ def resolve_all_intersections(
             "initial_pair_count": len(rigid["initial_pairs"]),
             "remaining_pairs": [list(pair) for pair in left],
             "iterations": rigid["iterations"],
+            "clearance_scale": rigid["clearance_scale"],
             "moved": [
                 {"object_name": name, "distance": distance}
                 for name, distance in sorted(rigid["moved"].items())

@@ -1613,6 +1613,7 @@
   "No overlapping objects found": "未发现重叠的物体",
   "Moved {moved} object(s); {left} pair(s) still overlap after {passes} pass(es)": "已移动 {moved} 个物体；经过 {passes} 遍后仍有 {left} 对重叠",
   "Moved {moved} object(s) in {passes} pass(es); no overlap is left. Run Transfer again": "在 {passes} 遍内移动了 {moved} 个物体；已无重叠。请重新执行传输",
+  "Clearance lowered to {percent}% of the setting so the objects fit": "为使物体能够容纳，已将间隙降低到设定值的 {percent}%",
   "Intersection Correction": "相交修正",
   "Push apart SOLID and PDRD objects that overlap.": "将重叠的 SOLID 和 PDRD 物体推开。",
   "Open every overlap in the scene so Transfer accepts it. SOLID and PDRD objects are pushed apart first, as rigid bodies, and then SHELL meshes are deformed until no surface is inside another's contact offsets or its own. The vertex coordinates of the cloth are edited; Ctrl+Z takes all of it back. Pinned vertices, and objects whose mesh cannot be edited, stay where they are and the rest moves around them": "消除场景中的所有重叠，使传输能够接受。先将 SOLID 和 PDRD 物体作为刚体推开，然后变形 SHELL 网格，直到没有任何表面处于其他表面或自身的接触偏移之内。布料的顶点坐标会被修改，按 Ctrl+Z 可全部撤销。被固定的顶点以及网格无法编辑的物体保持原位，其余部分绕开它们移动",

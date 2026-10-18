@@ -1611,6 +1611,7 @@
   "No overlapping objects found": "No overlapping objects found",
   "Moved {moved} object(s); {left} pair(s) still overlap after {passes} pass(es)": "Moved {moved} object(s); {left} pair(s) still overlap after {passes} pass(es)",
   "Moved {moved} object(s) in {passes} pass(es); no overlap is left. Run Transfer again": "Moved {moved} object(s) in {passes} pass(es); no overlap is left. Run Transfer again",
+  "Clearance lowered to {percent}% of the setting so the objects fit": "Clearance lowered to {percent}% of the setting so the objects fit",
   "Intersection Correction": "Intersection Correction",
   "Push apart SOLID and PDRD objects that overlap.": "Push apart SOLID and PDRD objects that overlap.",
   "Open every overlap in the scene so Transfer accepts it. SOLID and PDRD objects are pushed apart first, as rigid bodies, and then SHELL meshes are deformed until no surface is inside another's contact offsets or its own. The vertex coordinates of the cloth are edited; Ctrl+Z takes all of it back. Pinned vertices, and objects whose mesh cannot be edited, stay where they are and the rest moves around them": "Open every overlap in the scene so Transfer accepts it. SOLID and PDRD objects are pushed apart first, as rigid bodies, and then SHELL meshes are deformed until no surface is inside another's contact offsets or its own. The vertex coordinates of the cloth are edited; Ctrl+Z takes all of it back. Pinned vertices, and objects whose mesh cannot be edited, stay where they are and the rest moves around them",

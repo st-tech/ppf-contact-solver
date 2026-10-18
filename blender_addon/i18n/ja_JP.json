@@ -1613,6 +1613,7 @@
   "No overlapping objects found": "重なっているオブジェクトは見つかりませんでした",
   "Moved {moved} object(s); {left} pair(s) still overlap after {passes} pass(es)": "{moved} 個のオブジェクトを移動しました。{passes} 回のパス後も {left} 組が重なっています",
   "Moved {moved} object(s) in {passes} pass(es); no overlap is left. Run Transfer again": "{passes} 回のパスで {moved} 個のオブジェクトを移動しました。重なりは残っていません。もう一度転送を実行してください",
+  "Clearance lowered to {percent}% of the setting so the objects fit": "オブジェクトが収まるようにクリアランスを設定値の {percent}% に下げました",
   "Intersection Correction": "交差の修正",
   "Push apart SOLID and PDRD objects that overlap.": "重なっている SOLID と PDRD のオブジェクトを押し離します。",
   "Open every overlap in the scene so Transfer accepts it. SOLID and PDRD objects are pushed apart first, as rigid bodies, and then SHELL meshes are deformed until no surface is inside another's contact offsets or its own. The vertex coordinates of the cloth are edited; Ctrl+Z takes all of it back. Pinned vertices, and objects whose mesh cannot be edited, stay where they are and the rest moves around them": "シーン内のすべての重なりを解消し、転送が受け付けるようにします。まず SOLID と PDRD のオブジェクトを剛体として押し離し、続いて、どのサーフェスも他のサーフェスまたは自身のコンタクトオフセット内に入らなくなるまで SHELL メッシュを変形します。クロスの頂点座標が編集されますが、Ctrl+Z ですべて元に戻せます。ピン留めされた頂点と、メッシュを編集できないオブジェクトはその場に留まり、残りがそれらを避けて移動します",

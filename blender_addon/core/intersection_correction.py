@@ -30,23 +30,49 @@
 #      whether it is going in or coming out there. Sorted along the edge, the
 #      crossings bound the stretches of that edge inside the other object.
 #   3. One sample per stretch: the vertex when the stretch reaches an end of
-#      the edge, the midpoint otherwise. The crossings also trace the curve
-#      the two surfaces meet along, and that curve gives the pair ONE way
-#      out: the direction that shrinks the overlapping volume fastest. Each
-#      sample is pushed that way as far as a ray takes to leave the other
-#      object (`BVHTree.ray_cast`), plus half the clearance.
+#      the edge, the midpoint otherwise. The crossings also trace the curves
+#      the two surfaces meet along. The curves that bound one connected
+#      PIECE of the overlap give that piece ONE way out: the direction that
+#      shrinks its volume fastest. Each sample is pushed the way of its own
+#      piece as far as a ray takes to leave the other object
+#      (`BVHTree.ray_cast`), plus half the clearance.
 #   4. The smallest rigid motions, of all objects at once, that open every
 #      contact by what it asks: a least-squares solve in which a rotation is
 #      costed as the displacement it would give the object's own vertices. A
 #      chain whose every link overlaps the next closes up in one solve.
+#   5. The motions are scaled down to what one pass may do: a bounded
+#      rotation (`_MAX_TURN`), a bounded closing of any two objects
+#      (`_MAX_STEP`), and no two of the objects' own surfaces taken from apart
+#      to crossing (`_admitted`).
 # Passes repeat until no two triangles cross, a pass moves nothing, or the
 # budget is spent.
 #
+# ONE WAY OUT PER PIECE, NOT PER PAIR. A chain link held tight in the next
+# one's hole meets it on both sides of the hole: two pieces of overlap, whose
+# ways out point opposite ways. Summed into one, they cancel to a direction
+# that is no way out of either, and the samples asked to travel along it are
+# pushed through the other link's wire, which unlinks the chain. Apart, they
+# center the link in the hole. Measured on the chain of public issue #157
+# (eleven 6 mm links): summed, one or two of the ten pairs came unlinked at a
+# tenth to a third of its contact gap as clearance; apart, none.
+#
+# THE CLEARANCE IS FITTED. A pair asks for its clearance on every side, and
+# a link threaded through a hole has a room of its own the clearance may not
+# fit in: that chain's 1 mm contact gap, with a 1.1 mm wire, is one. Then no
+# motion opens every contact, and a run that keeps trying moves the links
+# around the chain: there, nine of the ten pairs came unlinked at the whole
+# gap with a way out per piece. So a run that leaves a pair with a movable
+# object is repeated from the start at half the clearance, down to what the
+# tree resolves, and the report says which fraction of the setting was used
+# (`resolve`). Only a pair still left then is reported as left.
+#
 # WHAT IT DOES NOT SEE. An object wholly inside another crosses no surface
 # and is not found. An object that passes clean through another has two
-# crossing curves that cancel, so it has no single way out; its samples then
-# go to the nearest surface point each, which is right for a shallow overlap
-# only.
+# crossing curves bounding one piece, whose ways out cancel; the piece then
+# goes the way most of its samples' nearest surface points lie
+# (`_consensus`), and when even that cancels, as for a rod through the very
+# center of a block, each sample goes to its own nearest surface point,
+# which is right for a shallow overlap only.
 #
 # Everything is in world space and in Blender units. Only `mathutils` and
 # numpy are used: Blender's own Python carries no numba or scipy, and the
@@ -85,6 +111,40 @@ _CLEARANCE_FLOOR = 4 * 4
 # where it reads as touching things the object is nowhere near.
 _MITER_LIMIT = 4.0
 
+# The largest rotation, in radians, one pass may give an object. The contacts
+# are solved as LINEAR in the rotation vector `w`, which moves a point at a
+# lever arm `r` by `w x r`, while the rotation applied moves it by
+# `sin|w|` along that and `1 - cos|w|` toward the axis. At 0.1 the second is
+# 5% of the first. Contacts that ask for more than an object can give (two
+# pieces on opposite sides of a hole asking for more room than it has) are
+# answered by a least-squares rotation of any size: on the chain of public
+# issue #157, at half its contact gap as clearance, that turned links by up
+# to 3.8 mm of travel and one through its neighbor. A larger motion takes
+# more passes, each on the contacts where the last one left them.
+_MAX_TURN = 0.1
+
+# The damping of the least-squares solve of a pass (`_least_motion`), as a
+# fraction of the size of its matrix. The way of a contact is the difference
+# of two positions held in single precision, over their distance, so a
+# direction the contacts reach only by a component of that size is
+# round-off, not a constraint: contacts all along x that ask for different
+# distances (the samples of a rod leaving a block sideways) reach y and z by
+# 1e-6 of their size, and an undamped solve divided the disagreement by that
+# and moved the rod by 50000. Damped at the square root of the single
+# precision epsilon, such a direction is left alone, and one the contacts
+# reach by a hundredth of their size is solved to within a thousandth.
+_DAMPING = float(np.sqrt(np.finfo(np.float32).eps))
+
+# How far two objects whose boxes meet may move toward each other in one
+# pass, as a fraction of the thinner one's thickness (`Body.thickness`). A
+# pass is a jump, with nothing between where it starts and where it lands,
+# so a step longer than a wire carries one link through the other's wire and
+# nothing sees it: there is no overlap left to find on the far side. On a
+# chain built like the one of public issue #157, an unbounded step walked
+# the links out of each other's holes over a few passes, no pass leaving a
+# crossing behind.
+_MAX_STEP = 0.5
+
 
 @dataclass
 class Body:
@@ -119,7 +179,13 @@ class Body:
     reach: float = 0.0
     margin: float = 0.0
     outward: float = 1.0
+    # The thinnest the object is: the shortest way through it from a vertex,
+    # against its normal, to the surface on the other side. Infinite when no
+    # such way is found.
+    thickness: float = float("inf")
     swell: np.ndarray = field(default=None, repr=False)
+    # Every mesh edge once, as (lower vertex, higher vertex).
+    edges: np.ndarray = field(default=None, repr=False)
     rotation: np.ndarray = field(default=None, repr=False)
     translation: np.ndarray = field(default=None, repr=False)
     # World positions of the SWOLLEN surface at the current pose.
@@ -127,6 +193,10 @@ class Body:
     tree: object = field(default=None, repr=False)
     lower: np.ndarray = field(default=None, repr=False)
     upper: np.ndarray = field(default=None, repr=False)
+    # The same for the object's own surface, not swollen (`_admitted`).
+    true_tree: object = field(default=None, repr=False)
+    true_lower: np.ndarray = field(default=None, repr=False)
+    true_upper: np.ndarray = field(default=None, repr=False)
     stale: bool = True
     displaced: bool = False
 
@@ -222,10 +292,40 @@ def _prepare(body: Body) -> None:
     )
     distance = body.offset + 0.25 * body.margin
     body.swell = (distance * body.outward) * travel[:, None] * normal
+    ends = np.concatenate(
+        [body.tri[:, [0, 1]], body.tri[:, [1, 2]], body.tri[:, [2, 0]]]
+    )
+    body.edges = np.unique(np.sort(ends, axis=1), axis=0)
+    body.thickness = _thickness(body, normal)
     body.rotation = np.eye(3)
     body.translation = np.zeros(3)
     body.stale = True
     body.displaced = False
+
+
+def _thickness(body: Body, normal: np.ndarray) -> float:
+    """The shortest way through ``body``, along any vertex's inward normal.
+
+    The ray starts a little inside, so it does not stop on the triangles
+    around its own vertex: as far in as the tree resolves positions there.
+    """
+    from mathutils.bvhtree import BVHTree  # pyright: ignore
+
+    tree = BVHTree.FromPolygons(
+        body.vert.tolist(), body.tri.tolist(), all_triangles=True
+    )
+    start = _CLEARANCE_FLOOR * _TREE_EPS * max(float(np.abs(body.vert).max()), 1.0)
+    inward = -body.outward * normal
+    thinnest = float("inf")
+    for v, d in zip(body.vert, inward, strict=True):
+        if not np.any(d):
+            continue
+        location, _n, _index, distance = tree.ray_cast(
+            (v + start * d).tolist(), d.tolist()
+        )
+        if location is not None:
+            thinnest = min(thinnest, distance + start)
+    return thinnest
 
 
 def _refresh(body: Body) -> None:
@@ -242,17 +342,36 @@ def _refresh(body: Body) -> None:
     body.tree = BVHTree.FromPolygons(
         body.current.tolist(), body.tri.tolist(), all_triangles=True
     )
+    body.true_tree, body.true_lower, body.true_upper = _true_surface(
+        body, body.rotation, body.translation
+    )
     body.stale = False
 
 
-def _box_pairs(bodies: list[Body]) -> list[tuple[int, int]]:
-    """Index pairs whose boxes overlap.
+def _true_surface(body: Body, rotation: np.ndarray, translation: np.ndarray):
+    """The tree and box of ``body``'s own surface, not swollen, at a pose."""
+    from mathutils.bvhtree import BVHTree  # pyright: ignore
 
-    A sweep along x: sorted by lower bound, an object can only overlap the
-    ones that start before it ends.
+    vert = (body.vert - body.centroid) @ rotation.T + body.centroid + translation
+    tree = BVHTree.FromPolygons(
+        vert.tolist(), body.tri.tolist(), all_triangles=True
+    )
+    return tree, vert.min(axis=0), vert.max(axis=0)
+
+
+def _box_pairs(bodies: list[Body]) -> list[tuple[int, int]]:
+    """Index pairs whose boxes overlap."""
+    return _boxes_meeting(
+        np.array([b.lower for b in bodies]), np.array([b.upper for b in bodies])
+    )
+
+
+def _boxes_meeting(lower: np.ndarray, upper: np.ndarray) -> list[tuple[int, int]]:
+    """Index pairs of the boxes ``lower[k]``..``upper[k]`` that overlap.
+
+    A sweep along x: sorted by lower bound, a box can only overlap the ones
+    that start before it ends.
     """
-    lower = np.array([b.lower for b in bodies])
-    upper = np.array([b.upper for b in bodies])
     order = np.argsort(lower[:, 0], kind="stable")
     starts = lower[order, 0]
     pairs = []
@@ -357,20 +476,73 @@ def _inside_stretches(t: np.ndarray, entering: np.ndarray) -> list[tuple[float, 
     return stretches
 
 
+def _labels(count: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Component label of each of ``count`` nodes joined by the links
+    ``a[k]``-``b[k]``: the smallest node of its component."""
+    label = np.arange(count)
+    if not len(a):
+        return label
+    while True:
+        low = np.minimum(label[a], label[b])
+        new = label.copy()
+        np.minimum.at(new, a, low)
+        np.minimum.at(new, b, low)
+        new = new[new]
+        if np.array_equal(new, label):
+            return label
+        label = new
+
+
+def _inside_parts(body: Body, crossed: np.ndarray, seeds: list[int]) -> np.ndarray:
+    """Which piece of ``body``'s surface inside the other object each vertex
+    is on, -1 for a vertex outside.
+
+    ``crossed`` are the edges, as (lower, higher) vertex, that cross the other
+    surface, and ``seeds`` vertices known to be inside. Cut along the crossed
+    edges, the mesh falls into parts each wholly inside or wholly outside,
+    and a part is inside when it holds a seed.
+    """
+    n = len(body.vert)
+    edges = body.edges
+    keep = np.ones(len(edges), dtype=bool)
+    if len(crossed):
+        code = edges[:, 0] * n + edges[:, 1]
+        keep = ~np.isin(code, crossed[:, 0] * n + crossed[:, 1])
+    label = _labels(n, edges[keep, 0], edges[keep, 1])
+    part = np.full(n, -1, dtype=np.int64)
+    if seeds:
+        inside = np.isin(label, label[np.asarray(seeds, dtype=np.int64)])
+        part[inside] = label[inside]
+    return part
+
+
 def _pair_contacts(bodies, i, j, pairs):
     """What one crossing pair of objects needs to be pushed apart.
 
-    Returns ``(samples, area)``. ``samples`` are the points of each object
-    inside the other, as ``(owner, other, point)``. ``area`` is the vector
-    area of the part of object ``i``'s surface that lies inside object ``j``,
-    read off the curve the two surfaces cross along: moving ``i`` by ``d``
-    changes the overlapping volume by ``d . area``, so ``-area`` is the
-    direction that takes ``i`` out of ``j`` fastest, however deep it is.
+    Returns a list of ``(area, samples)``, one per connected piece of the
+    overlap. ``samples`` are the points of each object inside the other, as
+    ``(owner, other, point)``. ``area`` is the vector area of the part of
+    object ``i``'s surface that bounds that piece, read off the curves the
+    two surfaces cross along: moving ``i`` by ``d`` changes the piece's
+    volume by ``d . area``, so ``-area`` is the direction that takes ``i``
+    out of it fastest, however deep it is. None when it has no single way out
+    (`_vector_area`).
+
+    Two crossing curves bound one piece when the surface between them, of
+    either object, lies inside the other: an object passing clean through
+    another, whose two curves cancel. They bound two pieces when they are
+    apart on both: a link touching both sides of the hole it is threaded
+    through. Summed, those two would cancel as well, and the way out of
+    neither is what is left (see the header).
     """
     pair = np.asarray(pairs, dtype=np.int64)
     count = len(pair)
     samples = []
-    hit_pair, hit_point = [], []
+    # Per crossing found: the triangle pair it belongs to, the point, and a
+    # key naming the edge and the triangle it crosses, which the triangle
+    # pair on the other side of that edge shares.
+    hit_pair, hit_point, hit_key = [], [], []
+    parts = []
     for owner, other, own_col, other_col in ((i, j, 0, 1), (j, i, 1, 0)):
         a, b = bodies[owner], bodies[other]
         own_tri = a.tri[pair[:, own_col]]
@@ -389,11 +561,15 @@ def _pair_contacts(bodies, i, j, pairs):
             b.current[b3[:, 0]], b.current[b3[:, 1]], b.current[b3[:, 2]],
         )
         if not hit.any():
+            parts.append(np.full(len(a.vert), -1, dtype=np.int64))
             continue
         lo, hi, face3, t, side = lo[hit], hi[hit], face3[hit], t[hit], side[hit]
         where = a.current[lo] + t[:, None] * (a.current[hi] - a.current[lo])
         hit_pair.append(np.tile(np.arange(count), 3)[hit])
         hit_point.append(where)
+        hit_key.append(
+            np.stack([np.full(len(lo), own_col), lo, hi, face3], axis=1)
+        )
         # The same edge meets the same triangle once, however many of the
         # owner's triangles brought it here.
         _, first = np.unique(
@@ -418,39 +594,137 @@ def _pair_contacts(bodies, i, j, pairs):
                     inside_vertices.add(hi_k)
                 else:
                     samples.append(
-                        (owner, other, p0 + 0.5 * (t0 + t1) * (p1 - p0))
+                        (owner, other, p0 + 0.5 * (t0 + t1) * (p1 - p0), -1)
                     )
         samples.extend(
-            (owner, other, a.current[v]) for v in sorted(inside_vertices)
+            (owner, other, a.current[v], v) for v in sorted(inside_vertices)
         )
-    return samples, _crossing_area(bodies[i], bodies[j], pair, hit_pair, hit_point)
+        crossed = np.stack([lo[bounds[:-1]], hi[bounds[:-1]]], axis=1)
+        parts.append(_inside_parts(a, crossed, sorted(inside_vertices)))
+    return _pieces(bodies, i, j, pair, hit_pair, hit_point, hit_key, parts,
+                   samples)
 
 
-def _crossing_area(a, b, pair, hit_pair, hit_point):
-    """Vector area of the part of ``a``'s surface inside ``b``, or None.
-
-    Two crossing triangles meet along a segment whose ends are two of the
-    edge crossings found above. Directed along ``n_a x n_b`` (outward
-    normals), the segments of a pair of objects chain into closed curves, and
-    half the sum of ``p x q`` over them is the vector area of any surface they
-    bound, which the part of ``a`` inside ``b`` is. None when the sum is not
-    resolved above its own round-off, as when one object passes clean through
-    the other and its two curves cancel.
-    """
-    if not hit_pair:
-        return None
+def _pieces(bodies, i, j, pair, hit_pair, hit_point, hit_key, parts, samples):
+    """The samples of a pair of objects grouped by the piece of overlap they
+    are in, each group with its way out (see `_pair_contacts`)."""
+    a, b = bodies[i], bodies[j]
+    plain = [(owner, other, point) for owner, other, point, _v in samples]
+    if not hit_pair or not samples:
+        return [(None, plain)] if samples else []
     index = np.concatenate(hit_pair)
     point = np.concatenate(hit_point)
+    key = np.concatenate(hit_key)
     order = np.argsort(index, kind="stable")
-    index, point = index[order], point[order]
+    index, point, key = index[order], point[order], key[order]
     # Triangle pairs with exactly two crossings: the ends of their segment.
-    first = np.flatnonzero(
-        np.concatenate([[True], index[1:] != index[:-1]])
-    )
+    first = np.flatnonzero(np.concatenate([[True], index[1:] != index[:-1]]))
     size = np.diff(np.concatenate([first, [len(index)]]))
     first = first[size == 2]
     if len(first) == 0:
-        return None
+        return [(None, plain)]
+    # Nodes: the segment ends (by key), then the inside parts of each object.
+    _, end = np.unique(key, axis=0, return_inverse=True)
+    end = end.reshape(-1)
+    keys = int(end.max()) + 1
+    part_ids = []
+    nodes = keys
+    for side in parts:
+        ids = {}
+        for value in np.unique(side[side >= 0]).tolist():
+            ids[value] = nodes
+            nodes += 1
+        part_ids.append(ids)
+    link_a = [end[first]]
+    link_b = [end[first + 1]]
+    # A segment lies on a triangle of each object; it bounds the inside part
+    # every inside vertex of those triangles is on.
+    segment_pair = index[first]
+    for column, side in enumerate(parts):
+        corner = (a if column == 0 else b).tri[pair[segment_pair, column]]
+        for k in range(3):
+            label = side[corner[:, k]]
+            on = label >= 0
+            if on.any():
+                ids = part_ids[column]
+                link_a.append(end[first][on])
+                link_b.append(np.array([ids[int(v)] for v in label[on]]))
+    # Two segments on one triangle bound one inside part between them when
+    # each faces the other with its inside: the side of a rod passing through
+    # a block, a long triangle with no vertex inside, is crossed so at both
+    # faces of the block.
+    middle = 0.5 * (point[first] + point[first + 1])
+    unit = []
+    for column, body in enumerate((a, b)):
+        corner = body.current[body.tri[pair[segment_pair, column]]]
+        n = body.outward * _cross(
+            corner[:, 1] - corner[:, 0], corner[:, 2] - corner[:, 0]
+        )
+        length = np.linalg.norm(n, axis=1)
+        unit.append(n / np.where(length > 0.0, length, 1.0)[:, None])
+    for column in (0, 1):
+        own, theirs = unit[column], unit[1 - column]
+        # Toward the inside of the other object, in this triangle's plane.
+        inward = -(theirs - np.einsum("ij,ij->i", theirs, own)[:, None] * own)
+        triangle = pair[segment_pair, column]
+        order = np.argsort(triangle, kind="stable")
+        sorted_triangle = triangle[order]
+        bounds = np.flatnonzero(
+            np.concatenate(
+                [[True], sorted_triangle[1:] != sorted_triangle[:-1], [True]]
+            )
+        )
+        for start, stop in zip(bounds[:-1], bounds[1:], strict=True):
+            rows = order[start:stop]
+            for x in range(len(rows)):
+                for y in range(x + 1, len(rows)):
+                    s, t = rows[x], rows[y]
+                    apart = middle[t] - middle[s]
+                    if inward[s] @ apart > 0.0 and inward[t] @ apart < 0.0:
+                        link_a.append(end[first][[s]])
+                        link_b.append(end[first][[t]])
+    label = _labels(nodes, np.concatenate(link_a), np.concatenate(link_b))
+    segment_piece = label[end[first]]
+    pieces = np.unique(segment_piece)
+    # A vertex sample is in the piece of its inside part; a sample inside an
+    # edge whose ends are both outside, in the piece of the nearest segment.
+    points = np.concatenate([point[first], point[first + 1]])
+    point_piece = np.concatenate([segment_piece, segment_piece])
+    groups = {int(p): [] for p in pieces}
+    for owner, other, sample, vertex in samples:
+        column = 0 if owner == i else 1
+        piece = None
+        if vertex >= 0:
+            found = int(label[part_ids[column][int(parts[column][vertex])]])
+            if found in groups:
+                piece = found
+        if piece is None:
+            offset = points - sample
+            nearest = int(np.argmin(np.einsum("ij,ij->i", offset, offset)))
+            piece = int(point_piece[nearest])
+        groups[piece].append((owner, other, sample))
+    out = []
+    for piece, members in groups.items():
+        if not members:
+            continue
+        mine = first[segment_piece == piece]
+        out.append((_vector_area(a, b, pair, index, point, mine), members))
+    return out
+
+
+def _vector_area(a, b, pair, index, point, first):
+    """Vector area of the part of ``a``'s surface inside ``b`` that the
+    segments starting at rows ``first`` of ``index`` and ``point`` bound, or
+    None.
+
+    Two crossing triangles meet along a segment whose ends are two of the
+    edge crossings found above. Directed along ``n_a x n_b`` (outward
+    normals), the segments chain into closed curves, and half the sum of
+    ``p x q`` over them is the vector area of any surface they bound, which
+    the part of ``a`` inside ``b`` is. None when the sum is not resolved
+    above its own round-off, as when one object passes clean through the
+    other and its two curves cancel.
+    """
     k = index[first]
     p, q = point[first], point[first + 1]
     ta, tb = a.tri[pair[k, 0]], b.tri[pair[k, 1]]
@@ -541,6 +815,9 @@ def _least_motion(bodies, first, second, way, point_first, point_second, gap,
         gross = np.add.reduceat(magnitude * np.abs(y)[row, None], start, axis=0)
         return float(np.vdot(gross, gross)) * (len(y) * _EPS) ** 2
 
+    # A motion the contacts constrain only to round-off is not taken: see
+    # `_DAMPING`. The damped normal equations are (A^T A + mu^2) x = A^T b.
+    mu2 = (_DAMPING * float(np.sqrt(np.vdot(stacked, stacked)))) ** 2
     x = np.zeros((count, 6))
     residual = gap.astype(np.float64).copy()
     s = transpose(residual)
@@ -553,17 +830,93 @@ def _least_motion(bodies, first, second, way, point_first, point_second, gap,
         if not np.abs(residual).max() > slack:
             break
         q = forward(direction)
-        qq = float(np.dot(q, q))
+        qq = float(np.dot(q, q)) + mu2 * float(np.vdot(direction, direction))
         if not qq > 0.0:
             break
         alpha = gamma / qq
         x += alpha * direction
         residual -= alpha * q
-        s = transpose(residual)
+        s = transpose(residual) - mu2 * x
         gamma_next = float(np.vdot(s, s))
         direction = s + (gamma_next / gamma) * direction
         gamma = gamma_next
     return x[:, :3], x[:, 3:] / radius[:, None]
+
+
+def _consensus(bodies: list[Body], i: int, samples) -> np.ndarray | None:
+    """One way out, for object ``i``, of a piece of overlap whose curves
+    cancel (`_vector_area`), or None.
+
+    Each sample's way is to the nearest surface point of the other object,
+    and their sum, resolved above its own round-off, is the piece's: a rod
+    through a block off its center has most of its samples nearest the
+    near face. Taken one sample at a time instead, the ways change as the
+    rod moves, and a rod whose exit takes several passes is carried along
+    the face by the samples near the block's other faces.
+    """
+    total = np.zeros(3)
+    gross = 0.0
+    for owner, other, sample in samples:
+        location, _n, _index, distance = bodies[other].tree.find_nearest(
+            sample.tolist()
+        )
+        if location is None or not distance > 0.0:
+            continue
+        heading = (np.array(location) - sample) / distance
+        total += heading if owner == i else -heading
+        gross += 1.0
+    length = float(np.linalg.norm(total))
+    if not length > gross * _EPS * 16.0 or not length > 0.0:
+        return None
+    return total / length
+
+
+def _resolved(body: Body, shift: np.ndarray, turn: np.ndarray) -> bool:
+    """Whether a motion is above the resolution the tree holds ``body`` at."""
+    travel = float(np.linalg.norm(shift) + np.linalg.norm(turn) * body.reach)
+    return travel > _TREE_EPS * float(np.abs(body.current).max())
+
+
+def _admitted(bodies: list[Body], shift: np.ndarray, turn: np.ndarray):
+    """The motions of a pass, halved until no two surfaces cross that did not.
+
+    A pass opens the pairs that cross, and may make two others cross: a link
+    asked by its two neighbors for more room than its holes have is pushed
+    into a wire. Pushed on over later passes, it comes out on the wire's far
+    side, where every check is satisfied and the chain is unlinked. So a pass
+    never takes two of the objects' own surfaces (not swollen) from apart to
+    crossing. Each pass closes any two objects by less than the thinner one's
+    thickness (`_MAX_STEP`), so a surface cannot cross another and leave it
+    within one. When no motion above the tree's resolution is admitted, the
+    pass moves nothing, the run ends with its pairs, and a lower clearance is
+    tried (`resolve`).
+    """
+    while any(
+        _resolved(b, shift[k], turn[k]) for k, b in enumerate(bodies)
+    ):
+        poses = []
+        for k, b in enumerate(bodies):
+            if _resolved(b, shift[k], turn[k]):
+                rotation = _rotation(turn[k]) @ b.rotation
+                poses.append(_true_surface(b, rotation, b.translation + shift[k]))
+            else:
+                poses.append((b.true_tree, b.true_lower, b.true_upper))
+        lower = np.array([p[1] for p in poses])
+        upper = np.array([p[2] for p in poses])
+        crossed = False
+        for i, j in _boxes_meeting(lower, upper):
+            if poses[i][0] is bodies[i].true_tree and poses[j][0] is bodies[j].true_tree:
+                continue
+            if not poses[i][0].overlap(poses[j][0]):
+                continue
+            before = bodies[i].true_tree.overlap(bodies[j].true_tree)
+            if not before:
+                crossed = True
+                break
+        if not crossed:
+            return shift, turn
+        shift, turn = 0.5 * shift, 0.5 * turn
+    return np.zeros_like(shift), np.zeros_like(turn)
 
 
 def _rotation(w: np.ndarray) -> np.ndarray:
@@ -579,20 +932,80 @@ def _rotation(w: np.ndarray) -> np.ndarray:
 def resolve(bodies: list[Body], *, max_iterations: int, progress=None) -> dict:
     """Move ``bodies`` rigidly until no two of their surfaces cross.
 
+    The clearance is fitted (see the header): when a run leaves a pair with
+    a movable object, the run is repeated from the start with every
+    object's clearance halved, until one leaves none or the clearances are
+    at what the tree resolves, where halving changes nothing. Each run gets
+    the whole budget, so a budget too small for a scene lowers its
+    clearance too. The run that cleared the scene is kept; when none did, the
+    one that left the fewest pairs, the larger clearance on a tie, so a second
+    click goes on from the run that got furthest.
+
     Args:
         bodies: The closed objects. Each is updated in place; read the result
             from :meth:`Body.matrix`.
-        max_iterations: The number of passes to spend.
+        max_iterations: The number of passes each run may spend.
         progress: Called with ``(pass index, crossing object pairs)`` after
             each pass, when given.
 
     Returns:
         dict: ``iterations`` (passes run), ``initial_pairs`` and
         ``remaining_pairs`` (name pairs whose surfaces crossed before the
-        first pass and after the last, two held objects included), and
+        first pass and after the last, two held objects included),
         ``moved`` (``{name: distance}``, the largest displacement of any
-        vertex of each object that moved).
+        vertex of each object that moved), and ``clearance_scale``, the
+        fraction of each object's clearance the run used: 1.0 as asked.
     """
+    asked = [body.clearance for body in bodies]
+    movable = {body.name for body in bodies if body.movable}
+
+    def run(scale):
+        for body, clearance in zip(bodies, asked, strict=True):
+            body.clearance = clearance * scale
+        outcome = _relax(
+            bodies, max_iterations=max_iterations, progress=progress
+        )
+        outcome["clearance_scale"] = scale
+        left = sum(
+            1 for a, b in outcome["remaining_pairs"] if a in movable or b in movable
+        )
+        # `_prepare` raised every margin to what the tree resolves; below
+        # that a halving asks for nothing new.
+        floor = all(body.margin > body.clearance for body in bodies)
+        return outcome, left, floor
+
+    def pose():
+        return [
+            (b.rotation.copy(), b.translation.copy(), b.displaced) for b in bodies
+        ]
+
+    outcome, left, floor = run(1.0)
+    best = left, outcome, pose()
+    scale = 1.0
+    while left and not floor:
+        scale *= 0.5
+        outcome, left, floor = run(scale)
+        if left < best[0]:
+            best = left, outcome, pose()
+    if left:
+        # No clearance cleared the scene. What is kept and reported is the
+        # run that left the fewest pairs, the larger clearance on a tie, so an
+        # object no clearance can free keeps the run at the setting. Keeping
+        # the run at the setting in every case would stall a scene whose
+        # setting cannot fit the same way on every click: on Windows CI four
+        # clicks on a chain a quarter shorter than its taut length each left
+        # the same 19 pairs.
+        _left, outcome, kept = best
+        for body, (rotation, translation, displaced) in zip(bodies, kept, strict=True):
+            body.rotation, body.translation = rotation, translation
+            body.displaced = displaced
+    for body, clearance in zip(bodies, asked, strict=True):
+        body.clearance = clearance
+    return outcome
+
+
+def _relax(bodies: list[Body], *, max_iterations: int, progress=None) -> dict:
+    """One run of `resolve` at the clearances the bodies carry."""
     for body in bodies:
         _prepare(body)
     crossing: dict[tuple[int, int], tuple] = {}
@@ -621,9 +1034,9 @@ def resolve(bodies: list[Body], *, max_iterations: int, progress=None) -> dict:
             # triangle of the other.
             pairs = bodies[i].tree.overlap(bodies[j].tree)
             if pairs:
-                samples, area = _pair_contacts(bodies, i, j, pairs)
-                if samples:
-                    crossing[key] = (samples, area)
+                pieces = _pair_contacts(bodies, i, j, pairs)
+                if pieces:
+                    crossing[key] = pieces
         names = sorted(
             tuple(sorted((bodies[i].name, bodies[j].name))) for i, j in crossing
         )
@@ -636,7 +1049,7 @@ def resolve(bodies: list[Body], *, max_iterations: int, progress=None) -> dict:
 
         first, second, way, at_first, at_second, gap = [], [], [], [], [], []
         slack = np.inf
-        for (i, j), (samples, area) in crossing.items():
+        for (i, j), pieces in crossing.items():
             # Two held objects that cross are found and reported, since the
             # result must not call such a scene clear, and are left as they
             # are.
@@ -648,67 +1061,92 @@ def resolve(bodies: list[Body], *, max_iterations: int, progress=None) -> dict:
             # A contact opened to within half of that is opened: the swollen
             # surfaces then clear each other.
             slack = min(slack, 0.5 * clearance)
-            # The way out of `j` for `i`. Every sample of the pair is asked
-            # to travel as far that way as the deepest of them needs, so one
-            # translation satisfies the pair.
-            out = None if area is None else -area / np.linalg.norm(area)
-            rows, reach = [], 0.0
-            if out is not None:
+            for area, samples in pieces:
+                # The way out of `j` for `i` from this piece. Every sample of
+                # the piece is asked to travel as far that way as the deepest
+                # of them needs, so one translation satisfies the piece.
+                out = (
+                    _consensus(bodies, i, samples) if area is None
+                    else -area / np.linalg.norm(area)
+                )
+                rows, reach = [], 0.0
+                if out is not None:
+                    for owner, other, sample in samples:
+                        heading = out if owner == i else -out
+                        location, _n, _index, distance = (
+                            bodies[other].tree.ray_cast(
+                                sample.tolist(), heading.tolist()
+                            )
+                        )
+                        if location is None:
+                            continue
+                        hit = np.array(location)
+                        rows.append(
+                            (out, sample, hit) if owner == i
+                            else (out, hit, sample)
+                        )
+                        reach = max(reach, distance)
+                if rows:
+                    for direction, on_i, on_j in rows:
+                        first.append(i)
+                        second.append(j)
+                        way.append(direction)
+                        at_first.append(on_i)
+                        at_second.append(on_j)
+                        gap.append(reach + clearance)
+                    continue
+                # No single way out: each sample goes to the nearest surface
+                # point of the other object instead.
                 for owner, other, sample in samples:
-                    heading = out if owner == i else -out
-                    location, _n, _index, distance = bodies[other].tree.ray_cast(
-                        sample.tolist(), heading.tolist()
+                    location, face_normal, _index, distance = (
+                        bodies[other].tree.find_nearest(sample.tolist())
                     )
                     if location is None:
                         continue
                     hit = np.array(location)
-                    rows.append(
-                        (out, sample, hit) if owner == i else (out, hit, sample)
-                    )
-                    reach = max(reach, distance)
-            if rows:
-                for direction, on_i, on_j in rows:
+                    if distance > 0.0:
+                        heading = (hit - sample) / distance
+                    else:
+                        heading = bodies[other].outward * np.array(face_normal)
                     first.append(i)
                     second.append(j)
-                    way.append(direction)
-                    at_first.append(on_i)
-                    at_second.append(on_j)
-                    gap.append(reach + clearance)
-                continue
-            # No single way out: each sample goes to the nearest surface
-            # point of the other object instead.
-            for owner, other, sample in samples:
-                location, face_normal, _index, distance = (
-                    bodies[other].tree.find_nearest(sample.tolist())
-                )
-                if location is None:
-                    continue
-                hit = np.array(location)
-                if distance > 0.0:
-                    heading = (hit - sample) / distance
-                else:
-                    heading = bodies[other].outward * np.array(face_normal)
-                first.append(i)
-                second.append(j)
-                way.append(heading if owner == i else -heading)
-                at_first.append(sample if owner == i else hit)
-                at_second.append(hit if owner == i else sample)
-                gap.append(distance + clearance)
+                    way.append(heading if owner == i else -heading)
+                    at_first.append(sample if owner == i else hit)
+                    at_second.append(hit if owner == i else sample)
+                    gap.append(distance + clearance)
         if not first:
             break
         shift, turn = _least_motion(
             bodies, np.array(first), np.array(second), np.array(way),
             np.array(at_first), np.array(at_second), np.array(gap), slack,
         )
+        # Scaled as a whole, the motions keep the proportions the contacts
+        # asked for between objects.
+        scale = 1.0
+        most = float(np.linalg.norm(turn, axis=1).max())
+        if most > _MAX_TURN:
+            scale = _MAX_TURN / most
+        # Two objects whose boxes meet close by at most the step, the
+        # translations' difference and both rotations' largest travel. A
+        # chain spreading as a whole moves its end links farthest and each
+        # pair of neighbors little, so the bound is on the pair, not on how
+        # far an object travels.
+        for i, j in candidates:
+            closing = (
+                float(np.linalg.norm(shift[i] - shift[j]))
+                + float(np.linalg.norm(turn[i])) * bodies[i].reach
+                + float(np.linalg.norm(turn[j])) * bodies[j].reach
+            )
+            limit = _MAX_STEP * min(bodies[i].thickness, bodies[j].thickness)
+            if closing * scale > limit:
+                scale = limit / closing
+        shift, turn = _admitted(bodies, shift * scale, turn * scale)
         for k, body in enumerate(bodies):
             # A motion below the resolution the tree holds this object's
             # positions at changes nothing the next pass could see. Contacts
             # that disagree settle into motions of that size, each pass
             # answering the rounding of the one before.
-            travel = float(
-                np.linalg.norm(shift[k]) + np.linalg.norm(turn[k]) * body.reach
-            )
-            if not travel > _TREE_EPS * float(np.abs(body.current).max()):
+            if not _resolved(body, shift[k], turn[k]):
                 continue
             body.rotation = _rotation(turn[k]) @ body.rotation
             body.translation = body.translation + shift[k]

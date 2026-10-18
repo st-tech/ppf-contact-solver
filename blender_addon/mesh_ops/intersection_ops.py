@@ -283,9 +283,21 @@ def run_rigid(context, *, selected_only: bool, clearance: float,
         "initial_pairs": outcome["initial_pairs"],
         "remaining_pairs": outcome["remaining_pairs"],
         "moved": outcome["moved"],
+        "clearance_scale": outcome["clearance_scale"],
         "held": held,
         "skipped": skipped,
     }, None
+
+
+def clearance_note(report: dict) -> str | None:
+    """The line saying the Clearance was lowered so the objects fit, or None
+    when the run used the setting as it is (`resolve`)."""
+    scale = report["clearance_scale"]
+    if scale >= 1.0:
+        return None
+    return iface_(
+        "Clearance lowered to {percent}% of the setting so the objects fit"
+    ).format(percent=f"{100.0 * scale:.3g}")
 
 
 class OBJECT_OT_ResolveIntersections(Operator):
@@ -363,6 +375,7 @@ class OBJECT_OT_ResolveIntersections(Operator):
 
         _last_report = report
         moved, left = len(report["moved"]), len(report["remaining_pairs"])
+        note = clearance_note(report)
         if not report["initial_pairs"]:
             self.report({"INFO"}, iface_("No overlapping objects found"))
         elif left:
@@ -371,7 +384,8 @@ class OBJECT_OT_ResolveIntersections(Operator):
                 iface_(
                     "Moved {moved} object(s); {left} pair(s) still overlap "
                     "after {passes} pass(es)"
-                ).format(moved=moved, left=left, passes=report["iterations"]),
+                ).format(moved=moved, left=left, passes=report["iterations"])
+                + (f". {note}" if note else ""),
             )
         else:
             self.report(
@@ -379,7 +393,8 @@ class OBJECT_OT_ResolveIntersections(Operator):
                 iface_(
                     "Moved {moved} object(s) in {passes} pass(es); no overlap "
                     "is left. Run Transfer again"
-                ).format(moved=moved, passes=report["iterations"]),
+                ).format(moved=moved, passes=report["iterations"])
+                + (f". {note}" if note else ""),
             )
         return {"FINISHED"}
 
@@ -454,6 +469,9 @@ def draw_intersection_correction(layout, context):
             ),
             icon="CHECKMARK",
         )
+    note = clearance_note(report)
+    if note:
+        result.label(text=note, icon="INFO")
     if report["moved"]:
         result.label(
             text=iface_("{count} object(s) moved, by at most {distance}").format(

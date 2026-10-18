@@ -1613,6 +1613,7 @@
   "No overlapping objects found": "겹친 오브젝트를 찾지 못했습니다",
   "Moved {moved} object(s); {left} pair(s) still overlap after {passes} pass(es)": "{moved}개 오브젝트를 이동했습니다. {passes}회 패스 후에도 {left}쌍이 겹쳐 있습니다",
   "Moved {moved} object(s) in {passes} pass(es); no overlap is left. Run Transfer again": "{passes}회 패스로 {moved}개 오브젝트를 이동했습니다. 남은 겹침이 없습니다. 전송을 다시 실행하세요",
+  "Clearance lowered to {percent}% of the setting so the objects fit": "오브젝트가 들어맞도록 클리어런스를 설정값의 {percent}%로 낮췄습니다",
   "Intersection Correction": "교차 보정",
   "Push apart SOLID and PDRD objects that overlap.": "겹쳐 있는 SOLID 및 PDRD 오브젝트를 밀어 떼어 놓습니다.",
   "Open every overlap in the scene so Transfer accepts it. SOLID and PDRD objects are pushed apart first, as rigid bodies, and then SHELL meshes are deformed until no surface is inside another's contact offsets or its own. The vertex coordinates of the cloth are edited; Ctrl+Z takes all of it back. Pinned vertices, and objects whose mesh cannot be edited, stay where they are and the rest moves around them": "씬의 모든 겹침을 해소하여 전송이 받아들이도록 합니다. 먼저 SOLID 및 PDRD 오브젝트를 강체로서 밀어 떼어 놓고, 이어서 어떤 표면도 다른 표면 또는 자기 자신의 접촉 오프셋 안에 들어오지 않을 때까지 SHELL 메시를 변형합니다. 천의 정점 좌표가 편집되며, Ctrl+Z로 전부 되돌릴 수 있습니다. 핀 고정된 정점과 메시를 편집할 수 없는 오브젝트는 제자리에 남고, 나머지가 그 주위로 이동합니다",
