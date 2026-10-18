@@ -1191,10 +1191,18 @@ class EffectRunner:
         target_clause = (
             f'export CARGO_TARGET_DIR="{target_dir}"\n' if target_dir else ""
         )
+        # DETACHED WITHOUT `nohup`, which refuses to run on macOS under a
+        # session with no terminal ("nohup: can't detach from console:
+        # Inappropriate ioctl for device") and starts nothing, so a Mac solver
+        # host would get no server. What `nohup` is for is done by hand: the
+        # hangup signal is ignored (an ignored signal stays ignored across
+        # `exec`), standard input is /dev/null and the output goes to the log,
+        # in a background subshell the launching shell does not wait for.
         script = (
             f'#!/bin/bash\ncd "{directory}"\n'
             f'{target_clause}'
-            f'nohup bash -c "{activate_clause}{server_cmd}" > "{server_log}" 2>&1 &\n'
+            f'( trap "" HUP; exec bash -c "{activate_clause}{server_cmd}" ) '
+            f'> "{server_log}" 2>&1 < /dev/null &\n'
         )
         backend.exec_command(f"cat <<'EOF' > {script_path}\n{script}EOF\n", shell=True)
         backend.exec_command(f"chmod +x {script_path}", shell=True)

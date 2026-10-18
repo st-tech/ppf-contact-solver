@@ -208,7 +208,7 @@ def kill_local_server(port: int) -> KillReport:
                 continue
             except OSError as exc:
                 errors.append(f"kill -9 pid {pid}: {exc}")
-        # A detached wrapper (``nohup bash -c "...; ppf-cts-server --port N"``)
+        # A detached wrapper (``bash -c "...; ppf-cts-server --port N"``)
         # holds no socket, so the listener walk cannot see it.
         subprocess.run(
             ["pkill", "-f", f"{SERVER_PROCESS_NAME} .*--port {port}"],

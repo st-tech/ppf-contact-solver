@@ -48,6 +48,41 @@ from ..models.defaults import DEFAULT_SERVER_PORT, DEFAULT_SSH_KEEPALIVE_INTERVA
 DATA_PICKLE = "data.pickle"
 PARAM_PICKLE = "param.pickle"
 
+def bounded_command(command: str, seconds: float) -> str:
+    """``command`` as a shell command that the solver host kills after
+    ``seconds``, on any POSIX host.
+
+    GNU ``timeout`` where the host has it, and otherwise the same thing in
+    Perl: macOS ships no ``timeout``, so a bare ``timeout --signal=KILL``
+    fails every bounded command to a Mac solver host with ``command not
+    found: timeout`` before it starts, and Connect stops at the build
+    listing. Every macOS has ``/usr/bin/perl``. Both put the command in a
+    process group of its own and kill the GROUP, because ``/bin/sh -c`` runs a
+    command as its child: killing the shell alone left the child running and
+    holding the channel open (measured: a ``sleep 30`` bounded at 1 s runs 30 s).
+    The exit status is the command's, or 137 when it was killed, as
+    ``timeout --signal=KILL`` reports. The command runs under ``/bin/sh -c``
+    either way, so the login shell (zsh on a Mac, fish on some boxes) parses
+    nothing but the wrapper.
+    """
+    limit = f"{seconds:g}"
+    perl = (
+        "$t = shift; $p = fork; die \"fork: $!\" unless defined $p; "
+        "if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } "
+        "$SIG{ALRM} = sub { kill \"KILL\", -$p; waitpid($p, 0); exit 137 }; "
+        "alarm $t; waitpid($p, 0); "
+        "exit($? & 127 ? 128 + ($? & 127) : $? >> 8)"
+    )
+    script = (
+        "if command -v timeout >/dev/null 2>&1; then "
+        f'exec timeout --signal=KILL {limit}s /bin/sh -c "$0"; '
+        "else "
+        f'exec perl -e {shlex.quote(perl)} {limit} /bin/sh -c "$0"; '
+        "fi"
+    )
+    return f"/bin/sh -c {shlex.quote(script)} {shlex.quote(command)}"
+
+
 def command_lines(text: str) -> list[str]:
     """One command's output as lines, keeping a LEADING TAB on the first one.
 
@@ -700,7 +735,7 @@ class SSHBackend:
         if shell:
             command = f"/bin/sh -c {shlex.quote(command)}"
         if timeout is not None:
-            command = f"timeout --signal=KILL {timeout:g}s {command}"
+            command = bounded_command(command, timeout)
         if self._container and not command.startswith("docker"):
             command = f"docker exec -w {cwd} {self._container} {command}"
         elif not self._container:
@@ -815,7 +850,7 @@ class DockerBackend:
         if shell:
             command = f"/bin/sh -c {shlex.quote(command)}"
         if timeout is not None:
-            command = f"timeout --signal=KILL {timeout:g}s {command}"
+            command = bounded_command(command, timeout)
         try:
             # ``demux=True`` keeps the container's two streams apart. Muxed
             # together they cannot both be reported: the caller that reads
