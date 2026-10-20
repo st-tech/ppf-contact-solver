@@ -917,6 +917,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*Will the Slime Block Make It Down?*](https://www.youtube.com/shorts/yPJKib9Smzc) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 - [*Will the Squishy Balls Fit Through?*](https://www.youtube.com/shorts/qvGMO8czEAA) by [ゴリランド](https://www.youtube.com/@%E3%82%B4%E3%83%AA%E3%83%A9%E3%83%B3%E3%83%89).
 - https://www.youtube.com/shorts/l84D9OJNJ8U by [Arslan Ashraf](https://www.youtube.com/@ArslanCreates3D).
+- https://www.youtube.com/shorts/Pr5J5vSydvg by [Arthendo](https://www.youtube.com/@arthendo4175).
 - https://www.instagram.com/reel/DdpRXR5SfSR/ by [avril.studios](https://www.instagram.com/avril.studios/).
 - https://www.instagram.com/reel/DeRXEnVNqL2/ by [ohonkanen](https://www.instagram.com/ohonkanen/).
 - https://www.instagram.com/reel/Debyir-oTZH/ by [fatdog3d](https://www.instagram.com/fatdog3d/).
