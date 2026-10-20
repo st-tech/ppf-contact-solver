@@ -1021,6 +1021,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
+| Then why not use &lt;XXX&gt;? | &lt;XXX&gt; may lack a strain limit guarantee, which is very important for us. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
 | Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
