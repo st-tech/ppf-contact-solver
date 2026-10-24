@@ -1028,6 +1028,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
 | Why did you make the setup this complicated? | For internal use reasons. For now, see the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg) and our [video tutorials](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). They are much cleaner. |
+| The UI is not very user friendly, either. | True. We designed it that way to make debugging easier for us. At least we are aware. |
 | I don't have GPUs. Can I use this? | Yes, all the features run on the CPU backend (or Metal on Apple silicon), but it does not scale to large-scale scenes. See [Requirements](#️-requirements). |
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
