@@ -901,6 +901,14 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 <td valign="top"><a href="https://youtu.be/ZagGwtRO3Ss?si=vbAPHeBAPhbqdemM&t=684"><em>Blender 5.2 Cloth Simulation + The Secret to Better Collisions</em></a> by <a href="https://www.youtube.com/@styliz3d">Styliz 3D</a>.</td>
 <td valign="top"><a href="https://www.youtube.com/watch?v=z5D5iCBqMKI"><em>This FREE Blender Add-on Could Solve Your Cloth Problems</em></a> by <a href="https://www.youtube.com/@blenderhub7">BlenderHub</a>.</td>
 </tr>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=7BzCCpbpgKY&t=282s"><img src="https://img.youtube.com/vi/7BzCCpbpgKY/hqdefault.jpg" alt="These Blender Simulation Solvers Are Changing Everything"></a></td>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=eeYQ2qM3KPw"><img src="https://img.youtube.com/vi/eeYQ2qM3KPw/hqdefault.jpg" alt="I Tested &quot;Next-Gen&quot; Cloth Physics in Blender... Then It Stopped."></a></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=7BzCCpbpgKY&t=282s"><em>These Blender Simulation Solvers Are Changing Everything</em></a> by <a href="https://www.youtube.com/@InspirationTuts">InspirationTuts</a>.</td>
+<td valign="top"><a href="https://www.youtube.com/watch?v=eeYQ2qM3KPw"><em>I Tested "Next-Gen" Cloth Physics in Blender... Then It Stopped.</em></a> by <a href="https://www.youtube.com/@BracerJack">Bracer Jack</a>.</td>
+</tr>
 </table>
 
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
