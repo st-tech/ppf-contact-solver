@@ -1049,6 +1049,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 | But LLMs can make mistakes. | The author makes more mistakes. |
 | Did you write everything using AI? | We try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. We know what we are doing. |
+| Is this really free? | Yes. |
 | Free? AI coded? Sounds cheap. | This project is years of research. It started even before ChatGPT existed. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
