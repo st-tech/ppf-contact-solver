@@ -1053,7 +1053,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Free? AI coded? Sounds cheap. | This project is years of research. It started even before ChatGPT existed. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
-| How's it possible? | AI was of great help. The author also has years of experience in physics simulation. |
+| How's it possible? | AI was of great help. The author also has more than 10 years of experience in physics simulation. |
 | You forked other repo and just made small changes? | No. Everything is written from scratch. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
 | This is great! | I am flattered, thank you! |
