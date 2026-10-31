@@ -1028,6 +1028,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | --- | --- |
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | A fashion company made this? | Yes. |
+| What does ppf stand for? | It's Production Platform, our internal department. |
 | Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
 | Then why not use &lt;XXX&gt;? | We need to check two things for &lt;XXX&gt;. First, whether it provides a strain limit guarantee, which is very important for us. Second, whether it runs entirely in single precision, since any use of double precision would prevent it from compiling on Apple Metal. |
