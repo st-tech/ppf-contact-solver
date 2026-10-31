@@ -1033,6 +1033,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Then, if &lt;XXX&gt; can do all of that, will you adopt it? | The adoption cost is not free. Also, incorporating third-party techniques requires our internal legal review. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
+| Does the author speak English? When I post an issue, I prefer the author read it directly, not an AI translating it into Japanese and passing it to the author. | I directly read it. No translation. |
 | What are the third-party alternatives? | Ask ChatGPT. |
 | Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
