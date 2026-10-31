@@ -1056,7 +1056,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | You forked other repo and just made small changes? | No. Everything is written from scratch. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
 | This is great! | I am flattered, thank you! |
-| It's got so many stars! Is it worth it? | Stars do not directly reflect how much something is worth, but I am happy. |
+| It's got so many stars! Is it worth it? | Stars do not directly reflect how much something is worth, but I am glad. |
 | I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE), you are free to distribute and commercialize your own. |
 
 ## 🙏 Acknowledgements
