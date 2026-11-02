@@ -1028,7 +1028,6 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | --- | --- |
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | A fashion company made this? | Yes. |
-| What does ppf stand for? | It's Production Platform, our internal department. |
 | Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
 | Then why not use &lt;XXX&gt;? | We need to check two things for &lt;XXX&gt;. First, whether it provides a strain limit guarantee, which is very important for us. Second, whether it runs entirely in single precision, since any use of double precision would prevent it from compiling on Apple Metal. |
@@ -1045,7 +1044,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | I don't have GPUs. Can I use this? | Yes, all the features run on the CPU backend (or Metal on Apple silicon), but it does not scale to large-scale scenes. See [Requirements](#️-requirements). |
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
-| Oh yea why should I believe you? | We perform explicit intersection checks at the end of every step. See [How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections). |
+| Why should I believe you? | We perform explicit intersection checks at the end of every step. See [How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections). |
 | Overhyped? | Many people seem to think it runs in real time and are disappointed to learn that it does not. We have laid out clear limitations in [Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations). |
 | I got an intersection error. Where is your guarantee? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
@@ -1056,11 +1055,8 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | AI slacking off? | No! Tremendous human effort is poured into it. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
-| How's it possible? | AI was of great help. The author also has more than 10 years of experience in physics simulation. |
 | You forked other repo and just made small changes? | No. Everything is written from scratch. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
-| This is great! | I am flattered, thank you! |
-| It's got so many stars! Is it worth it? | Stars do not directly reflect how much something is worth, but we try to live up to people's expectations. |
 | I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE), you are free to distribute and commercialize your own. |
 
 ## 🙏 Acknowledgements
