@@ -1,7 +1,7 @@
 # File: handlers/statistics.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MCP handlers for the per-object solver statistics cache: what the solver
 # measured for each simulated object, frame by frame.  Thin adapters over

@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_hair_pin_weights.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The per-point weights of Hair Curves, through the MCP server (issue #146).
 #

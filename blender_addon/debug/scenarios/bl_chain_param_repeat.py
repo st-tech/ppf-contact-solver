@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Param-edit cycle: catch param-hash drift / re-encode bugs across
 # multiple update_params cycles. Each param_retransfer mutates the
 # pin op's delta; the simulation result must reflect the latest

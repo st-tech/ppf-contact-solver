@@ -28,6 +28,10 @@ struct AnalyticContactResult {
     Vec3f normal;
     float stiffness;
     bool valid_gap;
+    // The normal force the friction was bounded by, which tells the caller to
+    // record the pair in the friction's memory (`friction_memory.kernel.cpp`).
+    // Zero where friction is off.
+    float normal_force;
 };
 
 [[seam::device_fn]] inline float combine_friction_values(float a, float b,
@@ -40,6 +44,23 @@ struct AnalyticContactResult {
     }
     return fmath::min(a, b);
 }
+
+// THE RESIDUAL AN ANALYTIC CONTACT'S FRICTION READS, per vertex it names, so
+// that each vertex's part is scaled by the contact's share of that vertex's
+// cone (`friction_cone_fraction`) once the contact's normal force is known.
+// `residual[k]` is the vertex's load (its residual plus its lagged non-friction
+// contact load, `friction_load_settle`) already multiplied by its weight in the
+// contact point, `weight[k]` the weight's magnitude, and `cone_sum[k]` and
+// `cone_pairs[k]` the vertex's lagged cone sum and pair count. A vertex contact
+// is one entry of weight one.
+enum : unsigned { ANALYTIC_SHARE_VERTICES = 4u };
+struct AnalyticShareInput {
+    Vec3f residual[ANALYTIC_SHARE_VERTICES];
+    float weight[ANALYTIC_SHARE_VERTICES];
+    float cone_sum[ANALYTIC_SHARE_VERTICES];
+    float cone_pairs[ANALYTIC_SHARE_VERTICES];
+    unsigned count;
+};
 
 // THE ONE-VERTEX SLIP PREDICTION, which is `friction_slip_prediction<1>` with
 // the weight fixed at one and the pair's elastic block already in hand: an
@@ -69,10 +90,16 @@ struct AnalyticContactResult {
 [[seam::device_fn]] inline AnalyticContactResult
 analytic_contact_evaluate(const Mat3x3f &local_hessian,
                               const Vec3f &slip,
+                              // The slip this contact carried out of the last
+                              // committed step, zero for none.
+                              const Vec3f &carried,
+                              // and how far it slid in that step.
+                              float slide,
                               const Vec3f &normal,
                               float signed_distance, float physical_gap,
                               float ghat, float friction, float friction_eps,
-                              float mass, const Vec3f &residual, float dt,
+                              float mass, const AnalyticShareInput &residual,
+                              float dt,
                               bool kinematic,
                               bool include_friction) {
     AnalyticContactResult result;
@@ -83,6 +110,7 @@ analytic_contact_evaluate(const Mat3x3f &local_hessian,
     result.normal = normal;
     result.stiffness = 0.0f;
     result.valid_gap = physical_gap >= 0.0f;
+    result.normal_force = 0.0f;
     if (signed_distance >= 0.0f) {
         return result;
     }
@@ -109,16 +137,43 @@ analytic_contact_evaluate(const Mat3x3f &local_hessian,
         // THE ANCHOR THE FRICTION SURROGATE IS TIGHT AT, read off the residual
         // this vertex already carries. A prediction that does not resolve
         // leaves `drive_stiffness` at zero, which is the lagged surrogate.
+        // EACH VERTEX'S SHARE, this contact's cone there over the vertex's
+        // summed cone (`friction_cone_fraction`): the contact reads that part
+        // of the vertex's residual and moves that part of its mass and
+        // stiffness (`friction_slip_prediction` says why both). The caller has
+        // already averaged the vertices' blocks and masses by weight, so the
+        // stiffness takes the weight-averaged share.
+        const float pair_cone =
+            friction * fmath::max(0.0f, -normal.dot(result.force));
+        Vec3f shared = Vec3f::Zero();
+        float owned = 0.0f;
+        float weight = 0.0f;
+        for (unsigned k = 0; k < residual.count; ++k) {
+            const float fraction = friction_cone_fraction(
+                residual.weight[k] * pair_cone, residual.cone_sum[k],
+                residual.cone_pairs[k]);
+            shared = shared + fraction * residual.residual[k];
+            owned = owned + residual.weight[k] * fraction;
+            weight = weight + residual.weight[k];
+        }
         Vec3f drive = Vec3f::Zero();
         float drive_stiffness = 0.0f;
-        if (!analytic_slip_prediction(local_hessian, mass, residual, normal, dt,
+        if (!analytic_slip_prediction(local_hessian, mass, shared, normal, dt,
                                           drive, drive_stiffness)) {
             drive_stiffness = 0.0f;
+        } else if (owned != weight) {
+            drive_stiffness = drive_stiffness * fmath::div(owned, weight);
         }
-        friction_evaluate(
-            result.force, slip, normal, friction, friction_eps, drive,
-            drive_stiffness, result.friction_gradient, result.friction_hessian,
+        const Vec3f held_slip =
+            slip + (carried - normal * normal.dot(carried));
+        friction_evaluate_anchored(
+            result.force, held_slip, normal, friction, friction_eps, drive,
+            drive_stiffness, slide, result.friction_gradient,
+            result.friction_hessian,
             lambda, stiffness, tangent, projection, contact);
+        if (friction > 0.0f) {
+            result.normal_force = contact;
+        }
         result.force += result.friction_gradient;
         result.hessian += result.friction_hessian;
     }

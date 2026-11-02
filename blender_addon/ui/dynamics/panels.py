@@ -1,8 +1,7 @@
 # File: panels.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import os
 
 import bpy  # pyright: ignore
@@ -1066,53 +1065,160 @@ def _draw_stitch_stiffness(layout, group):
         layout.label(text="No loose-edge stitches in this group", icon="INFO")
 
 
-def _draw_bend_reference(layout, group, actual_index):
-    """Draw the per-object bending reference rest-angle controls.
+def bend_plasticity_applies(group) -> bool:
+    """Whether Bend Plasticity is drawn: not under From Reference Geometry,
+    where the reference owns the rest angle (the encoder's ``gate_open``
+    closes the same gate)."""
+    return group.bend_rest_angle_source != "FROM_REFERENCE"
 
-    Shown only when the group's "From Reference Geometry" master toggle is
-    on. Lays out a pulldown of the group's shell objects; the selected
-    object gets an "Enable Reference Rest Angle" checkbox plus an
-    eyedropper to pick (and an X to clear) its reference object. When a
-    reference is enabled and resolves, an info line reminds the artist
-    that it overrides the group Rest Angle source for that object.
+
+def _draw_shell_bend_rest(layout, group, actual_index):
+    """The Shell group's rest-angle box: the Rest Angle dropdown, then either
+    the per-object reference controls (From Reference Geometry) or Bend
+    Plasticity (every other Rest Angle)."""
+    layout.prop(group, "bend_rest_angle_source")
+    if group.bend_rest_angle_source == "FROM_REFERENCE":
+        _draw_bend_reference(layout, group, actual_index)
+    if bend_plasticity_applies(group):
+        _draw_bend_plasticity(layout, group)
+
+
+def _draw_bend_plasticity(layout, group):
+    """Draw the Bend Plasticity toggle and its two sliders.
+
+    Not drawn under From Reference Geometry, where the reference owns the rest
+    angle; the encoder closes the same gate there (``gate_open``), so a value
+    the hidden toggle still holds never reaches the solver.
+    """
+    layout.prop(group, "enable_bend_plasticity")
+    if group.enable_bend_plasticity:
+        _material_prop(layout, group, "bend_plasticity")
+        _material_prop(layout, group, "bend_plasticity_threshold")
+
+
+def _draw_bend_reference(layout, group, actual_index):
+    """Draw the per-object bending reference controls.
+
+    Shown when the group's Rest Angle is From Reference Geometry. Lays out a
+    pulldown of the group's objects; the selected object gets a Reference
+    Source picker. A Reference Object source draws an eyedropper to pick (and
+    an X to clear) the reference object; a Shape Key source draws a search
+    field over the object's own shape keys; a Shape Key Mix source draws the
+    mix's status. Every object in such a group reads its reference, so an
+    object with none set gets an ERROR line naming what the Transfer will
+    refuse.
     """
     from ...core.uuid_registry import get_object_by_uuid
 
     ref_box = layout.box()
-    ref_box.label(text="Reference Rest Angle (per object):")
+    ref_box.label(text="Reference (per object):")
     ref_box.prop(group, "bend_ref_object_selection", text="")
     assigned = get_assigned_by_selection_uuid(group, "bend_ref_object_selection")
     if assigned is None:
         ref_box.label(text="No objects in this group", icon="INFO")
         return
 
-    ref_box.prop(assigned, "bend_ref_enable")
-    ref_obj = (
-        get_object_by_uuid(assigned.bend_ref_uuid) if assigned.bend_ref_uuid else None
-    )
-    if ref_obj is not None:
-        label, icon = ref_obj.name, "MESH_DATA"
-    elif assigned.bend_ref_uuid:
-        label = iface_("Missing: {name}").format(name=assigned.bend_ref_name or assigned.bend_ref_uuid[:8])
-        icon = "ERROR"
+    ref_box.prop(assigned, "bend_ref_source", text="Source")
+
+    if assigned.bend_ref_source == "SHAPE_KEY":
+        _draw_bend_reference_shape_key(ref_box, assigned)
+    elif assigned.bend_ref_source == "SHAPE_KEY_MIX":
+        _draw_bend_reference_shape_key_mix(ref_box, group, assigned)
     else:
-        label, icon = "No reference set", "RADIOBUT_OFF"
-
-    pick_row = ref_box.row(align=True)
-    pick_row.enabled = assigned.bend_ref_enable
-    pick_row.label(text=label, icon=icon)
-    op = pick_row.operator("object.pick_bend_reference", text="", icon="EYEDROPPER")
-    op.group_index = actual_index
-    op.object_uuid = assigned.uuid
-    clr = pick_row.operator("object.clear_bend_reference", text="", icon="X")
-    clr.group_index = actual_index
-    clr.object_uuid = assigned.uuid
-
-    if assigned.bend_ref_enable and ref_obj is not None:
-        ref_box.label(
-            text="Reference geometry overrides the group Rest Angle source for this object.",
-            icon="INFO",
+        ref_obj = (
+            get_object_by_uuid(assigned.bend_ref_uuid) if assigned.bend_ref_uuid else None
         )
+        if ref_obj is not None:
+            label, icon = ref_obj.name, "MESH_DATA"
+        elif assigned.bend_ref_uuid:
+            label = iface_("Missing: {name}").format(name=assigned.bend_ref_name or assigned.bend_ref_uuid[:8])
+            icon = "ERROR"
+        else:
+            label, icon = "No reference set: Transfer refuses this object", "ERROR"
+
+        pick_row = ref_box.row(align=True)
+        pick_row.label(text=label, icon=icon)
+        op = pick_row.operator("object.pick_bend_reference", text="", icon="EYEDROPPER")
+        op.group_index = actual_index
+        op.object_uuid = assigned.uuid
+        clr = pick_row.operator("object.clear_bend_reference", text="", icon="X")
+        clr.group_index = actual_index
+        clr.object_uuid = assigned.uuid
+
+
+def _draw_bend_reference_shape_key_mix(layout, group, assigned):
+    """Draw the status of a shape-key-mix reference and return whether the
+    mix can be read.
+
+    Nothing to pick: the mix is the object's own. The status line says
+    whether the mix is animated (the rest angle then follows it) or static,
+    and names the refusal the encoder applies to an animated mix in a Rod
+    group before the artist meets it at Transfer.
+    Read from declarations only (``shape_key_mix_animated``), never by
+    stepping the timeline, since this runs in ``draw``.
+    """
+    from ...core.utils import shape_key_mix_animated, validate_bend_shape_key_mix
+    from ...core.uuid_registry import get_object_by_uuid
+
+    obj = get_object_by_uuid(assigned.uuid) if assigned.uuid else None
+    ok, msg = validate_bend_shape_key_mix(obj)
+    if not ok:
+        layout.label(text=msg, icon="INFO")
+        return False
+    if not shape_key_mix_animated(obj):
+        layout.label(
+            text="Mix is not animated: the rest angle is the current mix",
+            icon="SHAPEKEY_DATA",
+        )
+        return True
+    if group.object_type != "SHELL":
+        layout.label(text="An animated mix needs a Shell group", icon="ERROR")
+        return False
+    layout.label(text="Mix is animated: the rest angle follows it", icon="ACTION")
+    return True
+
+
+def _draw_bend_reference_shape_key(layout, assigned):
+    """Draw the shape-key row of the bending reference controls and return
+    whether the stored shape key resolves on the object.
+
+    The search field is always drawn, disabled while the object has no shape
+    keys; a status line says which precondition is missing, and an ERROR line
+    names an unset key or a stored key that no longer exists (renamed or
+    removed), both of which the encoder refuses.
+    """
+    from ...core.uuid_registry import get_object_by_uuid
+
+    obj = get_object_by_uuid(assigned.uuid) if assigned.uuid else None
+    keys = obj.data.shape_keys if obj is not None and obj.type == "MESH" else None
+
+    row = layout.row(align=True)
+    row.enabled = keys is not None
+    if keys is not None:
+        row.prop_search(
+            assigned, "bend_ref_shape_key", keys, "key_blocks",
+            text="", icon="SHAPEKEY_DATA",
+        )
+    else:
+        row.prop(assigned, "bend_ref_shape_key", text="", icon="SHAPEKEY_DATA")
+
+    name = assigned.bend_ref_shape_key
+    if obj is None or obj.type != "MESH":
+        layout.label(text="Shape-key rest angles need a mesh object", icon="INFO")
+        return False
+    if keys is None:
+        layout.label(text="This object has no shape keys", icon="INFO")
+        return False
+    if not name:
+        layout.label(text="No shape key set: Transfer refuses this object", icon="ERROR")
+        return False
+    if keys.key_blocks.get(name) is None:
+        layout.label(
+            text=iface_("Missing shape key: {name}").format(name=name),
+            icon="ERROR",
+        )
+        return False
+    return True
 
 
 def _draw_damping(layout, group, include_bending):
@@ -2262,15 +2368,7 @@ class DYNAMICS_PT_Groups(Panel):
                         if group.enable_plasticity:
                             _material_prop(plast_box, group, "plasticity")
                             _material_prop(plast_box, group, "plasticity_threshold")
-                        bplast_box = param_box.box()
-                        bplast_box.prop(group, "bend_rest_angle_source")
-                        bplast_box.prop(group, "bend_rest_from_reference")
-                        if group.bend_rest_from_reference:
-                            _draw_bend_reference(bplast_box, group, actual_index)
-                        bplast_box.prop(group, "enable_bend_plasticity")
-                        if group.enable_bend_plasticity:
-                            _material_prop(bplast_box, group, "bend_plasticity")
-                            _material_prop(bplast_box, group, "bend_plasticity_threshold")
+                        _draw_shell_bend_rest(param_box.box(), group, actual_index)
                         _draw_velocity_keyframes(param_box, group, actual_index, show_angular=True)
                         _draw_lock_translation(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=True)
@@ -2296,18 +2394,14 @@ class DYNAMICS_PT_Groups(Panel):
                         bend_box.label(text="Bend")
                         _material_prop(bend_box, group, "bend")
                         bend_box.prop(group, "bend_rest_angle_source")
-                        bend_box.prop(group, "bend_rest_from_reference")
-                        if group.bend_rest_from_reference:
+                        if group.bend_rest_angle_source == "FROM_REFERENCE":
                             _draw_bend_reference(bend_box, group, actual_index)
                         sl_box = param_box.box()
                         sl_box.prop(group, "enable_strain_limit")
                         if group.enable_strain_limit:
                             _material_prop(sl_box, group, "strain_limit_percent")
-                        bplast_box = param_box.box()
-                        bplast_box.prop(group, "enable_bend_plasticity")
-                        if group.enable_bend_plasticity:
-                            _material_prop(bplast_box, group, "bend_plasticity")
-                            _material_prop(bplast_box, group, "bend_plasticity_threshold")
+                        if bend_plasticity_applies(group):
+                            _draw_bend_plasticity(param_box.box(), group)
                         _draw_velocity_keyframes(param_box, group, actual_index)
                         _draw_lock_translation(param_box, group, actual_index)
                         _draw_damping(param_box, group, include_bending=True)

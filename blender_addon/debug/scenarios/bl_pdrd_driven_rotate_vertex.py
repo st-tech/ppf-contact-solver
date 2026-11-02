@@ -1,7 +1,7 @@
 # File: scenarios/bl_pdrd_driven_rotate_vertex.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # PDRD Driven Motion: a Rotate step about a picked vertex, encoding round-trip.
 #

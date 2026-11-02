@@ -1,7 +1,7 @@
 # File: addon_host_tests/_ssh_jump_transport_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Gate for the code that OPENS a ProxyJump chain, against real SSH servers.
 #

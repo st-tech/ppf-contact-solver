@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_overlay_follows_edit_mode.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Pin overlay tracks live BMesh vertex positions while the user is
 # in Edit Mode.

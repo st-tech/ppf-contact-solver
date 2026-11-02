@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Markers for the public Blender Python API.
 
 The ``docs/generate_blender_api_reference.py`` generator walks the

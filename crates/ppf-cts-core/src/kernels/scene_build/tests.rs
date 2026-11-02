@@ -722,6 +722,8 @@ fn make_assemble_obj<'a>(
         stitch_w: None,
         stitch_w_cols: 0,
         stitch_stiffness: 1.0,
+        stitch_rest_length: None,
+        stitch_rest_mode: None,
         position: [0.0, 0.0, 0.0],
     }
 }
@@ -882,12 +884,71 @@ fn assemble_cross_stitch_remaps() {
         weights: &cs_w,
         k: 1,
         stitch_stiffness: 2.5,
+        rest_length: None,
+        rest_mode: None,
     };
     let r = assemble_dyn_scene(&[oa, ob], &map, 6, &disp, &[cs]).unwrap();
     // source a[0,1,2] -> 0,1,2; target b[0,1,2] -> 3,4,5.
     assert_eq!(r.concat_stitch_ind, vec![0i64, 1, 2, 3, 4, 5]);
     assert_eq!(r.concat_stitch_w, cs_w);
     assert_eq!(r.concat_stitch_stiffness, vec![2.5f32]);
+    // No rest length named: the row derives its rest length.
+    assert_eq!(r.concat_stitch_rest_mode, vec![STITCH_REST_DERIVED]);
+    assert_eq!(r.concat_stitch_rest_length, vec![0.0]);
+}
+
+#[test]
+fn assemble_cross_stitch_carries_rest_lengths_per_row() {
+    let va = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let vb = vec![0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+    let ca = vec![0.0; 9];
+    let faces: [[u32; 3]; 1] = [[0, 1, 2]];
+    let oa = make_assemble_obj("a", "tri", &va, &ca, Some(&faces), None, None);
+    let ob = make_assemble_obj("b", "tri", &vb, &ca, Some(&faces), None, None);
+    let mut map = std::collections::HashMap::new();
+    map.insert("a".to_string(), vec![0i64, 1, 2]);
+    map.insert("b".to_string(), vec![3i64, 4, 5]);
+    let disp = vec![
+        ("a".to_string(), [0.0, 0.0, 0.0]),
+        ("b".to_string(), [0.0, 0.0, 0.0]),
+    ];
+    let cs_ind = vec![0i64, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2];
+    let cs_w = vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0].repeat(3);
+    let lengths = [0.4, 0.0, 0.0];
+    let modes = [STITCH_REST_AUTHORED, STITCH_REST_DERIVED, STITCH_REST_INITIAL];
+    let cs = CrossStitch {
+        source_name: "a",
+        target_name: "b",
+        ind: &cs_ind,
+        weights: &cs_w,
+        k: 3,
+        stitch_stiffness: 1.0,
+        rest_length: Some(&lengths),
+        rest_mode: Some(&modes),
+    };
+    let r = assemble_dyn_scene(&[oa, ob], &map, 6, &disp, &[cs]).unwrap();
+    assert_eq!(r.concat_stitch_rest_mode, modes.to_vec());
+    assert_eq!(r.concat_stitch_rest_length, vec![0.4, 0.0, 0.0]);
+
+    // An authored row must carry a finite positive length.
+    for bad in [0.0, -1.0, f64::NAN] {
+        let lengths = [bad];
+        let modes = [STITCH_REST_AUTHORED];
+        let cs = CrossStitch {
+            source_name: "a",
+            target_name: "b",
+            ind: &cs_ind[..6],
+            weights: &cs_w[..6],
+            k: 1,
+            stitch_stiffness: 1.0,
+            rest_length: Some(&lengths),
+            rest_mode: Some(&modes),
+        };
+        let oa = make_assemble_obj("a", "tri", &va, &ca, Some(&faces), None, None);
+        let ob = make_assemble_obj("b", "tri", &vb, &ca, Some(&faces), None, None);
+        let err = assemble_dyn_scene(&[oa, ob], &map, 6, &disp, &[cs]).unwrap_err();
+        assert!(matches!(err, SceneAssemblyError::StitchRestLength { .. }));
+    }
 }
 
 #[test]
@@ -921,6 +982,27 @@ fn assemble_static_scene_offsets_faces() {
     assert_eq!(r.static_vert.len(), 18);
     assert_eq!(r.static_tri, vec![0u32, 1, 2, 3, 4, 5]);
     assert_eq!(r.static_vert_dmap, vec![0u32, 0, 0, 1, 1, 1]);
+}
+
+#[test]
+fn assemble_static_scene_refuses_an_object_without_faces() {
+    // A faceless static contributes nothing to the collision mesh; skipping
+    // it would remove an obstacle from the scene, so it is refused.
+    let v = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let so = AssembleStaticObject {
+        name: "dowel",
+        vertex_world: &v,
+        color: [0.5, 0.5, 0.5],
+        faces: None,
+        n_faces: 0,
+        position: [0.0, 0.0, 0.0],
+    };
+    let disp = vec![("dowel".to_string(), [0.0, 0.0, 0.0])];
+    let err = assemble_static_scene(&[so], &disp).unwrap_err();
+    assert!(matches!(
+        err,
+        SceneAssemblyError::StaticObjectWithoutFaces { ref name } if name == "dowel"
+    ));
 }
 
 #[test]

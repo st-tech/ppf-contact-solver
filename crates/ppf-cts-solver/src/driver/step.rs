@@ -150,6 +150,11 @@ struct StepParams {
     max_newton_steps: u32,
     min_newton_steps: u32,
     target_toi: f32,
+    /// The friction law's own length: below this slip a contact's friction is
+    /// a spring rather than a capped force (`friction_evaluate`'s
+    /// `minimum_slip`), and the stick range the friction's memory return maps
+    /// a committed slip to (`driver/friction_memory.rs`).
+    friction_eps: f32,
     line_search_max_t: f32,
     eiganalysis_eps: f32,
     /// The factor the cross-stitch length cap scales its rest length by. One
@@ -187,6 +192,7 @@ impl StepParams {
             max_newton_steps: p.max_newton_steps,
             min_newton_steps: p.min_newton_steps,
             target_toi: p.target_toi,
+            friction_eps: p.friction_eps,
             line_search_max_t: p.line_search_max_t,
             eiganalysis_eps: p.eiganalysis_eps,
             stitch_length_factor: p.stitch_length_factor,
@@ -551,6 +557,14 @@ pub unsafe fn advance<D: Device>(
         // Safety: both buffers outlive the calls and name `vertices` floats.
         let u = unsafe { state.fold.max(device, "step.max_u", a, vertices as u32, 0.0) }?;
         let r = unsafe { state.fold.max(device, "step.reach", b, vertices as u32, 0.0) }?;
+        // A NaN velocity or coordinate reaches here through the NaN-keeping
+        // folds; every comparison below would read it as in range.
+        if !(u.is_finite() && r.is_finite()) {
+            return Err(Fatal::invariant(format!(
+                "solver driver: the start-of-step fold read a non-finite speed ({u}) or \
+                 reach ({r}); a vertex's velocity or position is NaN or infinite"
+            )));
+        }
         (u.sqrt(), r)
     };
     let domain = position_domain_abi();
@@ -795,6 +809,9 @@ pub unsafe fn advance<D: Device>(
     let mut step: u32 = 1;
     let mut final_step = false;
     let mut last_toi: f32 = 1.0;
+    // Whether any pair of this step can carry friction, and so whether the
+    // friction's memory records and commits (`driver/friction_memory.rs`).
+    let frictional = scene_has_friction(data);
 
     // RECORDED AND NOT PRINTED. The head of the step is not one of the
     // solver's own printed scopes, so a printed row here would read, in a
@@ -1170,12 +1187,12 @@ pub unsafe fn advance<D: Device>(
             // here rather than read out of `force` directly because the
             // contacts below deposit into `force` through atomics, so a pair
             // reading that vector would read a row another pair had already
-            // moved. TWO SNAPSHOTS, NOT ONE, because this driver deposits both
-            // halves straight into `force` rather than accumulating the
-            // self-contact half into a vector of its own and folding it in at
-            // the end. The second copy therefore carries the analytic and
-            // collision-mesh forces, which is what the self-contact pass must
-            // anchor on.
+            // moved. ONE SNAPSHOT FOR ALL THREE PASSES: the contact forces a
+            // friction term must see reach it through the lagged non-friction
+            // load instead, which holds EVERY contact's normal force and no
+            // friction force (`friction_load_settle`), so reading the analytic
+            // and collision-mesh forces again here would count them twice and
+            // their friction once.
             {
                 let bytes = 3 * state.sizes.vertices * size_of::<f32>();
                 let (residual, force) = (state.residual.handle(), state.force.handle());
@@ -1189,6 +1206,13 @@ pub unsafe fn advance<D: Device>(
             // FIRST, before the self-contact assembly, and reading the SAME
             // elastic snapshot. The self-contact block below says why the order
             // is load-bearing.
+            // THE FRICTION'S RECORD OPENS for this iteration's three
+            // assemblies, which read the last committed step's memory and
+            // append this iteration's pairs (`driver/friction_memory.rs`).
+            // Safety: the snapshot above holds three floats per vertex.
+            let memory = unsafe {
+                state.friction_memory.open(device, state.residual.handle(), step == 1)
+            }?;
             let constraint_result = if shell.is_ok() && rod.is_ok() {
                 let SolverState {
                     analytic: analytic_state,
@@ -1207,10 +1231,8 @@ pub unsafe fn advance<D: Device>(
                     grain_angular: grain_angular_buffer,
                     grain_coupling: grain_coupling_buffer,
                     grain_rotational: grain_rotational_buffer,
-                    residual: residual_buffer,
                     ..
                 } = &mut *state;
-                let residual = residual_buffer.handle();
                 let grain_angular = grain_angular_buffer.handle();
                 let grain_coupling = grain_coupling_buffer.handle();
                 let grain_rotational = grain_rotational_buffer.handle();
@@ -1240,8 +1262,8 @@ pub unsafe fn advance<D: Device>(
                     grain_angular,
                     grain_coupling,
                     grain_rotational,
-                    residual,
                     statistics,
+                    memory,
                 );
                 if outcome.is_ok() && !prm.disable_contact {
                     if let Some(contact) = contact_state.as_mut() {
@@ -1256,8 +1278,8 @@ pub unsafe fn advance<D: Device>(
                             &mut fixed,
                             force.handle(),
                             push,
-                            residual,
                             statistics,
+                            memory,
                         );
                     }
                 }
@@ -1265,48 +1287,26 @@ pub unsafe fn advance<D: Device>(
             } else {
                 Ok(())
             };
-            // THE RESIDUAL SNAPSHOT THIS PASS'S FRICTION ANCHORS ON. Taken
-            // here rather than read out of `force` directly because the
-            // contacts below deposit into `force` through atomics, so a pair
-            // reading that vector would read a row another pair had already
-            // moved. TWO SNAPSHOTS, NOT ONE, because this driver deposits both
-            // halves straight into `force` rather than accumulating the
-            // self-contact half into a vector of its own and folding it in at
-            // the end. The second copy therefore carries the analytic and
-            // collision-mesh forces, which is what the self-contact pass must
-            // anchor on.
-            {
-                let bytes = 3 * state.sizes.vertices * size_of::<f32>();
-                let (residual, force) = (state.residual.handle(), state.force.handle());
-                device.copy(residual, 0, force, 0, bytes)?;
-            }
             // THE SELF-CONTACT ASSEMBLY, timed as `asm_contact`.
             //
-            // AFTER the analytic and collision-mesh contacts, and the order is
-            // load-bearing rather than
-            // incidental: every friction term anchors itself on the
-            // residual assembled so far, and the contacts above are the ones
-            // carrying the normal load in most scenes, so a mesh contact built
-            // after them reads a tangential drive with that load already
-            // removed. The reverse order would hand a vertex resting on a floor
-            // its full weight as the sideways drive of a contact against a
-            // neighbor. Both are fp32 running sums either way, so the order is
-            // not free to change back.
+            // AFTER the analytic and collision-mesh contacts. `force` is an fp32
+            // running sum, so the order is part of the answer and is kept. It
+            // does not decide what a friction term reads: every pass reads the
+            // one snapshot above plus the lagged non-friction load.
             let _asm_contact = std::time::Instant::now();
             let contact_result = if shell.is_ok() && rod.is_ok() && !prm.disable_contact {
                 let SolverState {
                     contact: contact_state,
                     force,
+                    diagonal,
                     eval_x,
                     push,
                     grain_omega: omega,
                     grain_torque: torque,
                     grain_stiffness: stiffness,
                     grain_normal: normal,
-                    residual: residual_buffer,
                     ..
                 } = &mut *state;
-                let residual = residual_buffer.handle();
                 let iterate = eval_x.handle();
                 let grain_omega = omega.handle();
                 let (grain_torque, grain_stiffness, grain_normal) =
@@ -1327,13 +1327,40 @@ pub unsafe fn advance<D: Device>(
                         grain_torque,
                         grain_stiffness,
                         grain_normal,
-                        residual,
                         statistics,
+                        memory,
+                        diagonal.handle(),
                     ),
                     None => Err(Fatal::invariant(
                         "solver driver: the contact assembly was reached with no contact \
                          subsystem allocated",
                     )),
+                }
+            } else if shell.is_ok() && rod.is_ok() && frictional {
+                // NO SELF-CONTACT ASSEMBLY, so no dynamic matrix: the analytic
+                // contacts' friction is still the frozen record's, applied
+                // into the fixed pattern alone.
+                let (x0, iterate, force, diagonal) = (
+                    curr,
+                    state.eval_x.handle(),
+                    state.force.handle(),
+                    state.diagonal.handle(),
+                );
+                let fixed_refs = fixed.device_push_refs();
+                // Safety: the two poses and the force name the scene's
+                // vertices, and the fixed matrix is the one this iteration
+                // assembles.
+                unsafe {
+                    state.friction_memory.embed_frozen_fixed_only(
+                        device,
+                        &memory,
+                        x0,
+                        iterate,
+                        prm.friction_eps,
+                        fixed_refs,
+                        force,
+                        diagonal,
+                    )
                 }
             } else {
                 Ok(())
@@ -1353,6 +1380,24 @@ pub unsafe fn advance<D: Device>(
             log::mark("advance", "asm_contact", _asm_contact.elapsed());
             contact_result?;
             constraint_result?;
+            // THE RECORD CLOSES once all three have run: one word read back,
+            // and the capacity grown when this iteration's pairs did not fit.
+            if frictional {
+                let (start, iterate) = (state.positions.handle(), state.eval_x.handle());
+                let (force, residual) = (state.force.handle(), state.residual.handle());
+                // Safety: the two poses and the two arrays all name the scene's
+                // vertices; `eval_x` is the iterate the passes just assembled at.
+                unsafe {
+                    state.friction_memory.close(
+                        device,
+                        start,
+                        iterate,
+                        prm.friction_eps,
+                        force,
+                        residual,
+                    )
+                }?;
+            }
             // A PAIR THE ASSEMBLY FOUND ALREADY COLLAPSED TO ITS OFFSET ends
             // the advance here, and the report is a HOST CONTRACT: the kind
             // string, the pair, the world-space lengths, and for a
@@ -1610,6 +1655,7 @@ pub unsafe fn advance<D: Device>(
             // the vertex rows and the frame rows are one system. PDRD bodies, a
             // lock and the Schwarz preconditioner are refused alongside it at
             // `initialize()`, so none of the branches below has to compose with it.
+            state.cosserat.sum_frame_rows(device)?;
             let frames = state.cosserat.blocks(removed > 0);
             pcg::solve_cosserat(
                 device,
@@ -2201,7 +2247,10 @@ pub unsafe fn advance<D: Device>(
         // decide whether the search direction must be rescaled before
         // the line search.
         log::mark("advance", "max_dx", max_dx as f64);
-        let mut toi_recale = (prm.max_dx / max_dx).min(1.0);
+        // A NaN magnitude would read as no step limit through `min`; it stops the
+        // run instead. A zero magnitude (nothing moves) needs no limit.
+        let max_dx = super::ccd::certified_fraction(max_dx, "search-direction magnitude");
+        let mut toi_recale = if max_dx > 0.0 { (prm.max_dx / max_dx).min(1.0) } else { 1.0 };
         // THE FRAMES' TWIN OF `max-dx`, folded into the same factor because
         // positions and frames are one Newton direction and must move by one
         // fraction of it. `MAX_FRAME_TURN` says why the bound is a quarter turn.
@@ -2215,7 +2264,10 @@ pub unsafe fn advance<D: Device>(
                 )));
             }
             if turn > super::cosserat::MAX_FRAME_TURN {
-                toi_recale = toi_recale.min(super::cosserat::MAX_FRAME_TURN / turn);
+                toi_recale = toi_recale.min(super::ccd::certified_fraction(
+                    super::cosserat::MAX_FRAME_TURN / turn,
+                    "frame-turn step limit",
+                ));
             }
         }
         let toi_recale = toi_recale;
@@ -2428,10 +2480,14 @@ pub unsafe fn advance<D: Device>(
                         / prm.line_search_max_t,
                 )),
             );
-            let smallest = filter
-                .as_ref()
-                .map_or(prm.line_search_max_t, super::ccd::Filter::time_of_impact)
-                .min(sweep.time_of_impact);
+            // Each operand is checked before the `min`, which would drop a NaN.
+            let smallest = super::ccd::certified_fraction(
+                filter
+                    .as_ref()
+                    .map_or(prm.line_search_max_t, super::ccd::Filter::time_of_impact),
+                "contact sweep",
+            )
+            .min(super::ccd::certified_fraction(sweep.time_of_impact, "analytic sweep"));
             (smallest / prm.line_search_max_t).min(1.0)
         };
         // THE STRAIN LIMITER'S OWN HALF, folded in after the contact CCD.
@@ -2460,7 +2516,9 @@ pub unsafe fn advance<D: Device>(
                     prm.line_search_max_t,
                 )
             }?;
-            let shell_toi = smallest / prm.line_search_max_t;
+            // Checked before it meets a `min`, which would drop a NaN.
+            let shell_toi = super::ccd::certified_fraction(smallest, "shell strain limiter")
+                / prm.line_search_max_t;
             sl_toi = sl_toi.min(shell_toi);
             toi = toi.min(shell_toi);
             // Name: Strain-Limit Time of Impact
@@ -2487,7 +2545,8 @@ pub unsafe fn advance<D: Device>(
                     prm.line_search_max_t,
                 )
             }?;
-            let rod_toi = smallest / prm.line_search_max_t;
+            let rod_toi = super::ccd::certified_fraction(smallest, "rod strain limiter")
+                / prm.line_search_max_t;
             sl_toi = sl_toi.min(rod_toi);
             toi = toi.min(rod_toi);
             // Name: SL-rod-toi
@@ -2753,10 +2812,14 @@ pub unsafe fn advance<D: Device>(
                     result.contact_separated = false;
                     return Ok(result);
                 }
-                let smallest = filter
-                    .as_ref()
-                    .map_or(prm.line_search_max_t, super::ccd::Filter::time_of_impact)
-                    .min(sweep.time_of_impact);
+                // Each operand is checked before the `min`, which would drop a NaN.
+                let smallest = super::ccd::certified_fraction(
+                    filter
+                        .as_ref()
+                        .map_or(prm.line_search_max_t, super::ccd::Filter::time_of_impact),
+                    "contact sweep",
+                )
+                .min(super::ccd::certified_fraction(sweep.time_of_impact, "analytic sweep"));
                 (smallest / prm.line_search_max_t).min(1.0)
             };
             log::mark("advance", "rigidify_toi", f64::from(toi_rig));
@@ -2900,6 +2963,26 @@ pub unsafe fn advance<D: Device>(
             log::mark("advance", "check_intersection", _gate.elapsed());
             super::publish_intersection_records(&report);
         }
+        // THE ANALYTIC SPHERES' HALF OF THE SAME GATE (`sphere_feature_gate`),
+        // outside the `disable-contact` gate as the analytic barrier and sweep
+        // are: a surface triangle, edge or free vertex inside a static solid
+        // sphere at the pose about to be committed. The mesh scan above sees
+        // only mesh pairs, and a triangle can be inside a sphere with every
+        // vertex outside.
+        {
+            let SolverState { analytic, eval_x, sphere, .. } = &mut *state;
+            if let Some(analytic) = analytic.as_mut() {
+                let inside =
+                    analytic.sphere_features_inside(device, mesh_refs, eval_x.handle(), sphere)?;
+                if inside > 0 {
+                    log::message!(
+                        "### intersection detected: {inside} surface triangle(s), edge(s) or \
+                         vertex(es) inside an analytic sphere at the committed pose"
+                    );
+                    result.intersection_free = false;
+                }
+            }
+        }
 
         // Name: Advanced Fractional Step Size
         // Format: list[(time, ratio)]
@@ -2966,6 +3049,16 @@ pub unsafe fn advance<D: Device>(
                 vertices,
                 "completed Newton step",
             )?;
+        }
+
+        // THE FRICTION'S MEMORY COMMITS WITH THE POSE: the last iteration's
+        // pairs, their slips evaluated at the pose about to become current
+        // against the one it replaces, become what the next step's contacts
+        // carry (`driver/friction_memory.rs`). Before STEP C5, which is what
+        // overwrites the step's start.
+        if frictional {
+            let (start, pose) = (state.positions.handle(), state.eval_x.handle());
+            state.friction_memory.commit(device, start, pose, prm.friction_eps)?;
         }
 
         // STEP C5. Commit the positions: the current pose becomes the previous
@@ -3175,6 +3268,29 @@ unsafe fn compute_target<D: Device>(
     };
     device.launch("step.compute_target", &args, vertices as u32)?;
     Ok(())
+}
+
+/// Whether any contact in the scene can carry friction: a coefficient above
+/// zero on any vertex, edge or face of the solved meshes or of the static
+/// collision mesh, or on an analytic sphere or floor. The contact's own
+/// coefficient combines two of these (`friction-mode`), so this is the
+/// question "could any pair be frictional", answered from the host tables the
+/// refusals read too, every step, since materials may be animated.
+pub(super) fn scene_has_friction(data: &DataSet) -> bool {
+    // Safety: every table is a live host allocation of its stated size, as the
+    // refusals that read them on every step rely on.
+    unsafe {
+        let p = &data.param_arrays;
+        let m = &data.constraint.mesh.param_arrays;
+        super::scene::slice(&p.vertex).iter().any(|v| v.friction > 0.0)
+            || super::scene::slice(&p.edge).iter().any(|e| e.friction > 0.0)
+            || super::scene::slice(&p.face).iter().any(|f| f.friction > 0.0)
+            || super::scene::slice(&m.vertex).iter().any(|v| v.friction > 0.0)
+            || super::scene::slice(&m.edge).iter().any(|e| e.friction > 0.0)
+            || super::scene::slice(&m.face).iter().any(|f| f.friction > 0.0)
+            || super::scene::slice(&data.constraint.sphere).iter().any(|s| s.friction > 0.0)
+            || super::scene::slice(&data.constraint.floor).iter().any(|f| f.friction > 0.0)
+    }
 }
 
 #[cfg(test)]

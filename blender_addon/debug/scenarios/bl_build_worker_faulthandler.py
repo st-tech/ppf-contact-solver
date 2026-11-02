@@ -1,7 +1,7 @@
 # File: scenarios/bl_build_worker_faulthandler.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard for the "build worker exited with code 1" mystery on
 # Windows.

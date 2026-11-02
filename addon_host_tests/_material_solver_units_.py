@@ -1,7 +1,7 @@
 # File: addon_host_tests/_material_solver_units_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The one conversion from an authored material value to the solver's units.
 #
@@ -34,6 +34,7 @@ def make_group(object_type="SHELL", **overrides):
         enable_strain_limit=True,
         enable_plasticity=True,
         enable_bend_plasticity=True,
+        bend_rest_angle_source="FLAT",
         shrink_x=1.0,
         shrink_y=1.0,
         pin_vertex_groups=[],

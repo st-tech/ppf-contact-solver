@@ -182,6 +182,19 @@ pub const PLASTIC_PREFIX: &str = "plastic_";
 /// Trailing fragment of a per-frame rest-shape name.
 pub const PLASTIC_SUFFIX: &str = ".bin.gz";
 
+/// Leading fragment of a per-frame friction-memory name
+/// (`friction_<N>.bin.gz`).
+pub const FRICTION_PREFIX: &str = "friction_";
+
+/// Trailing fragment of a per-frame friction-memory name.
+pub const FRICTION_SUFFIX: &str = ".bin.gz";
+
+/// Leading fragment of a per-frame run-state name (`runstate_<N>.bin.gz`).
+pub const RUNSTATE_PREFIX: &str = "runstate_";
+
+/// Trailing fragment of a per-frame run-state name.
+pub const RUNSTATE_SUFFIX: &str = ".bin.gz";
+
 /// Leading fragment of a per-frame display-pin name (`display_pin_<N>.bin`):
 /// the scripted positions, at that frame's time, of the Blender vertices an
 /// exact SOLID pin holds.
@@ -224,6 +237,15 @@ pub const CHECKPOINT_LAYOUT_NOTE: &str = concat!(
     "                      from the build-time values held in the dataset.\n",
     "                      Paired 1:1 with state_<N>.bin.gz whenever some\n",
     "                      material has plasticity enabled.\n",
+    "  friction_<N>.bin.gz per-frame friction memory: where each frictional\n",
+    "                      contact stuck, carried from step to step. Paired\n",
+    "                      1:1 with state_<N>.bin.gz whenever some pair of\n",
+    "                      the scene can carry friction.\n",
+    "  runstate_<N>.bin.gz per-frame rotational run state a step carries to\n",
+    "                      the next: the Cosserat rod frames and their\n",
+    "                      history, the SAND grains' spin, and the PDRD\n",
+    "                      bodies' running rotation. Paired 1:1 with\n",
+    "                      state_<N>.bin.gz whenever the scene has any.\n",
 );
 
 /// Per-frame vertex bin written by the solver as `vert_<N>.bin`.
@@ -252,6 +274,26 @@ pub fn state_filename(frame: i32) -> String {
 /// full-name forms cannot drift.
 pub fn plastic_filename(frame: i32) -> String {
     format!("{PLASTIC_PREFIX}{frame}{PLASTIC_SUFFIX}")
+}
+
+/// Per-frame friction memory written by the solver as `friction_<N>.bin.gz`,
+/// alongside the `state_<N>.bin.gz` it belongs to: the contacts that were
+/// sticking at that frame and the slip each carried. Present only for a scene
+/// in which some pair can carry friction. Defined in terms of
+/// `FRICTION_PREFIX`/`FRICTION_SUFFIX` so the fragment and full-name forms
+/// cannot drift.
+pub fn friction_filename(frame: i32) -> String {
+    format!("{FRICTION_PREFIX}{frame}{FRICTION_SUFFIX}")
+}
+
+/// Per-frame run state written by the solver as `runstate_<N>.bin.gz`,
+/// alongside the `state_<N>.bin.gz` it belongs to: the rotational state a step
+/// reads from the one before it beside the positions (Cosserat frames, grain
+/// spin, PDRD running rotation). Present only for a scene that carries some.
+/// Defined in terms of `RUNSTATE_PREFIX`/`RUNSTATE_SUFFIX` so the fragment and
+/// full-name forms cannot drift.
+pub fn runstate_filename(frame: i32) -> String {
+    format!("{RUNSTATE_PREFIX}{frame}{RUNSTATE_SUFFIX}")
 }
 
 /// Per-frame display-pin positions written by the solver as

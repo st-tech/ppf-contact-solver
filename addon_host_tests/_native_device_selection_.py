@@ -1,7 +1,7 @@
 # File: addon_host_tests/_native_device_selection_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Host-side gates for the GPU/CPU choice on the two LOCAL NATIVE backends
 # (``blender_addon/core/connection.py``).

@@ -368,6 +368,22 @@ fn invert_rest_or_panic3(mat: &Matrix3<f32>, tet: usize, t: [usize; 4]) -> Matri
 /// degenerate element is a hard error rather than an exclusion, because build
 /// geometry the caller supplied degenerate is a defect in that geometry, not a
 /// pose a captured deformation happened to pass through.
+/// The rest dihedral angle of the hinge `[h0, h1, h2, h3]` measured on the
+/// vertex set `rest_v`. One definition for the build (a hinge whose rest angle
+/// comes from geometry or a reference shape) and for the per-keyframe angles of
+/// an animated bending rest shape (`Scene::bend_rest_schedule`), so a keyframe
+/// equal to the build-time reference reproduces the build-time angle exactly.
+pub(crate) fn hinge_rest_angle(hinge: [usize; 4], rest_v: &Matrix3xX<f32>) -> f32 {
+    // Mirror the device-side `shell_bend_remap`
+    // (`kernels/energy/model/shell_bend.kernel.cpp`) before taking the dihedral
+    // angle: (h2, h1, h0, h3).
+    let v0 = rest_v.column(hinge[2]).map(f32::from);
+    let v1 = rest_v.column(hinge[1]).map(f32::from);
+    let v2 = rest_v.column(hinge[0]).map(f32::from);
+    let v3 = rest_v.column(hinge[3]).map(f32::from);
+    signed_dihedral_angle(&v0, &v1, &v2, &v3)
+}
+
 pub(crate) fn compute_inv_rest(
     rest_v: &Matrix3xX<f32>,
     mesh: &MeshSet,
@@ -1324,14 +1340,7 @@ pub fn build(
             // when the group's Rest Angle source is Flat.
             let from_reference = !bend_mask.is_empty() && bend_mask[hinge[0]];
             let rest_angle = if from_geometry || from_reference {
-                // Mirror the device-side `shell_bend_remap`
-                // (`kernels/energy/model/shell_bend.kernel.cpp`) before taking
-                // the dihedral angle: (h2, h1, h0, h3).
-                let v0 = bend_rest_v.column(hinge[2]).map(f32::from);
-                let v1 = bend_rest_v.column(hinge[1]).map(f32::from);
-                let v2 = bend_rest_v.column(hinge[0]).map(f32::from);
-                let v3 = bend_rest_v.column(hinge[3]).map(f32::from);
-                signed_dihedral_angle(&v0, &v1, &v2, &v3)
+                hinge_rest_angle([hinge[0], hinge[1], hinge[2], hinge[3]], bend_rest_v)
             } else {
                 0.0
             };

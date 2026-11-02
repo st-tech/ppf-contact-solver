@@ -1662,5 +1662,22 @@
   "Last run: aborted": "前回の実行: 中止",
   "Resolving shell intersections: {stage}, iteration {iteration}, {pairs} pair(s) inside their margin": "シェルの交差を解消中: {stage}、反復 {iteration}、マージン内のペア {pairs} 組",
   "{name} was edited while the run was going, so the result was not written. Run again": "{name} が実行中に編集されたため、結果は書き込まれませんでした。もう一度実行してください",
-  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "「すべての交差を解消」を中止します。手順 1 ではシェルは元のまま、手順 2 ではそこまでに得た状態が保たれます"
+  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "「すべての交差を解消」を中止します。手順 1 ではシェルは元のまま、手順 2 ではそこまでに得た状態が保たれます",
+  "Reference (per object):": "参照 (オブジェクトごと):",
+  "Mix is not animated: the rest angle is the current mix": "ミックスはアニメーションされていません: 静止角度は現在のミックスです",
+  "An animated mix needs a Shell group": "アニメーションするミックスにはシェルグループが必要です",
+  "Mix is animated: the rest angle follows it": "ミックスはアニメーションされています: 静止角度はそれに従います",
+  "Shape-key rest angles need a mesh object": "シェイプキーの静止角度にはメッシュオブジェクトが必要です",
+  "This object has no shape keys": "このオブジェクトにはシェイプキーがありません",
+  "No shape key set: Transfer refuses this object": "シェイプキーが設定されていません: このオブジェクトは転送できません",
+  "Missing shape key: {name}": "シェイプキーが見つかりません: {name}",
+  "Each object takes its rest angle from its own reference: another object (a topological copy whose vertices were moved), one of its shape keys, or its shape-key mix (animated with it). Every object in the group must have one. Bend Plasticity does not apply": "各オブジェクトは自身の参照から静止角度を取得します: 別のオブジェクト (頂点を動かしたトポロジー上のコピー)、自身のシェイプキーの一つ、またはシェイプキーのミックス (それに合わせてアニメーション)。グループ内のすべてのオブジェクトに参照が必要です。曲げ塑性は適用されません",
+  "Reference Source": "参照ソース",
+  "Reference Object": "参照オブジェクト",
+  "Take the rest angle from another object, a topological copy of this one whose vertices were moved": "別のオブジェクト (頂点を動かしたこのオブジェクトのトポロジー上のコピー) から静止角度を取得します",
+  "Shape Key": "シェイプキー",
+  "Take the rest angle from one of this object's own shape keys, read as the key's stored shape (independent of its Value slider, before modifiers)": "このオブジェクト自身のシェイプキーの一つから静止角度を取得します。キーに保存された形状として読み取ります (値スライダーに依存せず、モディファイアー適用前)",
+  "Shape Key Mix (Animated)": "シェイプキーミックス (アニメーション)",
+  "Take the rest angle from this object's whole shape-key mix as Blender plays it (every key's Value, before modifiers). When the mix is animated, the rest angle follows it through the simulation": "Blender が再生するこのオブジェクトのシェイプキーミックス全体 (各キーの値、モディファイアー適用前) から静止角度を取得します。ミックスがアニメーションされている場合、静止角度はシミュレーション中それに従います",
+  "Shape key of this object whose stored shape gives the bending rest angle": "保存された形状が曲げ静止角度を決める、このオブジェクトのシェイプキー"
 }

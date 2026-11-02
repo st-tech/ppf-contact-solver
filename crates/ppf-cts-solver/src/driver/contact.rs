@@ -870,10 +870,12 @@ impl Contact {
         grain_torque: ppf_cts_compute::Handle,
         grain_stiffness: ppf_cts_compute::Handle,
         grain_normal: ppf_cts_compute::Handle,
-        // A COPY OF THE FORCE VECTOR TAKEN BEFORE THIS PASS. See
-        // `NarrowPhaseInputs::residual`.
-        residual: ppf_cts_compute::Handle,
         statistics: StatisticsRefs,
+        // The friction's memory (`driver/friction_memory.rs`).
+        memory: FrictionMemoryRefs,
+        // The operator's block diagonal, where the frozen friction puts each
+        // vertex's own block.
+        diagonal: ppf_cts_compute::Handle,
     ) -> FatalResult<()> {
         self.matrix.start_rebuild();
         self.assembled = 0;
@@ -897,7 +899,8 @@ impl Contact {
         let inputs =
             self.narrow_phase_inputs(
                 data, mesh, param, x0, x, reference, grain_omega,
-                grain_torque, grain_stiffness, grain_normal, residual, statistics,
+                grain_torque, grain_stiffness, grain_normal, statistics,
+                memory,
             );
         for kind in Kind::ORDER {
             // ALL FOUR TRAVERSE AND EMBED IN ONE PASS. Each invokes its
@@ -923,6 +926,11 @@ impl Contact {
                 }
             }
         }
+        // THE STEP'S FRICTION, from the record the step's first iteration
+        // wrote (`driver/friction_memory.rs`), after the four passes and into
+        // the same matrix, so its blocks outside the fixed pattern land in this
+        // rebuild's dynamic slots.
+        self.embed_frozen_friction(device, &inputs, fixed, force, diagonal)?;
         self.assembled_device.download(device)?;
         self.assembled = self.assembled_device.host().iter().map(|&count| u64::from(count)).sum();
         self.matrix.finalize();
@@ -1093,7 +1101,18 @@ impl Contact {
             friction_mode: a.friction_mode,
             barrier_id: a.barrier_id,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -1124,6 +1143,56 @@ impl Contact {
                 "solver driver: the fused point-face traversal staged more than the {capacity} \
                  dynamic blocks reserved for it. Every block past the offer was DROPPED, which \
                  is a lost Hessian coupling; the reserve is one pass wide and needs raising"
+            ))
+        })?;
+        Ok(())
+    }
+
+    /// The step's friction from its frozen record
+    /// ([`super::friction_memory::launch_frozen`]), with this rebuild's dynamic
+    /// slots for the blocks the fixed pattern does not hold: a point-face or
+    /// edge-edge pair couples vertices of two elements.
+    ///
+    /// # Safety
+    /// Every handle the record names must outlive the dispatch.
+    unsafe fn embed_frozen_friction<D: Device>(
+        &mut self,
+        device: &mut D,
+        inputs: &NarrowPhaseInputs,
+        fixed: &mut FixedCsr<'_>,
+        force: ppf_cts_compute::Handle,
+        diagonal: ppf_cts_compute::Handle,
+    ) -> FatalResult<()> {
+        let a = inputs;
+        let entries = a.memory.frozen_capacity as usize;
+        if entries == 0 {
+            return Ok(());
+        }
+        let (_fi, _fo, out_fixed_value, _rc) = fixed.device_push_refs();
+        // The upper triangle of a pair of four vertices is ten blocks.
+        let capacity = 10 * entries;
+        self.matrix.reserve_device_staging(device, capacity)?;
+        let dyn_stage = self.matrix.device_staging(device, capacity)?;
+        // Safety: every buffer named is borrowed for the whole call.
+        unsafe {
+            super::friction_memory::launch_frozen(
+                device,
+                &a.memory,
+                a.x0,
+                a.x,
+                a.friction_eps,
+                (a.fixed_index, a.fixed_offset, out_fixed_value, a.row_count),
+                force,
+                diagonal,
+                &dyn_stage,
+            )
+        }?;
+        self.matrix.take_device_staged(device, capacity).map_err(|fault| {
+            let _ = &fault;
+            Fatal::invariant(format!(
+                "solver driver: the frozen friction pass staged more than the {capacity} \
+                 dynamic blocks reserved for it, ten for each recorded pair; every block past \
+                 the offer was DROPPED, which is a lost Hessian coupling"
             ))
         })?;
         Ok(())
@@ -1191,7 +1260,18 @@ impl Contact {
             friction_mode: a.friction_mode,
             barrier_id: a.barrier_id,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -1279,7 +1359,18 @@ impl Contact {
             friction_mode: a.friction_mode,
             barrier_id: a.barrier_id,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -1362,7 +1453,18 @@ impl Contact {
             friction_mode: a.friction_mode,
             barrier_id: a.barrier_id,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             grain_inv_inertia: a.grain_inv_inertia,
             grain_omega: a.grain_omega,
@@ -2194,16 +2296,15 @@ impl Contact {
         fixed: &mut FixedCsr<'_>,
         force: ppf_cts_compute::Handle,
         _staging: &mut super::state::PushStaging,
-        // A COPY OF THE FORCE VECTOR TAKEN BEFORE THIS PASS. See
-        // `CollisionInputs::residual`.
-        residual: ppf_cts_compute::Handle,
         statistics: StatisticsRefs,
+        // The friction's memory (`driver/friction_memory.rs`).
+        memory: FrictionMemoryRefs,
     ) -> FatalResult<()> {
         if !self.has_collision_mesh() {
             return Ok(());
         }
         let inputs =
-            self.collision_inputs(data, mesh, param, x0, x, reference, residual, statistics);
+            self.collision_inputs(data, mesh, param, x0, x, reference, statistics, memory);
         let mut counts = [0usize; 3];
         // THE THREE PASSES, IN THE ORDER `ColliderPass` DECLARES THEM, each
         // traversing and embedding in one dispatch. Written out rather than
@@ -2317,7 +2418,18 @@ impl Contact {
             row_count: a.row_count,
             friction_mode: a.friction_mode,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -2412,7 +2524,18 @@ impl Contact {
             row_count: a.row_count,
             friction_mode: a.friction_mode,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -2508,7 +2631,18 @@ impl Contact {
             row_count: a.row_count,
             friction_mode: a.friction_mode,
             friction_eps: a.friction_eps,
-            residual: a.residual,
+            memory_word0: a.memory.memory_word0,
+            memory_word1: a.memory.memory_word1,
+            memory_slip: a.memory.memory_slip,
+            memory_count: a.memory.memory_count,
+            record_word0: a.memory.record_word0,
+            record_word1: a.memory.record_word1,
+            record_vertex: a.memory.record_vertex,
+            record_float: a.memory.record_float,
+            record_count: a.memory.record_count,
+            record_capacity: a.memory.record_capacity,
+            friction_load: a.memory.friction_load,
+            friction_cone: a.memory.friction_cone,
             dt: a.dt,
             out_vertex_force: force,
             out_fixed_value,
@@ -2563,8 +2697,8 @@ impl Contact {
         x0: ppf_cts_compute::Handle,
         x: ppf_cts_compute::Handle,
         reference: &mut FixedCsr<'_>,
-        residual: ppf_cts_compute::Handle,
         statistics: StatisticsRefs,
+        memory: FrictionMemoryRefs,
     ) -> CollisionInputs {
         let pattern = reference.pattern();
         let _statics = &data.constraint.mesh;
@@ -2596,7 +2730,7 @@ impl Contact {
             row_count: pattern.rows,
             friction_mode: (*param).friction_mode as u32,
             friction_eps: (*param).friction_eps,
-            residual,
+            memory,
             dt: (*param).dt,
         }
     }
@@ -2883,6 +3017,8 @@ impl StatisticsRefs {
     }
 }
 
+use super::friction_memory::FrictionMemoryRefs;
+
 struct NarrowPhaseInputs {
     /// The per-object statistics channel; see [`StatisticsRefs`].
     statistics: StatisticsRefs,
@@ -2929,11 +3065,8 @@ struct NarrowPhaseInputs {
     friction_mode: u32,
     barrier_id: u32,
     friction_eps: f32,
-    /// THE RESIDUAL EVERY FRICTION TERM ANCHORS ITSELF ON, a COPY of the force
-    /// vector taken before this pass rather than the vector itself. Every
-    /// contact here deposits into that vector through atomics, so a pair
-    /// reading it directly would read a row another pair had already moved.
-    residual: ppf_cts_compute::Handle,
+    /// The friction's memory; see [`FrictionMemoryRefs`].
+    memory: FrictionMemoryRefs,
 }
 
 /// The inputs half of the collision-mesh passes.
@@ -2972,11 +3105,8 @@ struct CollisionInputs {
     row_count: u32,
     friction_mode: u32,
     friction_eps: f32,
-    /// THE RESIDUAL EVERY FRICTION TERM ANCHORS ITSELF ON, a COPY of the force
-    /// vector taken before this pass rather than the vector itself. Every
-    /// contact here deposits into that vector through atomics, so a pair
-    /// reading it directly would read a row another pair had already moved.
-    residual: ppf_cts_compute::Handle,
+    /// The friction's memory; see [`FrictionMemoryRefs`].
+    memory: FrictionMemoryRefs,
     dt: f32,
 }
 
@@ -2998,8 +3128,8 @@ impl Contact {
         grain_torque: ppf_cts_compute::Handle,
         grain_stiffness: ppf_cts_compute::Handle,
         grain_normal: ppf_cts_compute::Handle,
-        residual: ppf_cts_compute::Handle,
         statistics: StatisticsRefs,
+        memory: FrictionMemoryRefs,
     ) -> NarrowPhaseInputs {
         let pattern = reference.pattern();
         NarrowPhaseInputs {
@@ -3037,7 +3167,7 @@ impl Contact {
             friction_mode: (*param).friction_mode as u32,
             barrier_id: (*param).barrier as u32,
             friction_eps: (*param).friction_eps,
-            residual,
+            memory,
         }
     }
 }
@@ -4391,34 +4521,7 @@ mod tests {
             );
             let positions = positions_block.handle();
             // The topology as handles, seeded the same way the state seeds it.
-            let face_block = crate::driver::state::position_block_u32(
-                &mut device,
-                unsafe {
-                    crate::driver::state::slice_or_empty(
-                        data.mesh.mesh.face.data as *const u32,
-                        3 * data.mesh.mesh.face.size as usize,
-                    )
-                },
-                "test.face",
-            );
-            let edge_block = crate::driver::state::position_block_u32(
-                &mut device,
-                unsafe {
-                    crate::driver::state::slice_or_empty(
-                        data.mesh.mesh.edge.data as *const u32,
-                        2 * data.mesh.mesh.edge.size as usize,
-                    )
-                },
-                "test.edge",
-            );
-            let prop_block = crate::driver::state::position_block_prop(
-                &mut device,
-                unsafe {
-                    crate::driver::state::slice_or_empty(data.prop.vertex.data, data.prop.vertex.size as usize)
-                },
-                "test.prop",
-            );
-            let test_mesh = unsafe { crate::driver::state::test_mesh_of(&mut device, &data) };
+            let test_mesh = { crate::driver::state::test_mesh_of(&mut device, &data) };
             let mesh_refs = test_mesh.refs();
             let statistics =
                 crate::driver::contact::StatisticsRefs::absent(&mut device).unwrap();
@@ -4427,6 +4530,10 @@ mod tests {
             contact.refresh_contact_queries(
                 &mut device, &data, mesh_refs, positions, Windows::default(),
             ).expect("the query boxes are prepared");
+            let mut friction_memory =
+                crate::driver::friction_memory::FrictionMemory::allocate(&mut device, 0, 1).unwrap();
+            // Safety: the residual holds three floats per vertex of the scene.
+            let memory = { friction_memory.open(&mut device, residual.handle(), true) }.unwrap();
             contact
                 .assemble_collision_mesh_prepared(
                     &mut device,
@@ -4439,15 +4546,8 @@ mod tests {
                     &mut fixed,
                     force.handle(),
                     &mut staging,
-                    // THE RESIDUAL SNAPSHOT. In production it is a copy of the
-                    // force vector taken before this pass; this fixture starts
-                    // that vector at zero, so a zeroed allocation is the
-                    // snapshot it would have made, and a zero residual has no
-                    // tangential part, so the friction falls back to the lagged
-                    // surrogate. The anchor's own coverage is
-                    // `tests/kernels/friction_branches.cpp`.
-                    residual.handle(),
                     statistics,
+                    memory,
                 )
                 .expect("the assembly runs");
             {

@@ -1,7 +1,7 @@
 # File: scenarios/server_smoke.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Smallest end-to-end exercise: a debug server is up; a client connects;
 # the engine reports the expected initial NO_DATA / NO_BUILD / IDLE state.

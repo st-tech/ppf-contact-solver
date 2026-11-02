@@ -1,7 +1,7 @@
 # File: scenarios/bl_resolve_intersections.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Resolve Intersections, the Intersection Correction entry of the Utility
 # Tools panel, driven on real Blender objects.

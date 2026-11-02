@@ -854,7 +854,9 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
 }
 
 // The bend coupling's share of y's frame rows, one thread per site, after the
-// slot pass: y_next += H_site u_prev and y_prev += H_site^T u_next.
+// slot pass, as differences: y_next += H_site (u_prev - u_next) and
+// y_prev += H_site^T (u_next - u_prev). With the slot pass's row sum S this is
+// H_self u + H_site u_prev on the next frame's row, the plain product exactly.
 [[seam::entry(site)]]
 [[seam::device_fn]] inline void cosserat_apply_site_row(
     const Vec2u *bend_slots,
@@ -872,11 +874,31 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     const unsigned next = theta_base + 3u * slots[1];
     const Vec3f u_prev(input[prev], input[prev + 1u], input[prev + 2u]);
     const Vec3f u_next(input[next], input[next + 1u], input[next + 2u]);
-    const Vec3f y_next = cosserat_apply(coupling, u_prev);
-    const Vec3f y_prev = cosserat_apply_t(coupling, u_next);
+    const Vec3f y_next = cosserat_apply(coupling, u_prev - u_next);
+    const Vec3f y_prev = cosserat_apply_t(coupling, u_next - u_prev);
     for (unsigned i = 0; i < 3u; ++i) {
         compute::atomic_add(output + next + i, y_next[i]);
         compute::atomic_add(output + prev + i, y_prev[i]);
+    }
+}
+
+// The frame rows' sums the difference form reads, one thread per site, after
+// `row_sum` has been given each frame's own block: the site's coupling H joins
+// the next frame's row and its transpose the previous frame's, so that row's
+// blocks summed are S = H_self + the couplings of its sites.
+[[seam::entry(site)]]
+[[seam::device_fn]] inline void cosserat_row_sum_site_row(
+    const Vec2u *bend_slots,
+    const float *site_block,
+    compute::atomic_float_t *row_sum,
+    unsigned site) {
+    const Vec2u slots = bend_slots[site];
+    for (unsigned c = 0; c < 3u; ++c) {
+        for (unsigned r = 0; r < 3u; ++r) {
+            // column major: (r, c) is r + 3 c, and the transpose's (r, c) is H's (c, r)
+            compute::atomic_add(row_sum + 9u * slots[1] + r + 3u * c, site_block[9u * site + r + 3u * c]);
+            compute::atomic_add(row_sum + 9u * slots[0] + r + 3u * c, site_block[9u * site + c + 3u * r]);
+        }
     }
 }
 

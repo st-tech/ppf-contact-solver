@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_solid_tet.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling SCALE-INVARIANCE for a SOLID (tetrahedralized) body. A
 # closed cube is assigned to a SOLID group, tetrahedralized by the

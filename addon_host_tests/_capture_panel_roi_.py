@@ -1,7 +1,7 @@
 # File: addon_host_tests/_capture_panel_roi_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Host-side gate on the coordinate space of the capture ROI
 # (``blender_addon/ui/capture.py``).

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Lifecycle chain: connect → transfer → run → fetch → clear → rerun
 # → fetch → clear. Targets stale state in the run/fetch/clear cycle
 # that the matrix scenarios miss because they only do one cycle.

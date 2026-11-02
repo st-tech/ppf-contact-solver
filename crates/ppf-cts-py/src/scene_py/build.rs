@@ -117,6 +117,8 @@ pub(super) fn scene_build_fixed<'py>(
         stitch_w: Option<Vec<f64>>,
         stitch_w_cols: usize,
         stitch_stiffness: f64,
+        stitch_rest_length: Option<Vec<f64>>,
+        stitch_rest_mode: Option<Vec<u8>>,
         position: [f64; 3],
     }
     let mut dyn_owned: Vec<OwnedDyn> = Vec::with_capacity(dyn_objects.len());
@@ -227,6 +229,7 @@ pub(super) fn scene_build_fixed<'py>(
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or(1.0);
+        let (stitch_rest_length, stitch_rest_mode) = rest_rows(&d)?;
         dyn_owned.push(OwnedDyn {
             name,
             obj_type,
@@ -245,6 +248,8 @@ pub(super) fn scene_build_fixed<'py>(
             stitch_w,
             stitch_w_cols,
             stitch_stiffness,
+            stitch_rest_length,
+            stitch_rest_mode,
             position,
         });
     }
@@ -329,6 +334,8 @@ pub(super) fn scene_build_fixed<'py>(
         weights: Vec<f64>,
         k: usize,
         stitch_stiffness: f64,
+        rest_length: Option<Vec<f64>>,
+        rest_mode: Option<Vec<u8>>,
     }
     let mut cs_owned: Vec<OwnedCross> = Vec::with_capacity(cross_stitches.len());
     for cs in cross_stitches.iter() {
@@ -386,6 +393,7 @@ pub(super) fn scene_build_fixed<'py>(
             .map(|v| v.extract())
             .transpose()?
             .unwrap_or(1.0);
+        let (rest_length, rest_mode) = rest_rows(&d)?;
         cs_owned.push(OwnedCross {
             source_name,
             target_name,
@@ -393,6 +401,8 @@ pub(super) fn scene_build_fixed<'py>(
             weights,
             k: s[0],
             stitch_stiffness,
+            rest_length,
+            rest_mode,
         });
     }
 
@@ -417,6 +427,8 @@ pub(super) fn scene_build_fixed<'py>(
             stitch_w: o.stitch_w.as_deref(),
             stitch_w_cols: o.stitch_w_cols,
             stitch_stiffness: o.stitch_stiffness,
+            stitch_rest_length: o.stitch_rest_length.as_deref(),
+            stitch_rest_mode: o.stitch_rest_mode.as_deref(),
             position: o.position,
         })
         .collect();
@@ -429,6 +441,8 @@ pub(super) fn scene_build_fixed<'py>(
             weights: c.weights.as_slice(),
             k: c.k,
             stitch_stiffness: c.stitch_stiffness,
+            rest_length: c.rest_length.as_deref(),
+            rest_mode: c.rest_mode.as_deref(),
         })
         .collect();
     let static_view: Vec<sb::AssembleStaticObject> = static_owned
@@ -532,6 +546,14 @@ pub(super) fn scene_build_fixed<'py>(
         "concat_stitch_stiffness",
         PyArray1::<f32>::from_vec(py, dyn_result.concat_stitch_stiffness),
     )?;
+    out.set_item(
+        "concat_stitch_rest_length",
+        PyArray1::<f64>::from_vec(py, dyn_result.concat_stitch_rest_length),
+    )?;
+    out.set_item(
+        "concat_stitch_rest_mode",
+        PyArray1::<u8>::from_vec(py, dyn_result.concat_stitch_rest_mode),
+    )?;
 
     out.set_item("rod_count", dyn_result.rod_count)?;
     out.set_item("shell_count", dyn_result.shell_count)?;
@@ -594,4 +616,32 @@ pub(super) fn scene_shell_shrink_strain_limit_conflict(
     strain_limit: Vec<f64>,
 ) -> Option<(usize, f64, f64, f64)> {
     sb::check_shell_shrink_strain_limit_conflict(&shrink_x, &shrink_y, &strain_limit)
+}
+
+/// The optional per-row `stitch_rest_length` (float64) and `stitch_rest_mode`
+/// (uint8) arrays of one stitch-carrying entry. Absent or `None` keys mean the
+/// caller named no rest length, which the assembly reads as derived for every
+/// row; the assembly checks the two counts against the rows.
+fn rest_rows(d: &Bound<'_, PyDict>) -> PyResult<(Option<Vec<f64>>, Option<Vec<u8>>)> {
+    let length = match d.get_item("stitch_rest_length")? {
+        Some(item) if !item.is_none() => Some(
+            item.extract::<PyReadonlyArray1<'_, f64>>()
+                .map_err(|_| PyTypeError::new_err("stitch_rest_length must be (M,) float64"))?
+                .as_slice()
+                .map_err(|_| PyTypeError::new_err("stitch_rest_length must be C-contiguous"))?
+                .to_vec(),
+        ),
+        _ => None,
+    };
+    let mode = match d.get_item("stitch_rest_mode")? {
+        Some(item) if !item.is_none() => Some(
+            item.extract::<PyReadonlyArray1<'_, u8>>()
+                .map_err(|_| PyTypeError::new_err("stitch_rest_mode must be (M,) uint8"))?
+                .as_slice()
+                .map_err(|_| PyTypeError::new_err("stitch_rest_mode must be C-contiguous"))?
+                .to_vec(),
+        ),
+        _ => None,
+    };
+    Ok((length, mode))
 }

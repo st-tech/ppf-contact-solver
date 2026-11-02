@@ -1,7 +1,7 @@
 # File: scenarios/bl_group_slot_reuse.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Group creation and deletion addressed by slot, not by scan position.
 #

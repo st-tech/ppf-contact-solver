@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Dynamic scene parameter and invisible-collider keyframe handlers."""
 
 from typing import Optional

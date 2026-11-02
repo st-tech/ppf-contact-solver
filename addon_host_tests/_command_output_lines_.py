@@ -1,7 +1,7 @@
 # File: addon_host_tests/_command_output_lines_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A COMMAND'S OUTPUT KEEPS THE LEADING TAB ON ITS FIRST LINE
 # (``blender_addon/core/backends.py``, ``command_lines``).

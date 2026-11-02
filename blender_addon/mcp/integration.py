@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Integration module for the decorator-based MCP system."""
 
 from collections.abc import Callable

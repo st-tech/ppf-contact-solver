@@ -1,7 +1,7 @@
 # File: force_field_status.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What the add-on says about each force field object, in one place: the
 # Force Fields panel, the MCP listing (`get_force_field_settings`) and the

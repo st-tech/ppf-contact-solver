@@ -1,7 +1,7 @@
 # File: scenarios/rig_solver_log_format.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The shape of the solver's STREAMED log.
 #

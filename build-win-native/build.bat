@@ -337,9 +337,9 @@ if "!HAS_ROCM!"=="1" (
     REM platforms write the same file name, so the name says nothing about which
     REM one is on disk.
     if "!ROCM_PLATFORM!"=="amd" (
-        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import amdhip64_7.dll --must-not-import cudart64_12.dll
+        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import amdhip64_7.dll --must-not-import cudart64_13.dll
     ) else (
-        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import cudart64_12.dll --must-not-import amdhip64_7.dll
+        "%PYTHON_EXE%" "%BUILD_WIN%\scripts\pe-audit.py" backend --arch !PPF_WIN_ARCH! --dll "%ROCM_LIB_DIR%\libppfbe_rocm.dll" --def "%ROCM_OUT_DIR%\backend-exports.def" --must-import cudart64_13.dll --must-not-import amdhip64_7.dll
     )
     if errorlevel 1 exit /b 1
     REM AND ASK THE DEVICE IMAGE WHICH TARGETS IT CARRIES, on the platform that
@@ -452,7 +452,7 @@ if "!HAS_ROCM!"=="1" (
     if "!ROCM_PLATFORM!"=="amd" (
         set "PATH=%ROCM_LIB_DIR%;%ROCM_DIR%\bin;!PATH!"
     ) else (
-        set "PATH=%ROCM_LIB_DIR%;%CUDA_DIR%\bin;!PATH!"
+        set "PATH=%ROCM_LIB_DIR%;%CUDA_DIR%\bin\x64;!PATH!"
     )
 
     REM ONE WORKSPACE BUILD, NOT A SECOND `-p ppf-cts-server` ONE. The server and

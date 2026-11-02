@@ -154,6 +154,31 @@ HIPCC_FLAGS = -std=c++17 -O3 -MMD -MP $(PIC_FLAG) $(PLATFORM_FLAGS)
 
 KERNELGEN := ../seam/kernelgen.py
 KERNELGEN_DIR := $(OUT_DIR)/kernelgen
+
+# EVERY FILE OF THE NEUTRAL TREE, because that is what a rendering is read
+# from. The generator reads more than the source it is handed: the sources that
+# include it and that it includes (an includer's entry declarations seed the
+# address-space inference), and every header and kernel for the record layouts,
+# whose sizes it writes into the argument records. A rule naming only its own
+# source would leave those renderings stale after an edit elsewhere: a record
+# grown in data_records.hpp, with the kernels reading it untouched, would be
+# compiled at its old size against the new struct.
+#
+# Naming the whole tree re-runs every rendering after any edit to it, and the
+# generator writes its output only when the text changed, so an unchanged
+# rendering keeps its time and nothing compiled from it rebuilds. That is also
+# why each rendering goes through a STAMP: a rule whose output keeps an older
+# time than a prerequisite would otherwise run again on every build. The stamp
+# records that the rendering is current; the output's own rule (no work unless
+# the file has gone missing, when it removes the stamp and renders it again)
+# is what downstream rules name, so they see the output's time.
+KERNEL_TREE := $(shell find $(KERNEL_ROOT) -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print)
+
+# The stamps are produced only as prerequisites, so make would otherwise DELETE
+# them as intermediate files after the build that made them, and the next build
+# would render everything again.
+.SECONDARY:
+
 KERNEL_SRCS := $(shell cd $(KERNEL_ROOT) && find . -name '*.kernel.cpp' | sed 's|^\./||' | sort)
 KERNEL_ENTRY_HIP := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.entry.hip,$(KERNEL_SRCS))
 KERNEL_ARGS_HIPH := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.args.hiph,$(KERNEL_SRCS))
@@ -164,17 +189,26 @@ KERNEL_BODY_HIP  := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.kernel.hip,$(KERN
 # files, so the build passes once and fails on every later one.
 .SECONDARY: $(KERNEL_ARGS_HIPH) $(KERNEL_BODY_HIP) $(KERNEL_ENTRY_HIP) $(KERNEL_TABLE_INC)
 
-$(KERNELGEN_DIR)/%.entry.hip: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
-	@mkdir -p $(dir $@)
-	python3 $(KERNELGEN) --target hip --emit entry --out $@ $<
+$(KERNELGEN_DIR)/%.entry.hip.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
+	@mkdir -p $(@D)
+	python3 -B $(KERNELGEN) --target hip --emit entry --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.entry.hip: $(KERNELGEN_DIR)/%.entry.hip.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.args.hiph: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
-	@mkdir -p $(dir $@)
-	python3 $(KERNELGEN) --target hip --emit args --out $@ $<
+$(KERNELGEN_DIR)/%.args.hiph.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
+	@mkdir -p $(@D)
+	python3 -B $(KERNELGEN) --target hip --emit args --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.args.hiph: $(KERNELGEN_DIR)/%.args.hiph.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.kernel.hip: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
-	@mkdir -p $(dir $@)
-	python3 $(KERNELGEN) --target hip --emit body --out $@ $<
+$(KERNELGEN_DIR)/%.kernel.hip.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
+	@mkdir -p $(@D)
+	python3 -B $(KERNELGEN) --target hip --emit body --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.kernel.hip: $(KERNELGEN_DIR)/%.kernel.hip.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # THE KERNEL TABLE IS ONE FRAGMENT PER NEUTRAL SOURCE, CONCATENATED. A kernel
 # id is a dense index over every entry the library carries, so no single neutral
@@ -189,18 +223,24 @@ KERNEL_TABLE := $(KERNELGEN_DIR)/kernel_table.inc
 DIAG_FILE_INC := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.diagfile.inc,$(KERNEL_SRCS))
 DIAG_FILES := $(KERNELGEN_DIR)/diag_files.inc
 
-$(KERNELGEN_DIR)/%.table.inc: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
-	@mkdir -p $(dir $@)
+$(KERNELGEN_DIR)/%.table.inc.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
+	@mkdir -p $(@D)
 	# --kernel-root because a fragment spells the argument header its rows are
 	# written against from the generated root, so the concatenation below can be
 	# a plain cat rather than an include list.
-	python3 -B $(KERNELGEN) --target hip --emit table --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target hip --emit table --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.table.inc: $(KERNELGEN_DIR)/%.table.inc.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.diagfile.inc: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
-	@mkdir -p $(dir $@)
+$(KERNELGEN_DIR)/%.diagfile.inc.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
+	@mkdir -p $(@D)
 	# EVERY source gets a row, including one that declares no entry point: an
 	# assert does not need an entry to exist.
-	python3 -B $(KERNELGEN) --target hip --emit diagfile --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target hip --emit diagfile --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.diagfile.inc: $(KERNELGEN_DIR)/%.diagfile.inc.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 $(KERNEL_TABLE): $(KERNEL_TABLE_INC)
 	@mkdir -p $(dir $@)

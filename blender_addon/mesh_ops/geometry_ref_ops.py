@@ -1,7 +1,7 @@
 # File: geometry_ref_ops.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Operators backing the per-object "bending reference rest angle" UI in
 # the SHELL material panel. The picker sets a reference object (a

@@ -5,11 +5,12 @@
 
 """What a force field script may call: the ONE list every surface shows.
 
-THIS FILE EXISTS TWICE, BYTE FOR BYTE: as ``frontend/_script_api_.py`` and as
-``blender_addon/core/script_api.py``, because the add-on ships without the
-frontend and both show the list (the compiler in its errors and in
-``scene.force_field.builtins()``, the add-on in its Built-in Functions popup,
-its new-script template, its drawing of the script, MCP and the Python API).
+THIS FILE EXISTS TWICE, IDENTICAL BUT FOR ITS LICENSE LINE: as
+``frontend/_script_api_.py`` and as ``blender_addon/core/script_api.py``,
+because the add-on ships without the frontend and both show the list (the
+compiler in its errors and in ``scene.force_field.builtins()``, the add-on in
+its Built-in Functions popup, its new-script template, its drawing of the
+script, MCP and the Python API).
 ``addon_host_tests/_force_field_noise_copies_.py`` fails when the two differ,
 and ``frontend/tests/_force_field_compiler_.py`` fails when the compiler
 admits a call this list does not name, or refuses one it does.

@@ -1,7 +1,7 @@
 # File: scenarios/rig_launch_config.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Guard for how the rig LAUNCHES Blender, as opposed to what the addon
 # does once it is up. Three of those decisions are invisible at run time

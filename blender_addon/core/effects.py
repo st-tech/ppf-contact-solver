@@ -1,7 +1,7 @@
 # File: effects.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Typed, frozen effect classes for the event-driven state machine.
 # Effects are pure *descriptions* of side-effects to perform -- they carry

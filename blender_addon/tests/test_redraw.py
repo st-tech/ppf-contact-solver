@@ -1,7 +1,7 @@
 # File: test_redraw.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression tests for UI-redraw / race-condition fixes. Runs inside
 # Blender via the debug port; no stubs or host pytest needed.

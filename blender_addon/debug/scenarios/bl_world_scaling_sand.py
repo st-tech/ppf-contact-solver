@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_sand.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling SCALE-INVARIANCE for the SAND granular type. A closed
 # mesh is seeded with grains, assigned to a SAND group, and the cloud

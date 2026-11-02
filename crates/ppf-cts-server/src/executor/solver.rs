@@ -83,6 +83,16 @@ pub(crate) mod exit_watch {
     /// record and pins the monitor's liveness witness at "still starting".
     static SLOT: Mutex<Option<Slot>> = Mutex::new(None);
 
+    /// THE SLOT IS PROCESS-WIDE AND HOLDS ONE LAUNCH, so every test that arms
+    /// it, directly or through a real `launch_solver`, holds this while it
+    /// does. Two such tests at once each observe the other's arm, and a
+    /// monitor test then reads its own launch as unarmed and reports a launch
+    /// failure over a solver that is still starting. A tokio mutex because
+    /// several of them await while holding it; a `std` guard across an await
+    /// is what `clippy::await_holding_lock` is for.
+    #[cfg(test)]
+    pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Never reused within a process, so a token from a launch that has been
     /// superseded can never match the slot again.
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);

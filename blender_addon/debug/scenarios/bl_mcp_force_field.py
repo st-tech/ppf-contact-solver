@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_force_field.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The force field's MCP surface: get_force_field_settings,
 # set_force_field_settings, check_force_field_script, and the group's

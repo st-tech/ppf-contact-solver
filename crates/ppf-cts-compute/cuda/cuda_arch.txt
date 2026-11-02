@@ -38,9 +38,8 @@
 ;        covers a device of the same major whose minor is at or above it.
 ; cubin  One native SASS cubin, by compute capability (major * 10 + minor).
 
-floor 61
+floor 75
 
-cubin 61
 cubin 75
 cubin 86
 cubin 89

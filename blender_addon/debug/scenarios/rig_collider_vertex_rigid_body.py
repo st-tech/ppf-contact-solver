@@ -1,7 +1,7 @@
 # File: scenarios/rig_collider_vertex_rigid_body.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: a rigid body dropped flat onto the APEX of
 # a static collision mesh is held by that vertex.

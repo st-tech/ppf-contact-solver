@@ -570,7 +570,7 @@ check devices devices
 if [ "$CUDA_SCENES" != "none" ]; then
     if [ -z "$SUITE_BACKEND" ]; then
         check gpu-suite sh -c \
-            'printf "--cuda-scenes was given and this distribution stamps %s, so name one with --gpu-backend\n" "$1"; exit 1' \
+            'printf "%s was given and this distribution stamps %s, so name one with --gpu-backend\n" --cuda-scenes "$1"; exit 1' \
             _ "$BACKENDS"
     else
         start_sampler

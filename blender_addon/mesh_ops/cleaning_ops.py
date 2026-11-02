@@ -1,7 +1,7 @@
 # File: cleaning_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Mesh Cleaning: find the geometry defects that make a Transfer fail or make
 # the solver abort, and repair the ones that can be repaired safely.

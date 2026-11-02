@@ -17,9 +17,8 @@ warmup.bat
 
 This downloads and installs locally (no admin required), provisioning the
 toolkit each backend in `PPF_WIN_BACKENDS` needs:
-- 7-Zip (portable, for CUDA extraction)
 - MinGit (portable)
-- CUDA Toolkit 12.8 (extracted locally), where cuda is among the backends
+- CUDA Toolkit 13.2 (NVIDIA's redistributable components, unpacked locally), where cuda is among the backends
 - The ROCm SDK (unpacked locally), where rocm is among the backends
 - MSVC compiler (portable, via [portable-msvc](https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977))
 - Rust (local installation)
@@ -102,7 +101,7 @@ All external download URLs and filenames are centralized in
 `scripts\downloads.txt`. There are two kinds of entry: a fetched archive
 pairs `URL_*` with `FILE_*`, while a cloned repository pairs `URL_*_GIT`
 with the tag to check out and has no `FILE_*`. To bump a tool (for example
-CUDA 12.8 -> 12.9), edit that entry's lines together, then verify the new
+CUDA 13.2 -> 13.3), edit that entry's lines together, then verify the new
 pointer:
 
 ```batch

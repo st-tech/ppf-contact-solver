@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_tool_schema_invariants.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Schema invariants that must hold across the WHOLE MCP tool list.
 #

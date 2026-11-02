@@ -127,6 +127,7 @@ mod constraint;
 mod cosserat;
 mod dirichlet;
 mod dump_linsys;
+pub(crate) mod friction_memory;
 /// The aggregate lock's projector: the dispatches that build the feasible
 /// correction for a locked group and remove the constraint-space component from
 /// a search direction.
@@ -136,6 +137,8 @@ mod lock;
 mod lock_math;
 mod plasticity;
 mod refusal;
+/// The rotational run state a checkpoint carries beside the positions.
+pub(crate) mod run_state;
 /// The PDRD reduced six-DOF solve's host orchestration.
 mod pdrd;
 mod rest_shape;
@@ -1276,6 +1279,57 @@ pub unsafe extern "C" fn update_rest_shape(update: *const RestShapeUpdate) {
     }
 }
 
+/// Write this step's animated bending rest angles: `angle[k]` becomes the rest
+/// angle of hinge `index[k]`.
+///
+/// The animated bending rest shape (a shape-key mix the artist animates)
+/// calls this once per step, right after the streamed rest shape and for the
+/// same reason: the bending kernels read `HingeProp::rest_angle` off the
+/// device every Newton iteration. It writes the live `DataSet` and then
+/// re-stages the hinge records, exactly as bend plasticity commits its crept
+/// rest angles (`plasticity.rs`), so the host copy and the staged copy cannot
+/// disagree. The two never both own a hinge: a hinge driven here carries no
+/// bend plasticity (`backend.rs` asserts it).
+///
+/// # Safety
+/// `index` and `angle` must each address `count` live elements.
+#[no_mangle]
+pub unsafe extern "C" fn update_hinge_rest_angles(index: *const u32, angle: *const f32, count: u32) {
+    if count == 0 {
+        return;
+    }
+    if index.is_null() || angle.is_null() {
+        fatal_exit(Fatal::invariant(
+            "solver driver: update_hinge_rest_angles received a null array",
+        ));
+    }
+    let view = require_scene("update_hinge_rest_angles");
+    let index = std::slice::from_raw_parts(index, count as usize);
+    let angle = std::slice::from_raw_parts(angle, count as usize);
+    let props = view.hinge_props_mut();
+    for (&i, &a) in index.iter().zip(angle.iter()) {
+        let Some(prop) = props.get_mut(i as usize) else {
+            fatal_exit(Fatal::invariant(
+                "solver driver: update_hinge_rest_angles names a hinge past the hinge count",
+            ));
+        };
+        prop.rest_angle = a;
+    }
+    // SOLVER THEN DEVICE, the order `update_rest_shape` takes.
+    if let Ok(mut guard) = SOLVER.lock() {
+        if let Some(state) = guard.as_mut() {
+            let hinges = state.prop_hinge.len().min(props.len());
+            if hinges > 0 {
+                state.prop_hinge.at()[..hinges].copy_from_slice(&props[..hinges]);
+                if let Err(fatal) = with_device(|device| Ok(state.prop_hinge.upload(device)?)) {
+                    drop(guard);
+                    fatal_exit(fatal);
+                }
+            }
+        }
+    }
+}
+
 /// Replace this frame's material tables with the streamed ones.
 ///
 /// The animated-parameter path calls this once per step, right after the pin
@@ -1468,6 +1522,114 @@ pub(crate) fn install_force_field(field: &crate::force_field::ForceFieldData, wo
         ));
     };
     if let Err(fatal) = with_device(|device| state.field.install(device, field, world_scaling)) {
+        drop(guard);
+        fatal_exit(fatal);
+    }
+}
+
+/// Whether any pair of the scene can carry friction, which is when a
+/// checkpoint carries the friction's memory (`friction_<N>.bin.gz`).
+pub(crate) fn scene_has_friction(data: &crate::data::DataSet) -> bool {
+    step::scene_has_friction(data)
+}
+
+/// The friction's committed memory, read back for a checkpoint.
+pub(crate) fn friction_memory_snapshot() -> friction_memory::FrictionMemoryState {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: the friction memory was asked for before initialize()",
+        ));
+    };
+    match with_device(|device| state.friction_memory.snapshot(device)) {
+        Ok(snapshot) => snapshot,
+        Err(fatal) => {
+            drop(guard);
+            fatal_exit(fatal);
+        }
+    }
+}
+
+/// Install a checkpoint's friction memory, once, straight after
+/// `initialize()` accepts a resumed scene and before its first step.
+pub(crate) fn install_friction_memory(memory: &friction_memory::FrictionMemoryState) {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: install_friction_memory was called before initialize()",
+        ));
+    };
+    if let Err(fatal) = with_device(|device| state.friction_memory.restore(device, memory)) {
+        drop(guard);
+        fatal_exit(fatal);
+    }
+}
+
+/// The run state parts this scene carries (`driver/run_state.rs`), read off
+/// the allocated state, which is when a checkpoint writes
+/// `runstate_<N>.bin.gz` and when a resume requires one.
+pub(crate) fn run_state_kinds() -> run_state::RunStateKinds {
+    let Ok(guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_ref() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: the run state's parts were asked for before initialize()",
+        ));
+    };
+    run_state::RunStateKinds::of(state)
+}
+
+/// The committed run state, read back for a checkpoint.
+pub(crate) fn run_state_snapshot() -> run_state::RunState {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: the run state was asked for before initialize()",
+        ));
+    };
+    match with_device(|device| run_state::RunState::snapshot(state, device)) {
+        Ok(snapshot) => snapshot,
+        Err(fatal) => {
+            drop(guard);
+            fatal_exit(fatal);
+        }
+    }
+}
+
+/// Install a checkpoint's run state, once, straight after `initialize()`
+/// accepts a resumed scene and before its first step.
+pub(crate) fn install_run_state(run: &run_state::RunState) {
+    let Ok(mut guard) = SOLVER.lock() else {
+        fatal_exit(Fatal::invariant(
+            "solver driver: the solver state is poisoned, so an earlier failure went unreported",
+        ));
+    };
+    let Some(state) = guard.as_mut() else {
+        drop(guard);
+        fatal_exit(Fatal::invariant(
+            "solver driver: install_run_state was called before initialize()",
+        ));
+    };
+    if let Err(fatal) = with_device(|device| run.install(state, device)) {
         drop(guard);
         fatal_exit(fatal);
     }

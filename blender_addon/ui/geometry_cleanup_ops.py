@@ -1,7 +1,7 @@
 # File: geometry_cleanup_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Operators that clean up mesh geometry the solver rejects at Transfer:
 # removing stray (isolated, faceless) vertices from STATIC colliders, and

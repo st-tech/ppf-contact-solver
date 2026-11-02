@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """SSH config file parsing utility for resolving host aliases.
 
 Besides the connection fields for a single host, this resolves ``ProxyJump``

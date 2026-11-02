@@ -1,7 +1,7 @@
 # File: scenarios/bl_ssh_proxy_jump.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # ProxyJump support for every SSH-backed connection type: the solver host is
 # reached through one or more jump hosts, named either by ~/.ssh/config or by

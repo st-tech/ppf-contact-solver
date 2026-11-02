@@ -1,7 +1,7 @@
 # File: scenarios/bl_resolve_intersections_threaded_chain.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Intersection Correction on a chain whose links are threaded TIGHT through
 # each other, as a Geometry Nodes chain arrives (public issue #157, the

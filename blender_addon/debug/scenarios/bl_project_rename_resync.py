@@ -1,7 +1,7 @@
 # File: scenarios/bl_project_rename_resync.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Project rename mid-session: ``com.set_project_name`` flips the
 # runner's project_name so that subsequent server requests carry the

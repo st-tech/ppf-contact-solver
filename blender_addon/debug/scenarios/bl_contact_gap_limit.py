@@ -1,7 +1,7 @@
 # File: scenarios/bl_contact_gap_limit.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The local gap limit caps a contact gap at a share of the room between mesh
 # neighbors, element by element, so a mesh finer than its gap does not start

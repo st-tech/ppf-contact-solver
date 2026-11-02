@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_still_head.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hair Curves rooted on a head that does not move (issue #146). The driver
 # and its six checks are bl_hair_curves_scalp's, run with a head that

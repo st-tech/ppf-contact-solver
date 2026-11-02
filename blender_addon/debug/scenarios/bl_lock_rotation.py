@@ -1,5 +1,5 @@
 # File: scenarios/bl_lock_rotation.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Per-object Lock Rotation encoding round-trip.
 #

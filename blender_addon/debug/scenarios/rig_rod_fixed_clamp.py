@@ -1,7 +1,7 @@
 # File: scenarios/rig_rod_fixed_clamp.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: a rod clamped by FIXED pins holds the
 # clamp's moment, so a cantilever of it droops as the elastica says and not as a

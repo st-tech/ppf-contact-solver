@@ -1,8 +1,7 @@
 # File: addon_host_tests/_bounded_command_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """A bounded remote command runs, and is killed on time, on a host with no
 GNU `timeout`.
 
@@ -27,6 +26,13 @@ import time
 import pytest
 
 from conftest import load_addon_module
+
+# The wrapper is a POSIX shell command for a Linux or macOS solver host, and these
+# tests run it under /bin/sh. A host with no /bin/sh (Windows) cannot run it at
+# all; the macOS and Linux legs do.
+pytestmark = pytest.mark.skipif(
+    not os.path.exists("/bin/sh"), reason="runs the wrapper under /bin/sh, which this host does not have"
+)
 
 
 @pytest.fixture(scope="module")

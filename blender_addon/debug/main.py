@@ -2,8 +2,7 @@
 # File: main.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """General CLI — status, tools, call, exec, reload, scene, resources.
 
 MCP tools are discovered dynamically from the running server.

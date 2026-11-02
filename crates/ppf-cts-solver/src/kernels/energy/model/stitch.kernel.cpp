@@ -39,11 +39,24 @@
 //
 // EVERY SCALAR DIVISION IS SPELLED `fmath::div`, which is `/` on CUDA (so the
 // CUDA arithmetic is unchanged) and `precise::divide` in MSL. The distinction
-// is load-bearing: MSL's plain `/` is not correctly rounded, and the parity
-// fixture compares this chain to the bit against a host image of the same body,
-// where `/` is. The one division that is NOT spelled here is inside
-// `SMat::norm`, which reaches the seam's square root and is correctly rounded
-// on both.
+// is load-bearing: MSL's plain `/` is not correctly rounded, and a backend whose
+// division is not would give this chain a different answer from the host image
+// of the same body, where `/` is. The one division that is NOT spelled here is
+// inside `SMat::norm`, which reaches the seam's square root and is correctly
+// rounded on both.
+//
+// THE REST LENGTH IS EITHER AUTHORED OR DERIVED, AND A FLAG SAYS WHICH. A stitch
+// between two bodies that rest apart (a couching tack from a floss strand to
+// the ground yarn under it, whose center lines sit about two yarn radii apart)
+// carries its own rest length, so it holds that distance with no preload. A
+// stitch without one takes half the barycentric mean contact gap, which closes
+// a seam to contact distance. The choice is a separate `has_rest_length` flag
+// rather than a reserved value of `rest_length`, because every float is a
+// length someone could mean, and the derived length is computed either way so
+// the unflagged path is the same arithmetic it has always been. The energy is
+// in STRAIN units, `l / l0 - 1`, so a longer rest length makes a given
+// stiffness a softer spring in absolute terms: the force at an extension `d`
+// is `stiffness * d / l0`.
 //
 // The caller passes the six per-vertex `ghat` and `offset` values rather than
 // the length cap, so the whole numeric chain from scene data to scattered
@@ -53,15 +66,18 @@
     const Vec3f *x, const float *w,
     const float *ghat, const float *offset,
     float stitch_length_factor, float stiffness,
+    float rest_length, unsigned has_rest_length,
     Mat3x6f &gradient,
     Mat18x18f &hessian) {
-    // The rest length is the mean contact gap over the six slots, weighted by
-    // the same barycentric weights the spring itself uses, halved because a gap
-    // is measured between two surfaces.
-    const float l0 =
+    // The derived rest length is the mean contact gap over the six slots,
+    // weighted by the same barycentric weights the spring itself uses, halved
+    // because a gap is measured between two surfaces. An authored one replaces
+    // it; the host has already refused one that is not finite and positive.
+    const float gap_rest_length =
         fmath::div(w[0] * ghat[0] + w[1] * ghat[1] + w[2] * ghat[2] +
                      w[3] * ghat[3] + w[4] * ghat[4] + w[5] * ghat[5],
                  2.0f);
+    const float l0 = has_rest_length != 0u ? rest_length : gap_rest_length;
     // The two endpoints' contact offsets, each the LARGEST over that
     // endpoint's three slots. A max rather than a barycentric blend, because
     // the offset is the shell the barrier keeps clear and a blend would let the
@@ -157,6 +173,7 @@
     float ghat5, float offset0, float offset1, float offset2, float offset3,
     float offset4, float offset5, const float *weight,
     float stitch_length_factor, float stiffness,
+    float rest_length, unsigned has_rest_length,
     Mat3x6f &gradient, Mat18x18f *hessian,
     unsigned element) {
     const Vec3f node[6] = {x0, x1, x2, x3, x4, x5};
@@ -171,14 +188,17 @@
     // space its destination lives in.
     Mat18x18f block;
     stitch_force_hessian(node, share, gap, shell, stitch_length_factor,
-                         stiffness, gradient, block);
+                         stiffness, rest_length, has_rest_length, gradient,
+                         block);
     hessian[element] = block;
 }
 
 // Six positions, six contact gaps and six offsets read THROUGH the stitch's own
 // six-slot index list, the six barycentric weights as this element's own run of
-// the weight array, two per-element scalars, the gradient as a non-const gather
-// and the Hessian as a base pointer with the thread index forwarded beside it.
+// the weight array, four per-element scalars (the length factor, the stiffness,
+// the authored rest length and the flag saying whether there is one), the
+// gradient as a non-const gather and the Hessian as a base pointer with the
+// thread index forwarded beside it.
 [[seam::entry(count, element)]] void stitch_force_hessian_gathered(
     [[seam::through]] const Vec3f *x,
     [[seam::indices(6)]] const unsigned *stitch_index,
@@ -188,6 +208,8 @@
     [[seam::stride(6)]] const float *stitch_weight,
     const float *length_factor,
     const float *stiffness,
+    const float *rest_length,
+    const unsigned *has_rest_length,
     Mat3x6f *gradient,
     Mat18x18f *hessian,
     unsigned element,

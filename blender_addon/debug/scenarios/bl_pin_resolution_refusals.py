@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_resolution_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Five ways the encoder read a pin, a curve or a contact length from somewhere
 # other than what the artist sees, each shipping a plausible payload that

@@ -1,7 +1,7 @@
 # File: scenarios/rig_device_diagnostic_channel.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A FAILED DEVICE CHECK REACHES THE HOST, on the build this rig is running.
 #

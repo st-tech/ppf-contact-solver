@@ -1,7 +1,7 @@
 # File: scenarios/bl_bend_reference_shell.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Exercises the per-object "reference rest angle" feature for SHELL
 # groups end-to-end through the production pipeline on a no-GPU host
@@ -139,7 +139,7 @@ try:
     cloth.create_pin(sheet.name, "TopEdge")
 
     grp = _raw_group(dh, "Cloth")
-    grp.bend_rest_from_reference = True
+    grp.bend_rest_angle_source = "FROM_REFERENCE"
     assigned = None
     for a in grp.assigned_objects:
         if a.uuid == sheet_uuid:
@@ -147,7 +147,6 @@ try:
             break
     if assigned is None:
         raise RuntimeError("assigned object for sheet not found in group")
-    assigned.bend_ref_enable = True
     assigned.bend_ref_uuid = ref_uuid
     dh.log("reference_configured")
 

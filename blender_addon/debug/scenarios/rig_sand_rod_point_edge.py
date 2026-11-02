@@ -1,7 +1,7 @@
 # File: scenarios/rig_sand_rod_point_edge.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: SAND grains dropped onto the INTERIOR of a
 # rod segment come to rest on it, and the run finishes (public issue #154).

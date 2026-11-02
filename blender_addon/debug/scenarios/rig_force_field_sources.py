@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_sources.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The external force field's two sources against plain gravity: a uniform
 # field object and a constant script each reproduce it, and a

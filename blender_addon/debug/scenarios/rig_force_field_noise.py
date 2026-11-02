@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_noise.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The script's built-in curl_noise, run by the solver's kernel, matches the
 # Python reference the compiler and the add-on use, to single precision.

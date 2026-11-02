@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Composed pin op: MOVE_BY then SPIN. Order matters because the spin's
 # CENTROID is recomputed from the moved positions.
 

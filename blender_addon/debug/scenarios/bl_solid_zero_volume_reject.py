@@ -1,7 +1,7 @@
 # File: scenarios/bl_solid_zero_volume_reject.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Build-time rejection of zero-volume meshes assigned to SOLID groups.
 #

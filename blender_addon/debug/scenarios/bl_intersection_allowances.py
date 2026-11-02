@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowances.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The ADDON half of the four intersection allowances of issue #138: three
 # per-group checkboxes ("Allow Self-Intersections", "Allow Inter-Object

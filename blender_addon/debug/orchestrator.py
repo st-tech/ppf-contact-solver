@@ -1,7 +1,7 @@
 # File: orchestrator.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Orchestrator: spawns the debug solver server in an isolated per-worker
 # temp directory, runs a scenario against it, collects the verdict +

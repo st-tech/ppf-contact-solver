@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Remote management handlers (scene parameters, install, abort)."""
 
 from typing import Optional

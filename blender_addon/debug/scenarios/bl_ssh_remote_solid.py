@@ -1,7 +1,7 @@
 # File: scenarios/bl_ssh_remote_solid.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Real-backend SOLID counterpart to bl_ssh_remote_solve: macOS Blender
 # drives a REAL CUDA solve of a partially-pinned SOLID on a remote GPU box

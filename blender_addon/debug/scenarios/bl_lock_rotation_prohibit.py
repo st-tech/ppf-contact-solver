@@ -1,5 +1,5 @@
 # File: scenarios/bl_lock_rotation_prohibit.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Prohibit-axis mode keeps rotation perpendicular to the selected axis while
 # a coexisting Translation Lock independently constrains center-of-mass motion.

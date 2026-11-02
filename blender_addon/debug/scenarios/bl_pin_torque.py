@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # TORQUE: a force op, not kinematic. In Rust mode (no
 # dynamics, only kinematic constraints) the torque-pinned vertices
 # remain at rest. ``frontend.FixedScene.time(t)`` likewise returns

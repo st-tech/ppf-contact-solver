@@ -193,32 +193,40 @@ fn compute_edge(
     // vertex array shared with rod/tet groups, so they can sit
     // arbitrarily far past any packed-integer radix derived from
     // face count alone.
-    let mut hash = HashMap::<(usize, usize), (usize, usize, usize, Option<usize>)>::new();
+    // THE EDGE ORDER IS THE FACE WALK'S, first seen first: a key's index into
+    // `entries` is assigned when face i, corner j first meets it, so the order
+    // is a function of the input alone. Iterating a HashMap here would order
+    // the edges by its per-process random seed, and the edge order reaches the
+    // collision BVH, the contact assembly's summation order and every result.
+    let mut index = HashMap::<(usize, usize), usize>::new();
+    let mut entries: Vec<(usize, usize, usize, Option<usize>)> = Vec::new();
     for (i, column) in face.column_iter().enumerate() {
         for j in 0..3 {
             let e = (column[j], column[(j + 1) % 3], i, None);
             let key = (e.0.min(e.1), e.0.max(e.1));
-            if let Some(b) = hash.get_mut(&key) {
+            if let Some(&k) = index.get(&key) {
                 // Record the second face exactly once. A non-manifold edge
                 // (>2 incident faces) keeps a deterministic first-two-face
                 // pair instead of silently overwriting the second slot with
-                // an arbitrary later face. The edge stays in the hash so it
+                // an arbitrary later face. The edge stays in the list so it
                 // survives into mesh.edge and the collision BVH, unlike
                 // compute_hinge which can drop non-manifold edges.
+                let b = &mut entries[k];
                 if b.3.is_none() {
                     b.3 = Some(i);
                 }
             } else {
-                hash.insert(key, e);
+                index.insert(key, entries.len());
+                entries.push(e);
             }
         }
     }
     let mut edge = Vec::new();
     edge.extend(rod.iter());
-    edge.extend(hash.values().flat_map(|e| [e.0, e.1]));
+    edge.extend(entries.iter().flat_map(|e| [e.0, e.1]));
     let mut edge_face = Vec::new();
     edge_face.extend(vec![Vec::new(); rod.shape().1]);
-    edge_face.extend(hash.values().map(|e| {
+    edge_face.extend(entries.iter().map(|e| {
         if let Some(i) = e.3 {
             vec![e.2, i]
         } else {
@@ -254,37 +262,44 @@ fn compute_hinge(face: &Matrix3xX<usize>) -> (Matrix4xX<usize>, Vec<Vec<usize>>)
              or delete the duplicate faces) before running the solver."
         );
     }
-    let mut hash =
-        HashMap::<(usize, usize), (usize, usize, usize, Option<usize>, usize, Option<usize>)>::new(
-        );
-    let mut excludes = Vec::new();
+    // First-seen face-walk order, as `compute_edge`: the hinge order reaches
+    // the bending assembly, so it must not follow a HashMap's random seed. An
+    // edge met by a third face is excluded (non-manifold), wherever it sits.
+    let mut index = HashMap::<(usize, usize), usize>::new();
+    let mut entries: Vec<(usize, usize, usize, Option<usize>, usize, Option<usize>)> = Vec::new();
+    let mut excluded: Vec<bool> = Vec::new();
     for (i, f) in face.column_iter().enumerate() {
         for j in 0..3 {
             let e = (f[j], f[(j + 1) % 3], f[(j + 2) % 3]);
             let key = (e.0.min(e.1), e.0.max(e.1));
-            if let Some(b) = hash.get_mut(&key) {
+            if let Some(&k) = index.get(&key) {
+                let b = &mut entries[k];
                 if b.3.is_some() {
-                    excludes.push(key);
+                    excluded[k] = true;
                 } else {
                     b.3 = Some(e.2);
                     b.5 = Some(i);
                 }
             } else {
-                hash.insert(key, (e.0, e.1, e.2, None, i, None));
+                index.insert(key, entries.len());
+                entries.push((e.0, e.1, e.2, None, i, None));
+                excluded.push(false);
             }
         }
     }
-    for key in excludes {
-        hash.remove(&key);
-    }
-    let hinge = hash
-        .iter()
-        .filter_map(|(_, &(i0, i1, i2, op, _, _))| op.map(|i3| [i0, i1, i2, i3]))
+    let kept = || {
+        entries
+            .iter()
+            .zip(excluded.iter())
+            .filter(|(_, &x)| !x)
+            .map(|(e, _)| *e)
+    };
+    let hinge = kept()
+        .filter_map(|(i0, i1, i2, op, _, _)| op.map(|i3| [i0, i1, i2, i3]))
         .flatten()
         .collect::<Vec<_>>();
-    let face_neighbors = hash
-        .iter()
-        .filter_map(|(_, &(_, _, _, _, i, op))| op.map(|j| vec![i, j]))
+    let face_neighbors = kept()
+        .filter_map(|(_, _, _, _, i, op)| op.map(|j| vec![i, j]))
         .collect::<Vec<_>>();
     (
         Matrix4xX::from_column_slice(hinge.as_slice()),
@@ -343,6 +358,33 @@ fn count_interior_verts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_edge_emits_edges_in_face_walk_order() {
+        // Rods first, then each face edge where face i, corner j first meets
+        // it: the order is a function of the input, never of a hash seed.
+        let rod = Matrix2xX::<usize>::from_column_slice(&[4, 5]);
+        let face = Matrix3xX::<usize>::from_column_slice(&[0, 1, 2, 0, 2, 3]);
+        let (edge, edge_face) = compute_edge(&rod, &face);
+        let pairs: Vec<(usize, usize)> = edge.column_iter().map(|c| (c[0], c[1])).collect();
+        assert_eq!(pairs, vec![(4, 5), (0, 1), (1, 2), (2, 0), (2, 3), (3, 0)]);
+        assert_eq!(
+            edge_face,
+            vec![vec![], vec![0], vec![0], vec![0, 1], vec![1], vec![1]]
+        );
+    }
+
+    #[test]
+    fn compute_hinge_orders_hinges_by_face_walk() {
+        // A fan of three triangles around vertex 0: hinges on (0,2) then (0,3),
+        // in the order the walk first meets those edges.
+        let face = Matrix3xX::<usize>::from_column_slice(&[0, 1, 2, 0, 2, 3, 0, 3, 4]);
+        let (hinge, neighbors) = compute_hinge(&face);
+        let cols: Vec<[usize; 4]> =
+            hinge.column_iter().map(|c| [c[0], c[1], c[2], c[3]]).collect();
+        assert_eq!(cols, vec![[2, 0, 1, 3], [3, 0, 2, 4]]);
+        assert_eq!(neighbors, vec![vec![0, 1], vec![1, 2]]);
+    }
 
     #[test]
     fn compute_hinge_valid_quad_has_one_hinge() {

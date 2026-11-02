@@ -1,7 +1,7 @@
 # File: pdrd_chain.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch inside Blender (Scripting workspace, or
 # `blender --python examples/blender/pdrd_chain.py`) to build a

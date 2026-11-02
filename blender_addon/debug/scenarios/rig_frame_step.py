@@ -1,7 +1,7 @@
 # File: scenarios/rig_frame_step.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The frame-step API (issue #151): run_until_frame holds a live solver,
 # step_frame advances it, a field updated while held takes effect, and

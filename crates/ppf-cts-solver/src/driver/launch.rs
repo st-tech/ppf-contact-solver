@@ -383,6 +383,14 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_contact_point_point,
     launch_contact_edge_edge_traverse,
     launch_contact_edge_edge,
+    launch_friction_frozen_embed,
+    launch_friction_memory_gather_word,
+    launch_friction_memory_settle,
+    launch_friction_memory_head,
+    launch_friction_memory_merge,
+    launch_friction_load_prepare,
+    launch_friction_cone_gather,
+    launch_friction_load_settle,
     launch_intersect_scan_face_edge,
     launch_intersect_scan_edge_edge,
     launch_intersect_scan_point_point,
@@ -392,6 +400,9 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_pair_cache_record_interleaved,
     launch_vertex_constraint,
     launch_vertex_constraint_sweep,
+    launch_sphere_feature_constraint,
+    launch_sphere_feature_sweep,
+    launch_sphere_feature_gate,
     launch_dyn_count_transpose_pass,
     launch_dyn_scatter_transpose_pass,
     launch_dyn_row_begin_pass,
@@ -423,6 +434,7 @@ static LAUNCH: [Launch; id::COUNT] = [
     launch_cosserat_prescribe_row,
     launch_cosserat_apply_slot_row,
     launch_cosserat_apply_site_row,
+    launch_cosserat_row_sum_site_row,
     launch_cosserat_schwarz_factor_row,
     launch_cosserat_vertex_precond_row,
     launch_cosserat_schwarz_apply_row,
@@ -724,7 +736,7 @@ mod tests {
         let source_host = vec![1.0f32, 2.0, 3.0, 4.0];
         let destination_host = vec![10.0f32; 4];
         let source = device_vec(&mut device, &source_host, "test.src");
-        let mut destination = device_vec(&mut device, &destination_host, "test.dst");
+        let destination = device_vec(&mut device, &destination_host, "test.dst");
         // A generated entry point clamps its loop to the count in its OWN
         // record, because Metal never faults out of bounds and every backend
         // rounds a launch up to whole threadgroups. So a record whose count
@@ -794,7 +806,7 @@ mod tests {
         let source_host = vec![1.0f32, 2.0, 3.0, 4.0];
         let source = device_vec(&mut device, &source_host, "test.src");
         let destination_host = vec![10.0f32; 4];
-        let mut destination =
+        let destination =
             device_vec(&mut device, &destination_host, "test.dst");
         let args = add_scaled_args(source.handle(), destination.handle(), 2.0, source_host.len() as u32);
         // Safety: both buffers outlive the call and neither is aliased.
@@ -816,7 +828,7 @@ mod tests {
         let source_host = vec![1.0f32; 4];
         let source = device_vec(&mut device, &source_host, "test.src");
         let destination_host = vec![0.0f32; 4];
-        let mut destination =
+        let destination =
             device_vec(&mut device, &destination_host, "test.dst");
         let args = add_scaled_args(source.handle(), destination.handle(), 1.0, source_host.len() as u32);
         let result = device.run("test", |e| {
@@ -887,7 +899,7 @@ mod tests {
                 .map(|(s, d)| d + 1.5 * s)
                 .collect();
             let source = device_vec(&mut device, &source_host, "test.src");
-            let mut destination = device_vec(&mut device, &destination_host, "test.dst");
+            let destination = device_vec(&mut device, &destination_host, "test.dst");
             let args = add_scaled_args(
                 source.handle(),
                 destination.handle(),
@@ -911,7 +923,7 @@ mod tests {
         let source_host = vec![1.0f32; 8];
         let source = device_vec(&mut device, &source_host, "test.src");
         let destination_host = vec![0.0f32; 8];
-        let mut destination =
+        let destination =
             device_vec(&mut device, &destination_host, "test.dst");
         let args = add_scaled_args(source.handle(), destination.handle(), 1.0, source_host.len() as u32);
         let region = device
@@ -941,7 +953,7 @@ mod tests {
         let source_host = vec![2.0f32; 8];
         let source = device_vec(&mut device, &source_host, "test.src");
         let destination_host = vec![0.0f32; 8];
-        let mut destination =
+        let destination =
             device_vec(&mut device, &destination_host, "test.dst");
         let args = add_scaled_args(source.handle(), destination.handle(), 1.0, source_host.len() as u32);
         let region = device
@@ -968,7 +980,7 @@ mod tests {
         let source_host = vec![1.0f32; 8];
         let source = device_vec(&mut device, &source_host, "test.src");
         let destination_host = vec![0.0f32; 8];
-        let mut destination =
+        let destination =
             device_vec(&mut device, &destination_host, "test.dst");
         let args = add_scaled_args(source.handle(), destination.handle(), 1.0, source_host.len() as u32);
         let region = device

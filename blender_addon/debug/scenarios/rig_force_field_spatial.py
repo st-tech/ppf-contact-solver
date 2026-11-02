@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_spatial.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A field object acts by POSITION and by TIME, exactly: the kernel matches the
 # reference evaluator for four laws, for a field far from the scene and

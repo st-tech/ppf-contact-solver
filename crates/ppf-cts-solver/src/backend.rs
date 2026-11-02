@@ -36,6 +36,7 @@ extern "C" {
     fn update_dyn(index: *const u32, offset: *const u32);
     fn update_constraint(constraint: *const Constraint);
     fn update_rest_shape(update: *const RestShapeUpdate);
+    fn update_hinge_rest_angles(index: *const u32, angle: *const f32, count: u32);
     fn update_material_params(update: *const MaterialParamUpdate);
     fn initialize(data: *const DataSet, param: *const ParamSet) -> bool;
     fn override_velocity(indices: *const u32, count: u32, vx: f32, vy: f32, vz: f32, dt: f32);
@@ -132,6 +133,58 @@ fn interp_rest_shape(keyframes: &[RestShapeKeyframe], time: f64) -> RestShapeUpd
         exclude_face: CVec::from(&exclude_face[..]),
         exclude_tet: CVec::from(&exclude_tet[..]),
     }
+}
+
+/// The hinges an animated bending rest shape drives, and each keyframe's rest
+/// angles for exactly those hinges: `(time, angles)` with `angles[k]` the rest
+/// angle of hinge `index[k]`.
+struct BendRestSchedule {
+    index: Vec<u32>,
+    keyframes: Vec<(f64, Vec<f32>)>,
+}
+
+/// Wrap an angle difference into `(-pi, pi]`.
+fn wrap_angle(a: f32) -> f32 {
+    let two_pi = 2.0 * std::f32::consts::PI;
+    let mut w = a % two_pi;
+    if w > std::f32::consts::PI {
+        w -= two_pi;
+    } else if w <= -std::f32::consts::PI {
+        w += two_pi;
+    }
+    w
+}
+
+/// Interpolate the bending rest angles of `schedule` to `time`. Times outside
+/// the schedule clamp to the nearest end, and an endpoint reproduces its
+/// keyframe exactly. Between two keyframes each hinge turns through the SHORTER
+/// way from one angle to the next, so a hinge whose rest angle crosses the
+/// +-pi seam of the signed dihedral angle does not sweep the long way round;
+/// the result is expressed in `(-pi, pi]`, the range the build-time angle
+/// (`builder::hinge_rest_angle`) uses.
+fn interp_bend_rest(schedule: &BendRestSchedule, time: f64) -> Vec<f32> {
+    let keyframes = &schedule.keyframes;
+    debug_assert!(
+        keyframes.windows(2).all(|w| w[0].0 < w[1].0),
+        "bending rest keyframe times must be strictly increasing"
+    );
+    let n = keyframes.len();
+    if time <= keyframes[0].0 {
+        return keyframes[0].1.clone();
+    }
+    if time >= keyframes[n - 1].0 {
+        return keyframes[n - 1].1.clone();
+    }
+    let hi = keyframes.partition_point(|k| k.0 < time);
+    let lo = hi - 1;
+    let (t0, t1) = (keyframes[lo].0, keyframes[hi].0);
+    let alpha = ((time - t0) / (t1 - t0)) as f32;
+    keyframes[lo]
+        .1
+        .iter()
+        .zip(keyframes[hi].1.iter())
+        .map(|(&a, &b)| wrap_angle(a + alpha * wrap_angle(b - a)))
+        .collect()
 }
 
 /// One precomputed material keyframe: `(time, face_params)`.
@@ -280,6 +333,18 @@ fn interp_material_params(
 pub struct Backend {
     pub mesh: MeshSet,
     pub state: State,
+    /// A resumed run's friction memory, read from the checkpoint's
+    /// `friction_<N>.bin.gz` and installed once `initialize()` has accepted the
+    /// scene. Not part of this record's own serialization: it travels in its
+    /// own file, beside the state.
+    #[serde(skip)]
+    pub friction_memory: Option<crate::driver::friction_memory::FrictionMemoryState>,
+    /// A resumed run's rotational run state (Cosserat frames, grain spin, PDRD
+    /// running rotation), read from the checkpoint's `runstate_<N>.bin.gz`
+    /// and installed once `initialize()` has accepted the scene. Travels in
+    /// its own file, beside the state, like the friction memory.
+    #[serde(skip)]
+    pub run_state: Option<crate::driver::run_state::RunState>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -365,7 +430,7 @@ impl Backend {
             "#v = {}, #f = {}, #tet = {}",
             mesh.mesh.mesh.vertex_count, num_face, num_tet
         );
-        Self { state, mesh }
+        Self { state, mesh, friction_memory: None, run_state: None }
     }
 
     fn fetch_state(&mut self, dataset: &DataSet, param: &ParamSet) {
@@ -419,7 +484,7 @@ impl Backend {
             let state = super::read(&super::read_gz(path_state.as_str()));
             (mesh, state)
         };
-        Self { state, mesh }
+        Self { state, mesh, friction_memory: None, run_state: None }
     }
 
     /// Write `vert_<n>.bin`, `time_per_frame.out`, and
@@ -572,13 +637,12 @@ impl Backend {
                 .collect()
         };
 
-        // Write visible vertices in chunks while retaining the exact full pose
-        // for solver-side object statistics. Interior SOLID vertices are not
-        // written to PC2, but volume analysis needs them.
-        const CHUNK_SIZE: usize = 4096;
-        let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
-        let mut output_positions = Vec::with_capacity(self.state.curr_vertex.ncols());
-        for v in 0..self.state.curr_vertex.ncols() {
+        // Every vertex's output first, then the rigid-body correction, then the
+        // write: a body vertex's output depends on the whole body's motion.
+        let n_out = self.state.curr_vertex.ncols();
+        let mut outputs: Vec<[f32; 3]> = Vec::with_capacity(n_out);
+        let mut output_positions = Vec::with_capacity(n_out);
+        for v in 0..n_out {
             let p = self.state.prev_vertex.column(v);
             let c = self.state.curr_vertex.column(v);
             let mut output = [0.0; 3];
@@ -614,9 +678,43 @@ impl Backend {
                     }
                 }
             }
+            outputs.push(output);
             output_positions.push(analysis_output);
+        }
+
+        // A RIGID (PDRD) BODY IS INTERPOLATED AS A RIGID MOTION, not vertex by
+        // vertex. The solver holds a body exactly rigid at every step, but the
+        // straight line between a vertex's two step positions is a chord of
+        // its arc, so a turning body drawn by the plain lerp shrinks toward
+        // its centroid by up to r * theta^2 / 8 at a frame inside a step, and
+        // a pinned anchor on the body (placed exactly above) sits off it by
+        // that much. So each body's step is fitted as a rotation R about its
+        // centroid and a translation, the frame takes the fraction alpha of
+        // both (the rotation through its axis-angle), and the lerp of each
+        // vertex's residual off that fit is added back, which is round-off for
+        // a body the solver keeps rigid. With no rotation this is the plain
+        // lerp. Pinned vertices keep their exact placement above.
+        if alpha > 0.0 && alpha < 1.0 {
+            rigid_interpolate(
+                dataset,
+                &self.state.prev_vertex,
+                &self.state.curr_vertex,
+                alpha,
+                inv_world,
+                &pin_at_frame,
+                &mut outputs,
+                &mut output_positions,
+            );
+        }
+
+        // Write visible vertices in chunks; the exact full pose is retained for
+        // solver-side object statistics. Interior SOLID vertices are not
+        // written to PC2, but volume analysis needs them.
+        const CHUNK_SIZE: usize = 4096;
+        let mut chunk_buf: Vec<f32> = Vec::with_capacity(CHUNK_SIZE);
+        for (v, output) in outputs.iter().enumerate() {
             if v < surface_vert_count {
-                chunk_buf.extend_from_slice(&output);
+                chunk_buf.extend_from_slice(output);
             }
             if chunk_buf.len() >= CHUNK_SIZE {
                 let buff = unsafe {
@@ -759,6 +857,8 @@ impl Backend {
         // inert orphan, rather than a state with no rest shape, which is the
         // one combination that cannot be resumed.
         self.save_plastic_state(program_args, sim_args, dataset);
+        self.save_friction_memory(program_args, sim_args, dataset);
+        self.save_run_state(program_args, sim_args);
         let path_state = format!(
             "{}/{}",
             program_args.output,
@@ -824,6 +924,64 @@ impl Backend {
             &program_args.output,
             files::PLASTIC_PREFIX,
             files::PLASTIC_SUFFIX,
+            sim_args.keep_states,
+            self.state.curr_frame,
+        );
+    }
+
+    /// Write `friction_<frame>.bin.gz`, the friction's memory of where each
+    /// contact stuck, for a scene in which some pair can carry friction.
+    ///
+    /// Before the state, for the reason the rest shape is: a crash between the
+    /// two leaves an inert orphan rather than a resumable state whose stuck
+    /// contacts would restart from zero slip. Retention matches the state
+    /// checkpoints.
+    fn save_friction_memory(&self, program_args: &ProgramArgs, sim_args: &SimArgs, dataset: &DataSet) {
+        use ppf_cts_formats::files;
+        if !crate::driver::scene_has_friction(dataset) {
+            return;
+        }
+        let memory = crate::driver::friction_memory_snapshot();
+        let path = format!(
+            "{}/{}",
+            program_args.output,
+            files::friction_filename(self.state.curr_frame)
+        );
+        info!("saving friction memory ({} pairs) to {path}", memory.word0.len());
+        super::save(&memory, path.as_str());
+        super::remove_old_files(
+            &program_args.output,
+            files::FRICTION_PREFIX,
+            files::FRICTION_SUFFIX,
+            sim_args.keep_states,
+            self.state.curr_frame,
+        );
+    }
+
+    /// Write `runstate_<frame>.bin.gz`, the rotational state a step reads from
+    /// the step before it beside the positions (`driver/run_state.rs`), for a
+    /// scene that carries any.
+    ///
+    /// Before the state, for the reason the rest shape is, and retained with
+    /// the state checkpoints.
+    fn save_run_state(&self, program_args: &ProgramArgs, sim_args: &SimArgs) {
+        use ppf_cts_formats::files;
+        let kinds = crate::driver::run_state_kinds();
+        if !kinds.any() {
+            return;
+        }
+        let run = crate::driver::run_state_snapshot();
+        let path = format!(
+            "{}/{}",
+            program_args.output,
+            files::runstate_filename(self.state.curr_frame)
+        );
+        info!("saving run state ({}) to {path}", kinds.describe());
+        super::save(&run, path.as_str());
+        super::remove_old_files(
+            &program_args.output,
+            files::RUNSTATE_PREFIX,
+            files::RUNSTATE_SUFFIX,
             sim_args.keep_states,
             self.state.curr_frame,
         );
@@ -948,6 +1106,39 @@ impl Backend {
             // resumed; `dataset.vertex` holds the saved pose on a resume. A
             // no-op unless the scene names that preconditioner.
             crate::driver::install_multigrid(&self.mesh.vertex);
+            // A RESUMED RUN'S FRICTION MEMORY, before its first step, so a
+            // contact that was sticking at the checkpoint holds across the
+            // resume as it holds across a step.
+            if let Some(memory) = self.friction_memory.take() {
+                info!("installing friction memory ({} pairs)", memory.word0.len());
+                crate::driver::install_friction_memory(&memory);
+            }
+            // A RESUMED RUN'S ROTATIONAL STATE, for the same reason: the
+            // Cosserat frames and their history, the grains' spin and the PDRD
+            // running rotation are what a step reads from the one before it
+            // beside the positions. Which parts the scene carries is known only
+            // now that the state is allocated, so the refusal is here: a
+            // checkpoint of such a scene without the file would restart every
+            // one of them from its authored value.
+            if program_args.load > 0 {
+                let kinds = crate::driver::run_state_kinds();
+                match self.run_state.take() {
+                    Some(run) => {
+                        info!("installing run state ({})", kinds.describe());
+                        crate::driver::install_run_state(&run);
+                    }
+                    None if kinds.any() => panic!(
+                        "checkpoint {} has no matching {}: the scene carries {}, which a step \
+                         reads from the step before it, and their state at this frame is not \
+                         on disk (a checkpoint written before the solver kept it has none), so \
+                         it cannot be resumed; run it from the start",
+                        ppf_cts_formats::files::state_filename(program_args.load),
+                        ppf_cts_formats::files::runstate_filename(program_args.load),
+                        kinds.describe()
+                    ),
+                    None => {}
+                }
+            }
             // THE EXTERNAL FORCE FIELD, read, verified and installed once. A
             // malformed field stops the run here, naming the file and the
             // field, rather than reaching a dispatch; a session with none
@@ -965,6 +1156,14 @@ impl Backend {
                 }
                 Ok(None) => {}
                 Err(message) => panic!("force field: {message}"),
+            }
+            // EVERY REFUSAL A RESUME CAN MEET HAS NOW HAD ITS CHANCE (the
+            // checkpoint's files in `main.rs`, the scene in `initialize()`, the
+            // installs and the force field above), so what the resumed run will
+            // write again is discarded here, and not before (`setup` in
+            // `main.rs` says why).
+            if program_args.load > 0 {
+                super::discard_after_resume_point(program_args);
             }
             write_current_time_to_file(initialize_finish_path.to_str().unwrap()).unwrap();
             crate::status_writer::progress(
@@ -1065,6 +1264,46 @@ impl Backend {
             }
             None => Vec::new(),
         };
+        // An animated bending rest shape (a shape-key mix that changes over
+        // time): each keyframe's hinge rest angles, measured with the exact
+        // build-time formula, for the hinges whose shared edge the bending
+        // reference mask covers (the same rule the build uses). Interpolated
+        // and streamed per step below.
+        let bend_rest_schedule: Option<BendRestSchedule> =
+            scene.bend_rest_schedule().map(|(times, frames, mask)| {
+                let hinge_params = dataset.param_arrays.hinge.as_slice();
+                let hinge_props = dataset.prop.hinge.as_slice();
+                let mut index = Vec::new();
+                let mut hinges = Vec::new();
+                for (i, hinge) in self.mesh.mesh.mesh.hinge.column_iter().enumerate() {
+                    if !mask[hinge[0]] {
+                        continue;
+                    }
+                    // Bend plasticity rewrites the same rest angle every step,
+                    // so the two cannot both own it. The add-on refuses the
+                    // pair at encode; a scene built some other way stops here.
+                    let param = &hinge_params[hinge_props[i].param_index as usize];
+                    assert!(
+                        param.plasticity <= 0.0,
+                        "hinge {i} takes an animated bending rest angle and also \
+                         has bend plasticity; an object cannot have both"
+                    );
+                    index.push(i as u32);
+                    hinges.push([hinge[0], hinge[1], hinge[2], hinge[3]]);
+                }
+                let keyframes = times
+                    .into_iter()
+                    .zip(frames.iter())
+                    .map(|(t, rest_v)| {
+                        let angles = hinges
+                            .iter()
+                            .map(|&h| super::builder::hinge_rest_angle(h, rest_v))
+                            .collect();
+                        (t, angles)
+                    })
+                    .collect();
+                BendRestSchedule { index, keyframes }
+            });
         loop {
             // GPU clock sampling is meaningful only against a CUDA device, so
             // it is gated on the backend build.rs actually chose, never on a
@@ -1216,6 +1455,23 @@ impl Backend {
             if !rest_shape_keyframes.is_empty() {
                 let rest_shape = interp_rest_shape(&rest_shape_keyframes, target_time);
                 unsafe { update_rest_shape(&rest_shape) };
+            }
+
+            // Stream the animated bending rest angles the same way: the bending
+            // kernels read each hinge's rest angle off the hinge records every
+            // Newton iteration, so writing them here drives the fold through
+            // the step.
+            if let Some(schedule) = bend_rest_schedule.as_ref() {
+                if !schedule.index.is_empty() {
+                    let angles = interp_bend_rest(schedule, target_time);
+                    unsafe {
+                        update_hinge_rest_angles(
+                            schedule.index.as_ptr(),
+                            angles.as_ptr(),
+                            schedule.index.len() as u32,
+                        )
+                    };
+                }
             }
 
             // Stream this step's material tables, on the same schedule and for
@@ -1435,6 +1691,103 @@ fn read_hold(output: &str) -> Option<(i32, std::time::Duration)> {
             path.display(),
             text
         ),
+    }
+}
+
+/// Interpolate every rigid (PDRD) body of `prev` -> `curr` as a rigid motion
+/// at the fraction `alpha` (see the call site), overwriting the outputs of its
+/// vertices that no pin places exactly.
+#[allow(clippy::too_many_arguments)]
+fn rigid_interpolate(
+    dataset: &DataSet,
+    prev: &na::Matrix3xX<f32>,
+    curr: &na::Matrix3xX<f32>,
+    alpha: f32,
+    inv_world: f32,
+    pinned: &HashMap<u32, (Vec3f, Vec3f, Vec3f)>,
+    outputs: &mut [[f32; 3]],
+    output_positions: &mut [[f64; 3]],
+) {
+    let props = dataset.prop.vertex.as_slice();
+    let mut members: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+    for (v, prop) in props.iter().enumerate().take(prev.ncols()) {
+        if prop.pdrd_body_index != 0 {
+            members.entry(prop.pdrd_body_index).or_default().push(v);
+        }
+    }
+    for vertices in members.values() {
+        if vertices.len() < 3 {
+            continue;
+        }
+        // Offsets from the body's first vertex, differenced in f64 so the fit
+        // works on small numbers rather than absolute coordinates.
+        let base = vertices[0];
+        let rel = |m: &na::Matrix3xX<f32>, v: usize| -> na::Vector3<f64> {
+            na::Vector3::new(
+                f64::from(m[(0, v)]) - f64::from(m[(0, base)]),
+                f64::from(m[(1, v)]) - f64::from(m[(1, base)]),
+                f64::from(m[(2, v)]) - f64::from(m[(2, base)]),
+            )
+        };
+        let n = vertices.len() as f64;
+        let cp = vertices.iter().map(|&v| rel(prev, v)).sum::<na::Vector3<f64>>() / n;
+        // The current pose relative to the PREVIOUS base vertex, so the two
+        // centroids are in one frame.
+        let shift = na::Vector3::new(
+            f64::from(curr[(0, base)]) - f64::from(prev[(0, base)]),
+            f64::from(curr[(1, base)]) - f64::from(prev[(1, base)]),
+            f64::from(curr[(2, base)]) - f64::from(prev[(2, base)]),
+        );
+        let cc = vertices.iter().map(|&v| rel(curr, v) + shift).sum::<na::Vector3<f64>>() / n;
+        let mut h = na::Matrix3::<f64>::zeros();
+        for &v in vertices {
+            h += (rel(prev, v) - cp) * (rel(curr, v) + shift - cc).transpose();
+        }
+        let svd = h.svd(true, true);
+        let (Some(u), Some(vt)) = (svd.u, svd.v_t) else { continue };
+        let mut d = na::Matrix3::<f64>::identity();
+        if (vt.transpose() * u.transpose()).determinant() < 0.0 {
+            d[(2, 2)] = -1.0;
+        }
+        // THROUGH A UNIT QUATERNION, with the angle from `atan2` of its
+        // vector and scalar parts. The fitted matrix is orthonormal only to
+        // round-off, and an angle read off its trace through `acos` is NaN when
+        // the trace rounds past 3, which is exactly a body that did not turn.
+        let fitted = vt.transpose() * d * u.transpose();
+        let mut q = na::UnitQuaternion::from_matrix(&fitted);
+        if q.w < 0.0 {
+            q = na::UnitQuaternion::new_unchecked(-q.into_inner());
+        }
+        let r = q.to_rotation_matrix().into_inner();
+        let vector = q.imag();
+        let sine = vector.norm();
+        let ra = if sine > 0.0 {
+            let angle = 2.0 * sine.atan2(q.w);
+            na::Rotation3::from_axis_angle(&na::Unit::new_unchecked(vector / sine), f64::from(alpha) * angle)
+                .into_inner()
+        } else {
+            na::Matrix3::identity()
+        };
+        let a = f64::from(alpha);
+        for &v in vertices {
+            if pinned.contains_key(&(v as u32)) {
+                continue;
+            }
+            let p = rel(prev, v);
+            let c = rel(curr, v) + shift;
+            let fit_c = cc + r * (p - cp);
+            let residual = c - fit_c;
+            let at = cp + a * (cc - cp) + ra * (p - cp) + a * residual;
+            assert!(
+                at.iter().all(|x| x.is_finite()),
+                "the rigid interpolation of PDRD body vertex {v} is not finite"
+            );
+            for k in 0..3 {
+                let value = (f64::from(prev[(k, base)]) + at[k]) * f64::from(inv_world);
+                output_positions[v][k] = value;
+                outputs[v][k] = value as f32;
+            }
+        }
     }
 }
 
@@ -1725,6 +2078,37 @@ mod rest_shape_tests {
         let r = interp_rest_shape(&keyframes, 2.0);
         assert!(r.inv_rest2x2.as_slice().is_empty());
         assert!((r.inv_rest3x3.as_slice()[0] - i3 * 3.0).amax() < 1e-6);
+    }
+
+    // The animated bending rest angle: endpoints reproduce their keyframe,
+    // interior times interpolate linearly, and times outside clamp.
+    #[test]
+    fn interp_bend_rest_endpoints_midpoint_and_clamp() {
+        let schedule = BendRestSchedule {
+            index: vec![3, 7],
+            keyframes: vec![(0.0, vec![0.0, 0.5]), (2.0, vec![1.0, -0.5])],
+        };
+        let near = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        assert!(near(&interp_bend_rest(&schedule, 0.0), &[0.0, 0.5]));
+        assert!(near(&interp_bend_rest(&schedule, 2.0), &[1.0, -0.5]));
+        assert!(near(&interp_bend_rest(&schedule, 1.0), &[0.5, 0.0]));
+        assert!(near(&interp_bend_rest(&schedule, -3.0), &[0.0, 0.5]));
+        assert!(near(&interp_bend_rest(&schedule, 9.0), &[1.0, -0.5]));
+    }
+
+    // A rest angle crossing the +-pi seam of the signed dihedral angle turns
+    // the short way (through pi), not back through zero.
+    #[test]
+    fn interp_bend_rest_crosses_the_pi_seam_the_short_way() {
+        let pi = std::f32::consts::PI;
+        let schedule = BendRestSchedule {
+            index: vec![0],
+            keyframes: vec![(0.0, vec![pi - 0.1]), (1.0, vec![-pi + 0.1])],
+        };
+        let mid = interp_bend_rest(&schedule, 0.5)[0];
+        assert!((mid.abs() - pi).abs() < 1e-5, "midpoint {mid} should sit at +-pi");
+        let quarter = interp_bend_rest(&schedule, 0.25)[0];
+        assert!((quarter - (pi - 0.05)).abs() < 1e-5, "quarter {quarter}");
     }
 }
 

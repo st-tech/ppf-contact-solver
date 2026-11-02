@@ -516,10 +516,9 @@ def setup():
             print("CUDA packages installed successfully")
     else:
         # Report WHICH toolkit, not merely that one exists. A Deep Learning AMI
-        # carries several at once and points /usr/local/cuda at the newest, so
-        # the bare "found" message used to print at exactly the moment a 13.x
-        # toolkit had been selected, reading as reassurance right before the
-        # solver failed to compile against it.
+        # carries several at once and points /usr/local/cuda at whichever it
+        # prefers, so a bare "found" message would read as reassurance right
+        # before the solver's build refuses the toolkit it selected.
         try:
             banner = subprocess.run(
                 ["/usr/local/cuda/bin/nvcc", "--version"],
@@ -532,14 +531,12 @@ def setup():
         except (subprocess.CalledProcessError, OSError) as exc:
             release = f"unreadable ({exc})"
         print(f"CUDA toolkit found at /usr/local/cuda: {release}")
-        if "release 12.8" not in release:
+        if "release 13.2" not in release:
             print(
-                "WARNING: this project builds against CUDA 12.8. The solver "
-                "Makefile compiles through /usr/local/cuda/bin/nvcc by "
-                "absolute path, so repoint that symlink at "
-                "/usr/local/cuda-12.8 if a build fails on "
-                "cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 "
-                "removed."
+                "WARNING: this project builds against CUDA 13.2, and the "
+                "solver build refuses any other release. The solver Makefile "
+                "compiles through /usr/local/cuda/bin/nvcc by absolute path, "
+                "so repoint that symlink at /usr/local/cuda-13.2."
             )
 
     # Install Python packages in virtual environment

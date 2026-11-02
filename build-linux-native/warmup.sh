@@ -17,7 +17,7 @@
 #
 # WHAT IT PROVISIONS
 #   - Rust, into build-linux-native/rust, only when the host has no cargo.
-#   - The CUDA 12.8 toolkit into build-linux-native/cuda, from NVIDIA's
+#   - The CUDA 13.2 toolkit into build-linux-native/cuda, from NVIDIA's
 #     per-component archives, which build.sh selects through PPF_CUDA_ROOT.
 #     Only when CUDA is among the backends (scripts/platform.sh), which is the
 #     default on both architectures.
@@ -36,7 +36,7 @@
 #     for x264's x86 assembly.
 #   - The slim ffmpeg, into build-linux-native/ffmpeg.
 #
-# WHAT THE HOST PROVIDES: glibc, a C and C++ compiler (one CUDA 12.8 accepts
+# WHAT THE HOST PROVIDES: glibc, a C and C++ compiler (one CUDA 13.2 accepts
 # when CUDA is built), make, binutils, curl, tar, xz, git, rsync, pkg-config,
 # and a Python 3.10 or newer for the developer environment, with its headers
 # where a wheel is built from source. Each one found missing is named.
@@ -414,8 +414,20 @@ verify_cuda() {
     for tool in cuobjdump nvdisasm; do
         [ -x "$CUDA_ROOT/bin/$tool" ] || { printf 'no %s in %s/bin\n' "$tool" "$CUDA_ROOT" >&2; return 1; }
     done
-    [ -f "$CUDA_ROOT/lib64/libcudart.so.12" ] || {
-        printf 'no lib64/libcudart.so.12 in %s\n' "$CUDA_ROOT" >&2
+    # nvcc's banner runs without the device compiler or the crt headers, which
+    # ship as their own archives (libnvvm, cuda_crt), so a merge that lost one
+    # would pass the banner check and fail at the first compile.
+    [ -x "$CUDA_ROOT/nvvm/bin/cicc" ] || {
+        printf 'no nvvm/bin/cicc in %s (the libnvvm archive)\n' "$CUDA_ROOT" >&2
+        return 1
+    }
+    [ -f "$CUDA_ROOT/include/crt/host_config.h" ] || {
+        printf 'no include/crt/host_config.h in %s (the cuda_crt archive)\n' "$CUDA_ROOT" >&2
+        return 1
+    }
+    # The runtime's soname carries the release's major version.
+    [ -f "$CUDA_ROOT/lib64/libcudart.so.${CUDA_RELEASE%%.*}" ] || {
+        printf 'no lib64/libcudart.so.%s in %s\n' "${CUDA_RELEASE%%.*}" "$CUDA_ROOT" >&2
         return 1
     }
     [ "$(cat "$CUDA_ROOT/.ppf-cuda-components" 2>/dev/null)" = "$(cuda_expected_stamp)" ] || {

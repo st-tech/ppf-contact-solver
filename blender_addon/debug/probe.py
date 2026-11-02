@@ -1,7 +1,7 @@
 # File: probe.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Blender-side monitor for the debug test rig. Hooks event handlers,
 # wraps timer registration, samples addon state at 10 Hz, and writes a

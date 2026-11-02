@@ -1,8 +1,7 @@
 # File: blender_addon/ui/dynamics/statistics.py
 # Code: GitHub Copilot
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Current-frame solver statistics panel and scalar CSV export."""
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # File: session.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Session identity.  Every connection run gets a fresh, short id that is
 # stamped on downstream artifacts (PC2 headers, MESH_CACHE modifier binds,

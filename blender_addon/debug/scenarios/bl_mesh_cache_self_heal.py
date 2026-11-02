@@ -1,7 +1,7 @@
 # File: scenarios/bl_mesh_cache_self_heal.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MESH_CACHE modifier self-heal coverage.
 #

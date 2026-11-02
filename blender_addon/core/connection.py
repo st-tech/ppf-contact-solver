@@ -1,7 +1,7 @@
 # File: connection.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Connection establishment/teardown functions extracted from client.py.
 

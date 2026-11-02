@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Reconnect cycles: assert the addon/server can survive multiple
 # disconnect/reconnect rounds without losing state-on-disk hashes,
 # and that runs continue to work each time.

@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_scale_op.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling kinematic round-trip for a SCALE pin op about an
 # ABSOLUTE pivot, world_scaling=10. The pin SCALE factor is

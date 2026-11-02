@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Group management handlers (create, delete, objects, pins, materials)."""
 
 import contextlib
@@ -681,8 +682,12 @@ def remove_all_objects_from_group(group_uuid: str):
 def _bend_reference(assigned) -> dict:
     """The per-object bending rest-angle reference, as a caller sees it.
 
-    The reference object is stored by UUID so it survives a rename, and the
-    name beside it is only the label the panel last drew.
+    "source" says which stored reference is read: "OBJECT" (the reference
+    object), "SHAPE_KEY" (one shape key of the object itself) or
+    "SHAPE_KEY_MIX" (the object's whole shape-key mix, animated with it). The
+    reference object is stored by UUID so it survives a rename, and the name
+    beside it is only the label the panel last drew. The shape key is stored
+    by name.
     """
     from ...core.uuid_registry import get_object_by_uuid
 
@@ -691,10 +696,11 @@ def _bend_reference(assigned) -> dict:
     # no reference picked yet carries.
     reference = get_object_by_uuid(object_uuid) if object_uuid else None
     return {
-        "enabled": bool(assigned.bend_ref_enable),
+        "source": assigned.bend_ref_source,
         "object_uuid": object_uuid,
         "object_name": reference.name if reference is not None else None,
         "stored_name": assigned.bend_ref_name,
+        "shape_key_name": assigned.bend_ref_shape_key,
     }
 
 
@@ -802,12 +808,15 @@ def get_group_objects(group_uuid: str):
     tetrahedralizer setting on SOLID, a bending reference on SHELL and ROD.
     So a value reported for a type that does not use it is stored and unread.
 
-    "bend_reference" is this object's own bending rest angle source, which
-    replaces the group's for that object, and which the scene build reads
-    only while the group's bend_rest_from_reference is on. Its object is
-    stored by UUID: "object_name" is what that UUID resolves to in the scene
-    now, and is null when it resolves to nothing, which is a reference whose
-    object has left the scene.
+    "bend_reference" is this object's own bending rest angle reference,
+    which the scene build reads only while the group's
+    bend_rest_angle_source is FROM_REFERENCE. Its "source" says which
+    reference is read: "OBJECT", "SHAPE_KEY" (the object's own shape key
+    named by "shape_key_name") or "SHAPE_KEY_MIX" (its whole shape-key mix,
+    followed over time when animated). Its object is stored by UUID:
+    "object_name" is what that UUID resolves to in the scene now, and is null
+    when it resolves to nothing, which is a reference whose object has left
+    the scene.
 
     Args:
         group_uuid: UUID of group
@@ -1745,7 +1754,6 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "bend_plasticity",
         "bend_plasticity_threshold",
         "bend_rest_angle_source",
-        "bend_rest_from_reference",
         "allow_self_intersection",
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
@@ -1807,7 +1815,6 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "bend_plasticity",
         "bend_plasticity_threshold",
         "bend_rest_angle_source",
-        "bend_rest_from_reference",
         "allow_self_intersection",
         "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",

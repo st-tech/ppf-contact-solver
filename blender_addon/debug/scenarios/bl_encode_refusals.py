@@ -1,7 +1,7 @@
 # File: scenarios/bl_encode_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Settings the solve cannot honor are REFUSED at encode, by name, rather than
 # shipped as something the artist did not author.

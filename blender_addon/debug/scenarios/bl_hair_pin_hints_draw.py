@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_pin_hints_draw.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The two lines the pin panel draws under the Pull row of a Hair Curves pin
 # (issue #146), drawn by the REAL panel in a real Properties editor.

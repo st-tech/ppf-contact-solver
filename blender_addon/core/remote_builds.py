@@ -1,7 +1,7 @@
 # File: remote_builds.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Which solver builds a REMOTE solver host holds, asked once per connection.
 #

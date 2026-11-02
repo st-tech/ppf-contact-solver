@@ -1660,5 +1660,22 @@
   "Last run: aborted": "Last run: aborted",
   "Resolving shell intersections: {stage}, iteration {iteration}, {pairs} pair(s) inside their margin": "Resolving shell intersections: {stage}, iteration {iteration}, {pairs} pair(s) inside their margin",
   "{name} was edited while the run was going, so the result was not written. Run again": "{name} was edited while the run was going, so the result was not written. Run again",
-  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far"
+  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far",
+  "Reference (per object):": "Reference (per object):",
+  "Mix is not animated: the rest angle is the current mix": "Mix is not animated: the rest angle is the current mix",
+  "An animated mix needs a Shell group": "An animated mix needs a Shell group",
+  "Mix is animated: the rest angle follows it": "Mix is animated: the rest angle follows it",
+  "Shape-key rest angles need a mesh object": "Shape-key rest angles need a mesh object",
+  "This object has no shape keys": "This object has no shape keys",
+  "No shape key set: Transfer refuses this object": "No shape key set: Transfer refuses this object",
+  "Missing shape key: {name}": "Missing shape key: {name}",
+  "Each object takes its rest angle from its own reference: another object (a topological copy whose vertices were moved), one of its shape keys, or its shape-key mix (animated with it). Every object in the group must have one. Bend Plasticity does not apply": "Each object takes its rest angle from its own reference: another object (a topological copy whose vertices were moved), one of its shape keys, or its shape-key mix (animated with it). Every object in the group must have one. Bend Plasticity does not apply",
+  "Reference Source": "Reference Source",
+  "Reference Object": "Reference Object",
+  "Take the rest angle from another object, a topological copy of this one whose vertices were moved": "Take the rest angle from another object, a topological copy of this one whose vertices were moved",
+  "Shape Key": "Shape Key",
+  "Take the rest angle from one of this object's own shape keys, read as the key's stored shape (independent of its Value slider, before modifiers)": "Take the rest angle from one of this object's own shape keys, read as the key's stored shape (independent of its Value slider, before modifiers)",
+  "Shape Key Mix (Animated)": "Shape Key Mix (Animated)",
+  "Take the rest angle from this object's whole shape-key mix as Blender plays it (every key's Value, before modifiers). When the mix is animated, the rest angle follows it through the simulation": "Take the rest angle from this object's whole shape-key mix as Blender plays it (every key's Value, before modifiers). When the mix is animated, the rest angle follows it through the simulation",
+  "Shape key of this object whose stored shape gives the bending rest angle": "Shape key of this object whose stored shape gives the bending rest angle"
 }

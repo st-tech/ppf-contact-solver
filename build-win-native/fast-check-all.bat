@@ -77,13 +77,13 @@ if not defined HAS_GPU_BUILD (
 
 set PYTHON=%PYTHON_DIR%\python.exe
 REM Use local CUDA (in source tree: build-win-native\cuda, in bundle: bin\ has the DLLs)
-if exist "%BUILD_WIN%\cuda\bin" (
+if exist "%BUILD_WIN%\cuda\bin\x64" (
     set CUDA_PATH=%BUILD_WIN%\cuda
 ) else (
     REM In bundled dist, CUDA DLLs are in bin\
     set CUDA_PATH=
 )
-set PATH=%PYTHON_DIR%;%PYTHON_DIR%\Scripts;%BIN_DIR%;%MINGIT_DIR%;%CUDA_PATH%\bin;%PATH%
+set PATH=%PYTHON_DIR%;%PYTHON_DIR%\Scripts;%BIN_DIR%;%MINGIT_DIR%;%CUDA_PATH%\bin\x64;%PATH%
 
 REM Point Python at certifi's CA bundle. urllib.request.urlretrieve
 REM (used by some examples to fetch mesh assets) doesn't auto-load

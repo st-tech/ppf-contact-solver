@@ -23,10 +23,6 @@
 # Every consumer reads these by NAME for that reason: a value passed through
 # `call` is percent-expanded a second time, which rewrites the escape.
 
-# 7-Zip extracts the CUDA installer, so it is fetched only where CUDA is built.
-URL_7ZIP=https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.exe
-FILE_7ZIP=7z2408-x64.exe
-
 # The two digests are the ones Git for Windows publishes in the release notes of
 # v2.47.1.windows.1, read through the GitHub releases API on 2026-09-15.
 URL_MINGIT_X64=https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip
@@ -36,8 +32,54 @@ URL_MINGIT_ARM64=https://github.com/git-for-windows/git/releases/download/v2.47.
 FILE_MINGIT_ARM64=MinGit-2.47.1-arm64.zip
 SHA256_MINGIT_ARM64=fc5747e187a70147404a94da104dc9f6005a3d45a78a56dbfa132075ad4a45e4
 
-URL_CUDA=https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda_12.8.1_572.61_windows.exe
-FILE_CUDA=cuda_12.8.1_572.61_windows.exe
+# THE CUDA 13.2 TOOLKIT, AS NVIDIA'S PER-COMPONENT REDISTRIBUTABLE ARCHIVES,
+# fetched only where CUDA is built. warmup.bat fetches each entry below through
+# scripts\fetch-download.bat, which checks its SHA256, and merges every archive's
+# top directory into build-win-native\cuda. Adding a component is adding one
+# entry here and its name to CUDA_COMPONENTS, a comma-separated list because
+# bash sources this file too and would run a space-separated value as a command.
+#
+# What each component is for:
+#   CUDA_NVCC, CUDA_CRT, CUDA_NVVM  the compiler. CUDA 13 ships nvcc's CRT
+#                                   headers (crt\host_config.h and the rest)
+#                                   and NVVM (nvvm\bin\cicc.exe) as their own
+#                                   components, and nvcc cannot compile a file
+#                                   without both.
+#   CUDA_CUDART                     cuda_runtime.h, cudart.lib, and the
+#                                   cudart64_13.dll bundle.bat ships.
+#   CUDA_CCCL, CUDA_PROFILER_API    not read by the solver's own CUDA sources,
+#                                   which include only cuda_runtime.h. The ROCm
+#                                   backend's NVIDIA staging build compiles
+#                                   HIP's hip\nvidia_detail headers through this
+#                                   nvcc, and those include cuda_fp16.h (which
+#                                   includes nv\target from CCCL) and
+#                                   cuda_profiler_api.h.
+#
+# The versions are the components of the CUDA 13.2.2 release, all 13.2.86. The
+# hashes are the windows-x86_64 sha256 fields of NVIDIA's redistrib_13.2.2.json,
+# read on 2026-10-29 from the verbatim copy of that manifest nixpkgs keeps
+# (pkgs/development/cuda-modules/_cuda/manifests/cuda/). The manifest lists no
+# Windows ARM64 archive for any component, which is why these carry no _X64
+# suffix: scripts\platform.bat refuses cuda on ARM64 before any is read.
+CUDA_COMPONENTS=CUDA_NVCC,CUDA_CRT,CUDA_NVVM,CUDA_CUDART,CUDA_CCCL,CUDA_PROFILER_API
+URL_CUDA_NVCC=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_NVCC=cuda_nvcc-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_NVCC=3e9b024c9a3199689721b4a02bf7337aaea7bedc5ddd42a08ed34d9c81fe1e3e
+URL_CUDA_CRT=https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_CRT=cuda_crt-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_CRT=a8d61bacb23bbc7131b9ccff0876abec3edb68f3b767bfb0377e5571892e9c19
+URL_CUDA_NVVM=https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_NVVM=libnvvm-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_NVVM=293de78978866080e7d8b43d316a27c45a51eda1ffccd1bd01b6b624d5f88779
+URL_CUDA_CUDART=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_CUDART=cuda_cudart-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_CUDART=024e0c1055343d9d2a7d35c90fb7695db14cc2f05bb962198eb18b92c73b32be
+URL_CUDA_CCCL=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_CCCL=cuda_cccl-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_CCCL=f8d75fba1f3b597ae625283fe3a03928f09223be75941a69c497e2b412b752be
+URL_CUDA_PROFILER_API=https://developer.download.nvidia.com/compute/cuda/redist/cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.2.86-archive.zip
+FILE_CUDA_PROFILER_API=cuda_profiler_api-windows-x86_64-13.2.86-archive.zip
+SHA256_CUDA_PROFILER_API=c611ef0c8e8b81d8fd6cc5b728a5c6fc7e9491091273adc0aa9ff4356c2dcb7b
 
 # A moving pointer to the current rustup-init, so there is no digest to pin; the
 # host triple that `rustc -vV` reports after the install is checked instead.

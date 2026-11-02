@@ -64,7 +64,7 @@ def trigger_workflow(example_name, instance_type, region, branch=None):
 
 def main():
     instance_type = sys.argv[1] if len(sys.argv) > 1 else "g6e.2xlarge"
-    region = sys.argv[2] if len(sys.argv) > 2 else "us-east-2"
+    region = sys.argv[2] if len(sys.argv) > 2 else "ap-northeast-1"
 
     try:
         result = subprocess.run(

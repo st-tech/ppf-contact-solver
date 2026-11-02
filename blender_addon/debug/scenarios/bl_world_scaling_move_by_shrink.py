@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_move_by_shrink.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling kinematic round-trip, SHRINK direction. Same MOVE_BY
 # pin op as bl_world_scaling_move_by but with world_scaling=0.1 (an

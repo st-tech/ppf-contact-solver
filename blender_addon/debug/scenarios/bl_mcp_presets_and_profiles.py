@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_presets_and_profiles.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Presets, profiles, and the copy/paste pairs over MCP.
 #

@@ -1,7 +1,7 @@
 # File: scenarios/bl_time_scale_encoding.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Time Scale encoding contract. state.time_scale re-interprets how much
 # simulated time one Blender frame covers, implemented entirely encoder-side

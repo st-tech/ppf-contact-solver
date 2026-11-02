@@ -82,6 +82,21 @@ def test_a_valid_stitch_set_is_kept(scene):
     [kept] = scene._cross_stitch
     assert kept["source_name"] == "sheet" and kept["target_name"] == "box"
     assert kept["ind"].shape == (3, 6) and kept["stitch_stiffness"] == 2.5
+    assert kept["rest_length"] is None
+
+
+def test_a_stitch_set_keeps_its_rest_length(scene):
+    scene.add("sheet")
+    box = scene.add("box")
+    tri = [int(i) for i in box.get("F")[0]]
+    ind, w = _vertex_stitch(3, 0, tri)
+    scene.cross_stitch("sheet", "box", ind, w, rest_length="initial")
+    scene.cross_stitch("sheet", "box", ind, w, rest_length=0.25)
+    scene.cross_stitch("sheet", "box", ind, w, rest_length=[0.1, 0.2, 0.3])
+    initial, uniform, per_row = scene._cross_stitch
+    assert initial["rest_length"] == "initial"
+    assert float(uniform["rest_length"]) == 0.25
+    assert per_row["rest_length"].tolist() == [0.1, 0.2, 0.3]
 
 
 @pytest.mark.parametrize(
@@ -100,6 +115,11 @@ def test_a_valid_stitch_set_is_kept(scene):
         (lambda a: a.update(w=[[1.0, 0.0, 0.0, np.nan, 0.5, 0.5]]), "finite"),
         (lambda a: a.update(stiffness=-1.0), "stiffness"),
         (lambda a: a.update(stiffness=float("inf")), "stiffness"),
+        (lambda a: a.update(rest_length=0.0), "finite positive distance"),
+        (lambda a: a.update(rest_length=-0.1), "finite positive distance"),
+        (lambda a: a.update(rest_length=float("nan")), "finite positive distance"),
+        (lambda a: a.update(rest_length=[0.1, 0.2]), "one per stitch"),
+        (lambda a: a.update(rest_length="final"), "'initial'"),
     ],
 )
 def test_a_malformed_stitch_set_is_refused(scene, mutate, message):

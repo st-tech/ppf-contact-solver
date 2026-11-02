@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_ordered_collections.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # In-place editing and reordering of the ordered per-object collections,
 # against a real Blender.

@@ -39,6 +39,9 @@ enum Result {
     SLIDING_OVER_CONE_GRAD_X,
     SLIDING_OVER_CONE_H_XX,
     NO_PREDICTION_H_XX,
+    SLIDE_OVER_PREDICTION_H_XX,
+    SLIDE_UNDER_PREDICTION_H_XX,
+    SLIDE_INSIDE_CONE_H_XX,
     PULLING_H_XX,
     VERTEX_PRED_STIFFNESS,
     VERTEX_PRED_DRIVE_X,
@@ -46,6 +49,13 @@ enum Result {
     PAIR_PRED_STIFFNESS,
     PAIR_PRED_DRIVE_X,
     PAIR_PRED_PINNED,
+    SHARE_LONE,
+    SHARE_THIRD,
+    SHARE_GROWN,
+    SHARED_UNIT_DRIVE_X,
+    SHARED_THREE_H_XX,
+    UNSHARED_THREE_H_XX,
+    SHARED_PAST_CONE_SLIP,
     N_RESULT,
 };
 
@@ -120,6 +130,26 @@ void run(float *out, const float *residual) {
                       stiffness, tangent, projection, contact);
     out[NO_PREDICTION_H_XX] = hessian(0, 0);
 
+    // The last step's slide past the cone: the anchor adds the LARGER of it
+    // and the predicted slip, so a slide of 0.5 over a prediction of 0.1 gives
+    // 0.02 + 0.5, and a slide of 0.05 under it leaves 0.02 + 0.1.
+    friction_evaluate_anchored(contact_force, Vec3f(0.02f, 0.0f, 0.0f), normal,
+                               mu, eps, Vec3f(1.8f, 0.0f, 0.0f), 10.0f, 0.5f,
+                               gradient, hessian, lambda, stiffness, tangent,
+                               projection, contact);
+    out[SLIDE_OVER_PREDICTION_H_XX] = hessian(0, 0);
+    friction_evaluate_anchored(contact_force, Vec3f(0.02f, 0.0f, 0.0f), normal,
+                               mu, eps, Vec3f(1.8f, 0.0f, 0.0f), 10.0f, 0.05f,
+                               gradient, hessian, lambda, stiffness, tangent,
+                               projection, contact);
+    out[SLIDE_UNDER_PREDICTION_H_XX] = hessian(0, 0);
+    // Inside the cone a slide changes nothing: the static row again.
+    friction_evaluate_anchored(contact_force, Vec3f(0.005f, 0.0f, 0.0f), normal,
+                               mu, eps, Vec3f(0.5f, 0.0f, 0.0f), 10.0f, 0.5f,
+                               gradient, hessian, lambda, stiffness, tangent,
+                               projection, contact);
+    out[SLIDE_INSIDE_CONE_H_XX] = hessian(0, 0);
+
     // A contact force that pulls (a negative normal force) has no cone and must
     // not put a negative block into the system.
     friction_evaluate(Vec3f(0.0f, 0.0f, 2.0f), Vec3f(0.005f, 0.0f, 0.0f),
@@ -147,7 +177,10 @@ void run(float *out, const float *residual) {
     // (200 + 200) / |W|^4 = 100, the reduced mass m / 2 over dt^2. The
     // frictionless slip 2 / 100 = 0.02 is the relative slip of the two bodies
     // moved by their own residuals, 3 dt^2 / m + 1 dt^2 / m.
-    unsigned index[2] = {0u, 1u};
+    SVecf<6> pair_load;
+    for (unsigned k = 0; k < 6u; ++k) {
+        pair_load[k] = residual[k];
+    }
     SVecf<2> weight;
     weight[0] = 1.0f;
     weight[1] = -1.0f;
@@ -157,8 +190,11 @@ void run(float *out, const float *residual) {
     const SMatf<6, 6> no_elastic = SMatf<6, 6>::Zero();
     Vec3f pair_drive = Vec3f::Zero();
     float pair_stiffness = 0.0f;
-    friction_slip_prediction<2>(index, weight, mass, no_elastic, residual,
-                                normal, 0.1f, pair_drive, pair_stiffness);
+    SVecf<2> whole;
+    whole[0] = 1.0f;
+    whole[1] = 1.0f;
+    friction_slip_prediction<2>(weight, mass, no_elastic, pair_load,
+                                whole, normal, 0.1f, pair_drive, pair_stiffness);
     out[PAIR_PRED_STIFFNESS] = pair_stiffness;
     out[PAIR_PRED_DRIVE_X] = pair_drive[0];
     // With the second vertex pinned (weight zero) only the first moves: drive
@@ -166,9 +202,76 @@ void run(float *out, const float *residual) {
     SVecf<2> pinned_weight;
     pinned_weight[0] = 1.0f;
     pinned_weight[1] = 0.0f;
-    friction_slip_prediction<2>(index, pinned_weight, mass, no_elastic, residual,
-                                normal, 0.1f, pair_drive, pair_stiffness);
+    friction_slip_prediction<2>(pinned_weight, mass, no_elastic, pair_load,
+                                whole, normal, 0.1f, pair_drive, pair_stiffness);
     out[PAIR_PRED_PINNED] = pair_stiffness * pair_drive[0];
+
+    // THE SHARE OF A VERTEX'S RESIDUAL a pair reads. A vertex that carried one
+    // pair gives it everything; one of three equal pairs reads a third; a pair
+    // whose cone grew past the lagged sum is capped at the whole.
+    out[SHARE_LONE] = friction_cone_fraction(0.8f, 0.7f, 1.0f);
+    out[SHARE_THIRD] = friction_cone_fraction(0.8f, 2.4f, 3.0f);
+    out[SHARE_GROWN] = friction_cone_fraction(3.0f, 2.4f, 3.0f);
+    // A share of one is the prediction without it, bit for bit.
+    {
+        SVecf<2> unit;
+        unit[0] = 1.0f;
+        unit[1] = 1.0f;
+        Vec3f a = Vec3f::Zero(), b = Vec3f::Zero();
+        float ka = 0.0f, kb = 0.0f;
+        friction_slip_prediction<2>(weight, mass, no_elastic, pair_load,
+                                    unit, normal, 0.1f, a, ka);
+        friction_slip_prediction<2>(weight, mass, no_elastic, pair_load,
+                                    whole, normal, 0.1f, b, kb);
+        out[SHARED_UNIT_DRIVE_X] = (a[0] == b[0] && ka == kb) ? 1.0f : 0.0f;
+    }
+    // THREE EQUAL PAIRS AT ONE VERTEX, each with cone 0.8, the vertex loaded
+    // at 0.59 of the three cones together (x = 0.59 * 2.4 = 1.416): the
+    // vertex holds. Each pair reading the whole residual sees 1.416 > 0.8,
+    // releases, and takes the last step's slide 0.1 into its anchor; reading
+    // its third, 0.472, it stays at the static stiffness 0.8 / 0.01.
+    {
+        SVecf<1> w1;
+        w1[0] = 1.0f;
+        SVecf<1> m1;
+        m1[0] = 2.0f;
+        const SMatf<3, 3> none = SMatf<3, 3>::Zero();
+        SVecf<3> loaded;
+        loaded[0] = 1.416f;
+        loaded[1] = 0.0f;
+        loaded[2] = 0.0f;
+        SVecf<1> third;
+        third[0] = friction_cone_fraction(0.8f, 2.4f, 3.0f);
+        SVecf<1> all;
+        all[0] = 1.0f;
+        Vec3f drive = Vec3f::Zero();
+        float k = 0.0f;
+        friction_slip_prediction<1>(w1, m1, none, loaded, third, normal,
+                                    0.1f, drive, k);
+        friction_evaluate_anchored(contact_force, Vec3f(0.005f, 0.0f, 0.0f),
+                                   normal, mu, eps, drive, k, 0.1f, gradient,
+                                   hessian, lambda, stiffness, tangent,
+                                   projection, contact);
+        out[SHARED_THREE_H_XX] = hessian(0, 0);
+        friction_slip_prediction<1>(w1, m1, none, loaded, all, normal,
+                                    0.1f, drive, k);
+        friction_evaluate_anchored(contact_force, Vec3f(0.005f, 0.0f, 0.0f),
+                                   normal, mu, eps, drive, k, 0.1f, gradient,
+                                   hessian, lambda, stiffness, tangent,
+                                   projection, contact);
+        out[UNSHARED_THREE_H_XX] = hessian(0, 0);
+        // PAST THE SUMMED CONE each pair predicts the VERTEX's slip: load 3.0
+        // over the three cones' 2.4 slides the vertex (3.0 - 2.4) / 200, and
+        // a pair owning a third reads drive 1.0 against stiffness 200 / 3, so
+        // its excess 0.2 predicts the same 0.003.
+        SVecf<3> heavy;
+        heavy[0] = 3.0f;
+        heavy[1] = 0.0f;
+        heavy[2] = 0.0f;
+        friction_slip_prediction<1>(w1, m1, none, heavy, third, normal,
+                                    0.1f, drive, k);
+        out[SHARED_PAST_CONE_SLIP] = (drive[0] - 0.8f) / k;
+    }
 }
 
 static bool near(float actual, float expected) {
@@ -214,10 +317,16 @@ int main() {
         0.8f, 0.8f / 0.12f,
         // No prediction: 0.8 / min_dx.
         80.0f,
+        // The last step's slide: 0.8 / (0.02 + 0.5), 0.8 / (0.02 + 0.1), and
+        // inside the cone the static 80.
+        0.8f / 0.52f, 0.8f / 0.12f, 80.0f,
         // Pulling: no cone, no block.
         0.0f,
         // The predictions.
         230.0f, 3.0f, 0.0f, 100.0f, 2.0f, 600.0f,
+        // The shares, then the three pairs: 80 shared, 0.8 / (0.005 + 0.1)
+        // unshared.
+        1.0f, 1.0f / 3.0f, 1.0f, 1.0f, 80.0f, 0.8f / 0.105f, 0.003f,
     };
     const char *name[N_RESULT] = {
         "static gradient", "static Hxx", "static Hyy", "static Hzz",
@@ -227,10 +336,14 @@ int main() {
         "rest-over-cone gradient x", "rest-over-cone Hxx",
         "rest-over-cone Hyy", "rest-over-cone Hzz",
         "sliding-over-cone gradient x", "sliding-over-cone Hxx",
-        "no-prediction Hxx", "pulling Hxx",
+        "no-prediction Hxx", "slide-over-prediction Hxx",
+        "slide-under-prediction Hxx", "slide-inside-cone Hxx", "pulling Hxx",
         "vertex prediction stiffness", "vertex prediction drive x",
         "vertex prediction drive z", "pair prediction stiffness",
         "pair prediction drive x", "pair prediction pinned",
+        "share of a lone pair", "share of one of three", "share of a grown pair",
+        "unit share is the unshared prediction", "three shared pairs Hxx",
+        "three unshared pairs Hxx", "shared pair past the cone predicts the vertex slip",
     };
     for (int i = 0; i < N_RESULT; ++i) {
         if (!near(result[i], expected[i])) {

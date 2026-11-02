@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_encode.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The add-on's Fluid Flow ENCODE (issue #155): what a Fluid
 # Flow field's Domain Object, a baked Mantaflow gas domain or a Volume object

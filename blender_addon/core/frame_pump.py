@@ -1,7 +1,7 @@
 # File: frame_pump.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A dedicated modal operator that drives apply_animation + MESH_CACHE
 # self-heal from a modal-operator timer context. This is the only context

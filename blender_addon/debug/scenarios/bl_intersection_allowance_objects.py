@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowance_objects.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The OBJECT SUBSET each of the three group-level intersection allowances is
 # narrowed to.

@@ -40,6 +40,12 @@ pub enum SceneAssemblyError {
         index: i64,
         n_verts: usize,
     },
+    #[error("stitch row {row} of {name:?}: {detail}")]
+    StitchRestLength {
+        name: String,
+        row: usize,
+        detail: String,
+    },
     #[error("cross-stitch missing source map: {name:?}")]
     CrossStitchMissingSource { name: String },
     #[error("cross-stitch missing target map: {name:?}")]
@@ -48,6 +54,12 @@ pub enum SceneAssemblyError {
     StaticVertexNotMultipleOf3 { name: String },
     #[error("missing displacement entry for static {name:?}")]
     MissingStaticDisplacement { name: String },
+    #[error(
+        "static {name:?} has no faces: the collision mesh holds triangles only, so a rod \
+         or a point set cannot be one, and dropping it would let every other object pass \
+         through where it stands"
+    )]
+    StaticObjectWithoutFaces { name: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +220,87 @@ pub struct AssembleObject<'a> {
     /// Per-object stitch stiffness applied to every stitch row this
     /// object owns (its loose-edge / intra-object stitches).
     pub stitch_stiffness: f64,
+    /// Per-row rest length of this object's stitches, read where the mode
+    /// beside it is [`STITCH_REST_AUTHORED`]. Both are `None` for an object
+    /// with no stitches, and both have one entry per stitch row otherwise.
+    pub stitch_rest_length: Option<&'a [f64]>,
+    pub stitch_rest_mode: Option<&'a [u8]>,
     pub position: [f64; 3], // displacement entry
+}
+
+/// A stitch row's rest length is derived from its six vertices' contact gaps.
+pub const STITCH_REST_DERIVED: u8 = 0;
+/// A stitch row's rest length is the number the caller gave.
+pub const STITCH_REST_AUTHORED: u8 = 1;
+/// A stitch row's rest length is measured from the built scene's positions,
+/// which the caller does once the scene is assembled; this kernel carries the
+/// mode through and leaves the length at zero.
+pub const STITCH_REST_INITIAL: u8 = 2;
+
+/// Append one row's rest length and mode, refusing a mode this kernel does not
+/// know and an authored length that is not a finite positive distance.
+fn push_stitch_rest(
+    out: &mut AssembleResult,
+    owner: &str,
+    row: usize,
+    length: f64,
+    mode: u8,
+) -> Result<(), SceneAssemblyError> {
+    match mode {
+        STITCH_REST_DERIVED | STITCH_REST_INITIAL => {
+            out.concat_stitch_rest_length.push(0.0);
+        }
+        STITCH_REST_AUTHORED => {
+            if !(length.is_finite() && length > 0.0) {
+                return Err(SceneAssemblyError::StitchRestLength {
+                    name: owner.to_string(),
+                    row,
+                    detail: format!(
+                        "the rest length {length} is not a finite positive distance"
+                    ),
+                });
+            }
+            out.concat_stitch_rest_length.push(length);
+        }
+        other => {
+            return Err(SceneAssemblyError::StitchRestLength {
+                name: owner.to_string(),
+                row,
+                detail: format!(
+                    "the rest-length mode {other} is not 0 (derived), 1 (authored) or 2 \
+                     (initial)"
+                ),
+            })
+        }
+    }
+    out.concat_stitch_rest_mode.push(mode);
+    Ok(())
+}
+
+/// The per-row rest lengths and modes of `rows` stitches, defaulting to
+/// derived when the caller gave neither, and refusing a count that disagrees.
+fn stitch_rest_rows<'a>(
+    owner: &str,
+    rows: usize,
+    length: Option<&'a [f64]>,
+    mode: Option<&'a [u8]>,
+) -> Result<Option<(&'a [f64], &'a [u8])>, SceneAssemblyError> {
+    match (length, mode) {
+        (None, None) => Ok(None),
+        (Some(length), Some(mode)) if length.len() == rows && mode.len() == rows => {
+            Ok(Some((length, mode)))
+        }
+        (length, mode) => Err(SceneAssemblyError::StitchRestLength {
+            name: owner.to_string(),
+            row: 0,
+            detail: format!(
+                "{rows} stitch rows carry {} rest lengths and {} rest-length modes; both \
+                 are one per row, or both absent",
+                length.map_or(0, <[f64]>::len),
+                mode.map_or(0, <[u8]>::len)
+            ),
+        }),
+    }
 }
 
 /// One static object as input to the assembly kernel. `vertex` is
@@ -240,6 +332,9 @@ pub struct CrossStitch<'a> {
     pub k: usize,
     /// Per-pair stitch stiffness applied to every row of this cross-stitch.
     pub stitch_stiffness: f64,
+    /// Per-row rest length and mode, as on [`AssembleObject`].
+    pub rest_length: Option<&'a [f64]>,
+    pub rest_mode: Option<&'a [u8]>,
 }
 
 /// Per-object output produced by `assemble_dyn_scene`. Used by the
@@ -286,6 +381,8 @@ pub struct AssembleResult {
     pub concat_stitch_ind: Vec<i64>,  // (S, 6) flat
     pub concat_stitch_w: Vec<f64>,    // (S, 6) flat
     pub concat_stitch_stiffness: Vec<f32>, // (S,) one per stitch row
+    pub concat_stitch_rest_length: Vec<f64>, // (S,) read where the mode is authored
+    pub concat_stitch_rest_mode: Vec<u8>,    // (S,) a STITCH_REST_* value
     pub rod_count: usize,
     pub shell_count: usize,
     pub per_object: Vec<(String, AssembleObjectStats)>,
@@ -538,6 +635,7 @@ pub fn assemble_dyn_scene(
                 w_rows: w.len() / obj.stitch_w_cols,
             });
         }
+        let rest = stitch_rest_rows(obj.name, m, obj.stitch_rest_length, obj.stitch_rest_mode)?;
         let map = map_by_name.get(obj.name).unwrap();
         for r in 0..m {
             // ind row -> 6-wide [s, s, s, t0, t1, t2]
@@ -586,6 +684,10 @@ pub fn assemble_dyn_scene(
             out.concat_stitch_w.extend_from_slice(&padded_w);
             // One stiffness per stitch row, from the owning object.
             out.concat_stitch_stiffness.push(obj.stitch_stiffness as f32);
+            match rest {
+                Some((length, mode)) => push_stitch_rest(&mut out, obj.name, r, length[r], mode[r])?,
+                None => push_stitch_rest(&mut out, obj.name, r, 0.0, STITCH_REST_DERIVED)?,
+            }
         }
     }
 
@@ -602,6 +704,8 @@ pub fn assemble_dyn_scene(
                 name: cs.target_name.to_string(),
             }
         })?;
+        let owner = format!("cross-stitch {} to {}", cs.source_name, cs.target_name);
+        let rest = stitch_rest_rows(&owner, cs.k, cs.rest_length, cs.rest_mode)?;
         for r in 0..cs.k {
             let off = 6 * r;
             // Source barycentric (slots 0..2) -> source map; target
@@ -616,6 +720,10 @@ pub fn assemble_dyn_scene(
                 .extend_from_slice(&cs.weights[off..off + 6]);
             // Per-pair stiffness for this cross-stitch row.
             out.concat_stitch_stiffness.push(cs.stitch_stiffness as f32);
+            match rest {
+                Some((length, mode)) => push_stitch_rest(&mut out, &owner, r, length[r], mode[r])?,
+                None => push_stitch_rest(&mut out, &owner, r, 0.0, STITCH_REST_DERIVED)?,
+            }
         }
     }
 
@@ -651,10 +759,16 @@ pub fn assemble_static_scene(
         dmap.insert(name.as_str(), i);
     }
     for so in objects {
-        let faces = match so.faces {
-            Some(f) => f,
-            None => continue,
-        };
+        // A static object IS its triangles here: the collision mesh holds
+        // nothing else, and every contact, CCD and intersection pass that
+        // reaches it walks faces and their edges and vertices. An object with
+        // no faces would contribute nothing, so it is refused rather than
+        // skipped. The frontend keeps a faceless object (a rod, a point set)
+        // solved however it is pinned (`Object.update_static`), so this is an
+        // invariant, not a user-facing path.
+        let faces = so.faces.ok_or_else(|| SceneAssemblyError::StaticObjectWithoutFaces {
+            name: so.name.to_string(),
+        })?;
         if so.vertex_world.len() % 3 != 0 {
             return Err(SceneAssemblyError::StaticVertexNotMultipleOf3 {
                 name: so.name.to_string(),

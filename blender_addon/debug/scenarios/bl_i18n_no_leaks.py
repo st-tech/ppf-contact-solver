@@ -1,7 +1,7 @@
 # File: scenarios/bl_i18n_no_leaks.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard against untranslated UI "leaks": English strings that
 # reach the panel but are not catalog keys, so bpy.app.translations can

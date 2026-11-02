@@ -137,14 +137,14 @@ pub type Launch = unsafe fn(
 /// generator's own portable cap is 4096 bytes; nothing in this driver is near
 /// it, and a stack copy per dispatch is what these numbers buy.
 ///
-/// The narrow-phase visitors set both: a point-point candidate reaches 19
-/// buffers, the widest record in the driver, because it walks two adjacency
-/// tables as well as the mesh, the properties and the elastic snapshot. The
-/// figures carry headroom for the collision-mesh passes rather than tracking
+/// The narrow-phase visitors set both: a point-point candidate reaches 27
+/// buffers and 744 bytes, the widest record in the driver, because it walks two
+/// adjacency tables as well as the mesh, the properties, the elastic snapshot
+/// and the friction's memory. The figures carry headroom rather than tracking
 /// the current maximum exactly, since a record that outgrows either is refused
 /// in `check_shape` off the DECLARATION and never truncated.
 pub const MAX_BOUND_BUFFERS: usize = 32;
-pub const MAX_BOUND_ARGS: usize = 640;
+pub const MAX_BOUND_ARGS: usize = 1024;
 
 /// Arenas this target opens, the same number the arena ABI states so that a
 /// driver sized against one backend's binding budget is sized against every

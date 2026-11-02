@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_deform_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # STATIC collider with a deforming modifier stack (Armature) carries a
 # per-frame depsgraph-baked vertex cache through the pipeline:

@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowance_matrix_solid_held.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The intersection allowance matrix, HELD object a SOLID: a 1 m x 1 m x 0.1 m
 # box whose top is at z = 0, tetrahedralized by the build, fully pinned with a

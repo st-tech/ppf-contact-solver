@@ -1,7 +1,7 @@
 # File: addon_host_tests/_ssh_proxy_jump_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Host-side gates for the two modules that decide WHERE an SSH connection
 # goes: ``blender_addon/core/ssh_config.py`` (the ~/.ssh/config reader and

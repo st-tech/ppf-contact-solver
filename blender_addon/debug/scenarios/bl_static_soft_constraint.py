@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_soft_constraint.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # "Apply Soft Constraints" on a STATIC group: the collider's pins change from
 # exact Dirichlet boundary conditions to Hookean springs of the group's

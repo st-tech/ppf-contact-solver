@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_objects_only.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Blender force field OBJECTS alone move simulated cloth end to end, with NO
 # script in the scene (issue #114): the field objects are the only force field

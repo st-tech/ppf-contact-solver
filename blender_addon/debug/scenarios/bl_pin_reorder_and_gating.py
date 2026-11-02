@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_reorder_and_gating.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Addon-side checks for the pin UI / encode work (no solver needed):
 #   * the pin reorder operator (object.move_pin_vertex_group),

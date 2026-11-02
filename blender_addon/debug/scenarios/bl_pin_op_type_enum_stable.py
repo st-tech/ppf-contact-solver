@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_op_type_enum_stable.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard for the ``PinOperation.op_type`` EnumProperty slot
 # assignments.

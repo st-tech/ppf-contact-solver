@@ -1,8 +1,7 @@
 # File: object_group.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import uuid
 
 import bpy  # pyright: ignore
@@ -771,27 +770,26 @@ class ObjectGroup(PropertyGroup):
     )  # pyright: ignore
     bend_rest_angle_source: EnumProperty(
         name="Rest Angle",
+        # Explicit numbers: FLAT and FROM_GEOMETRY were saved as 0 and 1 when
+        # this list auto-numbered, so they keep those numbers.
+        # FROM_REFERENCE replaced the retired `bend_rest_from_reference`
+        # checkbox (`core.migrate_renames.migrate_bend_rest_reference` carries
+        # a saved checkbox onto it).
         items=[
             ("FLAT", "Flat / Straight",
-             "Start from flat (shell hinge θ₀=0) or straight (rod θ₀=π)"),
+             "Start from flat (shell hinge θ₀=0) or straight (rod θ₀=π)",
+             "NONE", 0),
             ("FROM_GEOMETRY", "From Initial Geometry",
-             "Use the angle of the initial pose as rest"),
+             "Use the angle of the initial pose as rest", "NONE", 1),
+            ("FROM_REFERENCE", "From Reference Geometry",
+             "Each object takes its rest angle from its own reference: another "
+             "object (a topological copy whose vertices were moved), one of its "
+             "shape keys, or its shape-key mix (animated with it). Every object "
+             "in the group must have one. Bend Plasticity does not apply",
+             "NONE", 2),
         ],
         default=OBJECT_GROUP_DEFAULTS.get("bend_rest_angle_source", "FLAT"),
         description="How the initial bending rest angle is populated",
-        options=NOT_ANIMATABLE,
-    )  # pyright: ignore
-    bend_rest_from_reference: BoolProperty(
-        name="From Reference Geometry",
-        default=OBJECT_GROUP_DEFAULTS.get("bend_rest_from_reference", False),
-        description=(
-            "Enable per-object reference rest angles. Pick a reference object "
-            "(a topological copy whose vertices were moved, e.g. by a modifier "
-            "or geometry nodes) for individual shell or rod objects; each "
-            "object's bending rest angle is then computed from its reference "
-            "instead of its own initial pose, overriding the group Rest Angle "
-            "source for that object"
-        ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
     bend: FloatProperty(

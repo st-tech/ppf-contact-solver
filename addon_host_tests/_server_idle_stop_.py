@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """The add-on half of the server's idle stop, in the parts that need no Blender.
 
 The server stops itself after `--idle-timeout` seconds with no request and

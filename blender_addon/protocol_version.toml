@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Single source of truth for the addon <-> server WIRE PROTOCOL version.
 #
 # Read by BOTH separately shipped halves so the number can never drift:

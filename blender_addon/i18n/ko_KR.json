@@ -1662,5 +1662,22 @@
   "Last run: aborted": "마지막 실행: 중단됨",
   "Resolving shell intersections: {stage}, iteration {iteration}, {pairs} pair(s) inside their margin": "셸 교차 해소 중: {stage}, 반복 {iteration}, 여유 거리 안의 쌍 {pairs}개",
   "{name} was edited while the run was going, so the result was not written. Run again": "{name}이(가) 실행 중에 편집되어 결과를 기록하지 않았습니다. 다시 실행하세요",
-  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "모든 교차 해소를 중단합니다. 1단계에서는 셸이 원래대로 남고, 2단계에서는 그때까지 도달한 상태가 유지됩니다"
+  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "모든 교차 해소를 중단합니다. 1단계에서는 셸이 원래대로 남고, 2단계에서는 그때까지 도달한 상태가 유지됩니다",
+  "Reference (per object):": "참조 (오브젝트별):",
+  "Mix is not animated: the rest angle is the current mix": "믹스가 애니메이션되지 않음: 정지 각도는 현재 믹스입니다",
+  "An animated mix needs a Shell group": "애니메이션 믹스에는 셸 그룹이 필요합니다",
+  "Mix is animated: the rest angle follows it": "믹스가 애니메이션됨: 정지 각도가 이를 따릅니다",
+  "Shape-key rest angles need a mesh object": "셰이프 키 정지 각도에는 메시 오브젝트가 필요합니다",
+  "This object has no shape keys": "이 오브젝트에는 셰이프 키가 없습니다",
+  "No shape key set: Transfer refuses this object": "설정된 셰이프 키가 없습니다: 이 오브젝트는 전송할 수 없습니다",
+  "Missing shape key: {name}": "셰이프 키를 찾을 수 없음: {name}",
+  "Each object takes its rest angle from its own reference: another object (a topological copy whose vertices were moved), one of its shape keys, or its shape-key mix (animated with it). Every object in the group must have one. Bend Plasticity does not apply": "각 오브젝트는 자신의 참조에서 정지 각도를 가져옵니다: 다른 오브젝트(정점을 이동한 위상적 복사본), 자신의 셰이프 키 중 하나, 또는 셰이프 키 믹스(함께 애니메이션됨). 그룹의 모든 오브젝트에 참조가 있어야 합니다. 굽힘 소성은 적용되지 않습니다",
+  "Reference Source": "참조 소스",
+  "Reference Object": "참조 오브젝트",
+  "Take the rest angle from another object, a topological copy of this one whose vertices were moved": "다른 오브젝트(정점을 이동한 이 오브젝트의 위상적 복사본)에서 정지 각도를 가져옵니다",
+  "Shape Key": "셰이프 키",
+  "Take the rest angle from one of this object's own shape keys, read as the key's stored shape (independent of its Value slider, before modifiers)": "이 오브젝트 자신의 셰이프 키 중 하나에서 정지 각도를 가져오며, 키에 저장된 형상으로 읽습니다(값 슬라이더와 무관, 모디파이어 적용 전)",
+  "Shape Key Mix (Animated)": "셰이프 키 믹스 (애니메이션)",
+  "Take the rest angle from this object's whole shape-key mix as Blender plays it (every key's Value, before modifiers). When the mix is animated, the rest angle follows it through the simulation": "Blender가 재생하는 이 오브젝트의 전체 셰이프 키 믹스(각 키의 값, 모디파이어 적용 전)에서 정지 각도를 가져옵니다. 믹스가 애니메이션되면 시뮬레이션 동안 정지 각도가 이를 따릅니다",
+  "Shape key of this object whose stored shape gives the bending rest angle": "저장된 형상이 굽힘 정지 각도를 결정하는 이 오브젝트의 셰이프 키"
 }

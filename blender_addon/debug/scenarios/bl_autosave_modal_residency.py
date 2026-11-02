@@ -1,7 +1,7 @@
 # File: scenarios/bl_autosave_modal_residency.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard for issue #145: with the addon merely enabled, Blender
 # never wrote an auto-save file, so the user had nothing under

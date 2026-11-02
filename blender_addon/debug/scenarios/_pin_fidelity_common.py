@@ -1,7 +1,7 @@
 # File: scenarios/_pin_fidelity_common.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Shared driver + host-side diff for the per-pin-op fidelity scenarios.
 #

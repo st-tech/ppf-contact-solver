@@ -434,7 +434,7 @@ impl DeviceFold {
         count: u32,
         floor: f32,
     ) -> Result<f32, Fault> {
-        Ok(self.fold(device, region, values, count, true)?.map_or(floor, |v| v.min(floor)))
+        Ok(self.fold(device, region, values, count, true)?.map_or(floor, |v| if v.is_nan() { v } else { v.min(floor) }))
     }
 
     /// The largest value in `values[..count]`, not below `floor`.
@@ -449,7 +449,7 @@ impl DeviceFold {
         count: u32,
         floor: f32,
     ) -> Result<f32, Fault> {
-        Ok(self.fold(device, region, values, count, false)?.map_or(floor, |v| v.max(floor)))
+        Ok(self.fold(device, region, values, count, false)?.map_or(floor, |v| if v.is_nan() { v } else { v.max(floor) }))
     }
 
     /// The levels, then the one float.

@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_scene_inspection.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The scene enumeration an MCP agent starts from, against a real Blender.
 #

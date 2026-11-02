@@ -1,7 +1,7 @@
 # File: scenarios/bl_connect_linux_native.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch Blender with the addon loaded, point its Linux Native backend at the
 # worker's debug server, and assert the addon's state machine reaches ONLINE.

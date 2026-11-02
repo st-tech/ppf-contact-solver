@@ -756,6 +756,9 @@ pub struct SolverState {
     pub diagonal: Buffer<f32>,
     /// The preconditioner's diagonal and its inverse, `9 * vertices` floats.
     pub precond_diagonal: Buffer<f32>,
+    /// The friction's memory of where each contact stuck, carried from one
+    /// committed step to the next (`driver/friction_memory.rs`).
+    pub friction_memory: super::friction_memory::FrictionMemory,
     /// The additive Schwarz preconditioner, when the scene asks for one.
     ///
     /// Empty until a solve with `precond=schwarz` builds it, and rebuilt
@@ -1490,9 +1493,9 @@ pub struct RodBendScratch {
 /// three contributions onto one vertex and several of its thirty-six blocks
 /// onto one CSR slot, which is the sum the barycentric form asks for.
 ///
-/// THE RECORD IS DE-INTERLEAVED. `Stitch` is `{Vec6u, Vec6f, f32}`, and the
-/// shared body's entry point reads the indices, the weights and the stiffness
-/// as three separate arrays, so a step's records are unpacked into the arrays
+/// THE RECORD IS DE-INTERLEAVED. `Stitch` is `{Vec6u, Vec6f, f32, f32, u32}`,
+/// and the shared body's entry point reads the indices, the weights, the
+/// stiffness, the rest length and its presence flag as separate arrays, so a step's records are unpacked into the arrays
 /// below once by [`SolverState::stash_stitches`] rather than per Newton
 /// iteration.
 #[derive(Default)]
@@ -1503,6 +1506,10 @@ pub struct StitchScratch {
     pub weight: StagedBuffer<f32>,
     /// The per-stitch force factor, applied inside the shared body.
     pub stiffness: StagedBuffer<f32>,
+    /// The per-stitch authored rest length, read only where `has_rest_length`
+    /// is nonzero; elsewhere the body derives one from the contact gaps.
+    pub rest_length: StagedBuffer<f32>,
+    pub has_rest_length: StagedBuffer<u32>,
     /// `ParamSet::stitch_length_factor`, one entry per stitch.
     ///
     /// ONE SCENE-WIDE SCALAR HELD PER ELEMENT, because the entry point reads it
@@ -2581,6 +2588,34 @@ impl SolverState {
             .size(device, 9 * vertices, AllocLabel("step.diagonal"))?;
         self.precond_diagonal
             .size(device, 9 * vertices, AllocLabel("step.precond_diagonal"))?;
+        // A PAIR KEY GIVES ITS FIRST ELEMENT 28 BITS, the kind taking the
+        // rest (`contact/friction_memory.kernel.cpp`), so a scene with more
+        // elements of one kind than that would key two pairs alike.
+        {
+            let statics = &data.constraint.mesh;
+            let largest = [
+                vertices,
+                faces + edges,
+                statics.vertex.size as usize,
+                statics.face.size as usize,
+                statics.edge.size as usize,
+            ]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+            if largest >= super::friction_memory::ELEMENT_LIMIT {
+                return Err(Fatal::invariant(format!(
+                    "solver driver: the scene has {largest} elements of one kind, and the \
+                     friction's memory names a contact's first element in 28 bits, so at most \
+                     {} of them can be told apart",
+                    super::friction_memory::ELEMENT_LIMIT
+                )));
+            }
+        }
+        // Started at four entries a vertex where the scene has friction, and
+        // grown on demand from there; nothing is ever recorded otherwise.
+        let floor = if super::step::scene_has_friction(data) { 4 * vertices } else { 0 };
+        self.friction_memory = super::friction_memory::FrictionMemory::allocate(device, floor, vertices)?;
         self.precond_inverse
             .size(device, 9 * vertices, AllocLabel("step.precond_inverse"))?;
         self.dof_mask
@@ -2679,6 +2714,10 @@ impl SolverState {
             .size(device, 6 * stitches, AllocLabel("stitch.weight"))?;
         sc.stiffness
             .size(device, stitches, AllocLabel("stitch.stiffness"))?;
+        sc.rest_length
+            .size(device, stitches, AllocLabel("stitch.rest_length"))?;
+        sc.has_rest_length
+            .size(device, stitches, AllocLabel("stitch.has_rest_length"))?;
         sc.length_factor
             .size(device, stitches, AllocLabel("stitch.length_factor"))?;
         // SIZED OVER THE VERTICES AND NOT OVER THE SLOTS, because the shared
@@ -3188,7 +3227,35 @@ impl SolverState {
                 s.index.at()[6 * element + slot] = record.index[slot];
                 s.weight.at()[6 * element + slot] = record.weight[slot];
             }
+            // AN AUTHORED REST LENGTH DIVIDES the strain and both Hessian
+            // coefficients, so a zero, negative or non-finite one would reach
+            // the solve as a NaN or an inverted spring with nothing naming the
+            // stitch. The scene reader already refuses one; this is the check
+            // at the point the kernel's input is formed. The flag is 0 or 1 and
+            // nothing else, so the kernel's test cannot be fed a third state.
+            match record.has_rest_length {
+                0 => {}
+                1 => {
+                    if !(record.rest_length.is_finite() && record.rest_length > 0.0) {
+                        return Err(Fatal::invariant(format!(
+                            "solver driver: cross-stitch {element} carries the rest length {}, \
+                             and the spring divides by it, so a rest length must be a finite \
+                             positive distance",
+                            record.rest_length
+                        )));
+                    }
+                }
+                other => {
+                    return Err(Fatal::invariant(format!(
+                        "solver driver: cross-stitch {element} carries the rest-length flag \
+                         {other}, which is 0 (derive the rest length from the contact gaps) or 1 \
+                         (use the authored one)"
+                    )));
+                }
+            }
             s.stiffness.at()[element] = record.stiffness;
+            s.rest_length.at()[element] = record.rest_length;
+            s.has_rest_length.at()[element] = record.has_rest_length;
         }
         // PUBLISH BEFORE RETURNING. Both arrays are written here and read only
         // by kernels afterwards, and `StagedBuffer::handle` refuses while the
@@ -3198,6 +3265,8 @@ impl SolverState {
         s.index.upload(device)?;
         s.weight.upload(device)?;
         s.stiffness.upload(device)?;
+        s.rest_length.upload(device)?;
+        s.has_rest_length.upload(device)?;
         Ok(())
     }
 }

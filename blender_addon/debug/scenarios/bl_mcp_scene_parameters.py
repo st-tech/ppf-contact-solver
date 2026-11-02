@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_scene_parameters.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The scene-parameter tools over MCP, against a real Blender.
 #

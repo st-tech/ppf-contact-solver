@@ -1,7 +1,7 @@
 # File: scenarios/bl_win_native_bundle_layout.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Windows Native probe accepts the layout the published bundle really has,
 # on Windows, with Windows paths.

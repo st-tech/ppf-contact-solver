@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_script.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The exact script: a vortex turns a sheet, the compiler refuses unsupported
 # constructs by line, the solver's loader refuses bytecode that did not come

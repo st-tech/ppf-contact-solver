@@ -1,7 +1,7 @@
 # File: scenarios/rig_intersection_allowance_contact_pins_groups.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # An allowed pair is NOT A CONTACT PAIR, for a pin's allowance and the
 # inter-group one. Same drop shape as `rig_intersection_allowance_contact`;

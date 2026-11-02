@@ -1,8 +1,7 @@
 # File: __init__.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 from .colliders import (
     _build_collider_batches,
     _resolve_scene_dyn_params,

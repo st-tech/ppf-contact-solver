@@ -1,5 +1,5 @@
 # File: pc2.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # PC2 (PointCache2) file writer and Blender MESH_CACHE modifier management.
 # Used to store per-frame vertex positions for simulation animation.

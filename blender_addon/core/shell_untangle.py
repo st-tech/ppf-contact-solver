@@ -1,7 +1,7 @@
 # File: shell_untangle.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Remove the intersections of open triangle surfaces (cloth) by deforming them.
 # Built on Minarcik, Liu, Crane and Li, "Untangling Surfaces via Shape and Mesh
@@ -1521,6 +1521,9 @@ def _recover(sc, ev, x_start, x_orig, st, edge, rep, note, basis=None):
         solver.reset()
         f, g = ev(x)
         quiet = 0
+        # Whether the steps have stayed short since the L-BFGS memory was last
+        # cleared (see `quiet` below).
+        restarted = False
         recent = [f]
         travel = []
         while it < limit:
@@ -1541,11 +1544,24 @@ def _recover(sc, ev, x_start, x_orig, st, edge, rep, note, basis=None):
             x, f, g = xn, fn, gn
             rep.recover_iterations = it
             quiet = quiet + 1 if moved < 1e-2 * cap else 0
+            if quiet == 0:
+                restarted = False
             if st.verbose and it % 25 == 0:
                 dist = float(np.linalg.norm((x - x_orig).reshape(-1, 3), axis=1).mean())
                 print(f"recover {it:4d} band {scale:.2f}  f {f:.4e}  mean distance to input {dist / sc.scale:.4f}  step {moved:.2e}")
+            # Five short steps in a row end the band only when they follow a
+            # cleared L-BFGS memory. Short steps from a stale memory are slow,
+            # not finished: a corner held by one vertex spring relaxes at that
+            # pace while the objective still falls, and a band ended there
+            # leaves the corners of two wavy sheets turned 10 degrees on one
+            # numpy/scipy build and 5 on another. The memory is cleared and the
+            # band goes on, as for a step the line search rejects.
             if quiet >= 5:
-                break
+                if restarted:
+                    break
+                solver.reset()
+                restarted = True
+                quiet = 0
             # A band is done when the objective has stopped paying for the
             # iterations: it fell by under `recover_gain` over the last window,
             # and the surface is no longer travelling at the speed the step cap
@@ -2603,6 +2619,32 @@ class Run:
         return self._result
 
 
+# How long the child waits for the caller to close the progress file.
+_REPLACE_WAIT_SECONDS = 5.0
+
+
+def _replace_while_read(source: str, target: str) -> None:
+    """``os.replace(source, target)`` while another process may be reading ``target``.
+
+    On Windows a file Python opened cannot be replaced until it is closed: its
+    `open` does not share delete access, so `Run._refresh` reading the progress
+    file in the caller makes a replace landing in that moment fail with
+    ``PermissionError`` (WinError 5). The read lasts as long as one small
+    ``json.load``, so the replace is retried until it is closed. A file held past
+    `_REPLACE_WAIT_SECONDS` is not that read, and raises. POSIX replaces an open
+    file, so there a ``PermissionError`` is a real one and raises at once.
+    """
+    deadline = time.monotonic() + _REPLACE_WAIT_SECONDS
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or time.monotonic() > deadline:
+                raise
+        time.sleep(0.001)
+
+
 def _child(directory: str) -> int:
     """Run the job in ``directory`` and write its result there (see `Run`)."""
     if os.name != "nt":
@@ -2632,7 +2674,7 @@ def _child(directory: str) -> int:
                     {"stage": stage, "iteration": iteration, "pairs": pairs, "status": dict(settings.status or {})},
                     handle,
                 )
-            os.replace(progress_path + ".tmp", progress_path)
+            _replace_while_read(progress_path + ".tmp", progress_path)
         return not os.path.exists(cancel_path)
 
     settings.progress = hook

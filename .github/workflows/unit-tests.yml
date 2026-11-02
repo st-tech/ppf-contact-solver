@@ -107,6 +107,8 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+          - ap-northeast-3
+          - ap-northeast-2
 
 permissions:
   contents: read
@@ -262,6 +264,17 @@ jobs:
         run: |
           echo "::notice title=Subset not run::The solver crate's tests run against the CPU backend (--features cpu). That backend BUILDS with MSVC (measured, and build.bat builds it for every release); what is unmeasured is its test results under a third host compiler. They are covered on the macOS and Linux legs."
 
+      # The frontend tests that build a session start the solver binary, which
+      # they find through the `.ppf-backend` marker in target/<profile>, the
+      # profile the extension module above was built in. On macOS and Linux the
+      # solver crate's `cargo test` leaves that debug build behind; Windows runs
+      # no such step, so it builds the same binary here without running the
+      # tests held back above. Without it those tests fail with "no solver is
+      # built here".
+      - name: Build the CPU solver the frontend tests start (Windows)
+        if: matrix.os == 'windows-2025'
+        run: cargo build -p ppf-cts-solver --no-default-features --features cpu
+
       # One invocation per testpath. pytest exits 5 only when the WHOLE run
       # collects nothing, so a single invocation over every path stays
       # green when one path goes empty, which is what a rename or a move
@@ -335,8 +348,8 @@ jobs:
           if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
             echo "ERROR: github-actions-vpc not found in $AWS_REGION"; exit 1
           fi
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=github-actions-sg" --query 'SecurityGroups[0].GroupId' --output text)
@@ -344,9 +357,9 @@ jobs:
             echo "ERROR: github-actions-sg not found in github-actions-vpc ($VPC_ID) in $AWS_REGION"; exit 1
           fi
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
 
       - name: Generate identifiers and SSH key
@@ -378,18 +391,38 @@ jobs:
         id: instance
         run: |
           USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data "$USER_DATA" \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=64,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=tests-cuda-kernels-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=CudaKernelTests},{Key=RunId,Value=${{ github.run_id }}}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text)
+          # The root volume must be at least the AMI's own snapshot, and the
+          # query above takes the NEWEST Deep Learning AMI, whose snapshot grows
+          # between releases; a request below it fails at launch with
+          # InvalidBlockDeviceMapping. 100 GB matches the release and Windows
+          # legs and leaves room for the build.
+          # A subnet pins the availability zone, and a zone may not offer this
+          # instance type at all or may have no capacity for it right now, while
+          # another zone in the same VPC would take it. Try each subnet in turn, and
+          # report every refusal if none launches.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data "$USER_DATA" \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=tests-cuda-kernels-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=CudaKernelTests},{Key=RunId,Value=${{ github.run_id }}}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' --region "$AWS_REGION" --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch the instance in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "$INSTANCE_ID" > /tmp/instance_id.txt
 
@@ -438,12 +471,12 @@ jobs:
             -o ServerAliveInterval=60 -o ServerAliveCountMax=30 ubuntu@localhost << 'ENDSSH'
           set -u
           # The Deep Learning AMI ships several CUDA toolkits and defaults
-          # to the newest. Every host of this project builds against 12.8,
+          # to the newest. Every host of this project builds against 13.2,
           # so pin it here and assert the version rather than print it.
-          export PATH=/usr/local/cuda-12.8/bin:$PATH
-          export CUDA_PATH=/usr/local/cuda-12.8
+          export PATH=/usr/local/cuda-13.2/bin:$PATH
+          export CUDA_PATH=/usr/local/cuda-13.2
           command -v nvcc >/dev/null || { echo "ERROR: nvcc not on PATH"; exit 1; }
-          nvcc --version | grep -q "release 12.8" || { echo "ERROR: expected CUDA 12.8"; exit 1; }
+          nvcc --version | grep -q "release 13\.2" || { echo "ERROR: expected CUDA 13.2"; exit 1; }
           nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
           # ONE RECIPE. What belongs on a real GPU is what exercises a
           # device VERB: the arena and the diagnostic channel, which is what

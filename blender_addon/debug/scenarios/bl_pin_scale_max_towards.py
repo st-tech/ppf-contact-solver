@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SCALE with MAX_TOWARDS center.
 
 from __future__ import annotations

@@ -1,8 +1,7 @@
 # File: encoder/__init__.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import bpy  # pyright: ignore
 
 from ..transform import _normalize_and_scale, _swap_axes, _to_solver

@@ -1,7 +1,7 @@
 # File: scenarios/bl_real_shell_drape.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Real-backend SHELL gravity drape. A square cloth is pinned along its top
 # edge and released under gravity: the free region sags downward while the

@@ -317,6 +317,14 @@ pub(super) fn scene_validate_param_key_exists(exists: bool, key: &str) -> PyResu
     validators_core::validate_param_key_exists(exists, key).map_err(into_py_err)
 }
 
+/// `ParamManager.change` on `dt`: the same step-size limit `param.set` applies
+/// (`ppf_cts_core::datamodel::params::MAX_STEP_SIZE`).
+#[pyfunction]
+#[pyo3(signature = (dt))]
+pub(super) fn scene_validate_step_size(dt: f64) -> PyResult<()> {
+    ppf_cts_core::datamodel::params::check_step_size(dt).map_err(into_py_err)
+}
+
 /// `ParamManager.time` strictly-increasing check.
 #[pyfunction]
 #[pyo3(signature = (prev, next_time))]

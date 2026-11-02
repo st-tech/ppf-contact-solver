@@ -1,7 +1,7 @@
 # File: scenarios/rig_intersection_allowance_contact.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # An allowed pair is NOT A CONTACT PAIR, for the self and inter-object
 # allowances and the static collision mesh: a small sheet dropped onto a held

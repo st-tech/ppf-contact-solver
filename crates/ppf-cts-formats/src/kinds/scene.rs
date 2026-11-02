@@ -60,6 +60,12 @@ pub struct ObjectInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bend_rest_vert: Option<Vec<[f32; 3]>>,
 
+    /// SHELL only, optional: the bending reference over time, present when
+    /// the object's rest angle follows an animated shape-key mix. Each
+    /// keyframe is a full local-space vertex set in `vert`'s order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bend_rest_vert_anim: Option<BendRestVertAnim>,
+
     /// Triangulated faces, shape (M, 3). uint32 in pickle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face: Option<Vec<[u32; 3]>>,
@@ -129,6 +135,18 @@ pub struct ObjectInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaticDeformAnimation {
     pub vert_frames: Vec<Vec<[f32; 3]>>,
+}
+
+/// A shell's animated bending reference. Decoder reads it beside
+/// `bend_rest_vert` in frontend/_decoder_.py.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BendRestVertAnim {
+    /// Keyframe frame offsets relative to the resolved start frame (frames,
+    /// float; fps-free), strictly increasing. Seconds are derived by the
+    /// decoder from the Param payload's fps, as for `TransformAnimation`.
+    pub frame_offset: Vec<f32>,
+    /// One local-space vertex set per keyframe, each in `vert`'s order.
+    pub vert: Vec<Vec<[f32; 3]>>,
 }
 
 /// Keyframe-driven STATIC animation. Decoder reads at

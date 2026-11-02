@@ -1,7 +1,7 @@
 # File: events.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Typed, frozen event classes for the event-driven state machine.
 # Every external stimulus (user action, server response, background I/O

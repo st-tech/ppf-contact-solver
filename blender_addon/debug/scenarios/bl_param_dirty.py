@@ -1,7 +1,7 @@
 # File: scenarios/bl_param_dirty.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Verifies the click-time parameter-drift contract that replaced the
 # debounced ``param_hash_cache``.

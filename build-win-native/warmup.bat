@@ -94,12 +94,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set SEVENZIP_DIR=%BUILD_WIN%\7zip
-set SEVENZIP=%SEVENZIP_DIR%\7z.exe
 set MINGIT_DIR=%BUILD_WIN%\mingit
 set MINGIT_EXE=%MINGIT_DIR%\cmd\git.exe
 set CUDA_DIR=%BUILD_WIN%\cuda
-set NVCC=%CUDA_DIR%\bin\nvcc.exe
 set ROCM_DIR=%BUILD_WIN%\rocm
 set WHEELS_DIR=%BUILD_WIN%\wheels
 set MSVC_DIR=%BUILD_WIN%\msvc
@@ -134,8 +131,13 @@ for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
     if "%%B"=="rocm" set "HAS_ROCM=1"
 )
 if "!HAS_CUDA!"=="1" (
-    if not exist "%SEVENZIP%" if not exist "%DOWNLOADS%\%FILE_7ZIP%" set "PROBE=!PROBE! URL_7ZIP"
-    if not exist "%NVCC%" if not exist "%DOWNLOADS%\%FILE_CUDA%" set "PROBE=!PROBE! URL_CUDA"
+    REM The toolkit's stamp decides whether it is installed; see the CUDA
+    REM section below for why nvcc.exe existing is not enough.
+    set "CUDA_WANT="
+    for %%C in (%CUDA_COMPONENTS%) do set "CUDA_WANT=!CUDA_WANT!!FILE_%%C!;"
+    set "CUDA_HAVE="
+    if exist "%CUDA_DIR%\.ppf-cuda-components" set /p CUDA_HAVE=<"%CUDA_DIR%\.ppf-cuda-components"
+    if not "!CUDA_HAVE!"=="!CUDA_WANT!" for %%C in (%CUDA_COMPONENTS%) do if not exist "%DOWNLOADS%\!FILE_%%C!" set "PROBE=!PROBE! URL_%%C"
     REM build.bat fetches Eigen, and it is probed here so that a rotted pointer
     REM stops the warmup rather than the build.
     for %%I in ("%FILE_EIGEN%") do if not exist "%BUILD_WIN%\deps\%%~nI" if not exist "%DOWNLOADS%\%FILE_EIGEN%" set "PROBE=!PROBE! URL_EIGEN"
@@ -179,41 +181,6 @@ REM Create directories if needed
 if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
 
 REM ============================================================
-REM Download 7-Zip portable (needed for CUDA extraction)
-REM ============================================================
-REM ONLY WHERE CUDA IS BUILT. Nothing else in this directory opens a 7-Zip
-REM archive: the ROCm SDK and the ARM64 interpreter are gzip tarballs, which
-REM Windows' own tar reads.
-if "!HAS_CUDA!"=="1" (
-    if not exist "%SEVENZIP%" (
-        echo === Downloading 7-Zip Portable ===
-
-        set "SEVENZIP_EXE=%DOWNLOADS%\%FILE_7ZIP%"
-
-        if not exist "!SEVENZIP_EXE!" (
-            echo Downloading 7-Zip...
-            curl.exe -fL -o "!SEVENZIP_EXE!" "%URL_7ZIP%"
-            if errorlevel 1 (
-                echo ERROR: Failed to download 7-Zip
-                exit /b 1
-            )
-        )
-
-        echo Extracting 7-Zip...
-        if not exist "%SEVENZIP_DIR%" mkdir "%SEVENZIP_DIR%"
-        "!SEVENZIP_EXE!" /S /D=%SEVENZIP_DIR%
-        if errorlevel 1 (
-            echo ERROR: Failed to extract 7-Zip
-            exit /b 1
-        )
-
-        echo 7-Zip setup complete!
-    ) else (
-        echo 7-Zip already installed
-    )
-)
-
-REM ============================================================
 REM Download and setup MinGit (used instead of full Git installation)
 REM ============================================================
 if not exist "%MINGIT_EXE%" (
@@ -240,60 +207,89 @@ REM Add MinGit to PATH for current session
 set "PATH=%MINGIT_DIR%\cmd;%PATH%"
 
 REM ============================================================
-REM Download and extract CUDA Toolkit (no admin required)
+REM Download and assemble the CUDA toolkit (no admin required)
 REM ============================================================
+REM THE TOOLKIT IS ASSEMBLED FROM NVIDIA'S REDISTRIBUTABLE COMPONENT ARCHIVES,
+REM the CUDA_COMPONENTS entries of scripts\downloads.txt. Each is fetched and
+REM checked against its SHA256 by fetch-download.bat, unpacked with Windows' own
+REM tar (which reads zip), and its one top directory merged into cuda\.
+REM
+REM AN INSTALLED TOOLKIT IS CHECKED BY ITS STAMP, NOT BY nvcc.exe EXISTING.
+REM cuda\.ppf-cuda-components records the archive names it was assembled from.
+REM A toolkit whose stamp is missing or names other archives is a different
+REM release, and building with it would compile against the wrong headers while
+REM every file check passed, so it is removed and assembled again.
+REM
+REM THE LAYOUT IS ASSERTED, NOT ASSUMED. build.bat compiles with cuda\bin\nvcc.exe
+REM and links cuda\lib\x64\cudart.lib. The cudart archive puts cudart64_13.dll in
+REM cuda\bin\x64, beside no other tool, so bundle.bat copies it from there and
+REM build.bat's launcher and the CI scripts put cuda\bin\x64 on PATH. If an archive lays
+REM a file out elsewhere, the check below stops here and lists where it is.
 if "!HAS_CUDA!"=="1" (
-    if not exist "%NVCC%" (
-        echo === Downloading CUDA Toolkit ===
-
-        set "CUDA_EXE=%DOWNLOADS%\%FILE_CUDA%"
-
-        if not exist "!CUDA_EXE!" (
-            echo Downloading CUDA ^(about 3GB, please wait^)...
-            curl.exe -fL -o "!CUDA_EXE!" "%URL_CUDA%"
-            if errorlevel 1 (
-                echo ERROR: Failed to download CUDA Toolkit
+    REM CUDA_WANT and CUDA_HAVE were read before the download probe above.
+    if not "!CUDA_HAVE!"=="!CUDA_WANT!" (
+        echo === Assembling the CUDA toolkit ===
+        if exist "%CUDA_DIR%" (
+            if defined CUDA_HAVE (
+                echo   Removing cuda\, assembled from other archives: !CUDA_HAVE!
+            ) else (
+                echo   Removing cuda\, which carries no component stamp
+            )
+            rmdir /s /q "%CUDA_DIR%"
+            if exist "%CUDA_DIR%" (
+                echo ERROR: could not remove %CUDA_DIR%
                 exit /b 1
             )
         )
-
-        echo Extracting CUDA ^(this takes several minutes^)...
-        "%SEVENZIP%" x "!CUDA_EXE!" -o"%CUDA_DIR%_temp" -y
-        if errorlevel 1 (
-            echo ERROR: Failed to extract CUDA Toolkit
-            exit /b 1
+        if exist "%CUDA_DIR%_temp" rmdir /s /q "%CUDA_DIR%_temp"
+        mkdir "%CUDA_DIR%"
+        mkdir "%CUDA_DIR%_temp"
+        for %%C in (%CUDA_COMPONENTS%) do (
+            call "%BUILD_WIN%\scripts\fetch-download.bat" %%C
+            if errorlevel 1 exit /b 1
+            for %%F in ("!DOWNLOADED_FILE!") do set "CUDA_TOP=%%~nF"
+            echo   Unpacking !FILE_%%C!
+            "%TAR%" -xf "!DOWNLOADED_FILE!" -C "%CUDA_DIR%_temp"
+            if errorlevel 1 (
+                echo ERROR: could not unpack !DOWNLOADED_FILE!
+                exit /b 1
+            )
+            if not exist "%CUDA_DIR%_temp\!CUDA_TOP!\" (
+                echo ERROR: !FILE_%%C! has no top directory named !CUDA_TOP!.
+                echo        It unpacked to:
+                dir /b "%CUDA_DIR%_temp"
+                exit /b 1
+            )
+            robocopy "%CUDA_DIR%_temp\!CUDA_TOP!" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
+            if errorlevel 8 (
+                echo ERROR: could not merge !CUDA_TOP! into %CUDA_DIR%
+                exit /b 1
+            )
+            rmdir /s /q "%CUDA_DIR%_temp\!CUDA_TOP!"
         )
-
-        REM Create CUDA directory and merge required components
-        if not exist "%CUDA_DIR%" mkdir "%CUDA_DIR%"
-
-        REM Copy nvcc (compiler)
-        echo   Copying nvcc...
-        robocopy "%CUDA_DIR%_temp\cuda_nvcc\nvcc" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-
-        REM Copy cudart (runtime)
-        echo   Copying cudart...
-        robocopy "%CUDA_DIR%_temp\cuda_cudart\cudart" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-
-        REM Copy cccl (thrust, cub headers)
-        echo   Copying cccl headers...
-        robocopy "%CUDA_DIR%_temp\cuda_cccl\thrust" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-
-        REM Copy nvrtc (runtime compilation)
-        echo   Copying nvrtc...
-        robocopy "%CUDA_DIR%_temp\cuda_nvrtc\nvrtc" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-        robocopy "%CUDA_DIR%_temp\cuda_nvrtc\nvrtc_dev" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-
-        REM Copy profiler API
-        echo   Copying profiler API...
-        robocopy "%CUDA_DIR%_temp\cuda_profiler_api\cuda_profiler_api" "%CUDA_DIR%" /E /NFL /NDL /NJH /NJS /NC /NS /NP
-
-        REM Cleanup temp directory
         rmdir /s /q "%CUDA_DIR%_temp"
-
-        echo CUDA Toolkit extracted successfully!
     ) else (
-        echo CUDA Toolkit already installed
+        echo CUDA toolkit already assembled from the pinned archives
+    )
+
+    set "CUDA_MISSING="
+    for %%P in ("bin\nvcc.exe" "bin\x64\cudart64_13.dll" "lib\x64\cudart.lib" "include\cuda_runtime.h" "include\crt\host_config.h" "nvvm\bin\cicc.exe") do (
+        if not exist "%CUDA_DIR%\%%~P" (
+            echo ERROR: the CUDA toolkit has no %%~P
+            set "CUDA_MISSING=1"
+        )
+    )
+    if defined CUDA_MISSING (
+        echo        Where the toolkit holds nvcc, cicc, the cudart DLL and cudart.lib:
+        dir /s /b "%CUDA_DIR%\nvcc.exe" "%CUDA_DIR%\cicc.exe" "%CUDA_DIR%\cudart64_*.dll" "%CUDA_DIR%\cudart.lib" 2>nul
+        echo        build.bat and bundle.bat read the paths checked above. Fix the layout or
+        echo        those paths; the stamp is not written, so the next run assembles
+        echo        the toolkit again.
+        exit /b 1
+    )
+    if not "!CUDA_HAVE!"=="!CUDA_WANT!" (
+        > "%CUDA_DIR%\.ppf-cuda-components" echo !CUDA_WANT!
+        echo CUDA toolkit assembled
     )
     set CUDA_PATH=%CUDA_DIR%
 )

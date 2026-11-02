@@ -386,6 +386,8 @@ mod tests {
     #[tokio::test]
     #[cfg(not(target_os = "windows"))]
     async fn launch_solver_spawns_real_subprocess() {
+        // A real launch arms the process-wide exit slot.
+        let _slot = super::solver::exit_watch::TEST_LOCK.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path();
         let session = project.join("session");

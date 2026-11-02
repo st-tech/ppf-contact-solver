@@ -1,7 +1,7 @@
 # File: encoder/material_maps.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Reads a group's spatial material maps into per-vertex weight arrays.
 #

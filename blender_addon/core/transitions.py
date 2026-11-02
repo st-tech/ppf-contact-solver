@@ -1,7 +1,7 @@
 # File: transitions.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Pure state-transition function for the event-driven state machine.
 #

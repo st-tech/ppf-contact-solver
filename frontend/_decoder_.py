@@ -3397,6 +3397,30 @@ class SceneDecoder:
                         else np.ascontiguousarray(brv, dtype=np.float32)
                     )
                     _obj.set_bend_rest_vert(brv_world)
+                # An animated bending reference (an animated shape-key mix):
+                # every keyframe goes to world space with the same transform,
+                # and its frame offsets become seconds at the solver rate, as
+                # transform_animation's do.
+                if _obj is not None and obj.get("bend_rest_vert_anim") is not None:
+                    import numpy as np
+                    anim = obj["bend_rest_vert_anim"]
+                    frames = [
+                        (
+                            self._apply_transform(np.asarray(f), transform)
+                            if transform is not None
+                            else np.asarray(f, dtype=np.float32)
+                        )
+                        for f in anim["vert"]
+                    ]
+                    if solver_fps is None:
+                        raise ValueError(
+                            f"'{name}' carries an animated bending rest shape, "
+                            "which needs the Param payload's fps"
+                        )
+                    _obj.set_bend_rest_vert_anim(
+                        [float(o) / solver_fps for o in anim["frame_offset"]],
+                        np.stack(frames),
+                    )
 
                 self._apply_pin_mapping(
                     obj, _obj, name, group_type, vert, V, F, tet_mesh, verbose,

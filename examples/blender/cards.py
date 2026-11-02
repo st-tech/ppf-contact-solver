@@ -1,7 +1,7 @@
 # File: cards.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch inside Blender (Scripting workspace, or `blender --python cards.py`)
 # to build the same house-of-cards layout as examples/cards.ipynb,
@@ -225,7 +225,10 @@ def build(mesh_res: int = 8, n_stack: int = 8, card_height: float = 0.25,
     shell.param.contact_gap = gap
     shell.param.shell_young_modulus = 30000.0
     shell.param.bend = 1e6
-    shell.param.friction = 0.5
+    # Friction 0.6, as the notebook: at 0.5 the top pair of the stack sits at
+    # the edge of its friction cone after settling and topples about one run in
+    # three.
+    shell.param.friction = 0.6
 
     # Sphere projectile (SOLID; the server tetrahedralizes via fTetWild).
     sphere_obj = bpy.data.objects.new("sphere", sphere_mesh)
@@ -240,7 +243,7 @@ def build(mesh_res: int = 8, n_stack: int = 8, card_height: float = 0.25,
 
     # Floor wall at z=0 normal +Z; Blender-default gravity (0, 0, -9.8).
     solver.add_wall(position=(0.0, 0.0, 0.0),
-                    normal=(0.0, 0.0, 1.0)).param.friction = 0.5
+                    normal=(0.0, 0.0, 1.0)).param.friction = 0.6
 
     # Session parameters mirroring the notebook.
     solver.param.step_size = 0.01

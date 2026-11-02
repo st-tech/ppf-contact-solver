@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Internal helpers shared across handler modules.
 
 Kept out of the ``from .<module> import *`` re-exports in __init__.py so

@@ -1,7 +1,7 @@
 # File: scenarios/bl_export_cache.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Export the simulated mesh sequence to a USD / Alembic cache: coverage for the
 # two Export buttons in the Solver panel (solver.export_usd /

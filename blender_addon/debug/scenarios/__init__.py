@@ -1,7 +1,7 @@
 # File: scenarios/__init__.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Scenario registry. Each scenario module exports a ``run(ctx) -> dict``
 # function that returns ``{"status": "pass"|"fail", "violations": [...]}``.
@@ -65,8 +65,11 @@ from . import rig_server_idle_stop
 from . import bl_force_terminate_port
 from . import rig_collider_coincident_pair
 from . import rig_collider_free_edge
+from . import rig_pinned_rod_obstacle
 from . import rig_rod_fixed_clamp
+from . import rig_stitch_rest_length
 from . import rig_cosserat
+from . import rig_autosave_resume
 from . import rig_sand_rod_point_edge
 from . import rig_collider_vertex_rigid_body
 from . import rig_degenerate_rest_shape
@@ -123,6 +126,7 @@ from . import bl_pin_op_type_enum_stable
 from . import bl_pin_vgroup_enum_ref
 from . import bl_enum_props_guard
 from . import bl_i18n_no_leaks
+from . import bl_cbor_twin_agrees
 from . import bl_solver_crash_kind_localized
 from . import bl_solver_crash_open_session_folder
 from . import bl_pin_capture_deformation
@@ -170,6 +174,8 @@ from . import bl_stale_statistics_manifest
 from . import bl_bend_reference_shell
 from . import bl_bend_reference_rod
 from . import bl_bend_reference_rod_curve
+from . import bl_bend_reference_shape_key
+from . import bl_bend_reference_shape_key_anim
 from . import bl_shallow_copy
 from . import bl_shared_object_data
 from . import bl_transition_chains
@@ -212,6 +218,7 @@ from . import bl_static_fcurve_anim
 from . import bl_static_op_anim
 from . import bl_static_panel_draws
 from . import bl_fps_source
+from . import bl_step_size_limit
 from . import bl_time_scale_encoding
 from . import bl_time_scale_kinematic_invariance
 from . import bl_frame_start
@@ -276,6 +283,7 @@ from . import bl_contact_gap_unsolvable
 from . import bl_build_refusal_survives_polls
 from . import bl_resolve_intersections
 from . import bl_resolve_all_intersections
+from . import bl_untangle_progress_polled
 from . import bl_resolve_intersections_threaded_chain
 from . import bl_contact_gap_limit
 from . import bl_lock_translation
@@ -465,11 +473,20 @@ REGISTRY = {
     # it. Only the dynamic edge against collider edge pass can see that rim, and
     # the edges it has to act on carry no mass of their own.
     "rig_collider_free_edge": rig_collider_free_edge,
+    # A rod pinned at every vertex is a SOLVED obstacle (the collision mesh
+    # holds triangles only): a rod, a Cosserat rod, a shell and a solid dropped
+    # onto one come to rest on it.
+    "rig_pinned_rod_obstacle": rig_pinned_rod_obstacle,
     # SAND grains dropped onto the interior of a dynamic rod segment rest on
     # it. Only the point-edge line-search sweep can bound that pair: the grain
     # owns no edge and the rod edge has no face (issue #154).
     "rig_rod_fixed_clamp": rig_rod_fixed_clamp,
+    "rig_stitch_rest_length": rig_stitch_rest_length,
     "rig_cosserat": rig_cosserat,
+    # Auto-save writes checkpoints at its cadence, pruned to keep-states, and
+    # a resume from one STARTS and reproduces the uninterrupted run, for a
+    # friction cloth, a Cosserat rod, a plastic shell and a sliding solid.
+    "rig_autosave_resume": rig_autosave_resume,
     "rig_sand_rod_point_edge": rig_sand_rod_point_edge,
     # The same contract for the collider vertex against dynamic face pass: a
     # rigid body dropped onto the APEX of a collision mesh rests on it, and a
@@ -564,6 +581,7 @@ REGISTRY = {
     "bl_pin_vgroup_enum_ref": bl_pin_vgroup_enum_ref,
     "bl_enum_props_guard": bl_enum_props_guard,
     "bl_i18n_no_leaks": bl_i18n_no_leaks,
+    "bl_cbor_twin_agrees": bl_cbor_twin_agrees,
     "bl_solver_crash_kind_localized": bl_solver_crash_kind_localized,
     "bl_solver_crash_open_session_folder": bl_solver_crash_open_session_folder,
     "bl_pin_capture_deformation": bl_pin_capture_deformation,
@@ -609,6 +627,8 @@ REGISTRY = {
     "bl_bend_reference_shell": bl_bend_reference_shell,
     "bl_bend_reference_rod": bl_bend_reference_rod,
     "bl_bend_reference_rod_curve": bl_bend_reference_rod_curve,
+    "bl_bend_reference_shape_key": bl_bend_reference_shape_key,
+    "bl_bend_reference_shape_key_anim": bl_bend_reference_shape_key_anim,
     "bl_shallow_copy": bl_shallow_copy,
     "bl_shared_object_data": bl_shared_object_data,
     "bl_transition_chains": bl_transition_chains,
@@ -661,6 +681,7 @@ REGISTRY = {
     "bl_static_op_anim": bl_static_op_anim,
     "bl_static_panel_draws": bl_static_panel_draws,
     "bl_fps_source": bl_fps_source,
+    "bl_step_size_limit": bl_step_size_limit,
     "bl_time_scale_encoding": bl_time_scale_encoding,
     "bl_time_scale_kinematic_invariance": bl_time_scale_kinematic_invariance,
     "bl_frame_start": bl_frame_start,
@@ -733,6 +754,9 @@ REGISTRY = {
     # triangle is inside the contact offsets of another or of itself, writing
     # the cloth's vertex coordinates.
     "bl_resolve_all_intersections": bl_resolve_all_intersections,
+    # Its child process finishes while Blender reads the progress file in a
+    # loop: on Windows a replace onto a file being read is refused (#159).
+    "bl_untangle_progress_polled": bl_untangle_progress_polled,
     # A chain threaded tight through itself stays threaded: the rigid step
     # opens its overlaps without carrying a link through its neighbor's wire,
     # and lowers a clearance the holes cannot fit.

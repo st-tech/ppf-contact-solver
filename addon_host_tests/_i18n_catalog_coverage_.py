@@ -1,7 +1,7 @@
 # File: addon_host_tests/_i18n_catalog_coverage_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Every English string the add-on shows is a key of ``i18n/en.json``, and
 # every locale catalog carries every key.

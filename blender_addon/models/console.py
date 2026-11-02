@@ -1,7 +1,7 @@
 # File: console.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Console message queue singleton.
 # Extracted from ui/console.py to break core/ → ui/ dependency.

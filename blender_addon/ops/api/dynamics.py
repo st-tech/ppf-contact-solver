@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Scene-level parameter proxies: ``_SceneProxy`` (scalar attrs) and
 ``_DynParamBuilder`` (keyframed dynamic parameters).
 

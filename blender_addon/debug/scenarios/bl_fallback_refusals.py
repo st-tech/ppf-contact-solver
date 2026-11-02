@@ -1,7 +1,7 @@
 # File: scenarios/bl_fallback_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Five places where the solver could be handed something other than what the
 # artist authored, each without a word: a deformer dropped because a later

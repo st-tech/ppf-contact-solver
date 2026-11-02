@@ -1,7 +1,7 @@
 # File: scenarios/bl_friction_mode.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end of the friction-mode session parameter. For each of the
 # three allowed values (MIN, MAX, MEAN) the scenario sets

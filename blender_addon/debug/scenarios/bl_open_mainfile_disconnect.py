@@ -1,7 +1,7 @@
 # File: scenarios/bl_open_mainfile_disconnect.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Companion to bl_load_disconnect: that scenario only exercises a
 # single ``wm.read_homefile`` (File > New) and only fires load_pre

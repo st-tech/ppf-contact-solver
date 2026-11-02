@@ -138,6 +138,13 @@ enum : unsigned {
     CCD_SWEEP_EDGE_EDGE = 3u
 };
 
+// The smaller of two times of impact, NaN-propagating: a NaN time is a broken
+// sweep, and must reach the host's check (`Filter::fold_time`) rather than be
+// dropped by a fminf, which returns the other operand.
+[[seam::device_fn]] inline float ccd_toi_min(float a, float b) {
+    return (b < a || b != b) ? b : a;
+}
+
 // Fold one query's answer into its own slot of the per-primitive arrays.
 //
 // A MIN, so the order of the seven dispatches cannot change the number. The slot
@@ -147,7 +154,7 @@ enum : unsigned {
     float *out_toi,
     CcdOverlapRecord *out_overlap, unsigned slot, float toi,
     const CcdOverlapRecord &record) {
-    out_toi[slot] = fmath::min(out_toi[slot], toi);
+    out_toi[slot] = ccd_toi_min(out_toi[slot], toi);
     if (record.flagged != 0u && out_overlap[slot].flagged == 0u) {
         out_overlap[slot] = record;
     }
@@ -260,8 +267,8 @@ struct CcdPointFaceVisitor {
             kind = CCD_SWEEP_POINT_EDGE;
         }
         ccd_record_overlap(overlap, kind, vertex_index, f[0], info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -329,8 +336,8 @@ struct CcdPointPointVisitor {
                                                    max_t, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_POINT, vertex_index, index,
                            info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -424,8 +431,8 @@ struct CcdPointEdgeVisitor {
                                                   ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_EDGE, vertex_index, e[0],
                            info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -525,13 +532,13 @@ struct CcdEdgeEdgeVisitor {
                 const float toi_1 = accd::point_edge_ccd(
                     q02, q12, q00, q01, q10, q11, offset, ghat, max_t, ccd_eps,
                     &info);
-                result = fmath::min(toi_0, toi_1);
+                result = ccd_toi_min(toi_0, toi_1);
                 break;
             }
         }
         ccd_record_overlap(overlap, kind, e0[0], e1[0], info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -609,8 +616,8 @@ struct CcdCollisionPointFaceM2cVisitor {
                                      ghat, max_t, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_TRIANGLE, vertex_index,
                            f[0], info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -691,8 +698,8 @@ struct CcdCollisionPointFaceC2mVisitor {
                                      ghat, max_t, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_TRIANGLE, f[0],
                            vertex_index, info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;
@@ -770,8 +777,8 @@ struct CcdCollisionEdgeEdgeVisitor {
             accd::edge_edge_ccd(p00, p01, q0, q1, p10, p11, q0, q1, offset,
                                 ghat, max_t, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_EDGE_EDGE, e0[0], e1[0], info);
-        if (result < max_t) {
-            toi = fmath::min(toi, result);
+        if (!(result >= max_t)) {
+            toi = ccd_toi_min(toi, result);
             return true;
         }
         return false;

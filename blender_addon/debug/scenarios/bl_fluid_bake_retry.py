@@ -1,7 +1,7 @@
 # File: scenarios/bl_fluid_bake_retry.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The rig's own Mantaflow bake helper, `bake_fluid_domain` in
 # `_driver_lib.FLUID_BAKE_LIB`, which every scenario that bakes a gas domain

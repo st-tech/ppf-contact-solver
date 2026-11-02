@@ -1,7 +1,7 @@
 # File: scenarios/bl_lock_translation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Per-object Lock Translation encoding round-trip.
 #

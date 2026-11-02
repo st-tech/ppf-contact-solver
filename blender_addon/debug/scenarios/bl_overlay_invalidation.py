@@ -1,7 +1,7 @@
 # File: scenarios/bl_overlay_invalidation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Draw-stale matrix: every property whose update= callback should bump
 # ``state.overlay_version`` is mutated, and we assert the version

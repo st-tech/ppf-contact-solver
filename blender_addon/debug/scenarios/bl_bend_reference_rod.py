@@ -1,7 +1,7 @@
 # File: scenarios/bl_bend_reference_rod.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Exercises the per-object "reference rest angle" feature for mesh-based
 # ROD groups end-to-end through the production pipeline on a no-GPU host
@@ -129,7 +129,7 @@ try:
     rod_group.create_pin(rod.name, "RodEnd")
 
     grp = _raw_group(dh, "Rod")
-    grp.bend_rest_from_reference = True
+    grp.bend_rest_angle_source = "FROM_REFERENCE"
     assigned = None
     for a in grp.assigned_objects:
         if a.uuid == rod_uuid:
@@ -137,7 +137,6 @@ try:
             break
     if assigned is None:
         raise RuntimeError("assigned object for rod not found in group")
-    assigned.bend_ref_enable = True
     assigned.bend_ref_uuid = ref_uuid
     dh.log("reference_configured")
 

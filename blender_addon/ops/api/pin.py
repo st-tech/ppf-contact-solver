@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """``_Pin`` proxy: a pinned vertex group bound to a dynamics group.
 
 See :mod:`blender_addon.ops.api` for the package overview.

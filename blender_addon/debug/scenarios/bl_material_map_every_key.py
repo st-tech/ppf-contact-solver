@@ -1,7 +1,7 @@
 # File: scenarios/bl_material_map_every_key.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Every parameter a spatial map is offered for has to reach the solver varying.
 #

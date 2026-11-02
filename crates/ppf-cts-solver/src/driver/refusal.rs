@@ -1020,10 +1020,14 @@ mod tests {
             defects.len() >= 2,
             "expected the BaraffWitkin solid and the sheared PDRD face, got {text:?}"
         );
+        // The capability gate is `scene_refusals`, which is the one that reads
+        // `param`, so the implemented capabilities are checked against it too.
+        let refused: Vec<String> =
+            scene_refusals(&data, &param).iter().map(Refusal::describe).collect();
         for implemented in ["pressure", "torque", "schwarz"] {
             assert!(
-                !text.iter().any(|t| t.contains(implemented)),
-                "{implemented} is implemented and must not be reported: {text:?}"
+                !text.iter().chain(refused.iter()).any(|t| t.contains(implemented)),
+                "{implemented} is implemented and must not be reported: {text:?} {refused:?}"
             );
         }
         for wanted in ["BaraffWitkin", "PDRD"] {

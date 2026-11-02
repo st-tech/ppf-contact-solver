@@ -1,8 +1,7 @@
 # File: state_types.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import bpy  # pyright: ignore
 from bpy.props import (  # pyright: ignore
     BoolProperty,
@@ -761,25 +760,56 @@ class AssignedObject(PropertyGroup):
         update=_invalidate_overlay,
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
-    # Per-object bending reference rest angle (SHELL). When enabled with a
-    # valid reference object set, this object's bending rest angle is computed
-    # from the reference geometry (a topological copy whose vertices were
-    # moved, e.g. by a modifier or geometry nodes) instead of from its own
-    # initial pose. This overrides the group's Rest Angle source for just this
-    # object. The reference is stored by UUID so it survives renames;
-    # ``bend_ref_name`` is kept only as a fallback display label.
-    bend_ref_enable: BoolProperty(
-        name="Enable Reference Rest Angle",
-        default=False,
-        description=(
-            "Compute this object's bending rest angle from a reference "
-            "object's geometry instead of its own initial pose. Overrides the "
-            "group's Rest Angle source for this object"
-        ),
+    # Per-object bending reference rest angle (SHELL and ROD). When enabled
+    # with a valid reference set, this object's bending rest angle is computed
+    # from reference geometry instead of from its own initial pose. This
+    # overrides the group's Rest Angle source for just this object.
+    #
+    # ``bend_ref_source`` picks where the reference geometry comes from:
+    # another object (a topological copy whose vertices were moved, e.g. by a
+    # modifier or geometry nodes), or one of this object's own shape keys. The
+    # reference object is stored by UUID so it survives renames;
+    # ``bend_ref_name`` is kept only as a fallback display label. A shape key
+    # is stored by name, as Blender's own shape-key references are.
+    bend_ref_source: EnumProperty(
+        name="Reference Source",
+        items=[
+            (
+                "OBJECT", "Reference Object",
+                "Take the rest angle from another object, a topological copy "
+                "of this one whose vertices were moved",
+                "OBJECT_DATA", 0,
+            ),
+            (
+                "SHAPE_KEY", "Shape Key",
+                "Take the rest angle from one of this object's own shape "
+                "keys, read as the key's stored shape (independent of its "
+                "Value slider, before modifiers)",
+                "SHAPEKEY_DATA", 1,
+            ),
+            (
+                "SHAPE_KEY_MIX", "Shape Key Mix (Animated)",
+                "Take the rest angle from this object's whole shape-key mix as "
+                "Blender plays it (every key's Value, before modifiers). When "
+                "the mix is animated, the rest angle follows it through the "
+                "simulation",
+                "ACTION", 2,
+            ),
+        ],
+        default="OBJECT",
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
     bend_ref_uuid: StringProperty(default="")  # pyright: ignore
     bend_ref_name: StringProperty(default="")  # pyright: ignore
+    bend_ref_shape_key: StringProperty(
+        name="Shape Key",
+        default="",
+        description=(
+            "Shape key of this object whose stored shape gives the bending "
+            "rest angle"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
     static_ops: CollectionProperty(type=StaticOpItem)  # pyright: ignore
     static_ops_index: IntProperty(default=-1, options={"HIDDEN"})  # pyright: ignore
 

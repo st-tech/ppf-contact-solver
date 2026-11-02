@@ -140,7 +140,7 @@ REM build without AMD hardware, and nothing a user downloads should carry it.
 for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
     set "SAVED_PATH=!PATH!"
     if "%%B"=="cuda" (
-        set "PATH=%SRC_DIR%\crates\ppf-cts-compute\cuda\build\lib;%CUDA_PATH%\bin;!PATH!"
+        set "PATH=%SRC_DIR%\crates\ppf-cts-compute\cuda\build\lib;%CUDA_PATH%\bin\x64;!PATH!"
     ) else (
         set "PATH=%SRC_DIR%\crates\ppf-cts-compute\rocm\build\lib;%ROCM_DIR%\bin;!PATH!"
     )
@@ -313,10 +313,12 @@ echo.
 echo [4/10] Copying the GPU backend's runtime libraries...
 
 if "!HAS_CUDA!"=="1" (
-    set CUDA_BIN=%CUDA_PATH%\bin
+    set CUDA_BIN=%CUDA_PATH%\bin\x64
 
-    REM List of redistributable CUDA DLLs (only cudart needed)
-    set CUDA_DLLS=cudart64_12.dll
+    REM The redistributable CUDA DLLs the backend imports: cudart only. Its name
+    REM carries the toolkit's major version, so it follows the toolkit
+    REM scripts\downloads.txt pins.
+    set CUDA_DLLS=cudart64_13.dll
 
     for %%D in (!CUDA_DLLS!) do (
         if exist "!CUDA_BIN!\%%D" (
@@ -327,7 +329,9 @@ if "!HAS_CUDA!"=="1" (
             )
             echo   Copied %%D
         ) else (
-            echo   WARNING: %%D not found in !CUDA_BIN!
+            echo ERROR: %%D not found in !CUDA_BIN!. The CUDA backend imports it,
+            echo        so a distribution without it cannot start the CUDA backend.
+            exit /b 1
         )
     )
 )
@@ -727,6 +731,9 @@ echo ZOZO's Contact Solver
 echo -------------------
 echo Copyright 2025 Ryoichi Ando ^(ZOZO, Inc.^)
 echo Licensed under the Apache License, Version 2.0
+echo Exception: examples\blender is licensed under the GNU General Public
+echo License, version 3 or later, because those scripts call Blender's bpy.
+echo See examples\blender\LICENSE.
 echo.
 echo.
 )
@@ -736,8 +743,8 @@ if "!HAS_CUDA!"=="1" (
     echo ---------------------
     echo This software contains source code provided by NVIDIA Corporation.
     echo.
-    echo CUDA Runtime Libraries ^(cudart, cublas, cublasLt, cusparse^) are
-    echo redistributed under the NVIDIA CUDA Toolkit End User License Agreement.
+    echo The CUDA Runtime Library ^(cudart^) is redistributed under the
+    echo NVIDIA CUDA Toolkit End User License Agreement.
     echo.
     echo See: https://docs.nvidia.com/cuda/eula/index.html
     echo.

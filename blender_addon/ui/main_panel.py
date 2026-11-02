@@ -1,7 +1,7 @@
 # File: main_panel.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Main panel (MAIN_PT_RemotePanel), GlobalStateWatcher, and aggregated
 # operator registration.  Extracted from ui/client.py.

@@ -1,7 +1,7 @@
 # File: scenarios/bl_precond_multigrid.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Preconditioner picker offers Multigrid beside Block Jacobi and Schwarz,
 # and the choice the artist makes is the one the solver runs.

@@ -191,6 +191,10 @@ def _rehydrate_scene_object(obj: dict) -> None:
         obj["vert"] = np.asarray(obj["vert"], dtype=np.float32)
     if obj.get("bend_rest_vert") is not None:
         obj["bend_rest_vert"] = np.asarray(obj["bend_rest_vert"], dtype=np.float32)
+    if obj.get("bend_rest_vert_anim") is not None:
+        anim = obj["bend_rest_vert_anim"]
+        anim["frame_offset"] = np.asarray(anim["frame_offset"], dtype=np.float64)
+        anim["vert"] = np.asarray(anim["vert"], dtype=np.float32)
     if obj.get("face") is not None:
         obj["face"] = np.asarray(obj["face"], dtype=np.uint32)
     if obj.get("edge") is not None:

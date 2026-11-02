@@ -1,7 +1,7 @@
 # File: scenarios/bl_material_lock_guards.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A padlock beside a material parameter has to protect it, or it is decoration.
 #

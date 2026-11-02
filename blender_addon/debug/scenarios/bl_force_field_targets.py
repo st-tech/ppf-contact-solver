@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_targets.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Force field sources narrowed to object GROUPS (owner's request): each field
 # object and the script reaches every group, or with Apply to All Groups off,

@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_object_locks.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The MCP set_object_locks surface, against a real Blender.
 #

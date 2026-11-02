@@ -1,7 +1,7 @@
 # File: scenarios/bl_transform_translation_roundtrip.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # An object's world transform must survive the encode -> solver-input ->
 # output round-trip with its TRANSLATION intact, even when the transform mixes

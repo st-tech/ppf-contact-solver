@@ -1,7 +1,7 @@
 # File: migrate_dyn_params.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One-shot conversion of the addon's own scene-parameter keyframe list into
 # real Blender F-curves.

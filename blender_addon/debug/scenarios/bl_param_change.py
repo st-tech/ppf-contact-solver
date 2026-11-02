@@ -1,7 +1,7 @@
 # File: scenarios/bl_param_change.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end of the parameter-transfer pipeline. Verifies that editing
 # a scene parameter and re-transferring actually produces a different

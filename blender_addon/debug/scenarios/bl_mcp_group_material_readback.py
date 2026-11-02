@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_group_material_readback.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The MCP group read-back and pin list-management surface, against a real
 # Blender.

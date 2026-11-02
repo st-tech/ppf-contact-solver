@@ -1,8 +1,7 @@
 # File: save_checkpoint_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import bpy  # pyright: ignore
 from bpy.types import Operator  # pyright: ignore
 from bpy.app.translations import pgettext_iface as iface_, pgettext_tip as tip_  # pyright: ignore

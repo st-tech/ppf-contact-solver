@@ -1,8 +1,7 @@
 # File: utils.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import os
 
 import bpy  # pyright: ignore
@@ -1103,6 +1102,187 @@ def eval_reference_local_positions(ref_obj, context=None):
         eval_obj.to_mesh_clear()
 
 
+def bend_reference_configured(group, assigned) -> bool:
+    """True when *assigned* ships a bending reference rest angle: its group's
+    Rest Angle is From Reference Geometry and the source the object picked
+    (``bend_ref_source``) names something.
+
+    One predicate for every reader, so the encoder's dedup gate and the
+    reference encoder cannot disagree about which objects carry one. A
+    configured reference that does not resolve is not filtered out here; the
+    encoder refuses it by name, and it refuses an object of such a group that
+    names nothing (``bend_reference_missing``).
+    """
+    if group.object_type not in ("SHELL", "ROD"):
+        return False
+    if group.bend_rest_angle_source != "FROM_REFERENCE":
+        return False
+    if assigned.bend_ref_source == "SHAPE_KEY":
+        return bool(assigned.bend_ref_shape_key)
+    if assigned.bend_ref_source == "SHAPE_KEY_MIX":
+        return True
+    return bool(assigned.bend_ref_uuid)
+
+
+def bend_reference_missing(group, assigned) -> bool:
+    """True when *assigned* sits in a From Reference Geometry group but names
+    no reference, which the encoder refuses: such a group has no other rest
+    angle to fall back on."""
+    return (
+        group.object_type in ("SHELL", "ROD")
+        and group.bend_rest_angle_source == "FROM_REFERENCE"
+        and not bend_reference_configured(group, assigned)
+    )
+
+
+def validate_bend_shape_key(source_obj, key_name):
+    """Check that *key_name* is a shape key of *source_obj* usable as its
+    bending rest-angle reference.
+
+    A shape key stores one position per base-mesh vertex, in the base mesh's
+    vertex order and in local space, so it lines up one-to-one with the
+    vertices the object ships and needs no topology comparison. Only mesh
+    objects qualify: a curve rod is shipped sampled at control-point level,
+    where a curve shape key does not map one-to-one, and Hair Curves carry no
+    shape keys.
+
+    Returns ``(True, "")`` on success or ``(False, message)``.
+    """
+    if source_obj is None:
+        return False, "Source object not found."
+    if source_obj.type != "MESH":
+        return False, (
+            f"'{source_obj.name}' is a {source_obj.type.title()}; a shape-key "
+            f"rest angle needs a mesh object. Use a Reference Object instead."
+        )
+    if not key_name:
+        return False, f"No shape key named for '{source_obj.name}'."
+    keys = source_obj.data.shape_keys
+    if keys is None or keys.key_blocks.get(key_name) is None:
+        return False, (
+            f"'{source_obj.name}' has no shape key named '{key_name}'. "
+            f"Re-pick the shape key (it may have been renamed or removed)."
+        )
+    return True, ""
+
+
+def shape_key_local_positions(source_obj, key_name):
+    """``(N, 3)`` float32 local-space positions stored in the shape key
+    *key_name* of *source_obj*.
+
+    This is the key's own stored shape, the one Blender displays with Shape
+    Key Lock on: it does not depend on the key's Value slider or on the other
+    keys, and no modifier is applied to it. Raises ``ValueError`` when
+    :func:`validate_bend_shape_key` refuses the key.
+    """
+    import numpy as np
+
+    ok, msg = validate_bend_shape_key(source_obj, key_name)
+    if not ok:
+        raise ValueError(msg)
+    block = source_obj.data.shape_keys.key_blocks[key_name]
+    n = len(block.data)
+    co = np.empty(n * 3, dtype=np.float32)
+    block.data.foreach_get("co", co)
+    return co.reshape(n, 3)
+
+
+def validate_bend_shape_key_mix(source_obj):
+    """Check that *source_obj*'s shape-key mix can give its bending rest
+    angle: a mesh with relative shape keys.
+
+    Returns ``(True, "")`` on success or ``(False, message)``.
+    """
+    if source_obj is None:
+        return False, "Source object not found."
+    if source_obj.type != "MESH":
+        return False, (
+            f"'{source_obj.name}' is a {source_obj.type.title()}; a shape-key "
+            f"rest angle needs a mesh object. Use a Reference Object instead."
+        )
+    keys = source_obj.data.shape_keys
+    if keys is None or len(keys.key_blocks) == 0:
+        return False, f"'{source_obj.name}' has no shape keys."
+    if not keys.use_relative:
+        return False, (
+            f"'{source_obj.name}' uses absolute shape keys (Relative is off), "
+            f"whose mix is driven by an Evaluation Time rather than key "
+            f"weights. Turn Relative on, or pick one shape key instead."
+        )
+    return True, ""
+
+
+def _key_block_co(block):
+    import numpy as np
+
+    n = len(block.data)
+    co = np.empty(n * 3, dtype=np.float64)
+    block.data.foreach_get("co", co)
+    return co.reshape(n, 3)
+
+
+def shape_key_mix_local_positions(source_obj):
+    """``(N, 3)`` float64 local-space positions of *source_obj*'s shape-key
+    mix at the current frame, before modifiers.
+
+    This is the relative blend Blender evaluates: the reference key plus,
+    for every unmuted key, ``Value`` times its offset from its own relative
+    key, weighted per vertex by the key's vertex group (inverted when the key
+    says so). With Shape Key Lock on, Blender shows the active key alone, and
+    so does this. Raises ``ValueError`` when
+    :func:`validate_bend_shape_key_mix` refuses the object.
+    """
+    import numpy as np
+
+    ok, msg = validate_bend_shape_key_mix(source_obj)
+    if not ok:
+        raise ValueError(msg)
+    keys = source_obj.data.shape_keys
+    if source_obj.show_only_shape_key and source_obj.active_shape_key is not None:
+        return _key_block_co(source_obj.active_shape_key)
+    ref = keys.reference_key
+    co = _key_block_co(ref)
+    n = co.shape[0]
+    for block in keys.key_blocks:
+        if block == ref or block.mute or block.value == 0.0:
+            continue
+        delta = _key_block_co(block) - _key_block_co(block.relative_key)
+        weight = np.full(n, float(block.value))
+        if block.vertex_group:
+            group = source_obj.vertex_groups.get(block.vertex_group)
+            w = np.zeros(n)
+            if group is not None:
+                gi = group.index
+                for v in source_obj.data.vertices:
+                    for g in v.groups:
+                        if g.group == gi:
+                            w[v.index] = g.weight
+                            break
+            if getattr(block, "invert_vertex_group", False):
+                w = 1.0 - w
+            weight *= w
+        co += weight[:, None] * delta
+    return co
+
+
+def shape_key_mix_animated(source_obj) -> bool:
+    """True when something can change *source_obj*'s shape-key weights over
+    time: curves or drivers on its shape keys, or NLA strips. A cheap,
+    declarative superset of "the mix changes"; the encoder samples the mix
+    only then and compares the samples."""
+    keys = getattr(source_obj.data, "shape_keys", None)
+    if keys is None:
+        return False
+    ad = keys.animation_data
+    if ad is None:
+        return False
+    if get_id_fcurves(keys):
+        return True
+    if len(ad.drivers) > 0:
+        return True
+    return any(len(track.strips) > 0 for track in ad.nla_tracks)
+
+
 def _depsgraph_mesh_differs_across_range(obj, context) -> bool:
     """Compare depsgraph-evaluated mesh *shape* at ``frame_start`` and
     ``frame_end``. Returns True if any vertex moves in the object's
@@ -1228,7 +1408,7 @@ def _mesh_shape_could_animate(obj) -> bool:
     to frame: any modifier (a deform/generative modifier, or one whose
     parameters are animated or driven), shape keys (their values can be
     keyed or driven), mesh-level animation data (drivers on vertex coords),
-    or a parent (parent-relative armature/lattice deform). A fully inert
+    or a parent (parent-relative Armature/Lattice deform). A fully inert
     rigid mesh, none of the above, returns False; in that case the
     evaluated mesh shape is provably frame-invariant, so the caller can
     skip ``_depsgraph_mesh_differs_across_range`` and its two whole-scene

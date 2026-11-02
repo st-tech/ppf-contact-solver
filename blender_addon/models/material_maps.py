@@ -1,7 +1,7 @@
 # File: models/material_maps.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The material parameters a spatial map may drive, in one place.
 #
@@ -178,6 +178,12 @@ def gate_open(group, key: str) -> bool:
     """Whether `key` reaches the solver as an authored value on `group`."""
     gate = MATERIAL_GATE.get(key)
     if gate is not None and not getattr(group, gate):
+        return False
+    if (key in ("bend-plasticity", "bend-plasticity-threshold")
+            and group.bend_rest_angle_source == "FROM_REFERENCE"):
+        # The reference owns the rest angle, which bend plasticity would also
+        # rewrite every step; the panel hides the toggle in this mode, so a
+        # value it still holds must not reach the solver either.
         return False
     if key == "strain-limit" and group.object_type == "SHELL":
         # The strain-limit solver bakes its rest shape assuming unit scaling,

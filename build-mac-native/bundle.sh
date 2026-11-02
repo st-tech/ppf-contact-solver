@@ -1942,6 +1942,9 @@ ZOZO's Contact Solver
 ---------------------
 Copyright 2025 Ryoichi Ando (ZOZO, Inc.)
 Licensed under the Apache License, Version 2.0
+Exception: examples/blender/ is licensed under the GNU General Public
+License, version 3 or later, because those scripts call Blender's bpy.
+See examples/blender/LICENSE.
 
 
 Apple frameworks

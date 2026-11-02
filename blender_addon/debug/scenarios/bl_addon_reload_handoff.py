@@ -1,7 +1,7 @@
 # File: scenarios/bl_addon_reload_handoff.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Addon reload via the debug TCP port mid-session, preserving scene-
 # level state across the addon_disable / addon_enable boundary.

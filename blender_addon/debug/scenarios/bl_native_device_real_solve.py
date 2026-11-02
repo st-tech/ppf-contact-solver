@@ -1,7 +1,7 @@
 # File: scenarios/bl_native_device_real_solve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A real solve through the local native backend once per Compute Device, with
 # the ADD-ON launching the server as it does for an artist, and proof of which

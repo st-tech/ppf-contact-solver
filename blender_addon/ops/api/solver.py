@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """``_Solver``: top-level entry point for ZOZO's Contact Solver
 scripting API.
 

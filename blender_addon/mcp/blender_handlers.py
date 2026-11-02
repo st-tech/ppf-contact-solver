@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """General Blender operation handlers using the decorator system.
 
 This module contains MCP handlers for basic Blender operations like scene management,

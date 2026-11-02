@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """``_ParamProxy`` and ``_Group`` proxies for dynamics groups.
 
 See :mod:`blender_addon.ops.api` for the package overview.
@@ -29,7 +30,7 @@ _PARAM_PROPS = {
     "force_field_weight",
     "enable_plasticity", "plasticity", "plasticity_threshold",
     "enable_bend_plasticity", "bend_plasticity", "bend_plasticity_threshold",
-    "bend_rest_angle_source", "bend_rest_from_reference",
+    "bend_rest_angle_source",
     "bend", "shrink", "shrink_x", "shrink_y", "length_factor",
     "stitch_stiffness",
     # STATIC-specific (used only when the group's object_type is "STATIC").

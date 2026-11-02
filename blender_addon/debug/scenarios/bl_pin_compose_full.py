@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Composed pin op: MOVE_BY + SPIN + SCALE in that order, with mixed
 # center modes. Exercises the full kinematic stack.
 

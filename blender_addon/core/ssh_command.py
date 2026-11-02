@@ -1,7 +1,7 @@
 # File: ssh_command.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Parser for the ``ssh ...`` shell command the SSH Command backends are
 # configured with. It reads the destination and the few options the add-on

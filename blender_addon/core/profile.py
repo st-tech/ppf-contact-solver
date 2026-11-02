@@ -1,7 +1,7 @@
 # File: profile.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Connection profile loading from TOML files.
 
@@ -236,7 +236,6 @@ _MATERIAL_PARAM_FIELDS = {
     "bend_plasticity": "bend_plasticity",
     "bend_plasticity_threshold": "bend_plasticity_threshold",
     "bend_rest_angle_source": "bend_rest_angle_source",
-    "bend_rest_from_reference": "bend_rest_from_reference",
     "use_collision_windows": "use_collision_windows",
 }
 

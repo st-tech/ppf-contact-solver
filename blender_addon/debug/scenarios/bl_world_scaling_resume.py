@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_resume.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling across a SAVE / RESUME checkpoint. A world-scaled sim is
 # run two ways on one build: once start-to-finish (the reference), and

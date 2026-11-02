@@ -98,6 +98,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validators::scene_cone_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_project_root_from_frontend_file, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_param_key_exists, m)?)?;
+    m.add_function(wrap_pyfunction!(validators::scene_validate_step_size, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_param_time_strictly_increasing, m)?)?;
     m.add_function(wrap_pyfunction!(validators::scene_validate_session_exists, m)?)?;
     // pin_ops

@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_parity.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A Fluid Flow field against BLENDER ITSELF, not against this project's own
 # reference: Blender's particles in baked Mantaflow domains are the oracle,

@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_run.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hair Curves simulated as rods, end to end (issue #146). A Hair Curves
 # object (Blender object type CURVES) joins a ROD group, is transferred,

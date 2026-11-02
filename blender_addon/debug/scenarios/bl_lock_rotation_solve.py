@@ -1,5 +1,5 @@
 # File: scenarios/bl_lock_rotation_solve.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Solver coverage for coexisting Translation and Rotation locks.
 # Gravity may translate the sheet along X. An injected rigid spin about X is

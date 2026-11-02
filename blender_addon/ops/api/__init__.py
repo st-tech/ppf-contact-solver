@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Object-oriented API for ZOZO's Contact Solver.
 
 Usage in Blender scripts::

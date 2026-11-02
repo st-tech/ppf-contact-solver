@@ -1,8 +1,7 @@
 # File: __init__.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 from bpy.app.handlers import persistent  # pyright: ignore
 
 from .ui import main_panel, console, solver, state
@@ -121,12 +120,17 @@ def _reconcile_manifest_on_load(*_args):
     # stranding through an enum item number rather than a key.
     try:
         from .core.migrate_renames import (
+            migrate_bend_rest_reference,
             migrate_renamed_state_props,
             migrate_retired_connection,
         )
         moved = "; ".join(
             part
-            for part in (migrate_renamed_state_props(), migrate_retired_connection())
+            for part in (
+                migrate_renamed_state_props(),
+                migrate_retired_connection(),
+                migrate_bend_rest_reference(),
+            )
             if part
         )
         if moved:

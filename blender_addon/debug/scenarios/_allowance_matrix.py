@@ -1,7 +1,7 @@
 # File: scenarios/_allowance_matrix.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Shared driver library for the `bl_intersection_allowance_matrix_*`
 # scenarios: the four intersection allowances, authored in Blender through the

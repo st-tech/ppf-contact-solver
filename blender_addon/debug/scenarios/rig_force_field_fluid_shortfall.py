@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_fluid_shortfall.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # THE OPEN DEFECT OF A NEGATIVE FLUID COUPLING, AS A KNOWN FAILURE. This
 # scenario FAILS until the defect is fixed, and is ON DEMAND so the default

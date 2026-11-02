@@ -1,7 +1,7 @@
 # File: scenarios/bl_upload_id_desync_recovery.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Upload-id desync recovery (commit ea4303cb).
 #

@@ -121,6 +121,8 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+          - ap-northeast-3
+          - ap-northeast-2
       cuda_scenes:
         description: 'Example notebooks run on the Linux x86_64 GPU, space separated; all for the whole suite, none to skip'
         required: true
@@ -282,7 +284,7 @@ jobs:
       BUILD_MOUNT: /opt/ppf-release-build/ppf-contact-solver
       BUILD_INSTANCE_TYPE: c7i.16xlarge
       VERIFY_INSTANCE_TYPE: g6e.2xlarge
-      DRIVER_MIN_BRANCH: 570
+      DRIVER_MIN_BRANCH: 580
       CUDA_SCENES: ${{ inputs.cuda_scenes }}
       TUNNEL: .github/workflows/scripts/linux/tunnel.sh
     outputs:
@@ -1121,7 +1123,7 @@ jobs:
     env:
       AWS_REGION: ${{ inputs.region }}
       INSTANCE_TYPE: g5g.xlarge
-      DRIVER_MIN_BRANCH: 570
+      DRIVER_MIN_BRANCH: 580
       DIST_NAME: ${{ needs.build-linux-arm64.outputs.DIST_NAME }}
       ARCHIVE: ${{ needs.build-linux-arm64.outputs.ARCHIVE }}
       VERSION: ${{ needs.version.outputs.VERSION }}
@@ -1504,18 +1506,18 @@ jobs:
           echo "VPC: $VPC_ID"
 
           echo "Getting subnet in github-actions-vpc..."
-          SUBNET_ID=$(aws ec2 describe-subnets \
+          SUBNET_IDS=$(aws ec2 describe-subnets \
             --filters "Name=vpc-id,Values=$VPC_ID" \
-            --query 'Subnets[0].SubnetId' \
+            --query 'Subnets[].SubnetId' \
             --region "$AWS_REGION" \
-            --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+            --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: No subnet found in github-actions-vpc"
             exit 1
           fi
-          echo "::add-mask::$SUBNET_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
-          echo "Subnet: $SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
+          echo "Subnets: $SUBNET_IDS"
 
           echo "Getting github-actions-sg security group..."
           SG_ID=$(aws ec2 describe-security-groups \
@@ -1578,22 +1580,37 @@ jobs:
         id: instance
         run: |
           echo "Launching Windows EC2 instance..."
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
-            --instance-type "$BUILD_INSTANCE_TYPE" \
-            --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
-            --subnet-id "${{ steps.vpc.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data file:///tmp/user-data.ps1 \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
-              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' \
-            --region "$AWS_REGION" \
-            --output text)
+          # A subnet pins the availability zone, and a zone may not offer this
+          # instance type at all or may have no capacity for it right now, while
+          # another zone in the same VPC would take it. Try each subnet in turn, and
+          # report every refusal if none launches.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.vpc.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+              --instance-type "$BUILD_INSTANCE_TYPE" \
+              --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data file:///tmp/user-data.ps1 \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
+                "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-release-${{ needs.version.outputs.VERSION }}-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsReleaseBuild}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' \
+              --region "$AWS_REGION" \
+              --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch the instance in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "Instance launched: $INSTANCE_ID"
 
@@ -1644,22 +1661,37 @@ jobs:
           # Use standard SSH port 22 since we're using EICE tunnels
           sed "s/SSH_PORT_PLACEHOLDER/22/g" .github/workflows/scripts/win/user-data.ps1 > /tmp/verify-user-data.ps1
 
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.ami.outputs.AMI_ID }}" \
-            --instance-type "$VERIFY_INSTANCE_TYPE" \
-            --key-name "${{ steps.verify-keypair.outputs.KEY_NAME }}" \
-            --subnet-id "${{ steps.vpc.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data file:///tmp/verify-user-data.ps1 \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
-              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' \
-            --region "$AWS_REGION" \
-            --output text)
+          # A subnet pins the availability zone, and a zone may not offer this
+          # instance type at all or may have no capacity for it right now, while
+          # another zone in the same VPC would take it. Try each subnet in turn, and
+          # report every refusal if none launches.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.vpc.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.ami.outputs.AMI_ID }}" \
+              --instance-type "$VERIFY_INSTANCE_TYPE" \
+              --key-name "${{ steps.verify-keypair.outputs.KEY_NAME }}" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.vpc.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data file:///tmp/verify-user-data.ps1 \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Version,Value=${{ needs.version.outputs.VERSION }}}]" \
+                "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-verify-${{ needs.version.outputs.VERSION }}-${{ steps.verify-ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsBundleVerification}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' \
+              --region "$AWS_REGION" \
+              --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch the instance in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "Verification instance launched: $INSTANCE_ID"
 
@@ -2325,7 +2357,7 @@ jobs:
           echo "- Verification Instance ID: ${{ steps.verify-instance.outputs.INSTANCE_ID || 'Not launched' }}"
           echo ""
           echo "## Workflow Phases"
-          echo "1. Build Phase: Compiled on instance with CUDA 12.8 and build tools"
+          echo "1. Build Phase: Compiled on instance with CUDA 13.2 and build tools"
           echo "2. Verification Phase: Tested on clean instance with only NVIDIA driver"
           echo "3. Release Phase: the release job publishes every platform's archives"
 

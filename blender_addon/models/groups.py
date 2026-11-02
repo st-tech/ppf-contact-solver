@@ -1,7 +1,7 @@
 # File: groups.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Pure data-access functions for object groups.
 # Extracted from ui/state.py to break core/ → ui/ dependency.
@@ -172,7 +172,6 @@ OBJECT_GROUP_DEFAULTS = {
     "bend_plasticity": 0.5,
     "bend_plasticity_threshold": 0.0,
     "bend_rest_angle_source": "FLAT",
-    "bend_rest_from_reference": False,
     # Direct stiffness factor for the loose-edge stitch force: the solver
     # scales the stitch gradient and Hessian by this value, with no mass or
     # dt normalization. Raise it to hold seams harder under gravity/collision

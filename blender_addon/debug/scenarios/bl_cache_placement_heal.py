@@ -1,7 +1,7 @@
 # File: scenarios/bl_cache_placement_heal.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard: a ContactSolverCache bound while an object carried no
 # enabled deformer must be RE-PLACED once a deformer appears, instead of

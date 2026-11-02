@@ -1,7 +1,7 @@
 # File: client.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Re-exports the event-driven ``CommunicatorFacade`` as the ``communicator``
 # singleton, plus the helpers operators and UI code call directly. State

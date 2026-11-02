@@ -1,7 +1,7 @@
 # File: scenarios/bl_solver_crash_kind_localized.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The server names a crash cause with a stable snake_case tag (`crash_kind`,
 # `CrashKind::tag()` on the Rust side) and sends the full multi-line report

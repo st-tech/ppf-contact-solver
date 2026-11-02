@@ -37,7 +37,7 @@ DISK_SPACE=64
 GPU_NAME=RTX_4090
 
 # Image
-VAST_IMAGE="nvidia/cuda:11.8.0-devel-ubuntu22.04"
+VAST_IMAGE="nvidia/cuda:13.2.0-devel-ubuntu24.04"
 ```
 
 Search an instance
@@ -48,8 +48,8 @@ query=""
 query+="reliability > 0.98 " # high reliability
 query+="num_gpus=1 " # single gpu
 query+="gpu_name=$GPU_NAME " # GPU
-query+="driver_version >= 535.154.05 " # driver version
-query+="cuda_vers >= 11.8 " # cuda version
+query+="driver_version >= 580.65.06 " # driver version
+query+="cuda_vers >= 13.0 " # cuda version
 query+="compute_cap >= 750 " # compute capability
 query+="geolocation in [TW,VN,JP]" # location country code
 query+="rentable=True " # rentable only
@@ -178,7 +178,7 @@ DISK_SPACE=64
 GPU_NAME="RTX 4090"
 
 # Image
-RUNPOD_IMAGE="runpod/pytorch:2.0.1-py3.10-cuda11.8.0-devel-ubuntu22.04"
+RUNPOD_IMAGE="runpod/base:1.5.0-cuda1320-ubuntu2404"
 
 # go must be installed at this point (https://go.dev/doc/install)
 go version
@@ -252,7 +252,7 @@ result=$(scw instance server create \
          --output json \
          name=$name \
          type=$type \
-         image=ubuntu_jammy_gpu_os_12 \
+         image=ubuntu_noble_gpu_os_13_nvidia \
          zone=$zone)
 id=$(jq -r '.id' <<< "$result")
 ip=$(jq -r '.public_ip.address' <<< "$result")
@@ -286,7 +286,7 @@ Next, run the command below to provision an NVIDIA L4 GPU instance.
 As of late 2024, this setup costs approximately $1 per hour.
 
 ```bash
-IMAGE="projects/ml-images/global/images/c0-deeplearning-common-gpu-v20241118-debian-11-py310"
+IMAGE="projects/deeplearning-platform-release/global/images/family/common-cu129-ubuntu-2404-nvidia-580"
 ZONE="asia-east1-c"
 INSTANCE_NAME="ppf-contact-solver"
 INSTANCE_TYPE="g2-standard-8"

@@ -1,7 +1,7 @@
 # File: scenarios/rig_intersection_allowance_contact_drape.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The report that prompted the allowance change: a cloth hung vertically over
 # an invisible floor and let fall. With `allow-self-intersection` its folds

@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_pins.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hair Curves in the add-on, everything short of a solve (issue #146):
 # which groups take a hair object, how its pins are made, named, renamed

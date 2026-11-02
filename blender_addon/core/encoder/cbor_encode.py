@@ -1,7 +1,7 @@
 # File: blender_addon/core/encoder/cbor_encode.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 """CBOR upload encoder.
 
 Used by ``encode_obj`` (mesh.py) and ``encode_param`` (params.py).

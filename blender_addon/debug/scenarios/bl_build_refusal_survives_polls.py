@@ -1,7 +1,7 @@
 # File: scenarios/bl_build_refusal_survives_polls.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A refused Transfer stays refused, however often the server is asked.
 #

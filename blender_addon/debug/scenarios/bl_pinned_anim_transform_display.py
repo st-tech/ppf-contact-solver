@@ -1,7 +1,7 @@
 # File: scenarios/bl_pinned_anim_transform_display.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A dynamics object with an ANIMATED OBJECT TRANSFORM must display the
 # solver's output at the pose of each frame's own matrix_world.

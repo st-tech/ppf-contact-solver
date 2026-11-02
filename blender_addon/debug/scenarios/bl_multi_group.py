@@ -1,7 +1,7 @@
 # File: scenarios/bl_multi_group.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Two simultaneous SHELL groups, two distinct cloth meshes.
 #

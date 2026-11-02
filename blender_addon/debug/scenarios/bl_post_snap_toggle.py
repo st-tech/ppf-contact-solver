@@ -1,7 +1,7 @@
 # File: scenarios/bl_post_snap_toggle.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # "Post Snap Exactly" toggle, verified through the addon fetch path.
 #

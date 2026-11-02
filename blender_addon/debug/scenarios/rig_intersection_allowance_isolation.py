@@ -1,7 +1,7 @@
 # File: scenarios/rig_intersection_allowance_isolation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Does an issue-#138 intersection allowance stay INSIDE the pairs that asked
 # for it?

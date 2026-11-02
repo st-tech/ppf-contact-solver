@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SPIN around the pinned-vertex CENTROID. Axis = Blender +Z.
 
 from __future__ import annotations

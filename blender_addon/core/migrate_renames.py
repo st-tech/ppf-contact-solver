@@ -1,8 +1,7 @@
 # File: core/migrate_renames.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Carry renamed scene properties forward when an older .blend is opened.
 
 A PropertyGroup field is stored in the .blend under its identifier, so renaming
@@ -28,7 +27,7 @@ import sys
 
 import bpy  # pyright: ignore
 
-from ..models.groups import get_addon_data
+from ..models.groups import get_addon_data, iterate_object_groups
 
 # Legacy ID-property key -> current State field.
 #
@@ -143,4 +142,43 @@ def migrate_retired_connection(scene=None) -> str:
     # Written last, so a failure above leaves the file still saying Local and
     # the migration runs again on the next open rather than stranding the path.
     props.server_type = native
+    return "; ".join(moved)
+
+
+def migrate_bend_rest_reference(scene=None) -> str:
+    """Move the retired "From Reference Geometry" checkbox onto the Rest Angle.
+
+    A group used to carry `bend_rest_from_reference`, a checkbox beside its
+    Rest Angle dropdown, and each object a `bend_ref_enable` checkbox of its
+    own. Both are gone: From Reference Geometry is now an item of the Rest
+    Angle dropdown, and every object of such a group reads its reference.
+    WITHOUT THIS a scene saved with the checkbox on opens with its old Rest
+    Angle (Flat or From Initial Geometry) and silently stops reading the
+    references it was built around.
+
+    A group whose checkbox was on becomes From Reference Geometry. An object
+    whose own checkbox was off now reads its reference too, and one that has
+    none is refused at Transfer by name rather than falling back to a rest
+    angle the dropdown no longer names. The retired keys are dropped once
+    read.
+
+    Returns a summary of what moved, or an empty string when there was nothing
+    to do (the common case: a scene saved by a current build).
+    """
+    scene = scene or getattr(bpy.context, "scene", None)
+    if scene is None:
+        return ""
+    moved = []
+    for group in iterate_object_groups(scene):
+        if "bend_rest_from_reference" in group.keys():
+            if bool(group["bend_rest_from_reference"]):
+                group.bend_rest_angle_source = "FROM_REFERENCE"
+                moved.append(
+                    f"{group.name}: bend_rest_from_reference -> "
+                    "Rest Angle From Reference Geometry"
+                )
+            del group["bend_rest_from_reference"]
+        for assigned in group.assigned_objects:
+            if "bend_ref_enable" in assigned.keys():
+                del assigned["bend_ref_enable"]
     return "; ".join(moved)

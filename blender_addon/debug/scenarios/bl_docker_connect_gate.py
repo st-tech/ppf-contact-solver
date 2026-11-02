@@ -1,7 +1,7 @@
 # File: scenarios/bl_docker_connect_gate.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Local Docker: the Connect button's gate, the shipped defaults, and the
 # refusals the user reads.

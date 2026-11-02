@@ -1,7 +1,7 @@
 # File: encoder/scene_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Sampling of Blender F-curves on the SCENE-level solver settings into the
 # dyn_param schedule the solver already reads.
@@ -28,6 +28,7 @@
 from ..utils import get_id_fcurves
 from . import frame_to_time, solver_gravity, solver_wind
 from .param_anim import _drop_collinear
+from ..limits import step_size_refusal
 
 
 _STATE_PATH = "zozo_contact_solver.state."
@@ -113,6 +114,13 @@ def encode_scene_param_anim(state, fps, start_frame, frame_count):
                     read["wind_direction"], read["wind_strength"],
                     f"The keyframed wind at frame {frame}"))
             else:
+                if key == "dt":
+                    # An F-curve is evaluated past the field's maximum, and a
+                    # Bezier handle can overshoot between keys inside it.
+                    refusal = step_size_refusal(
+                        read[watched[0]], f"The keyframed Step Size at frame {frame}")
+                    if refusal is not None:
+                        raise ValueError(refusal)
                 values.append([read[watched[0]]])
         series[key] = values
 

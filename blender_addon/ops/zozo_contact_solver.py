@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Auto-generated bpy.ops.zozo_contact_solver.* operators from MCP handler registry.
 
 This module dynamically creates Blender operator classes for every registered

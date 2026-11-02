@@ -1,5 +1,5 @@
 # File: static_ops.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Add/remove/reorder operators for UI-assigned static ops on moving
 # static objects. Mirrors the pin-op pattern: ops live on the

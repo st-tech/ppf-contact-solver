@@ -1,8 +1,7 @@
 # File: force_field.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Blender force fields, and the exact force-field script, for the solver.
 
 The solver takes an external force field as FIELD OBJECTS, each evaluated
@@ -12,7 +11,7 @@ objects into field objects and is also what the viewport's Visualize overlay
 draws from, so what is drawn is what is sent.
 
 WHAT EACH BLENDER FIELD BECOMES was measured on Blender as a black box, law
-by law, and ``core/field_eval.py`` (byte-identical to
+by law, and ``core/field_eval.py`` (a copy of
 ``frontend/_field_eval_.py``) computes each law in double
 precision. A field object is sent as its settings and a TRACK of per-frame
 samples: its world origin and axes and every animatable value, sampled at

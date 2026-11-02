@@ -1,7 +1,7 @@
 # File: scenarios/bl_cleanup_respects_user_obj_color.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression: the deferred cleanup that runs off depsgraph updates
 # (``group_ops._apply_cleanup``) must not write obj.color on any object.

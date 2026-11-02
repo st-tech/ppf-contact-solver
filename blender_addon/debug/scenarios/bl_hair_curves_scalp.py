@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_scalp.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hair Curves rooted on a moving head (issue #146): the roots follow the
 # scalp, the strands collide with it, and the result is placed through the

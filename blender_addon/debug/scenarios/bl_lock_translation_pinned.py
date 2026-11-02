@@ -1,5 +1,5 @@
 # File: scenarios/bl_lock_translation_pinned.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Affine Lock Translation composition with exact moving pins in the solver.
 # A pinned edge moves perpendicular to the permitted X line. The free vertices

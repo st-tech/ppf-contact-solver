@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_stitch.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Dynamic-to-STATIC cross-stitch end to end (the {SOLID,SHELL,ROD}-STATIC
 # pipeline). This headline scenario exercises the hardest path: a dynamic

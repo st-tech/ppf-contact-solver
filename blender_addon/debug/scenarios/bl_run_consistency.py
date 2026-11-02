@@ -1,7 +1,7 @@
 # File: scenarios/bl_run_consistency.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end of the Run-button click-time consistency check.
 #

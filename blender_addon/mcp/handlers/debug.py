@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Debug and testing handlers (commands, data transfer tests, git, compile)."""
 
 import bpy  # pyright: ignore

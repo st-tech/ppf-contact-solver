@@ -1,7 +1,7 @@
 # File: addon_host_tests/conftest.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Loader for add-on modules that are pure logic but sit behind a top-level
 # ``import bpy``.
@@ -20,9 +20,6 @@
 # so the collection fails before any test runs. Kept at the top level,
 # nothing on the path is a package and the stub below is installed first.
 # ``blender_addon/tests`` stays where it is and is run by Blender.
-#
-# Precedent for the synthetic-parent-package technique:
-# ``crates/ppf-cts-formats/tests/scripts/gen_fixtures.py``.
 
 from __future__ import annotations
 

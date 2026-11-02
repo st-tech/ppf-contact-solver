@@ -1,7 +1,7 @@
 # File: enum_props.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Structural guard against the freed-memory dropdown bug.
 #

@@ -1,7 +1,7 @@
 # File: models/material_locks.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The material properties that carry a lock, and what a lock means.
 #

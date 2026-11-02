@@ -1,7 +1,7 @@
 # File: scenarios/rig_remote_kill_port_scope.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The remote kill ends ONE server: the one serving the port it was given.
 #

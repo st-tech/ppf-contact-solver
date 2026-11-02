@@ -24,7 +24,7 @@ Second, the pin's object needs a real deforming MODIFIER:
 ``has_deforming_modifier_stack`` (core/utils.py) inspects the modifier
 stack, and shape keys alone do not satisfy it despite being named in the
 operator's own warning. A Wave modifier is used because it deforms as a
-function of the frame with no armature, lattice or cage to place.
+function of the frame with no Armature, Lattice or cage to place.
 
 The number of frames recorded is the add-on's own **Frame Count**
 (default 180), not the scene's frame range.

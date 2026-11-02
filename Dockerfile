@@ -4,7 +4,7 @@
 # License: Apache v2.0
 
 # Base image stage - always from NVIDIA CUDA
-FROM nvidia/cuda:12.8.0-devel-ubuntu24.04 AS base-image
+FROM nvidia/cuda:13.2.0-devel-ubuntu24.04 AS base-image
 ENV NVIDIA_DRIVER_CAPABILITIES=utility,compute
 ENV LANG=en_US.UTF-8
 ENV PROJ_NAME=ppf-contact-solver

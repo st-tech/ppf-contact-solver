@@ -1,8 +1,7 @@
 # File: utils.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 from ...models.groups import get_addon_data
 from ..state import ObjectGroup
 

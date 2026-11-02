@@ -1,7 +1,7 @@
 # File: addon_host_tests/_cache_path_projection_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Host-side gates for the add-on's projection of the deepest cache path
 # the build pipeline writes (``blender_addon/core/utils.py``).

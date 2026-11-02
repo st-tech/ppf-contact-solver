@@ -1,8 +1,7 @@
 # File: encoder/pin.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import json
 
 import bpy  # pyright: ignore
@@ -550,7 +549,7 @@ def _encode_pin_config(context, groups, state, fps=None, start_frame=None):
             #
             # 1. Captured depsgraph cache (``_pindeform.pc2``) written
             #    by Capture Deformation. Dense one-sample-per-frame
-            #    coverage for armature / lattice / mesh-deform / shape-
+            #    coverage for Armature / Lattice / mesh-deform / shape-
             #    key driven pins. PC2 wins over fcurves: when both
             #    exist on the same pin, the cache is the live source.
             #

@@ -1,7 +1,7 @@
 # File: scenarios/bl_deformed_target_snap.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Snap-side coverage for snapping onto a DEFORMED target. Snap and Merge must
 # read the EVALUATED (post-modifier) surface the artist sees and the solver

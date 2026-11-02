@@ -1,7 +1,7 @@
 # File: scenarios/bl_time_scale_kinematic_invariance.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Time Scale end-to-end invariance. Time Scale stretches every schedule the
 # solver consumes (pin ops, transform keyframes, captured-deformation times)

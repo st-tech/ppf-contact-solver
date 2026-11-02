@@ -25,8 +25,8 @@ use ppf_cts_compute::{AllocLabel, Buffer, Device, Handle, StagedBuffer};
 
 use super::kernels::{
     CosseratBendRowArgs, CosseratDirichletRowArgs, CosseratDriveRowArgs,
-    CosseratInertiaRowArgs, CosseratPrescribeRowArgs, CosseratShearRowArgs,
-    CosseratStepRowArgs, DxMagnitudeArgs,
+    CosseratInertiaRowArgs, CosseratPrescribeRowArgs, CosseratRowSumSiteRowArgs,
+    CosseratShearRowArgs, CosseratStepRowArgs, DxMagnitudeArgs,
 };
 use super::scene::{Fatal, FatalResult};
 use super::state::SolverState;
@@ -120,6 +120,11 @@ pub struct State {
     /// Nine floats per site: the next frame's rows against the previous frame's
     /// columns.
     site_block: Buffer<f32>,
+    /// Nine floats per slot: the frame row's blocks summed, its own block and
+    /// its sites' couplings, which the augmented operator's difference form
+    /// reads (`cosserat_apply_slot_row`). Filled by [`State::sum_frame_rows`]
+    /// once the iteration's blocks are final.
+    row_sum: Buffer<f32>,
 
     /// Per slot, this step's held mask: `fixed`, or both of the edge's
     /// vertices prescribed (a clamp). Written by [`State::prescribe`].
@@ -343,6 +348,7 @@ impl State {
         self.coupling_from.size(device, 9 * slots, AllocLabel("cosserat.coupling_from"))?;
         self.coupling_to.size(device, 9 * slots, AllocLabel("cosserat.coupling_to"))?;
         self.site_block.size(device, 9 * sites.max(1), AllocLabel("cosserat.site_block"))?;
+        self.row_sum.size(device, 9 * slots, AllocLabel("cosserat.row_sum"))?;
         self.held.size(device, slots, AllocLabel("cosserat.held"))?;
         self.prescribed.size(device, 3 * slots, AllocLabel("cosserat.prescribed"))?;
         self.step.size(device, 3 * slots, AllocLabel("cosserat.step"))?;
@@ -382,8 +388,32 @@ impl State {
             coupling_from: self.coupling_from.handle(),
             coupling_to: self.coupling_to.handle(),
             site_block: self.site_block.span(0, 9 * self.sites),
+            row_sum: self.row_sum.handle(),
             step: self.step.handle(),
         }
+    }
+
+    /// Each frame row's blocks summed, for the augmented operator's difference
+    /// form: the frame's own block, then every bend site's coupling added into
+    /// both of its frames' rows. Run once per solve, after the Dirichlet pass,
+    /// which is the last writer of the blocks.
+    pub fn sum_frame_rows<D: Device>(&self, device: &mut D) -> FatalResult<()> {
+        if self.slots == 0 {
+            return Ok(());
+        }
+        device.copy(self.row_sum.handle(), 0, self.self_block.handle(), 0, 9 * self.slots * size_of::<f32>())?;
+        if self.sites > 0 {
+            let args = CosseratRowSumSiteRowArgs {
+                bend_slots: self.bend_slots.handle(),
+                site_block: self.site_block.handle(),
+                row_sum: self.row_sum.handle(),
+                count: self.sites as u32,
+                seam_arena_count: 0,
+            };
+            // Safety: every buffer is the state's, sized for its slots and sites.
+            unsafe { device.launch("cosserat.row_sum_site", &args, self.sites as u32) }?;
+        }
+        Ok(())
     }
 
     /// Return the frames to the last committed state.
@@ -644,6 +674,35 @@ impl State {
         Ok(out)
     }
 
+    /// The committed frames and the frames one step before them, read back for
+    /// a checkpoint (`driver/run_state.rs`), four floats per slot each.
+    pub fn history<D: Device>(&self, device: &mut D) -> FatalResult<(Vec<f32>, Vec<f32>)> {
+        let mut prev = vec![0.0f32; 4 * self.slots];
+        let mut prev2 = vec![0.0f32; 4 * self.slots];
+        if self.slots > 0 {
+            self.quat_prev.read(device, 0, &mut prev)?;
+            self.quat_prev2.read(device, 0, &mut prev2)?;
+        }
+        Ok((prev, prev2))
+    }
+
+    /// Install a checkpoint's committed frames and the frames before them. The
+    /// iterate takes the committed frames, as a commit leaves it.
+    pub fn set_history<D: Device>(
+        &mut self,
+        device: &mut D,
+        prev: &[f32],
+        prev2: &[f32],
+    ) -> FatalResult<()> {
+        if self.slots == 0 {
+            return Ok(());
+        }
+        self.quat.write(device, 0, prev)?;
+        self.quat_prev.write(device, 0, prev)?;
+        self.quat_prev2.write(device, 0, prev2)?;
+        Ok(())
+    }
+
     /// Overwrite the frame state with a stated pose and history.
     #[cfg(test)]
     pub fn set_frames<D: Device>(
@@ -709,6 +768,8 @@ pub struct Blocks {
     pub coupling_from: Handle,
     pub coupling_to: Handle,
     pub site_block: Handle,
+    /// Each frame row's blocks summed ([`State::sum_frame_rows`]).
+    pub row_sum: Handle,
     pub step: Handle,
 }
 
@@ -819,16 +880,6 @@ mod tests {
             [(r[0][2] + r[2][0]) / s, (r[1][2] + r[2][1]) / s, 0.25 * s, (r[1][0] - r[0][1]) / s]
         };
         [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
-    }
-
-    /// The frame a stored quaternion stands for, as `pdrd_quat_to_mat` reads it.
-    fn frame_of(q: [f32; 4]) -> M3 {
-        let [x, y, z, w] = q.map(f64::from);
-        [
-            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
-            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
-            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
-        ]
     }
 
     /// The nearest PSD matrix to a symmetric one, by Jacobi rotations.

@@ -26,6 +26,12 @@
 // NO SENTINEL: each block seeds from its own first element, so the bodies need
 // no constant, and `common.hpp`'s tree-specific `FLT_MAX` of `1.0e8f` and
 // NEGATIVE `FLT_MIN` never come into it.
+//
+// A NaN WINS. `fmath::min` and `max` are `fminf` and `fmaxf`, which return the
+// other operand when one is NaN, so a NaN time of impact or magnitude would
+// vanish in the fold and the host's check on the result could never see it.
+// Each step keeps a NaN it meets (`v != v`), and one that is already the best
+// stays, since no comparison against it holds.
 
 [[seam::device_fn]] inline void reduce_min_leaf(
     const float *values, unsigned count, unsigned block_size,
@@ -40,7 +46,8 @@
         if (at >= count) {
             break;
         }
-        best = fmath::min(best, values[at]);
+        const float v = values[at];
+        best = (v < best || v != v) ? v : best;
     }
     out[block_index] = best;
 }
@@ -58,7 +65,8 @@
         if (at >= count) {
             break;
         }
-        best = fmath::max(best, values[at]);
+        const float v = values[at];
+        best = (v > best || v != v) ? v : best;
     }
     out[block_index] = best;
 }

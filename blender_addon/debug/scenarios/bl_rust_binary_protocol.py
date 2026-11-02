@@ -1,7 +1,7 @@
 # File: scenarios/bl_rust_binary_protocol.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Lock in the launcher to Rust-binary handshake. Distinct from
 # bl_connect_linux_native in that it (a) asserts the binary on disk is the

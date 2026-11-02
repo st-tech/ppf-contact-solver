@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_op_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # STATIC group with a UI-assigned MOVE_BY op drives PC2 playback. This
 # scenario is intentionally focused on a single op kind so it can make

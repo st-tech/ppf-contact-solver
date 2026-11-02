@@ -1,7 +1,7 @@
 # File: yarn.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch inside Blender (Scripting workspace, or `blender --python yarn.py`)
 # to build the same interwoven yarn fabric as examples/yarn.ipynb,

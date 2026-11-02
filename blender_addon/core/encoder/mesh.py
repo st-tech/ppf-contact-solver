@@ -1,8 +1,7 @@
 # File: encoder/mesh.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import hashlib
 from contextlib import contextmanager
 
@@ -510,19 +509,58 @@ def _encode_bend_reference_verts(group, assigned, source_obj, context):
     array is in the same vertex order as the object's shipped ``vert``,
     which ``validate_bend_reference`` has confirmed matches one-to-one:
 
+    * Shape key (``bend_ref_source == "SHAPE_KEY"``): the key's stored
+      local positions (``shape_key_local_positions``).
     * SHELL / mesh ROD: the reference's modifier-evaluated local verts.
     * Curve ROD: the reference curve sampled the same way the source curve
       rod is sampled (control-point level).
     """
-    if group.object_type not in ("SHELL", "ROD"):
-        return None
-    if not group.bend_rest_from_reference:
-        return None
-    if not assigned.bend_ref_enable or not assigned.bend_ref_uuid:
+    from ..uuid_registry import get_object_by_uuid
+    from ..utils import (
+        bend_reference_configured,
+        bend_reference_missing,
+        eval_reference_local_positions,
+        shape_key_local_positions,
+        validate_bend_reference,
+    )
+
+    if bend_reference_missing(group, assigned):
+        raise ValueError(
+            f"Object '{source_obj.name}' in group '{group.name}' has no "
+            f"bending reference, and the group's Rest Angle is From Reference "
+            f"Geometry, which every object in it reads. Pick a reference for "
+            f"it, or move it to a group with another Rest Angle."
+        )
+    if not bend_reference_configured(group, assigned):
         return None
 
-    from ..uuid_registry import get_object_by_uuid
-    from ..utils import eval_reference_local_positions, validate_bend_reference
+    # The object's whole shape-key mix: the static reference is the mix at
+    # the starting frame, and an animated mix is shipped separately by
+    # `_encode_bend_reference_anim`.
+    if assigned.bend_ref_source == "SHAPE_KEY_MIX":
+        from ..utils import shape_key_mix_local_positions
+        try:
+            ref_local = shape_key_mix_local_positions(source_obj)
+        except ValueError as exc:
+            raise ValueError(
+                f"Reference Rest Angle for '{source_obj.name}' in group "
+                f"'{group.name}': {exc}"
+            ) from exc
+        return np.ascontiguousarray(ref_local, dtype=np.float32)
+
+    # Shape key of the object itself: its stored positions are in the base
+    # mesh's vertex order, which is the order `vert` ships in.
+    if assigned.bend_ref_source == "SHAPE_KEY":
+        try:
+            ref_local = shape_key_local_positions(
+                source_obj, assigned.bend_ref_shape_key,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Reference Rest Angle for '{source_obj.name}' in group "
+                f"'{group.name}': {exc}"
+            ) from exc
+        return np.ascontiguousarray(ref_local, dtype=np.float32)
 
     ref_obj = get_object_by_uuid(assigned.bend_ref_uuid)
     if ref_obj is None:
@@ -555,6 +593,70 @@ def _encode_bend_reference_verts(group, assigned, source_obj, context):
             f"'{source_obj.name}' in group '{group.name}'."
         )
     return np.ascontiguousarray(ref_local, dtype=np.float32)
+
+
+def _encode_bend_reference_anim(group, assigned, source_obj, context, state):
+    """The animated bending reference of an object whose rest angle follows
+    its shape-key mix, or ``None`` when the mix does not change over the solve.
+
+    The mix is sampled at every solve frame (``scene.frame_set``, so curves,
+    drivers and NLA on the shape keys all count), from the starting frame for
+    ``frame_count`` frames, and the current frame is restored afterward. A
+    frame equal to both neighbors is dropped: the solver interpolates linearly
+    between the keyframes it receives, so a held stretch needs only its ends.
+    Returns ``{"frame_offset": [...], "vert": [...]}`` with frame offsets from
+    the starting frame, the convention ``transform_animation`` uses.
+
+    A ROD group is refused here, by name: the solver animates shell hinge rest
+    angles only. Bend Plasticity, which also rewrites the rest angle, cannot
+    meet it: its gate is closed under From Reference Geometry (``gate_open``).
+    """
+    from ..utils import bend_reference_configured, shape_key_mix_animated
+    from ..utils import shape_key_mix_local_positions
+    from . import resolve_start_frame
+
+    if not bend_reference_configured(group, assigned):
+        return None
+    if assigned.bend_ref_source != "SHAPE_KEY_MIX":
+        return None
+    if not shape_key_mix_animated(source_obj):
+        return None
+
+    scene = context.scene
+    start = resolve_start_frame(state)
+    count = max(1, int(state.frame_count))
+    saved = scene.frame_current
+    frames = []
+    try:
+        for k in range(count):
+            scene.frame_set(start + k)
+            frames.append(shape_key_mix_local_positions(source_obj))
+    finally:
+        scene.frame_set(saved)
+    if all(np.array_equal(f, frames[0]) for f in frames[1:]):
+        return None
+
+    label = (
+        f"Reference Rest Angle for '{source_obj.name}' in group "
+        f"'{group.name}'"
+    )
+    if group.object_type != "SHELL":
+        raise ValueError(
+            f"{label}: the shape-key mix is animated, and an animated rest "
+            "angle applies to Shell groups only. Remove the shape-key "
+            "animation, or use a Shell group."
+        )
+
+    keep = [
+        k for k in range(count)
+        if k in (0, count - 1)
+        or not (np.array_equal(frames[k], frames[k - 1])
+                and np.array_equal(frames[k], frames[k + 1]))
+    ]
+    return {
+        "frame_offset": [float(k) for k in keep],
+        "vert": [np.ascontiguousarray(frames[k], dtype=np.float32) for k in keep],
+    }
 
 
 def _build_obj_data(context, *, persist_topology_hash: bool) -> list:
@@ -996,11 +1098,10 @@ def _encode_obj_inner(context, scene, state, data):
                     # 1:1 with its own `vert` order, so it can't share a
                     # canonical mesh with a sibling. Force it canonical, same
                     # as the static-deform and deform-stack cases.
+                    from ..utils import bend_reference_configured
                     _has_bend_ref = (
                         group.object_type == "SHELL"
-                        and group.bend_rest_from_reference
-                        and assigned.bend_ref_enable
-                        and bool(assigned.bend_ref_uuid)
+                        and bend_reference_configured(group, assigned)
                     )
                     _dedup_ok = (
                         not _has_sd and not _has_deform and not _has_bend_ref
@@ -1270,6 +1371,11 @@ def _encode_obj_inner(context, scene, state, data):
                         f"vertices but the object ships {len(vert)}."
                     )
                 info["bend_rest_vert"] = bend_ref_verts
+                bend_ref_anim = _encode_bend_reference_anim(
+                    group, assigned, obj, context, state,
+                )
+                if bend_ref_anim is not None:
+                    info["bend_rest_vert_anim"] = bend_ref_anim
 
             # Case-3 (static-deform pin shell): the cache is in solver
             # world space, so we override the rest mesh + world matrix

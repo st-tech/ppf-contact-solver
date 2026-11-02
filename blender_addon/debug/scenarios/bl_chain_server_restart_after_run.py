@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Stop-after-run: locks in the addon-side half of the regression
 #
 #   "I simulated, stopped the server and started it again, and now

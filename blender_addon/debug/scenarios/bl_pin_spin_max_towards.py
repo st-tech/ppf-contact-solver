@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SPIN with MAX_TOWARDS center: pivot is the centroid of the
 # pinned vertices furthest in the given direction.
 

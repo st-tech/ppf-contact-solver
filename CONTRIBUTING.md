@@ -8,4 +8,6 @@ Bug reports and feature proposals are welcome through GitHub Issues.
 
 By submitting an Issue, suggestion, or reference implementation (including code shared via Issues or Discussions) to this repository, you agree that your contribution is provided under the terms of the [Apache License, Version 2.0](./LICENSE). Any bug reports, feature proposals, or code you provide will be deemed to be licensed to us and the community on a royalty-free, unrestricted basis for the purpose of improving this software.
 
+Code that calls Blender's `bpy` (`blender_addon/`, `examples/blender/`) and its host tests (`addon_host_tests/`) is licensed under the GNU General Public License, version 3 or later, and a suggestion for those directories is provided under that license instead. See `LICENSING.md`.
+
 Thank you!

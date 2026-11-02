@@ -1,7 +1,7 @@
 # File: scenarios/bl_resolve_all_intersections.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Resolve All Intersections, the second entry of Intersection Correction in
 # the Mesh Repair panel, driven on real Blender objects.

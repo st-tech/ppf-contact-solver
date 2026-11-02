@@ -1,7 +1,7 @@
 # File: addon_host_tests/_force_field_volume_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Host-side gates for the arithmetic of a Fluid Flow's volume in the add-on
 # (`blender_addon/core/force_field.py`), the parts that touch no Blender data:

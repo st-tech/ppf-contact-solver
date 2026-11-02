@@ -303,7 +303,7 @@ box on the **Solver** panel has two buttons that work across the whole scene:
 - **Clear All Deformations** deletes every recording in the scene: all
   Static-collider recordings, all animated-pin captures, and any recording
   left behind by an object that was deleted or taken out of its group. The
-  objects keep their armatures, lattices and Shape Keys, so **Re-capture All
+  objects keep their Armatures, Lattices and Shape Keys, so **Re-capture All
   Deformations** rebuilds what it removed.
 
 Use the per-object buttons when one object's animation has changed. Use these

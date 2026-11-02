@@ -1,7 +1,7 @@
 # File: scenarios/bl_elastic_drape.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Exercises the elastic solve end-to-end through the production pipeline:
 # a sheet pinned along one edge and released under gravity DRAPES, free

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Same ops as bl_pin_compose_move_spin but in REVERSE order: SPIN then
 # MOVE_BY. The spin pivot is the original centroid; then everything is
 # translated. Different result from move-then-spin, exercising op-order

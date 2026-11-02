@@ -1,7 +1,7 @@
 # File: scenarios/bl_solid_fix_weight_threshold.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end check for the SOLID "Hard-Pin Core by Weight"
 # (fix_weight_threshold) feature. A partially-pinned SOLID with the

@@ -1,7 +1,7 @@
 # File: scenarios/rig_cosserat.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Cosserat rods, asserted end to end on the real backend: their bending has the
 # rigidity its parameter states at any segment length, their rest curvature has

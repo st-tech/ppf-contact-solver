@@ -1,7 +1,7 @@
 # File: scenarios/bl_shell_static_stitch.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # SHELL-to-STATIC cross-stitch end to end (the canonical "cloth stitched to
 # a static collider" case). Complements bl_static_stitch.py (SOLID source)

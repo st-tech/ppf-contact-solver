@@ -1,7 +1,7 @@
 # File: scenarios/rig_collider_coincident_pair.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: when a DYNAMIC vertex starts inside a
 # STATIC collider's contact offset, the advance ends as

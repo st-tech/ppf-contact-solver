@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_shell_drape.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling SCALE-INVARIANCE for a free-vertex SHELL drape. A grid
 # pinned along its +y edge sags under gravity (free verts deform, the

@@ -1,7 +1,7 @@
 # File: scenarios/bl_drape_ready_to_run.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # After a successful Transfer the Run button must be clickable and
 # the solver must be in READY state. There is no client-side hash

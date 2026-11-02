@@ -1,7 +1,7 @@
 # File: scenarios/bl_solver_gpu_select.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Acceptance gate for the solver GPU picker.
 #

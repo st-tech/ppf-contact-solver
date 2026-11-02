@@ -81,6 +81,10 @@ pub struct Scene {
     stitch_ind: Matrix6xX<usize>,
     stitch_w: Matrix6xX<f32>,
     stitch_stiffness: Vec<f32>,
+    /// Per-stitch authored rest length, read only where the flag beside it is
+    /// set; a stitch without one derives its rest length from contact gaps.
+    stitch_rest_length: Vec<f32>,
+    stitch_has_rest_length: Vec<bool>,
     pin: Vec<Pin>,
     display_pin: Vec<DisplayPin>,
     wall: Vec<InvisibleWall>,
@@ -96,6 +100,12 @@ pub struct Scene {
     /// Per-vertex mask marking which vertices belong to an object with a
     /// reference rest angle. Empty when `bend_rest_vert` is `None`.
     bend_rest_vert_mask: Vec<bool>,
+    /// Time-varying bending reference rest shape: keyframe times (seconds)
+    /// and full per-vertex positions per keyframe (unmasked entries equal the
+    /// initial vert), for objects whose rest angle follows an animated
+    /// shape-key mix. `None` when no object animates its bending rest shape.
+    /// The hinges it drives are the ones `bend_rest_vert_mask` marks.
+    bend_rest_vert_schedule: Option<RestVertSchedule>,
     /// Per-vertex mask marking vertices that belong to a STATIC collider.
     /// Empty when the scene has no collider in the solved namespace.
     collider_vert_mask: Vec<u8>,
@@ -929,6 +939,9 @@ impl Scene {
         let stitch_ind_path = format!("{}/bin/stitch_ind.bin", args.path);
         let stitch_w_path = format!("{}/bin/stitch_w.bin", args.path);
         let stitch_stiffness_path = format!("{}/bin/stitch_stiffness.bin", args.path);
+        let stitch_rest_length_path = format!("{}/bin/stitch_rest_length.bin", args.path);
+        let stitch_has_rest_length_path =
+            format!("{}/bin/stitch_has_rest_length.bin", args.path);
 
         // Uniform world scaling: every input geometric position/length is scaled
         // by `ws` on ingest (and the per-frame output is divided back by it in
@@ -1142,6 +1155,48 @@ impl Scene {
         } else {
             (None, Vec::new())
         };
+        // Animated bending reference rest shape (optional). Stored frame-major
+        // in bend_rest_vert_anim.bin as (n_frames * n_vert) columns, like
+        // rest_vert_anim.bin. It rides on the static reference: the mask that
+        // selects which hinges it drives is bend_rest_vert_mask.
+        let has_bend_rest_vert_anim = count
+            .get("has_bend_rest_vert_anim")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let bend_rest_vert_schedule = if has_bend_rest_vert_anim {
+            assert!(
+                has_bend_rest_vert,
+                "has_bend_rest_vert_anim requires has_bend_rest_vert: the \
+                 animated bending rest shape is masked by bend_rest_vert_mask"
+            );
+            let n_frames = read_usize(count, "bend_rest_vert_anim_frames");
+            let anim_path = format!("{}/bin/bend_rest_vert_anim.bin", args.path);
+            let times_path = format!("{}/bin/bend_rest_vert_times.bin", args.path);
+            let flat = scale_mat(
+                read_mat_from_file::<f64, 3>(&anim_path)
+                    .expect("Failed to read bend_rest_vert_anim"),
+                ws,
+                "an animated bending rest vertex (bend_rest_vert_anim.bin)",
+            );
+            assert_eq!(
+                flat.ncols(),
+                n_frames * n_vert,
+                "bend_rest_vert_anim size mismatch"
+            );
+            let times =
+                read_vec::<f64>(&times_path).expect("Failed to read bend_rest_vert_times");
+            assert_eq!(times.len(), n_frames, "bend_rest_vert_times size mismatch");
+            assert!(
+                times.windows(2).all(|w| w[0] < w[1]),
+                "bend_rest_vert_times must be strictly increasing"
+            );
+            let frames: Vec<Matrix3xX<f32>> = (0..n_frames)
+                .map(|k| flat.columns(k * n_vert, n_vert).into_owned())
+                .collect();
+            Some(RestVertSchedule { times, frames })
+        } else {
+            None
+        };
         // Optional: absent for a scene with no STATIC collider in the solved
         // namespace, and intentionally optional for older sessions. An empty
         // mask reads as "no colliders".
@@ -1274,6 +1329,75 @@ impl Scene {
                 Matrix6xX::<f32>::zeros(0),
                 Vec::new(),
             )
+        };
+        // Per-stitch authored rest lengths and their presence flags, written
+        // as a PAIR or not at all. A scene with neither file has no authored
+        // rest length anywhere, which is every scene written before the field
+        // existed and every scene that names none, so every stitch derives its
+        // rest length from its contact gaps. One file without the other is a
+        // writer that broke the pair, and is refused rather than guessed at.
+        //
+        // The length is a GEOMETRIC length, the distance the spring holds its
+        // two endpoints at, so it scales with the geometry under World Scaling
+        // as the sphere radius and the wall thickness do. The contact gaps the
+        // derived rest length comes from are physical parameters and do not.
+        let (stitch_rest_length_vec, stitch_has_rest_length_vec) = if n_stitch > 0 {
+            let lengths = read_vec::<f32>(&stitch_rest_length_path);
+            let flags = read_vec::<u8>(&stitch_has_rest_length_path);
+            match (lengths, flags) {
+                (Ok(lengths), Ok(flags)) => {
+                    assert_eq!(
+                        lengths.len(),
+                        n_stitch,
+                        "stitch_rest_length.bin holds {} entries for {n_stitch} stitches",
+                        lengths.len()
+                    );
+                    assert_eq!(
+                        flags.len(),
+                        n_stitch,
+                        "stitch_has_rest_length.bin holds {} entries for {n_stitch} stitches",
+                        flags.len()
+                    );
+                    let has: Vec<bool> = flags
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &flag)| match flag {
+                            0 => false,
+                            1 => true,
+                            other => panic!(
+                                "stitch_has_rest_length.bin entry {i} is {other}; a presence \
+                                 flag is 0 or 1"
+                            ),
+                        })
+                        .collect();
+                    let scaled: Vec<f32> = lengths
+                        .iter()
+                        .zip(&has)
+                        .enumerate()
+                        .map(|(i, (&length, &given))| {
+                            if !given {
+                                return 0.0;
+                            }
+                            let value = (length as f64 * ws) as f32;
+                            assert!(
+                                value.is_finite() && value > 0.0,
+                                "stitch {i} carries the rest length {length} (after World \
+                                 Scaling {value}); a rest length is a finite positive distance"
+                            );
+                            value
+                        })
+                        .collect();
+                    (scaled, has)
+                }
+                (Err(_), Err(_)) => (vec![0.0f32; n_stitch], vec![false; n_stitch]),
+                (Ok(_), Err(e)) | (Err(e), Ok(_)) => panic!(
+                    "the stitch rest lengths and their presence flags are written as a pair, \
+                     and only one of stitch_rest_length.bin and stitch_has_rest_length.bin \
+                     reads: {e}"
+                ),
+            }
+        } else {
+            (Vec::new(), Vec::new())
         };
 
         // One reader for both kinds of pin block, `pin` for the solver's pins
@@ -1584,8 +1708,20 @@ impl Scene {
                 let ny = read_f32(count, "ny");
                 let nz = read_f32(count, "nz");
                 let transition = read_string(count, "transition");
+                // The normal must be finite and long enough to normalize in
+                // f32 (its squared length must not underflow), and must stay
+                // finite after it: a NaN or zero normal makes the wall's height
+                // NaN everywhere.
                 let mut normal = Vector3::new(nx, ny, nz);
+                assert!(
+                    normal.iter().all(|v| v.is_finite()) && normal.norm_squared() > f32::MIN_POSITIVE,
+                    "wall {i}: normal ({nx}, {ny}, {nz}) is not finite and normalizable"
+                );
                 normal.normalize_mut();
+                assert!(
+                    normal.iter().all(|v| v.is_finite()),
+                    "wall {i}: normal ({nx}, {ny}, {nz}) did not normalize"
+                );
                 let position = scale_mat(
                     read_mat_from_file::<f64, 3>(&format!("{}/bin/wall-pos-{}.bin", args.path, i))
                         .expect("Failed to read pos_path"),
@@ -1662,6 +1798,10 @@ impl Scene {
                 );
                 assert_eq!(center.ncols(), n_keyframe);
                 assert_eq!(radius.len(), n_keyframe);
+                assert!(
+                    radius.iter().all(|r| r.is_finite() && *r >= 0.0),
+                    "sphere {i}: every radius must be finite and non-negative ({radius:?})"
+                );
                 assert_eq!(timing.len(), n_keyframe);
                 sphere.push(InvisibleSphere {
                     center,
@@ -1693,10 +1833,19 @@ impl Scene {
         assert_eq!(stitch_ind_mat.ncols(), n_stitch);
         assert_eq!(stitch_w_mat.ncols(), n_stitch);
         assert_eq!(stitch_stiffness_vec.len(), n_stitch);
+        assert_eq!(stitch_rest_length_vec.len(), n_stitch);
+        assert_eq!(stitch_has_rest_length_vec.len(), n_stitch);
 
         let args_path = format!("{}/param.toml", args.path);
         let file_content = fs::read_to_string(args_path).unwrap();
         let config: Config = toml::from_str(&file_content).unwrap();
+        // THE STEP-SIZE LIMIT, refused here rather than stepped past
+        // (`ppf_cts_core::datamodel::params::MAX_STEP_SIZE` says why).
+        if let Err(refusal) =
+            ppf_cts_core::datamodel::params::check_step_size(f64::from(config.param.dt))
+        {
+            panic!("{refusal}");
+        }
 
         let dyn_args = Self::load_dyn_param(&args.path);
 
@@ -1924,6 +2073,8 @@ impl Scene {
             stitch_ind: stitch_ind_mat,
             stitch_w: stitch_w_mat,
             stitch_stiffness: stitch_stiffness_vec,
+            stitch_rest_length: stitch_rest_length_vec,
+            stitch_has_rest_length: stitch_has_rest_length_vec,
             pin,
             display_pin,
             wall,
@@ -1933,6 +2084,7 @@ impl Scene {
             rest_vert_schedule,
             bend_rest_vert,
             bend_rest_vert_mask,
+            bend_rest_vert_schedule,
             collider_vert_mask,
             object_vert_index,
             group_vert_index,
@@ -2955,9 +3107,14 @@ impl Scene {
         let mut torque_vertices: Vec<TorqueVertex> = Vec::new();
         {
             use std::collections::HashMap;
-            // Key: pin_group_id string → (group index, axis_component, magnitude, hint_vertex)
+            // Key: pin_group_id string → (group index, axis_component, magnitude, hint_vertex).
+            // The map is for lookup only: the groups are emitted in the order
+            // they are first seen (`group_info`, indexed by group), since the
+            // group order sets each group's id and vertex range on the device
+            // and must not follow a HashMap's per-process random seed.
             let mut group_map: HashMap<String, (u32, u32, f32, usize)> = HashMap::new();
             let mut group_verts: Vec<Vec<usize>> = Vec::new();
+            let mut group_info: Vec<(u32, f32, usize)> = Vec::new();
 
             for pin in self.pin.iter() {
                 if let Some(unpin_t) = pin.unpin_time {
@@ -2986,6 +3143,7 @@ impl Scene {
                             group_map
                                 .insert(key, (new_id, *axis_component, *magnitude, *hint_vertex));
                             group_verts.push(Vec::new());
+                            group_info.push((*axis_component, *magnitude, *hint_vertex));
                             new_id
                         };
                         for &ind in pin.index.iter() {
@@ -2996,8 +3154,8 @@ impl Scene {
             }
 
             // Build final arrays
-            for (_key, &(gid, axis_component, magnitude, hint_vertex)) in group_map.iter() {
-                let verts = &group_verts[gid as usize];
+            for (gid, &(axis_component, magnitude, hint_vertex)) in group_info.iter().enumerate() {
+                let verts = &group_verts[gid];
                 let group_id = torque_groups.len() as u32;
                 let vertex_start = torque_vertices.len() as u32;
                 for &ind in verts.iter() {
@@ -3025,6 +3183,8 @@ impl Scene {
                     ),
                     weight: Vec6f::from_iterator(self.stitch_w.column(i).iter().copied()),
                     stiffness: self.stitch_stiffness[i],
+                    rest_length: self.stitch_rest_length[i],
+                    has_rest_length: u32::from(self.stitch_has_rest_length[i]),
                 });
             }
             stitch
@@ -3361,6 +3521,17 @@ impl Scene {
                 Self::DYN_PARAM_PREFIXES,
             );
         }
+        // An animated step size meets the same limit as a set one, at every
+        // keyframe, so a schedule cannot step past it partway through a run.
+        for (title, entries) in dyn_args.iter().filter(|(title, _)| title == "dt") {
+            for (time, value) in entries {
+                if let DynParamValue::Scalar(dt) = value {
+                    if let Err(refusal) = ppf_cts_core::datamodel::params::check_step_size(*dt) {
+                        panic!("dynamic parameter '{title}' at t = {time}: {refusal}");
+                    }
+                }
+            }
+        }
         dyn_args
     }
 
@@ -3621,6 +3792,26 @@ impl Scene {
             .map(|f| self.displaced_rest(f, &vert, &self.rest_vert_mask))
             .collect();
         Some((sched.times.clone(), frames))
+    }
+
+    /// The animated bending reference rest shape, if any: keyframe times
+    /// (seconds) and per-keyframe vertex sets in the same space as
+    /// `make_mesh`'s `bend_rest_vertex` (instancing displacement applied,
+    /// unmasked entries at the displaced initial vert), with the per-vertex
+    /// mask that selects the hinges it drives. The backend measures each
+    /// keyframe's hinge rest angles with `builder::hinge_rest_angle` and
+    /// interpolates them per step.
+    pub fn bend_rest_schedule(
+        &self,
+    ) -> Option<(Vec<f64>, Vec<Matrix3xX<f32>>, &[bool])> {
+        let sched = self.bend_rest_vert_schedule.as_ref()?;
+        let vert = self.displaced_vert();
+        let frames = sched
+            .frames
+            .iter()
+            .map(|f| self.displaced_rest(f, &vert, &self.bend_rest_vert_mask))
+            .collect();
+        Some((sched.times.clone(), frames, &self.bend_rest_vert_mask))
     }
 
     /// Where the prescribed path puts each fix-pinned vertex at `time`, as

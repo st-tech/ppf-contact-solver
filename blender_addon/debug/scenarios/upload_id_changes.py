@@ -1,7 +1,7 @@
 # File: scenarios/upload_id_changes.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Two atomic uploads back-to-back: the upload_id must change, but the
 # server's existing build (if any) must remain valid for the *previous*

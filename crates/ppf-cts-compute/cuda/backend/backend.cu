@@ -632,19 +632,27 @@ extern "C" BeStatus be_open(const BeBackendConfig *config,
     // measured on an L40S, where neither this line nor the open notice below
     // it appeared in a finished run's `stdout.log`. The record has to survive
     // into a crash report a user sends back, so it is emitted at 1 (`info`).
+    //
+    // The watchdog flag is a device attribute (`cudaDevAttrKernelExecTimeout`),
+    // not a `cudaDeviceProp` field, so it is a second query. Both must succeed
+    // for the line to be written: a line that printed a zero for a failed
+    // attribute query would state a watchdog that was never measured.
     cudaDeviceProp props{};
     int device_id = 0;
+    int kernel_timeout = 0;
     if (cudaGetDevice(&device_id) == cudaSuccess &&
-        cudaGetDeviceProperties(&props, device_id) == cudaSuccess) {
+        cudaGetDeviceProperties(&props, device_id) == cudaSuccess &&
+        cudaDeviceGetAttribute(&kernel_timeout, cudaDevAttrKernelExecTimeout,
+                               device_id) == cudaSuccess) {
         char line[256];
         std::snprintf(line, sizeof(line),
                       "cuda: device %d is %s, compute capability %d.%d, "
                       "tccDriver %d, kernelExecTimeoutEnabled %d",
                       device_id, props.name, props.major, props.minor,
-                      props.tccDriver, props.kernelExecTimeoutEnabled);
+                      props.tccDriver, kernel_timeout);
         emit_log(be, 1, line);
-        g_ppf_kernel_timeout_enabled = props.kernelExecTimeoutEnabled ? 1 : 0;
-        if (props.kernelExecTimeoutEnabled) {
+        g_ppf_kernel_timeout_enabled = kernel_timeout ? 1 : 0;
+        if (kernel_timeout) {
             emit_log(be, 1,
                      "cuda: the operating system's kernel-execution watchdog "
                      "is armed on this device");

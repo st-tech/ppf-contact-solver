@@ -1,7 +1,7 @@
 # File: scenarios/bl_contact_gap_unsolvable.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A contact gap the step size cannot solve is refused at Transfer, with the
 # two things that fix it, instead of ending the run in its first frames with

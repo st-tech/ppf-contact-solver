@@ -1,7 +1,7 @@
 # File: profile_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Profile operators for scene and material parameter profiles.
 

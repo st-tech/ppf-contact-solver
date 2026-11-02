@@ -1,7 +1,7 @@
 # File: scenarios/bl_pdrd_anchor_release.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # PDRD static anchor with a release frame, encoding round-trip.
 #

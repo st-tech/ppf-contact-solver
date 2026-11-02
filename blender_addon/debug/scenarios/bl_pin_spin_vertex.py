@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SPIN with VERTEX center: pivot is a specific Blender mesh vertex
 # (deforms with the mesh).
 

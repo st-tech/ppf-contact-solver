@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_deform_first_frame.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Frame 1 of a moving STATIC collider must land on its captured pose.
 #

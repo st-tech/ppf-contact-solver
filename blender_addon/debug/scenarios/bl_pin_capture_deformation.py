@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_capture_deformation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Capture Pin Deformation: a SHELL pin whose vertices move because of
 # an Armature modifier carries a depsgraph-baked per-frame buffer that
@@ -372,7 +372,7 @@ try:
     # ----- D2: pin overlay follows armature deformation ----------
     # Before the simulation produces a PC2 cache for the cloth, the
     # overlay must sample the depsgraph-evaluated mesh (the cloth's
-    # armature/lattice/etc.) so pin dots track the bone deformation
+    # Armature/Lattice/etc.) so pin dots track the bone deformation
     # in the viewport. The rest-pose fallback would leave them stuck
     # at the un-deformed positions. We exercise _build_pin_data
     # directly at a mid-bend frame and verify the dot for the moving

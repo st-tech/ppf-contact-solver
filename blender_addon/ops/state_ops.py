@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """State manipulation operators for bpy.ops.zozo_contact_solver.set().
 
 Provides a unified `set` operator that writes to scene.state, scene.ssh_state,

@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_keyframe_capture_hint.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A STATIC collider with only rigid loc/rot/scale keyframes does NOT need a
 # Capture Deformation pass: the encoder samples those keyframes via the

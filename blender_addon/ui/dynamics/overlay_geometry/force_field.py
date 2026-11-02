@@ -1,13 +1,13 @@
 # File: force_field.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The force field's Visualize overlay: arrows at a sparse PREVIEW grid around
 # the simulated objects, for the field at the current frame.
 #
 # DRAWN FROM THE SOLVER'S OWN LAWS (`core.force_field.evaluate`, through
-# `core/field_eval.py`, the frontend's reference evaluator byte for byte), in
+# `core/field_eval.py`, a copy of the frontend's reference evaluator), in
 # the record Transfer sends, so the arrows are what the solver computes at
 # those points, not a second reading of the settings. The preview resolution
 # is for drawing only: the solver evaluates a field at every vertex exactly.

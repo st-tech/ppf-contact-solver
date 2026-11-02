@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_spin.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling kinematic round-trip for a SPIN pin op about the pin
 # centroid, world_scaling=10. A rotation is scale-invariant in

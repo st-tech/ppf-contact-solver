@@ -1,8 +1,7 @@
 # File: client.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Transport + control primitives — talk to a running Blender addon over:
 
   * TCP debug/reload port (default 8765) — reload, exec, start-mcp.

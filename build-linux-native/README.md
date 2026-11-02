@@ -39,8 +39,8 @@ The build host provides:
 
 - Linux x86_64 or aarch64 with glibc. A musl host such as Alpine cannot build or
   run it.
-- A C and C++ compiler (when CUDA is built, one CUDA 12.8's nvcc accepts: GCC up
-  to 14), make, binutils (`readelf`, `strip`, `strings`, `objdump`), curl, tar,
+- A C and C++ compiler (when CUDA is built, one CUDA 13.2's nvcc accepts: GCC up
+  to 15), make, binutils (`readelf`, `strip`, `strings`, `objdump`), curl, tar,
   xz, git, rsync, `sha256sum` and pkg-config.
 - A Python 3.10 or newer for the developer environment and for `bundle.sh`'s
   ELF audit. On aarch64 its headers too (`python3-dev`), because a wheel is
@@ -65,7 +65,7 @@ ROCm SDK" below.
 It installs, each only when absent and each verified on every run:
 
 - Rust into `rust/`, only when the host has no cargo.
-- The CUDA 12.8 toolkit into `cuda/`, from NVIDIA's per-component archives, when
+- The CUDA 13.2 toolkit into `cuda/`, from NVIDIA's per-component archives, when
   CUDA is among the backends.
 - The ROCm SDK into `rocm/`, from AMD's TheRock tarball, when ROCm is among the
   backends. The math libraries the project neither compiles against nor ships
@@ -311,8 +311,10 @@ own Python environment for `python/`.
 
 ### What the GPU needs
 
-With the CUDA backend, the NVIDIA driver, 570 or newer, which is the oldest
-branch the CUDA 12.8 runtime supports. With the ROCm backend, an AMD GPU the
+With the CUDA backend, the NVIDIA driver, 580 or newer, which is the oldest
+branch the CUDA 13.2 runtime supports, and a GPU whose architecture
+`crates/ppf-cts-compute/cuda/cuda_arch.txt` lists (Turing or newer). An older
+GPU runs the CPU backend. With the ROCm backend, an AMD GPU the
 `amdgpu` kernel driver supports, and read access to `/dev/kfd`. The CPU backend
 runs without either, and a CPU-only distribution needs no GPU at all.
 
@@ -432,7 +434,7 @@ failure. Each check's output is `REPORT_DIR/<check>.log`.
 | `verify-floor` | a fresh AlmaLinux 8.10 container with no compiler | `verify-distribution.sh --cpu-scenes <input>` |
 | `build-linux-arm64` | the same container on a GitHub-hosted `ubuntu-24.04-arm` runner | the same three scripts, which build the CPU backend alone on aarch64 |
 | `verify-floor-arm64` | a fresh aarch64 AlmaLinux 8.10 container with no compiler | `verify-distribution.sh --cpu-scenes <input>` |
-| `verify-linux` | an EC2 GPU instance from a plain Ubuntu 24.04 image with only an NVIDIA server driver: the lowest branch at or above 570 that has a prebuilt module for the image's kernel | `verify-distribution.sh --driver-only --cuda-scenes <input>`, detached and polled |
+| `verify-linux` | an EC2 GPU instance from a plain Ubuntu 24.04 image with only an NVIDIA server driver: the lowest branch at or above 580 that has a prebuilt module for the image's kernel | `verify-distribution.sh --driver-only --cuda-scenes <input>`, detached and polled |
 | `release` | a short job | tag and GitHub release, unless a dry run |
 
 gcc-toolset links the libstdc++ symbols newer than the system's statically,

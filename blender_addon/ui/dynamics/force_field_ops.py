@@ -1,7 +1,7 @@
 # File: force_field_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The force field's two operators: a new exact-script Text, and Compile and
 # Check, which asks the connected server to compile the script with the same

@@ -1,7 +1,7 @@
 # File: intersection_allowance_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Add / remove / remove-all for the object subset each intersection allowance
 # is narrowed to. See models/intersection_allowances.py for what the subset

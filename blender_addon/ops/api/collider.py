@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Invisible collider proxies (walls, spheres) and shared collider param proxy.
 
 See :mod:`blender_addon.ops.api` for the package overview.

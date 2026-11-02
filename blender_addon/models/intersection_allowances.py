@@ -1,7 +1,7 @@
 # File: intersection_allowances.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The four group-level intersection allowances of issue #138, and which of a
 # group's objects each one reaches.

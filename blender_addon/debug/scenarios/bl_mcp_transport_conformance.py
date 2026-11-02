@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_transport_conformance.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MCP Streamable HTTP transport conformance, against a real Blender.
 #

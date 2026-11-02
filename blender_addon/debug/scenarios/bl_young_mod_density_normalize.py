@@ -1,7 +1,7 @@
 # File: scenarios/bl_young_mod_density_normalize.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end of the per-group ``young_mod_density_normalized`` toggle.
 # The solver consumes "young-mod" as a density-normalized value (Pa/rho).

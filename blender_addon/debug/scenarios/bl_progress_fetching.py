@@ -1,7 +1,7 @@
 # File: scenarios/bl_progress_fetching.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # UX progress: ``Fetching Animation`` progress bar.
 #

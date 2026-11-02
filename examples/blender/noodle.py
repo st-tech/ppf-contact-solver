@@ -1,7 +1,7 @@
 # File: noodle.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch inside Blender (Scripting workspace, or `blender --python noodle.py`)
 # to build the same noodles-into-bowl scene as examples/noodle.ipynb,

@@ -1,5 +1,5 @@
 # File: core/migrate.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # UUID migration for old .blend files.
 # Assigns UUIDs to all name-based references so the UUID system works.

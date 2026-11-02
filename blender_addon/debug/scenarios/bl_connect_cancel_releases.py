@@ -1,7 +1,7 @@
 # File: scenarios/bl_connect_cancel_releases.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # CANCEL MUST FREE THE ADD-ON, AND AN ABANDONED ATTEMPT MUST NOT LAND
 # (``blender_addon/core/effect_runner.py``, ``blender_addon/ui/connection_ops.py``).

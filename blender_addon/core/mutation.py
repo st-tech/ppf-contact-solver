@@ -1,7 +1,7 @@
 # File: mutation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Unified state-mutation surface.  The three user-visible callers
 # (Blender UI operators, MCP handlers for LLM clients, Python API for

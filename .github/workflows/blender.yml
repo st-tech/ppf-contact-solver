@@ -84,6 +84,8 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+          - ap-northeast-3
+          - ap-northeast-2
       # A RE-RUN AFTER A FIX SHOULD NOT COST THE WHOLE SET. Naming the scenarios
       # that failed runs only those on linux-gpu and windows-gpu (the rig
       # takes names on its command line); macos-ssh always runs its two SSH
@@ -394,14 +396,14 @@ jobs:
           # exit, which puts them after the subprocess output they describe.
           export PYTHONUNBUFFERED=1
           # The Deep Learning AMI ships several CUDA toolkits and points
-          # /usr/local/cuda at the newest one (13.2 on this image). Every
-          # host of this project builds against 12.8, and the solver's
-          # the CUDA Makefile invokes /usr/local/cuda/bin/nvcc by absolute
-          # path, so the toolkit is selected at that symlink.
-          echo "=== select CUDA 12.8 ==="
-          test -x /usr/local/cuda-12.8/bin/nvcc
+          # /usr/local/cuda at whichever it prefers. Every host of this
+          # project builds against 13.2, and the solver's CUDA Makefile
+          # invokes /usr/local/cuda/bin/nvcc by absolute path, so the toolkit
+          # is selected at that symlink.
+          echo "=== select CUDA 13.2 ==="
+          test -x /usr/local/cuda-13.2/bin/nvcc
           test -L /usr/local/cuda
-          sudo ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
+          sudo ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
           export PATH=/usr/local/cuda/bin:$PATH
           nvcc --version | tail -n 2
           echo "=== warmup.py (venv + deps) ==="
@@ -778,14 +780,14 @@ jobs:
           # exit, which puts them after the subprocess output they describe.
           export PYTHONUNBUFFERED=1
           # The Deep Learning AMI ships several CUDA toolkits and points
-          # /usr/local/cuda at the newest one (13.2 on this image). Every
-          # host of this project builds against 12.8, and the solver's
-          # the CUDA Makefile invokes /usr/local/cuda/bin/nvcc by absolute
-          # path, so the toolkit is selected at that symlink.
-          echo "=== select CUDA 12.8 ==="
-          test -x /usr/local/cuda-12.8/bin/nvcc
+          # /usr/local/cuda at whichever it prefers. Every host of this
+          # project builds against 13.2, and the solver's CUDA Makefile
+          # invokes /usr/local/cuda/bin/nvcc by absolute path, so the toolkit
+          # is selected at that symlink.
+          echo "=== select CUDA 13.2 ==="
+          test -x /usr/local/cuda-13.2/bin/nvcc
           test -L /usr/local/cuda
-          sudo ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
+          sudo ln -sfn /usr/local/cuda-13.2 /usr/local/cuda
           export PATH=/usr/local/cuda/bin:$PATH
           nvcc --version | tail -n 2
           echo "=== warmup.py (venv + deps) ==="

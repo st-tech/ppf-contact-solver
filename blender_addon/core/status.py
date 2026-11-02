@@ -1,7 +1,7 @@
 # File: status.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Status enums, dataclasses, and utilities extracted from core/client.py.
 

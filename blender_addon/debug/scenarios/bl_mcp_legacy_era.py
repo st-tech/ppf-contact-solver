@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_legacy_era.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The 2025-06-18 protocol era, against a real Blender.
 #

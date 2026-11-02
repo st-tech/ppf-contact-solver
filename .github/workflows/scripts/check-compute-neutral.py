@@ -184,6 +184,12 @@ MECHANISM = {
         "solver-adjacent strings are MSL reserved words",
     "seam/test_kernelgen.py":
         "PLATFORM: the generator's own tests",
+    "seam/kernelgen_deps.py":
+        "PLATFORM: runs the generator under an audit hook and records what it "
+        "read, so a cached rendering is reused only while its inputs are unchanged",
+    "src/build/kernelgen.rs":
+        "PLATFORM: runs the generator over many sources in parallel and reuses a "
+        "cached rendering whose recorded inputs are unchanged",
 
     # ---- recipes ------------------------------------------------------
     "cpu/tests/Makefile":

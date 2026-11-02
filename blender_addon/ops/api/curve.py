@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """``_CurveBuilder``: build a multi-spline Bezier curve object.
 
 See :mod:`blender_addon.ops.api` for the package overview.

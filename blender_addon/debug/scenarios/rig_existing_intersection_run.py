@@ -1,7 +1,7 @@
 # File: scenarios/rig_existing_intersection_run.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What the solver does with a scene that starts tangled under Allow Existing
 # Intersections, in one solve: the tangled pair runs with no NEW penetration

@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_snap_guard.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Snap-side coverage for {SOLID,SHELL,ROD}-STATIC cross-stitch. This is a
 # Blender-only scenario (no solver build / server run), so it is fast and

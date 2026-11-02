@@ -1,7 +1,7 @@
 # File: addon_host_tests/_force_field_addon_surfaces_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The add-on surfaces that report force fields, on a plain interpreter:
 #

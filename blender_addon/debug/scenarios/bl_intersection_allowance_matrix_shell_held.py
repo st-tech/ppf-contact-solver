@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowance_matrix_shell_held.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The intersection allowance matrix, HELD object a SHELL: a 1 m grid lying
 # flat at z = 0, fully pinned with a 1 mm MOVE_BY so it stays a dynamic

@@ -1,7 +1,7 @@
 # File: scenarios/bl_connect_win_native.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Windows-only counterpart to bl_connect_linux_native. Sets the
 # addon's backend to WIN_NATIVE and points it at the worker's debug

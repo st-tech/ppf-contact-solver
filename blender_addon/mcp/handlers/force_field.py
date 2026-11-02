@@ -1,7 +1,7 @@
 # File: force_field.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MCP tools for the scene's force fields (issues #151 and #114): the settings
 # the Force Fields panel shows, and the server's Compile and Check.

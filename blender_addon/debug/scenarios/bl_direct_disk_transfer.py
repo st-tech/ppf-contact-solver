@@ -1,7 +1,7 @@
 # File: scenarios/bl_direct_disk_transfer.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Co-located direct-disk transfer coverage.
 #

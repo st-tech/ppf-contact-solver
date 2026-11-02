@@ -1,7 +1,7 @@
 # File: scenarios/bl_enum_props_guard.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Structural-enforcement guard for the dynamic-EnumProperty freed-memory bug.
 #

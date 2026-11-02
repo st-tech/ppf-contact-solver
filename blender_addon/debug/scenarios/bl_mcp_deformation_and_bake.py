@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_deformation_and_bake.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Captured deformation and baking over MCP.
 #

@@ -1,7 +1,7 @@
 # File: scenarios/bl_sand_roundtrip.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # End-to-end round-trip for the SAND granular type. A closed mesh is
 # Converted into a particle mesh (N loose verts seeded inside it), assigned

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# License: GPL-3.0-or-later
 # Launch Blender with the addon and auto-start Debug + MCP servers.
 
 set -u

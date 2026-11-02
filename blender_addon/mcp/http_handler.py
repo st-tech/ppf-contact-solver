@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """HTTP handler implementing the MCP Streamable HTTP transport.
 
 Spec: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports

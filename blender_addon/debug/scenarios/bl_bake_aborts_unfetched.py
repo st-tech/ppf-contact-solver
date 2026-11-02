@@ -1,7 +1,7 @@
 # File: scenarios/bl_bake_aborts_unfetched.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Bake Animation must refuse to run while the connected run still has
 # animation frames that were not fetched into local PC2: baking then

@@ -92,7 +92,7 @@ TRIANGLE_COMMIT=595b43eb6682992a0b1012b9671bf860c0e6ae56
 URL_TRIANGLE_C_GIT=https://github.com/drufat/triangle-c
 TRIANGLE_C_COMMIT=8b9e1046e5cddab1298d3204f10c93665836cf99
 
-# THE CUDA 12.8 TOOLKIT, AS NVIDIA'S PER-COMPONENT REDISTRIBUTABLE ARCHIVES.
+# THE CUDA 13.2 TOOLKIT, AS NVIDIA'S PER-COMPONENT REDISTRIBUTABLE ARCHIVES.
 #
 # One set per architecture, read only when CUDA is among the backends
 # (scripts/platform.sh): NVIDIA's linux-x86_64 platform, and linux-sbsa, its
@@ -100,45 +100,65 @@ TRIANGLE_C_COMMIT=8b9e1046e5cddab1298d3204f10c93665836cf99
 # component carries the _<ARCH_KEY> suffix of the architecture it runs on.
 #
 # warmup.sh extracts every URL_CUDA_*_<ARCH_KEY> entry for its host into
-# build-linux-native/cuda, with no installer and no root. They are the four
-# pieces .github/workflows/both-backends.yml installs by apt for the same build:
-# the compiler, the runtime headers and library, and cuobjdump and nvdisasm,
-# which the release build's FP64 SASS guard reads. Adding a component is adding
-# one entry per architecture here; warmup.sh iterates the URL_CUDA_ keys.
+# build-linux-native/cuda, with no installer and no root. They are the pieces a
+# compile and the release build's checks need: the compiler driver (cuda_nvcc),
+# the compiler's runtime headers (cuda_crt, include/crt), the device compiler
+# (libnvvm, nvvm/), the runtime headers and library (cuda_cudart), and cuobjdump
+# and nvdisasm, which the release build's FP64 SASS guard reads. cuda_crt and
+# libnvvm are separate archives in this release; nvcc fails without either.
+# cuda_cccl is not needed: no header the solver includes, cuda_runtime.h and
+# what it pulls in, reaches <nv/...> or <cuda/...> (checked against a 13.2
+# install on 2026-10-29). Adding a component is adding one entry per
+# architecture here; warmup.sh iterates the URL_CUDA_ keys.
 #
-# The versions are the components of the CUDA 12.8.1 release. The hashes are
-# the sha256 fields of NVIDIA's redistrib_12.8.1.json manifest for these files.
-# The linux-sbsa hashes were read on 2026-09-15 from the verbatim copy of that
-# manifest nixpkgs keeps (pkgs/development/cuda-modules/_cuda/manifests/cuda/),
-# after its linux-x86_64 hashes were checked equal to the four pinned below, and
-# warmup.sh verifies every downloaded archive against them.
-URL_CUDA_NVCC_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-12.8.93-archive.tar.xz
-FILE_CUDA_NVCC_X86_64=cuda_nvcc-linux-x86_64-12.8.93-archive.tar.xz
-SHA256_CUDA_NVCC_X86_64=9961b3484b6b71314063709a4f9529654f96782ad39e72bf1e00f070db8210d3
-URL_CUDA_NVCC_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-sbsa/cuda_nvcc-linux-sbsa-12.8.93-archive.tar.xz
-FILE_CUDA_NVCC_AARCH64=cuda_nvcc-linux-sbsa-12.8.93-archive.tar.xz
-SHA256_CUDA_NVCC_AARCH64=dc0b713ce69fd921aa53ac68610717d126fc273a3c554b0465cf44d7e379f467
+# The versions are the components of the CUDA 13.2.2 release (13.2.86). The
+# hashes are the sha256 fields of NVIDIA's redistrib_13.2.2.json manifest for
+# these files, read on 2026-10-29 from the verbatim copy of that manifest
+# nixpkgs keeps (pkgs/development/cuda-modules/_cuda/manifests/cuda/). They were
+# NOT cross-checked against NVIDIA's own copy, which the host that read them
+# could not reach. warmup.sh verifies every downloaded archive against them, so
+# a mismatch stops the warmup by name.
+URL_CUDA_NVCC_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_NVCC_X86_64=cuda_nvcc-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_NVCC_X86_64=b04e5ca5b41f8b5629ce5f16930920e6af437f32c9777fcb67e0361f732b6f43
+URL_CUDA_NVCC_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-sbsa/cuda_nvcc-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_NVCC_AARCH64=cuda_nvcc-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_NVCC_AARCH64=0ae0716074fb8ca9a2eaebb0acd1425d8a41904ace1320793bbad270c3ce043f
 
-URL_CUDA_CUDART_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.8.90-archive.tar.xz
-FILE_CUDA_CUDART_X86_64=cuda_cudart-linux-x86_64-12.8.90-archive.tar.xz
-SHA256_CUDA_CUDART_X86_64=8d566b5fe745c46842dc16945cf36686227536decd2302c372be86da37faca68
-URL_CUDA_CUDART_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-sbsa/cuda_cudart-linux-sbsa-12.8.90-archive.tar.xz
-FILE_CUDA_CUDART_AARCH64=cuda_cudart-linux-sbsa-12.8.90-archive.tar.xz
-SHA256_CUDA_CUDART_AARCH64=9e54c6686b193efa9642e7f6609ce78b064c5d576946478bcff4c024e1acdea7
+URL_CUDA_CRT_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-x86_64/cuda_crt-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_CRT_X86_64=cuda_crt-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_CRT_X86_64=174ad29ab90c9301bd25f32f935345e65f19fbb0f39c15788daae25b0e924892
+URL_CUDA_CRT_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-sbsa/cuda_crt-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_CRT_AARCH64=cuda_crt-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_CRT_AARCH64=c7a8f385c86413bba4d2c522d32ec7750caed027cb82c121574f611abc808ef8
 
-URL_CUDA_CUOBJDUMP_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-12.8.90-archive.tar.xz
-FILE_CUDA_CUOBJDUMP_X86_64=cuda_cuobjdump-linux-x86_64-12.8.90-archive.tar.xz
-SHA256_CUDA_CUOBJDUMP_X86_64=dbf41355a0f7a8aa491c1839a6c6ff8df02cdb6c6eefd66360543616c1b4980f
-URL_CUDA_CUOBJDUMP_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-sbsa/cuda_cuobjdump-linux-sbsa-12.8.90-archive.tar.xz
-FILE_CUDA_CUOBJDUMP_AARCH64=cuda_cuobjdump-linux-sbsa-12.8.90-archive.tar.xz
-SHA256_CUDA_CUOBJDUMP_AARCH64=8be3b7eb313c65353ccffdca94698c9f207e2889444ec1d38f41917654b6d234
+URL_CUDA_NVVM_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-x86_64/libnvvm-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_NVVM_X86_64=libnvvm-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_NVVM_X86_64=029fc2a43904a2208a83dfd5834c4c343394d1117279f849863ae94208a88b8a
+URL_CUDA_NVVM_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-sbsa/libnvvm-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_NVVM_AARCH64=libnvvm-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_NVVM_AARCH64=14eb9d4d180f8466b3eb25e6801f48b7790b614a19528b876ec5d1b98abf05a1
 
-URL_CUDA_NVDISASM_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-x86_64/cuda_nvdisasm-linux-x86_64-12.8.90-archive.tar.xz
-FILE_CUDA_NVDISASM_X86_64=cuda_nvdisasm-linux-x86_64-12.8.90-archive.tar.xz
-SHA256_CUDA_NVDISASM_X86_64=8ac63f4079c47707ec958af3a97ceeb18194e16827a2766058f5872f6c3412ae
-URL_CUDA_NVDISASM_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-sbsa/cuda_nvdisasm-linux-sbsa-12.8.90-archive.tar.xz
-FILE_CUDA_NVDISASM_AARCH64=cuda_nvdisasm-linux-sbsa-12.8.90-archive.tar.xz
-SHA256_CUDA_NVDISASM_AARCH64=250ae30e878b0c4c1553e7c7f28c2c763902c807b5f493ebc16e6e10c71213f2
+URL_CUDA_CUDART_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_CUDART_X86_64=cuda_cudart-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_CUDART_X86_64=d6be2b3546fa93e5dec9e3d118d31f9540d0b7af5319ee3c6726f202dfc5b5d4
+URL_CUDA_CUDART_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-sbsa/cuda_cudart-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_CUDART_AARCH64=cuda_cudart-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_CUDART_AARCH64=30d07b79d832b517cedced78a9e1aa63ebfaa8d71e4df6d1943cdf33fe563400
+
+URL_CUDA_CUOBJDUMP_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_CUOBJDUMP_X86_64=cuda_cuobjdump-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_CUOBJDUMP_X86_64=0731c5f0d119c1361ce6bccb246b22beab4c08b0efc1423cb41f5f9682f8828e
+URL_CUDA_CUOBJDUMP_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-sbsa/cuda_cuobjdump-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_CUOBJDUMP_AARCH64=cuda_cuobjdump-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_CUOBJDUMP_AARCH64=f62dde26f87a313b63296a7ac2845c68f05734beffadbec57c77def3da8bf245
+
+URL_CUDA_NVDISASM_X86_64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-x86_64/cuda_nvdisasm-linux-x86_64-13.2.86-archive.tar.xz
+FILE_CUDA_NVDISASM_X86_64=cuda_nvdisasm-linux-x86_64-13.2.86-archive.tar.xz
+SHA256_CUDA_NVDISASM_X86_64=a920f95954b031c2437b0888e92e0d52f78ee84bf83ac47cfa9e28cb3de7a69c
+URL_CUDA_NVDISASM_AARCH64=https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-sbsa/cuda_nvdisasm-linux-sbsa-13.2.86-archive.tar.xz
+FILE_CUDA_NVDISASM_AARCH64=cuda_nvdisasm-linux-sbsa-13.2.86-archive.tar.xz
+SHA256_CUDA_NVDISASM_AARCH64=70da552fa1ac4d96d0e37954b2a27bc9c9a1dbfb460c7de6a9a467c003b4015e
 
 # THE ROCm SDK, AS AMD'S TheRock DISTRIBUTION TARBALL.
 #

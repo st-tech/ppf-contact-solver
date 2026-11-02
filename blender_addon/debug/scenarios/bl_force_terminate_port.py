@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_terminate_port.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Force Terminate Process button ends the local solver server from the state the
 # add-on cannot otherwise leave.

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Session store for the Streamable HTTP MCP transport.
 
 The server answers every JSON-RPC request synchronously over the POST

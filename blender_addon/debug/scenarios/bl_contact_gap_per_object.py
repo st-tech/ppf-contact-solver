@@ -1,7 +1,7 @@
 # File: scenarios/bl_contact_gap_per_object.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A relative contact gap is a fraction of EACH OBJECT'S OWN bounding-box
 # diagonal, and each object is solved at its own.

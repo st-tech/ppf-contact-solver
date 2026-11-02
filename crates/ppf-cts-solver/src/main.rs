@@ -157,9 +157,9 @@ fn main() {
     // this binary keys off `program_args.load > 0` for the resume
     // path, so resolve the sentinel to a real frame index before
     // anything reads it. Without this, `--load -1` falls into the
-    // fresh-start branch *and* trips `remove_files("vert"|"state",
-    // ...)` in `setup()` starting at index 0, which destroys the
-    // very checkpoint and vert frames the user wanted to resume from.
+    // fresh-start branch, and the discard past the resume point would
+    // start at index 0, which destroys the very checkpoint and vert
+    // frames the user wanted to resume from.
     if program_args.load < 0 {
         let output_dir = std::path::Path::new(&program_args.output);
         let saved = ppf_cts_core::datamodel::list_saved_states(output_dir);
@@ -174,6 +174,19 @@ fn main() {
                 );
                 std::process::exit(1);
             }
+        }
+    }
+    // THE RUN'S COMPLETION MARKERS GO FIRST, before anything can refuse this
+    // launch. A marker left by the previous run in this directory would
+    // otherwise survive a launch that panics before `Backend::run` reaches
+    // its own removal, and a caller polling for it would read the refused
+    // resume as finished.
+    for marker in [ppf_cts_formats::files::FINISHED, ppf_cts_formats::files::INITIALIZE_FINISH] {
+        let path = std::path::Path::new(&program_args.output).join(marker);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!("cannot remove the stale {}: {err}", path.display()),
         }
     }
     // Initialize the logger before emitting any diagnostics. The git
@@ -223,19 +236,6 @@ fn main() {
             program_args.output,
             ppf_cts_formats::files::DATASET
         )));
-        // A SCENE WITH COSSERAT RODS IS NOT RESUMED. Its material frames are
-        // run state the checkpoint does not carry: the dataset holds them as
-        // built, so a resume would restart every frame at its authored
-        // orientation under a pose that has moved on, and the first step would
-        // spend its shear and twist energy snapping them back.
-        if dataset.cosserat_edge.size > 0 {
-            panic!(
-                "this scene carries {} Cosserat rod frames, which a checkpoint does not \
-                 save yet, so it cannot be resumed from {}; run it from the start",
-                dataset.cosserat_edge.size,
-                ppf_cts_formats::files::state_filename(program_args.load)
-            );
-        }
         // The dataset's rest shape (the `inv_rest*` matrices and rest angles)
         // is the build-time one, because the dataset is written once. A scene
         // whose rest shape creeps also writes it per frame, so overwrite those
@@ -278,6 +278,63 @@ fn main() {
         // present" cannot distinguish "never written" from "deleted".
         info!("Loading backend state...");
         let mut backend = backend::Backend::load_state(program_args.load, &program_args.output);
+        // THE FRICTION'S MEMORY, written beside every checkpoint of a scene in
+        // which some pair can carry friction. A checkpoint of such a scene
+        // without one cannot be resumed as it ran: every contact that was
+        // sticking would restart from zero slip, so it is refused by name.
+        let path_friction = format!(
+            "{}/{}",
+            program_args.output,
+            ppf_cts_formats::files::friction_filename(program_args.load)
+        );
+        if std::path::Path::new(&path_friction).exists() {
+            info!("Loading friction memory from {path_friction}...");
+            let memory: driver::friction_memory::FrictionMemoryState =
+                read(&read_gz(&path_friction));
+            if let Err(fatal) = memory.check(dataset.vertex.curr.size as usize) {
+                panic!("{path_friction} cannot be resumed: {}", fatal.detail);
+            }
+            backend.friction_memory = Some(memory);
+        } else if driver::scene_has_friction(&dataset) {
+            panic!(
+                "checkpoint {} has no matching {}: the scene carries friction, and where its \
+                 contacts were sticking at this frame is not on disk (a checkpoint written \
+                 before the solver kept that memory has none), so it cannot be resumed; run \
+                 it from the start",
+                ppf_cts_formats::files::state_filename(program_args.load),
+                ppf_cts_formats::files::friction_filename(program_args.load)
+            );
+        }
+        // THE ROTATIONAL RUN STATE (Cosserat frames and their history, grain
+        // spin, PDRD running rotation), written beside every checkpoint of a
+        // scene that carries any. A checkpoint of such a scene without it, or
+        // with one sized for another scene, would restart each of them from its
+        // authored value under a pose that has moved on, so it is refused by
+        // name, here, before anything in the directory is discarded.
+        let path_run = format!(
+            "{}/{}",
+            program_args.output,
+            ppf_cts_formats::files::runstate_filename(program_args.load)
+        );
+        let run_kinds = driver::run_state::RunStateKinds::of_dataset(&dataset);
+        if std::path::Path::new(&path_run).exists() {
+            info!("Loading run state from {path_run}...");
+            let run: driver::run_state::RunState = read(&read_gz(&path_run));
+            if let Err(fatal) = run.check(run_kinds) {
+                panic!("{path_run} cannot be resumed: {}", fatal.detail);
+            }
+            backend.run_state = Some(run);
+        } else if run_kinds.any() {
+            panic!(
+                "checkpoint {} has no matching {}: the scene carries {}, which a step reads \
+                 from the step before it, and their state at this frame is not on disk (a \
+                 checkpoint written before the solver kept it has none), so it cannot be \
+                 resumed; run it from the start",
+                ppf_cts_formats::files::state_filename(program_args.load),
+                ppf_cts_formats::files::runstate_filename(program_args.load),
+                run_kinds.describe()
+            );
+        }
         info!("Data loaded successfully");
         param.time = backend.state.time;
         param.time_f32 = param.time as f32;
@@ -580,54 +637,73 @@ fn prune_out_streams(output: &str, load: i32) {
     }
 }
 
-fn setup(program_args: &ProgramArgs) {
-    if program_args.load == 0 {
-        remove_files_in_dir(&program_args.output).unwrap();
-    } else {
-        remove_files(&program_args.output, "vert", "bin", program_args.load);
-        remove_files(&program_args.output, "display_pin", "bin", program_args.load);
-        remove_files(
-            &program_args.output,
-            "statistics",
-            "cbor",
-            program_args.load,
-        );
-        // State checkpoints are sparse on disk: save_state writes
-        // state_<N>.bin.gz only every auto_save frames, and
-        // remove_old_files keeps just keep_states of them at the
-        // highest indices. So the indices are scattered high values,
-        // not contiguous from load+1. A contiguous break-on-gap scan
-        // (like the vert one above) would stop at the first absent
-        // index after the resume point and leave newer checkpoints
-        // behind, which a later `--load -1` (resume from latest) would
-        // then resolve to and jump past the frame the user branched
-        // from. Enumerate the actual on-disk set and drop every index
-        // newer than the resume frame instead of assuming contiguity.
-        //
-        // The per-frame rest shape is dropped in lockstep with the checkpoint it
-        // belongs to. Both sets are written at the same frames and pruned to
-        // the same `keep_states` count, so letting one outlive the other would
-        // desync the two budgets: an orphaned `plastic_<n>` above the resume
-        // point pushes the retention pass into deleting the OLDEST plastic
-        // file, whose `state_<n>` is still on disk, and resuming from that
-        // frame would then fail on a rest shape that no longer exists.
-        let output_dir = std::path::Path::new(&program_args.output);
-        for n in ppf_cts_core::datamodel::list_saved_states(output_dir) {
-            if (n as i32) > program_args.load {
-                for name in [
-                    ppf_cts_formats::files::state_filename(n as i32),
-                    ppf_cts_formats::files::plastic_filename(n as i32),
-                ] {
-                    let path = format!("{}/{name}", program_args.output);
-                    std::fs::remove_file(path).unwrap_or(());
-                }
+/// Discard what a resumed run will write again: every frame, statistics record
+/// and checkpoint past the resume point, and the stream rows after it.
+///
+/// ONLY ONCE THE RESUME CAN NO LONGER BE REFUSED. `Backend::run` calls it after
+/// `initialize()` has accepted the resumed scene and the checkpoint's friction
+/// memory and run state are installed, before the first step writes anything;
+/// see `setup`.
+pub(crate) fn discard_after_resume_point(program_args: &ProgramArgs) {
+    remove_files(&program_args.output, "vert", "bin", program_args.load);
+    remove_files(&program_args.output, "display_pin", "bin", program_args.load);
+    remove_files(
+        &program_args.output,
+        "statistics",
+        "cbor",
+        program_args.load,
+    );
+    // State checkpoints are sparse on disk: save_state writes
+    // state_<N>.bin.gz only every auto_save frames, and
+    // remove_old_files keeps just keep_states of them at the
+    // highest indices. So the indices are scattered high values,
+    // not contiguous from load+1. A contiguous break-on-gap scan
+    // (like the vert one above) would stop at the first absent
+    // index after the resume point and leave newer checkpoints
+    // behind, which a later `--load -1` (resume from latest) would
+    // then resolve to and jump past the frame the user branched
+    // from. Enumerate the actual on-disk set and drop every index
+    // newer than the resume frame instead of assuming contiguity.
+    //
+    // The per-frame rest shape, friction memory and run state are dropped in lockstep
+    // with the checkpoint they belong to. Both sets are written at the same frames and pruned to
+    // the same `keep_states` count, so letting one outlive the other would
+    // desync the two budgets: an orphaned `plastic_<n>` above the resume
+    // point pushes the retention pass into deleting the OLDEST plastic
+    // file, whose `state_<n>` is still on disk, and resuming from that
+    // frame would then fail on a rest shape that no longer exists.
+    let output_dir = std::path::Path::new(&program_args.output);
+    for n in ppf_cts_core::datamodel::list_saved_states(output_dir) {
+        if (n as i32) > program_args.load {
+            for name in [
+                ppf_cts_formats::files::state_filename(n as i32),
+                ppf_cts_formats::files::plastic_filename(n as i32),
+                ppf_cts_formats::files::friction_filename(n as i32),
+                ppf_cts_formats::files::runstate_filename(n as i32),
+            ] {
+                let path = format!("{}/{name}", program_args.output);
+                std::fs::remove_file(path).unwrap_or(());
             }
         }
-        // The .out streams in output/data are append-only, so the resume
-        // run would re-append rows for frames load+1.. that the original
-        // run already recorded. Prune them to frames/time <= the
-        // checkpoint so resumed frames don't produce duplicate keys.
-        prune_out_streams(&program_args.output, program_args.load);
+    }
+    // The .out streams in output/data are append-only, so the resume
+    // run would re-append rows for frames load+1.. that the original
+    // run already recorded. Prune them to frames/time <= the
+    // checkpoint so resumed frames don't produce duplicate keys.
+    prune_out_streams(&program_args.output, program_args.load);
+}
+
+fn setup(program_args: &ProgramArgs) {
+    // A RESUME DISCARDS NOTHING HERE. What lies past the resume point (the
+    // frames, the newer checkpoints, the stream rows) is the previous run's
+    // only copy of its results, and a resume can still be refused after this:
+    // a checkpoint missing a file its scene needs, a scene `initialize()`
+    // declines. So the discard waits until every refusal has had its chance
+    // (`discard_after_resume_point`, called by `Backend::run` once the resumed
+    // scene is initialized and its checkpoint installed), and a refused resume
+    // leaves the directory as it found it.
+    if program_args.load == 0 {
+        remove_files_in_dir(&program_args.output).unwrap();
     }
 
     if !std::path::Path::new(&program_args.output).exists() {

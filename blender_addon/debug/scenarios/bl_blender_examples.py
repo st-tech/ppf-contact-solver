@@ -1,7 +1,7 @@
 # File: scenarios/bl_blender_examples.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Every script in `examples/blender/` built, transferred, solved and fetched
 # through the add-on, the way an artist runs one.

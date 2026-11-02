@@ -1,7 +1,7 @@
 # File: scenarios/bl_geometry_hash.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Mesh-topology hash propagation. The addon stores a topology summary
 # in ``state.mesh_hash_json`` on every transfer; ``validate_mesh_hash``

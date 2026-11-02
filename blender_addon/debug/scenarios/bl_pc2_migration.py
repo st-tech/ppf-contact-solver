@@ -1,7 +1,7 @@
 # File: scenarios/bl_pc2_migration.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # PC2 cache migration on first save.
 #

@@ -1,7 +1,7 @@
 # File: sand_ops.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Convert a closed solid MESH into a "particle mesh": a faceless mesh of
 # N loose vertices (grain centers) plus a Geometry-Nodes "Particle Mesh"

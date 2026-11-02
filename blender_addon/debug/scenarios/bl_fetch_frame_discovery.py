@@ -1,7 +1,7 @@
 # File: scenarios/bl_fetch_frame_discovery.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What the fetch asks the session directory for, and whether the answer
 # reaches the fetch: ``EffectRunner._count_remote_frames``.

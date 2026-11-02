@@ -1,7 +1,7 @@
 # File: scenarios/bl_solid_spatial_material_map.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A SOLID's painted weights have to reach its TETRAHEDRA, interior included.
 #

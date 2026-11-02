@@ -135,6 +135,32 @@ pub enum ParamError {
     NotFound(String),
     #[error("Unknown object type: {0}")]
     UnknownObjectKind(String),
+    #[error("Step size {0} is outside (0, {max}] seconds: the solver takes no step larger than {max} s, because the solve a larger one needs is not known to converge", max = MAX_STEP_SIZE)]
+    StepSize(f64),
+}
+
+/// THE LARGEST STEP SIZE (`dt`, seconds) THE SOLVER ACCEPTS, the one home of the
+/// number: the solver checks a scene and every animated value against it at
+/// load, the frontend at `param.set` and at a `dyn` change, and the Blender
+/// add-on's Step Size field is capped at it (`blender_addon/core/limits.py`
+/// carries the add-on's copy, which `addon_host_tests` hold equal to this).
+///
+/// A LIMIT FOR SAFETY, NOT AN ACCURACY TARGET. Measured on a bias strip of
+/// Cosserat yarns, the first solve of a dt 0.1 run meets the linear solver's
+/// iteration cap on the rigid motions of yarns no clamp reaches, while dt 0.04
+/// and below converge with room to spare, and a frictional contact past its
+/// cone releases over a number of STEPS, so a large step also takes longer to
+/// reach the same slide. The project owner set the limit at 0.02 to keep a
+/// margin below what was measured to work.
+pub const MAX_STEP_SIZE: f64 = 0.02;
+
+/// Refuse a step size outside `(0, MAX_STEP_SIZE]`. A NaN fails both tests.
+pub fn check_step_size(dt: f64) -> Result<(), ParamError> {
+    if dt > 0.0 && dt <= MAX_STEP_SIZE {
+        Ok(())
+    } else {
+        Err(ParamError::StepSize(dt))
+    }
 }
 
 impl ParamHolder {
@@ -152,9 +178,17 @@ impl ParamHolder {
 
     /// Set an existing key. Returns the holder for chaining.
     pub fn set(&mut self, key: &str, value: impl Into<ParamValue>) -> Result<&mut Self, ParamError> {
+        let value = value.into();
+        if key == "dt" {
+            match value {
+                ParamValue::Float(dt) => check_step_size(dt)?,
+                ParamValue::Int(dt) => check_step_size(dt as f64)?,
+                _ => {}
+            }
+        }
         match self.entries.get_mut(key) {
             Some(e) => {
-                e.value = value.into();
+                e.value = value;
                 Ok(self)
             }
             None => Err(ParamError::NotFound(key.to_string())),
@@ -228,9 +262,9 @@ pub fn app_param() -> ParamHolder {
     m.insert("playback".into(), entry(1.0f64, "Playback Speed",
         "Playback speed. 1.0 is normal, >1.0 is faster, <1.0 is slower."));
     m.insert("min-newton-steps".into(), entry(0i64, "Lower Bound of Newton Steps",
-        "Minimal Newton's steps to advance a step. Raise it when a frictional scene needs \
-         the contact forces resolved more tightly within a step; the friction anchor \
-         already lets a loaded contact release at 1."));
+        "Minimal Newton's steps to advance a step. Raise it (16 or more) when a scene needs \
+         accurate friction: friction is held at the step's start within a step, and a \
+         contact loaded past its friction limit needs that many steps to slide as it should."));
     m.insert("max-newton-steps".into(), entry(2048i64, "Upper Bound of Newton Steps",
         "Maximum Newton's steps per substep. An over-constrained configuration (a pinned vertex \
          driven into geometry that cannot yield) otherwise loops forever; this bound turns that \
@@ -470,6 +504,22 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
 
 #[cfg(test)]
 mod tests {
+    /// The step-size limit holds at `param.set`, at both ends: the largest
+    /// allowed step is accepted, anything larger and anything non-positive is
+    /// refused by name, and the refused value is not stored.
+    #[test]
+    fn a_step_size_past_the_limit_is_refused_at_set() {
+        let mut p = app_param();
+        p.set("dt", super::MAX_STEP_SIZE).unwrap();
+        assert!(matches!(p.get("dt").unwrap(), ParamValue::Float(v) if *v == super::MAX_STEP_SIZE));
+        for bad in [super::MAX_STEP_SIZE * 1.5, 0.1, 0.0, -0.01, f64::NAN] {
+            let refused = p.set("dt", bad);
+            assert!(matches!(refused, Err(ParamError::StepSize(_))), "dt {bad} was accepted");
+        }
+        assert!(matches!(p.get("dt").unwrap(), ParamValue::Float(v) if *v == super::MAX_STEP_SIZE));
+        assert!(matches!(p.set("dt", 1i64), Err(ParamError::StepSize(_))));
+    }
+
     use super::*;
 
     #[test]

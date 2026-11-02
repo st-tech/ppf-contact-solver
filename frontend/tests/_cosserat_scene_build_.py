@@ -301,12 +301,13 @@ def test_tilt_and_as_cosserat_refuse_what_they_cannot_honor(ws):
     with pytest.raises(ValueError, match="non-finite"):
         rod.tilt(bad)
 
+    # A rod pinned whole is never static (the collision mesh holds triangles
+    # only), so it stays a solved obstacle and may be a Cosserat rod.
     rail = scene.add("strand", "rail")
     rail.pin()
     rail.update_static()
-    assert rail.static
-    with pytest.raises(ValueError, match="static"):
-        rail.as_cosserat()
+    assert not rail.static
+    assert rail.as_cosserat().cosserat
 
 
 def test_a_cosserat_rod_carries_the_seven_keys_and_a_plain_rod_none(ws):

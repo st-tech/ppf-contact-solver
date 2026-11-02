@@ -1,7 +1,7 @@
 # File: scenarios/bl_connection_path_relative.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Client-side connection paths survive Blender's relative-path notation.
 #

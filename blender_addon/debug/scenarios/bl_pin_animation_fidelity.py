@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_animation_fidelity.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MOVE_BY pin op fidelity. The flagship case from the original
 # fidelity test; kept under this name for backwards compatibility.

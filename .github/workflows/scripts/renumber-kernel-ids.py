@@ -54,13 +54,20 @@ def _entries_of(path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.KERNEL_ROOT = os.path.abspath(str(KDIR))
-    return [e.name for e in module.read_source(str(path))[3] if e.emit_entry]
+    return [e for e in module.read_source(str(path))[3] if e.emit_entry]
 
 
 sources = sorted(str(p.relative_to(KDIR)) for p in KDIR.rglob("*.kernel.cpp"))
 canon = []
+# NAME constant -> entry symbol, as the generator spells them (`kernelgen.py`:
+# `pub const {stem.upper()}_NAME: &str = "{entry_symbol}"`), taken from the same
+# reading as the order rather than from a build's renderings, so the script
+# runs before the first build instead of between two.
+names = {}
 for rel in sources:
-    canon.extend(_entries_of(KDIR / rel))
+    for e in _entries_of(KDIR / rel):
+        canon.append(e.name)
+        names[f"{e.stem.upper()}_NAME"] = e.entry_symbol
 if not canon:
     sys.exit("renumber-kernel-ids: no entry declarations matched. This script "
              "REWRITES the id, table and launch tables from what it matches, so "
@@ -69,12 +76,6 @@ print(f"canonical entries: {len(canon)}")
 
 kp = ROOT / "crates/ppf-cts-solver/src/driver/kernels.rs"
 ks = kp.read_text()
-
-# NAME constant -> entry symbol, from the generated renderings.
-names = {}
-for g in pathlib.Path("target/release/build").glob("ppf-cts-solver-*/out/kernelgen/**/*.entry.rs"):
-    for c, v in re.findall(r'pub const (\w+_NAME): &str = "(\w+)";', g.read_text()):
-        names[c] = v
 
 # TABLE rows, each `decl_generated*(  id::X,  X_NAME, ...)` through its `    ),`
 GAP = r"(?:\s|//[^\n]*\n)*"

@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_track_lead_in_and_spin_axis.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Two pin encodings where a plausible payload turns into motion the artist
 # never authored. Encode-only: no build and no run.

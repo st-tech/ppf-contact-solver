@@ -1,7 +1,7 @@
 # File: i18n/__init__.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Centralized localization for the addon. One JSON catalog per locale lives
 # in this directory, keyed by the English source string. Loading builds the

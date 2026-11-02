@@ -5,14 +5,15 @@
 
 """Gradient noise, fractal noise and curl noise for force fields.
 
-THIS FILE EXISTS TWICE, BYTE FOR BYTE: as ``frontend/_noise_.py`` and as
-``blender_addon/core/noise.py``, because the add-on ships without the
-frontend and both need it: the frontend's compiler cross-checks a script's
-bytecode against the Python function, the add-on draws the script, and both
-copies of the reference field evaluator (``frontend/_field_eval_.py`` and the
-add-on's ``core/field_eval.py``) compute a Turbulence field and every field's
-Noise Amount with it. ``addon_host_tests/_force_field_noise_copies_.py``
-fails when the two differ. The solver's kernel
+THIS FILE EXISTS TWICE, IDENTICAL BUT FOR ITS LICENSE LINE: as
+``frontend/_noise_.py`` and as ``blender_addon/core/noise.py``, because the
+add-on ships without the frontend and both need it: the frontend's compiler
+cross-checks a script's bytecode against the Python function, the add-on draws
+the script, and both copies of the reference field evaluator
+(``frontend/_field_eval_.py`` and the add-on's ``core/field_eval.py``) compute
+a Turbulence field and every field's Noise Amount with it.
+``addon_host_tests/_force_field_noise_copies_.py`` fails when the two differ.
+The solver's kernel
 (``crates/ppf-cts-solver/src/kernels/energy/external_field.kernel.cpp``)
 implements the SAME algorithm in single precision, so a script's noise on the
 solver matches this one to float32 rounding.

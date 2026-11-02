@@ -1,7 +1,7 @@
 # File: mcp/protocol.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Wire-level vocabulary for the MCP server: protocol versions, error codes,
 # result envelopes, and the header and `_meta` validation the Streamable HTTP

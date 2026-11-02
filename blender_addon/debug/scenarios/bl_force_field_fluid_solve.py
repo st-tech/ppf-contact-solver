@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_solve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A fluid simulation carries cloth end to end, one way (issue #155):
 # a Mantaflow gas sim is run, its velocity written out as a

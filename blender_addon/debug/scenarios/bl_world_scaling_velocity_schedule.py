@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_velocity_schedule.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling SCALE-INVARIANCE for a VELOCITY SCHEDULE (frame > 1
 # keyframes). A free shell is static until a mid-run keyframe (frame 4)

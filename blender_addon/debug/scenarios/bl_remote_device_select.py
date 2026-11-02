@@ -1,7 +1,7 @@
 # File: scenarios/bl_remote_device_select.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Compute Device and GPU Backend choices reaching a server on ANOTHER
 # machine, over SSH and over Docker.

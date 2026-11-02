@@ -63,7 +63,7 @@ try {
     # that way before slot 00, with only the CUDA directories on PATH.
     $env:PATH = "$Src\target\cuda\release;" +
                 "$Src\crates\ppf-cts-compute\cuda\build\lib;" +
-                "$Src\build-win-native\cuda\bin;" +
+                "$Src\build-win-native\cuda\bin\x64;" +
                 "$Src\target\rocm\release;" +
                 "$Src\crates\ppf-cts-compute\rocm\build\lib;" +
                 "$Src\build-win-native\rocm\bin;" +

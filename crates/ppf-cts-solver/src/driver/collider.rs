@@ -42,7 +42,8 @@ use ppf_cts_compute::{
 };
 use super::fixedcsr::FixedCsr;
 use super::kernels::{
-    VecFillArgs, VertexConstraintArgs, VertexConstraintSweepArgs,
+    SphereFeatureConstraintArgs, SphereFeatureGateArgs, SphereFeatureSweepArgs, VecFillArgs,
+    VertexConstraintArgs, VertexConstraintSweepArgs,
 };
 use super::scene::{Fatal, FatalResult};
 
@@ -67,6 +68,19 @@ pub struct Analytic {
     /// One `u32` per vertex, as `active` above and for the same reason.
     infeasible: ReadbackBuffer<u32>,
     surface_vertices: usize,
+    /// The surface triangle and edge counts, the features the sphere passes
+    /// walk (`sphere_feature_constraint` and its two siblings in
+    /// `vertex_constraint.kernel.cpp`): a triangle sags into a sphere between
+    /// vertices its barrier holds, so each feature is held, swept and checked
+    /// as a whole.
+    faces: usize,
+    edges: usize,
+    /// Per feature, the sweep's bound (`sphere_feature_sweep`).
+    feature_toi: Buffer<f32>,
+    /// Two words read back: blocks the fixed pattern refused and contacts made
+    /// (`sphere_feature_constraint`), or features inside a sphere
+    /// (`sphere_feature_gate`) in the first.
+    feature_count: ReadbackBuffer<u32>,
     /// How many analytic contacts the last assembly deposited.
     pub assembled: u64,
 }
@@ -169,6 +183,15 @@ impl Analytic {
             toi: readback(device, surface_vertices, "collider.toi")?,
             infeasible: readback(device, surface_vertices, "collider.infeasible")?,
             surface_vertices,
+            faces: data.mesh.mesh.face.size as usize,
+            edges: data.mesh.mesh.edge.size as usize,
+            feature_toi: {
+                let mut buffer = Buffer::default();
+                let features = (data.mesh.mesh.face.size + data.mesh.mesh.edge.size) as usize;
+                buffer.size(device, features, AllocLabel("collider.feature_toi"))?;
+                buffer
+            },
+            feature_count: readback(device, 2, "collider.feature_count")?,
             assembled: 0,
         })
     }
@@ -193,7 +216,7 @@ impl Analytic {
         spheres: &StagedBuffer<Sphere>,
         floors: &StagedBuffer<Floor>,
         reference: &mut FixedCsr<'_>,
-        _fixed: &mut FixedCsr<'_>,
+        fixed: &mut FixedCsr<'_>,
         _staging: &mut super::state::PushStaging,
         force: ppf_cts_compute::Handle,
         // `C`, the operator's block diagonal, which is where this barrier's
@@ -218,14 +241,10 @@ impl Analytic {
         grain_angular: ppf_cts_compute::Handle,
         grain_coupling: ppf_cts_compute::Handle,
         grain_rotational: ppf_cts_compute::Handle,
-        // THE RESIDUAL EVERY FRICTION TERM ANCHORS ITSELF ON, a COPY of the
-        // force vector taken before this pass. This entry writes only its own
-        // vertex's row, but the three collision-mesh passes that follow read
-        // the same array and deposit through atomics across vertices, so one
-        // snapshot serves them all and none of them reads a row another has
-        // already moved. It holds the momentum, elastic and strain-limit terms.
-        residual: ppf_cts_compute::Handle,
         statistics: super::contact::StatisticsRefs,
+        // The friction's memory, read by every frictional contact and
+        // appended to by this iteration's record (`driver/friction_memory.rs`).
+        memory: super::friction_memory::FrictionMemoryRefs,
     ) -> FatalResult<()> {
         self.assembled = 0;
         if self.surface_vertices == 0 {
@@ -261,7 +280,18 @@ impl Analytic {
             constraint_tol: (*param).constraint_tol,
             friction_mode: (*param).friction_mode as u32,
             friction_eps: (*param).friction_eps,
-            residual,
+            memory_word0: memory.memory_word0,
+            memory_word1: memory.memory_word1,
+            memory_slip: memory.memory_slip,
+            memory_count: memory.memory_count,
+            record_word0: memory.record_word0,
+            record_word1: memory.record_word1,
+            record_vertex: memory.record_vertex,
+            record_float: memory.record_float,
+            record_count: memory.record_count,
+            record_capacity: memory.record_capacity,
+            friction_load: memory.friction_load,
+            friction_cone: memory.friction_cone,
             dt: (*param).dt,
             force,
             diagonal,
@@ -307,7 +337,121 @@ impl Analytic {
         // THE TELEMETRY TOTAL, the one thing this pass reads back: two words, the
         // low and high halves of the `u64` the status channel reports.
         self.assembled = self.count_total.read_sum(device)?;
+
+        // THE SURFACE TRIANGLES AND EDGES AGAINST THE STATIC SOLID SPHERES
+        // (`sphere_feature_constraint`): a triangle whose vertices are all held
+        // at their gap sags into a sphere between them, so its interior and its
+        // edges' interiors carry the barrier too. Their Hessian blocks couple
+        // the feature's vertices and go into the fixed matrix, whose pattern
+        // holds every such pair; one it refuses stops the step here.
+        let features = self.faces + self.edges;
+        if features > 0 && !spheres.is_empty() {
+            let (_index, _offset, out_fixed_value, _rows) = fixed.device_push_refs();
+            device.fill_zero(self.feature_count.handle(), 8)?;
+            let feature_args = SphereFeatureConstraintArgs {
+                eval_x: x,
+                current: x0,
+                face: mesh.face,
+                face_count: self.faces as u32,
+                edge: mesh.edge,
+                edge_face_index: mesh.edge_face_index,
+                edge_face_offset: mesh.edge_face_offset,
+                has_edge_face: mesh.has_edge_face,
+                vertex_prop: mesh.vertex_prop,
+                vertex_param: mesh.vertex_param,
+                sphere: spheres.handle(),
+                sphere_count: spheres.len() as u32,
+                fixed_index: mesh.fixed_index,
+                fixed_offset: mesh.fixed_offset,
+                fixed_value: reference.value_handle(),
+                row_count: pattern.rows,
+                friction_mode: (*param).friction_mode as u32,
+                friction_eps: (*param).friction_eps,
+                memory_word0: memory.memory_word0,
+                memory_word1: memory.memory_word1,
+                memory_slip: memory.memory_slip,
+                memory_count: memory.memory_count,
+                record_word0: memory.record_word0,
+                record_word1: memory.record_word1,
+                record_vertex: memory.record_vertex,
+                record_float: memory.record_float,
+                record_count: memory.record_count,
+                record_capacity: memory.record_capacity,
+                friction_load: memory.friction_load,
+                friction_cone: memory.friction_cone,
+                dt: (*param).dt,
+                force,
+                out_fixed_value,
+                out_missing: self.feature_count.handle(),
+                count: features as u32,
+                seam_arena_count: 0,
+            };
+            device
+                .run("collider.sphere_feature_constraint", |encoder| {
+                    encoder.elements(&feature_args, features as u32)
+                })
+                .map_err(|fault| match fault {
+                    Fault::Device { diag, .. } => Fatal::device_assert(format!(
+                        "solver driver: a surface triangle or edge was evaluated against an \
+                         analytic sphere at a non-positive gap. The check failed {} time(s){}. \
+                         The feature is already at or past the sphere's surface, so the gap the \
+                         stiffness divides by is not positive",
+                        diag.failures,
+                        diag.first
+                            .as_ref()
+                            .map_or(String::new(), |first| format!(", first at {first}"))
+                    )),
+                    other => Fatal::from(other),
+                })?;
+            self.feature_count.download(device)?;
+            let missing = self.feature_count.host()[0];
+            if missing > 0 {
+                return Err(Fatal::invariant(format!(
+                    "solver driver: {missing} Hessian block(s) of a triangle or edge against an \
+                     analytic sphere found no slot in the fixed pattern. Every such block \
+                     couples two vertices of one surface triangle or edge, which the pattern \
+                     registers, so this is a pattern defect; the blocks were not assembled"
+                )));
+            }
+            self.assembled += u64::from(self.feature_count.host()[1]);
+        }
         Ok(())
+    }
+
+    /// How many surface triangles, edges and free vertices at the pose `x` are
+    /// inside a static solid sphere (`sphere_feature_gate`): the conservative check
+    /// beside the mesh's `check_intersection`, which sees only mesh pairs.
+    ///
+    /// # Safety
+    /// `x` must hold one position per vertex.
+    pub unsafe fn sphere_features_inside<D: Device>(
+        &mut self,
+        device: &mut D,
+        mesh: super::contact::MeshRefs,
+        x: ppf_cts_compute::Handle,
+        spheres: &StagedBuffer<Sphere>,
+    ) -> FatalResult<u32> {
+        let elements = self.faces + self.edges + self.surface_vertices;
+        if spheres.is_empty() || elements == 0 {
+            return Ok(0);
+        }
+        device.fill_zero(self.feature_count.handle(), 8)?;
+        let args = SphereFeatureGateArgs {
+            x,
+            face: mesh.face,
+            face_count: self.faces as u32,
+            edge: mesh.edge,
+            edge_count: self.edges as u32,
+            vertex_prop: mesh.vertex_prop,
+            sphere: spheres.handle(),
+            sphere_count: spheres.len() as u32,
+            out_count: self.feature_count.handle(),
+            count: elements as u32,
+            seam_arena_count: 0,
+        };
+        device.launch("collider.sphere_feature_gate", &args, elements as u32)?;
+        self.feature_count.download(device)?;
+        Ok(self.feature_count.host()[0])
     }
 
     /// The swept pin and collider test over this step's candidate motion.
@@ -386,11 +530,60 @@ impl Analytic {
         // kernel clears every slot itself and sets only the infeasible ones, so
         // the download is the whole answer rather than a merge.
         self.infeasible.download(device)?;
+        // THE SURFACE TRIANGLES AND EDGES AGAINST THE STATIC SOLID SPHERES
+        // (`sphere_feature_sweep`): a straight step dips a feature's interior
+        // toward a sphere however its vertices move, so the feature is bounded
+        // as a whole, and its bound folds into the same time of impact.
+        let features = self.faces + self.edges;
+        let mut feature_toi = max_t;
+        if features > 0 && !spheres.is_empty() {
+            let feature_args = SphereFeatureSweepArgs {
+                x0,
+                x1,
+                face: mesh.face,
+                face_count: self.faces as u32,
+                edge: mesh.edge,
+                vertex_prop: mesh.vertex_prop,
+                sphere: spheres.handle(),
+                sphere_count: spheres.len() as u32,
+                ccd_eps: (*param).ccd_eps,
+                line_search_max_t: max_t,
+                out_toi: self.feature_toi.handle(),
+                count: features as u32,
+                seam_arena_count: 0,
+            };
+            device
+                .run("collider.sphere_feature_sweep", |encoder| {
+                    encoder.elements(&feature_args, features as u32)
+                })
+                .map_err(|fault| match fault {
+                    Fault::Device { diag, .. } => Fatal::device_assert(format!(
+                        "solver driver: the sweep of a surface triangle or edge against an \
+                         analytic sphere granted a non-positive time of impact {} time(s){}, \
+                         which means the feature is already at the sphere's surface. No step \
+                         length can be trusted from this sweep",
+                        diag.failures,
+                        diag.first
+                            .as_ref()
+                            .map_or(String::new(), |first| format!(", first at {first}"))
+                    )),
+                    other => Fatal::from(other),
+                })?;
+            let values = self.feature_toi.handle();
+            // Safety: the buffer outlives the call and names `features` floats.
+            feature_toi = unsafe {
+                self.fold.min(device, "collider.feature_toi", values, features as u32, max_t)
+            }?;
+        }
         Ok(Sweep {
             time_of_impact: {
                 let values = self.toi.handle();
                 // Safety: the buffer outlives the call and names `span` floats.
-                unsafe { self.fold.min(device, "collider.toi", values, span as u32, max_t) }?
+                let vertex_toi =
+                    unsafe { self.fold.min(device, "collider.toi", values, span as u32, max_t) }?;
+                // Each checked before the `min`, which would drop a NaN.
+                super::ccd::certified_fraction(vertex_toi, "analytic vertex sweep")
+                    .min(super::ccd::certified_fraction(feature_toi, "analytic feature sweep"))
             },
             // FIRST BY INDEX, not by whichever thread arrived first, so two runs
             // of one scene name the same vertex.
@@ -469,6 +662,20 @@ mod tests {
         spheres: &[Sphere],
         floors: &[Floor],
     ) -> (Vec<f32>, [f32; 9], u64) {
+        let (force, block, count, _) = assemble_shifted(scene, param, spheres, floors, [0.0; 3]);
+        (force, block, count)
+    }
+
+    /// One assembly with every vertex's iterate moved by `shift` from its
+    /// start, then the friction record closed: the force, the diagonal block,
+    /// the contact count, and each vertex's non-friction contact load.
+    fn assemble_shifted(
+        scene: &TestScene,
+        param: &ParamSet,
+        spheres: &[Sphere],
+        floors: &[Floor],
+        shift: [f64; 3],
+    ) -> (Vec<f32>, [f32; 9], u64, Vec<f32>) {
         // Safety: the scene outlives every borrow below, and the two matrices
         // wrap its own pattern.
         unsafe {
@@ -512,7 +719,14 @@ mod tests {
                 "test.positions",
             );
             let positions = positions_block.handle();
-            let test_mesh = unsafe { crate::driver::state::test_mesh_of(&mut device, data) };
+            let moved_host: Vec<f32> = positions_host
+                .iter()
+                .enumerate()
+                .map(|(k, &p)| p + shift[k % 3] as f32)
+                .collect();
+            let moved_block =
+                crate::driver::state::position_block(&mut device, &moved_host, "test.moved");
+            let test_mesh = { crate::driver::state::test_mesh_of(&mut device, data) };
             let empty_pins = no_pins(&mut device);
             let sphere_set = staged_from(&mut device, spheres, "test.sphere");
             let floor_set = staged_from(&mut device, floors, "test.floor");
@@ -522,6 +736,10 @@ mod tests {
                 grain_blocks(&mut device, vertices);
             let mut residual = readback::<f32>(&mut device, 3 * vertices, "test.residual")
                 .expect("the test allocation succeeds");
+            let mut friction_memory =
+                crate::driver::friction_memory::FrictionMemory::allocate(&mut device, 4, vertices).unwrap();
+            // Safety: the residual holds three floats per vertex of the scene.
+            let memory = { friction_memory.open(&mut device, residual.handle(), true) }.unwrap();
             analytic
                 .assemble(
                     &mut device,
@@ -529,7 +747,7 @@ mod tests {
                     test_mesh.refs(),
                     param,
                     positions,
-                    positions,
+                    moved_block.handle(),
                     empty_pins.handle(),
                     &sphere_set,
                     &floor_set,
@@ -541,17 +759,25 @@ mod tests {
                     grain_angular.handle(),
                     grain_coupling.handle(),
                     grain_rotational.handle(),
-                    // THE RESIDUAL SNAPSHOT. In production it is a copy of the
-                    // force vector taken before this pass, and this fixture
-                    // starts with that vector at zero, so a zeroed allocation
-                    // is the snapshot it would have made. A zero residual has
-                    // no tangential part, so every friction term falls back to
-                    // the lagged surrogate; the anchor's own coverage is
-                    // `tests/kernels/friction_branches.cpp`.
-                    residual.handle(),
                     statistics,
+                    memory,
                 )
                 .expect("the assembly runs");
+            // THE FRICTION IS THE FROZEN RECORD'S, applied as a step applies it
+            // where there is no dynamic matrix. The two poses, the force and
+            // the diagonal hold the scene's vertices.
+            friction_memory
+                .embed_frozen_fixed_only(
+                    &mut device,
+                    &memory,
+                    positions,
+                    moved_block.handle(),
+                    param.friction_eps,
+                    fixed.device_push_refs(),
+                    force.handle(),
+                    diagonal.handle(),
+                )
+                .expect("the frozen friction applies");
             {
                 force.download(&mut device).expect("the force mirror refreshes");
                 // THE BLOCK IS ON THE DIAGONAL, not in the fixed pattern. The
@@ -560,7 +786,19 @@ mod tests {
                 diagonal.download(&mut device).expect("the diagonal reads back");
                 let mut block = [0.0f32; 9];
                 block.copy_from_slice(&diagonal.host()[..9]);
-                (force.host().to_vec(), block, analytic.assembled)
+                let assembled = force.host().to_vec();
+                friction_memory
+                    .close(
+                        &mut device,
+                        positions,
+                        moved_block.handle(),
+                        param.friction_eps,
+                        force.handle(),
+                        residual.handle(),
+                    )
+                    .expect("the record closes");
+                let loads = friction_memory.loads(&mut device);
+                (assembled, block, analytic.assembled, loads)
             }
         }
     }
@@ -689,6 +927,10 @@ mod tests {
                 grain_blocks(&mut device, vertices);
             let mut residual = readback::<f32>(&mut device, 3 * vertices, "test.residual")
                 .expect("the test allocation succeeds");
+            let mut friction_memory =
+                crate::driver::friction_memory::FrictionMemory::allocate(&mut device, 0, vertices).unwrap();
+            // Safety: the residual holds three floats per vertex of the scene.
+            let memory = { friction_memory.open(&mut device, residual.handle(), true) }.unwrap();
             analytic.assemble(
                 &mut device,
                 data,
@@ -707,10 +949,8 @@ mod tests {
                 grain_angular.handle(),
                 grain_coupling.handle(),
                 grain_rotational.handle(),
-                // See the sibling fixture: a zeroed residual is the snapshot
-                // this pass would have made, and it selects the lagged form.
-                residual.handle(),
                 statistics,
+                memory,
             )
         };
         let fatal = outcome.expect_err(
@@ -824,6 +1064,38 @@ mod tests {
         );
     }
 
+    /// THE NON-FRICTION LOAD A CLOSED ITERATION LEAVES IS THE BARRIER FORCE
+    /// ALONE. A vertex 1 mm above a frictional floor, its iterate moved 2 um
+    /// along x inside the stick range, takes a barrier force along the floor's
+    /// normal and a friction force against the move; the load the next
+    /// iteration's friction reads must hold the first and none of the second,
+    /// in the force vector's own sign.
+    #[test]
+    fn a_closed_iteration_leaves_the_barrier_force_without_the_friction() {
+        let mut scene = diagonal_scene(1);
+        scene.data.param_arrays.vertex = CVec::from(
+            &[VertexParam { ghat: 0.01, offset: 0.0, friction: 0.5 }][..],
+        );
+        scene.place(0, 0.0, 0.001, 0.0);
+        let mut floor = ground_plane(0.01);
+        floor.friction = 0.5;
+        let (force, _, count, load) =
+            assemble_shifted(&scene, &param(), &[], &[floor], [2e-6, 0.0, 0.0]);
+        assert_eq!(count, 1, "the floor contact was not counted");
+        assert!(force[0].abs() > 0.0, "the friction term deposited nothing: {force:?}");
+        assert!(force[1] != 0.0, "the barrier deposited nothing: {force:?}");
+        assert!(
+            (load[1] - force[1]).abs() <= 1e-6 * force[1].abs(),
+            "the load's normal part {} is not the barrier's {}",
+            load[1],
+            force[1]
+        );
+        assert!(
+            load[0].abs() <= 1e-6 * force[0].abs() && load[2] == 0.0,
+            "friction leaked into the load: {load:?} against force {force:?}"
+        );
+    }
+
     #[test]
     fn a_vertex_outside_the_barrier_contributes_nothing() {
         // The negative case the test above needs beside it: without it, an
@@ -868,12 +1140,93 @@ mod tests {
         );
     }
 
+    /// A solid static sphere of radius 0.5 at the origin, ghat 0.01.
+    fn solid_sphere() -> Sphere {
+        Sphere {
+            center: position(0.0, 0.0, 0.0),
+            ghat: 0.01,
+            friction: 0.0,
+            radius: 0.5,
+            thickness: 0.0,
+            bowl: false,
+            reverse: false,
+            kinematic: false,
+        }
+    }
+
+    /// One triangle lying flat at height `y` over the solid sphere, whose
+    /// vertices are all about 5 cm from its surface while its interior point
+    /// over the center is `y - 0.5` from it. The fixed pattern is the
+    /// triangle's own, which is what `builder.rs` registers for a face.
+    fn triangle_over_sphere(y: f32) -> TestScene {
+        let mut scene = diagonal_scene(3).with_faces(&[crate::data::Vec3u::new(0, 1, 2)]);
+        let rows: Vec<Vec<u32>> = vec![vec![0, 1, 2], vec![1, 2], vec![2]];
+        // The transpose table names each upper block by its slot in the
+        // row-major walk of `rows`: (0,1) is slot 1, (0,2) slot 2, (1,2) slot 4.
+        let transpose: Vec<Vec<Vec2u>> = vec![
+            Vec::new(),
+            vec![Vec2u::new(0, 1)],
+            vec![Vec2u::new(0, 2), Vec2u::new(1, 4)],
+        ];
+        scene.data.fixed_index_table = CVecVec::from(&rows[..]);
+        scene.data.transpose_table = CVecVec::from(&transpose[..]);
+        scene.place(0, -0.2, y, -0.1);
+        scene.place(1, 0.2, y, -0.1);
+        scene.place(2, 0.0, y, 0.2);
+        scene
+    }
+
+    #[test]
+    fn a_triangle_whose_interior_is_inside_the_barrier_is_pushed_out_through_its_vertices() {
+        // THE DEFECT THIS PASS EXISTS FOR: every vertex is far outside the
+        // barrier band (`|x| - R` about 5 cm against a 1 cm ghat), so the vertex
+        // barrier contributes nothing, while the face's closest point to the
+        // center is 5 mm from the surface. The face's own term pushes it out,
+        // spread over its three vertices by the closest point's weights.
+        let scene = triangle_over_sphere(0.505);
+        let (force, _block, count) = assemble_one(&scene, &param(), &[solid_sphere()], &[]);
+        assert_eq!(count, 1, "the face contact was not counted, or a vertex was: {force:?}");
+        for k in 0..3 {
+            // `force` carries the energy gradient, as the vertex barrier's
+            // does: an outward push is a negative radial (+y) component.
+            assert!(
+                force[3 * k + 1] < 0.0,
+                "vertex {k} of a face 5 mm from the sphere was not pushed outward: {force:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_triangle_falling_face_first_onto_a_sphere_is_stopped_before_its_interior_crosses() {
+        // The vertices end the step 4 cm outside the sphere, so the vertex sweep
+        // grants the whole step; the face's interior would end it 1.5 cm inside.
+        let scene = triangle_over_sphere(0.505);
+        let drop = 0.02;
+        let y = 0.505 - drop;
+        let end = [position(-0.2, y, -0.1), position(0.2, y, -0.1), position(0.0, y, 0.2)];
+        let sweep = sweep_one(&scene, &param(), &end, &[], &[solid_sphere()], &[]);
+        let t = sweep.time_of_impact;
+        assert!(t > 0.0, "the sweep granted no step at all: {t}");
+        // Where the face's center lands at the granted fraction, above the
+        // surface: its height is 0.505 - drop * t.
+        let landed = 0.505 - drop * t;
+        assert!(
+            landed > 0.5,
+            "the face's interior is granted a step to {landed}, inside the sphere of radius 0.5"
+        );
+        assert!(
+            landed < 0.505,
+            "the face was granted no motion toward the sphere at all: t = {t}"
+        );
+    }
+
     /// Run one sweep and hand back its verdict.
     fn sweep_one(
         scene: &TestScene,
         param: &ParamSet,
         end: &[crate::data::Vec3f],
         pins: &[FixPair],
+        spheres: &[Sphere],
         floors: &[Floor],
     ) -> Sweep {
         // Safety: as `assemble_one`.
@@ -897,7 +1250,7 @@ mod tests {
                     .write(&mut device, 0, pins)
                     .expect("the pin set uploads");
             }
-            let sphere_set = staged_from(&mut device, &[], "test.sphere");
+            let sphere_set = staged_from(&mut device, spheres, "test.sphere");
             let floor_set = staged_from(&mut device, floors, "test.floor");
             // The blocks are built BEFORE the call, so the device is borrowed
             // once rather than three times over.
@@ -945,7 +1298,7 @@ mod tests {
         scene.place(0, 0.0, above, 0.0);
         let end = vec![position(0.0, below, 0.0)];
         let param = param();
-        let sweep = sweep_one(&scene, &param, &end, &[], &[ground_plane(ghat)]);
+        let sweep = sweep_one(&scene, &param, &end, &[], &[], &[ground_plane(ghat)]);
 
         let park = crate::driver::ccd::park_gap_analytic(above, ghat, param.ccd_eps);
         let expected = (above - park) / (above - below);
@@ -973,7 +1326,7 @@ mod tests {
         let mut scene = diagonal_scene(1);
         scene.place(0, 0.0, 0.5, 0.0);
         let end = vec![position(0.0, 0.4, 0.0)];
-        let sweep = sweep_one(&scene, &param(), &end, &[], &[ground_plane(0.01)]);
+        let sweep = sweep_one(&scene, &param(), &end, &[], &[], &[ground_plane(0.01)]);
         assert_eq!(
             sweep.time_of_impact, 1.0,
             "a vertex that never reaches the floor had its step shortened"
@@ -1006,7 +1359,7 @@ mod tests {
         // The Newton endpoint clears the floor and its barrier band; the
         // horizon, 1.25 times as far, does not.
         let end = vec![position(0.0, 0.015, 0.0)];
-        let sweep = sweep_one(&scene, &param, &end, &[], &[ground_plane(ghat)]);
+        let sweep = sweep_one(&scene, &param, &end, &[], &[], &[ground_plane(ghat)]);
 
         // THE TIME IS IN HORIZON UNITS, up to `line_search_max_t`: the body
         // converts its fraction by that factor and `step.rs` divides by it
@@ -1051,7 +1404,7 @@ mod tests {
             allow_intersection: false,
         };
         let end = vec![position(0.0, -0.01, 0.0)];
-        let sweep = sweep_one(&scene, &param(), &end, &[pin], &[ground_plane(0.01)]);
+        let sweep = sweep_one(&scene, &param(), &end, &[pin], &[], &[ground_plane(0.01)]);
         assert_eq!(
             sweep.infeasible_pin,
             Some(0),

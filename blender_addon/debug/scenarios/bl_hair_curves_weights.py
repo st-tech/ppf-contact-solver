@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_weights.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Per-point weights on Hair Curves (issue #146): a pin whose pull fades
 # along a strand, and a material that varies along it.

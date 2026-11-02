@@ -1,7 +1,7 @@
 # File: scenarios/bl_native_attach_build_check.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A local native backend refuses to attach to a server running a different
 # build from the one its Compute Device selection names.

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SCALE around an ABSOLUTE world-space pivot. Grow to 1.5x.
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_blender_parity.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # BLENDER'S OWN FIELDS AGAINST THIS PROJECT'S, for every emulated non-fluid
 # type, and the solver in the same chain.

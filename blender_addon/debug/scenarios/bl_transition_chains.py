@@ -1,7 +1,7 @@
 # File: scenarios/bl_transition_chains.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Long chain of state transitions in one Blender process. Each link
 # in the chain records its own pass/fail, so the suite surfaces the

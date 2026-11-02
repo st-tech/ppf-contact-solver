@@ -1,7 +1,7 @@
 # File: scenarios/bl_overlay_respects_shading.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression: the addon's overlay system must not stomp the user's
 # viewport Solid-shading color_type. A community report on Blender 5.1

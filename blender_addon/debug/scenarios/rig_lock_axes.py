@@ -1,7 +1,7 @@
 # File: scenarios/rig_lock_axes.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Truth table for every Lock Translation / Lock Rotation mode, at the
 # AUTHORING and SCENE-BUILD gate.

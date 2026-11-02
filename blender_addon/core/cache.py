@@ -1,7 +1,7 @@
 # File: cache.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Ephemeral caches that *derive from* the state machine but are NOT part
 # of the immutable ``AppState`` snapshot.  These are the home for data

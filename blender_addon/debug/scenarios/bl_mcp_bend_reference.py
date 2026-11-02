@@ -1,19 +1,19 @@
 # File: scenarios/bl_mcp_bend_reference.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The MCP set_bend_reference surface, against a real Blender.
 #
 # A bending reference is a topological copy of an assigned object whose
 # vertices were moved: the group takes its hinge rest angles from that copy
-# instead of from the object's own initial pose. Two switches have to line up
-# before the scene build reads one, and they live on different records. The
-# GROUP carries bend_rest_from_reference, which only a SHELL or ROD group
-# offers as a material parameter, and the assigned OBJECT carries the
-# reference itself plus its own enable bit. set_bend_reference writes the
-# object half, and refuses every write that would come to rest where nothing
-# reads it, so each gate below is driven from both sides.
+# instead of from the object's own initial pose. Two records have to line up
+# before the scene build reads one. The GROUP's bend_rest_angle_source, a
+# material parameter only a SHELL or ROD group offers, must be
+# FROM_REFERENCE, and the assigned OBJECT carries the reference itself.
+# set_bend_reference writes the object half, and refuses every write that
+# would come to rest where nothing reads it, so each gate below is driven
+# from both sides.
 #
 # The reference object is stored by UUID and the name beside it is only a
 # label, so the checks read all three back: what the call reported, what
@@ -31,10 +31,10 @@
 # no bending term and so cannot use a reference at all.
 #
 # Assertions:
-#   A. ``reference_needs_group_flag`` -- while the SHELL group's
-#      bend_rest_from_reference is off, a reference is refused, and the
-#      message names both the flag and set_group_material_properties as the
-#      fix. Nothing is stored.
+#   A. ``reference_needs_group_source`` -- while the SHELL group's
+#      bend_rest_angle_source is FLAT, a reference is refused, and the message
+#      names the property, FROM_REFERENCE and set_group_material_properties
+#      as the fix. Nothing is stored.
 #   B. ``unsupported_group_type_is_refused`` -- a SOLID group is refused by
 #      type, naming the two types that do take a reference.
 #   C. ``reference_assigned_and_reported`` -- with the flag on, the reference
@@ -52,15 +52,34 @@
 #      vertex count does not match is refused with exactly the message
 #      validate_bend_reference produced for that pair, and the assignment
 #      from C is untouched.
-#   G. ``empty_name_clears_and_disables`` -- an empty reference name clears
-#      the UUID and the label and turns the per-object enable bit off, which
-#      get_group_objects reports as a null object name.
-#   H. ``enable_without_reference_is_refused`` -- enable=True alongside an
-#      empty name is refused, since there would be nothing to enable, and
-#      the cleared state stays cleared.
-#   I. ``enable_false_records_without_using`` -- a reference passed with
-#      enable=False is stored and reported while the enable bit stays off,
-#      which is how a reference is recorded before it is used.
+#   G. ``empty_name_clears`` -- an empty reference name clears the UUID and
+#      the label, which get_group_objects reports as a null object name.
+#   H. ``retired_enable_argument_refused`` -- the per-object enable bit is
+#      gone (every object of a From Reference Geometry group reads its
+#      reference), so an `enable` argument is refused by name and nothing is
+#      stored.
+#   I. ``retired_group_flag_refused`` -- the old bend_rest_from_reference
+#      material property is refused by name, and the reference is then set
+#      again for the checks that follow.
+
+# The shape-key source (set_bend_reference_shape_key) is the second reference
+# kind: the sheet carries a Basis and a "Curled" shape key, and the tool
+# switches the object over to reading a key of its own. The stored reference
+# object from I stays stored, unread, which is what the source field says.
+#
+#   J. ``shape_key_assigned_and_reported`` -- naming "Curled" switches the
+#      source to SHAPE_KEY; the call, get_group_objects and
+#      the PropertyGroup agree, and the reference object from I is kept.
+#   K. ``unknown_shape_key_refused_by_name`` -- a key the sheet does not
+#      have is refused naming it, and J's state is untouched.
+#   L. ``clearing_object_keeps_shape_key`` -- clearing the reference OBJECT
+#      while the shape key is the source leaves the shape key in use.
+#   M. ``empty_shape_key_clears`` -- an empty shape key name clears it.
+#   N. ``reference_object_switches_source_back`` -- set_bend_reference makes
+#      OBJECT the source again.
+#   O. ``shape_key_mix_assigned_and_reported`` --
+#      set_bend_reference_shape_key_mix makes the whole shape-key mix the
+#      source, and get_group_objects reports it.
 
 from __future__ import annotations
 
@@ -95,7 +114,6 @@ BLOCK = "BendBlock"
 EMPTY_REFERENCE = {
     "bend_ref_uuid": "",
     "bend_ref_name": "",
-    "bend_ref_enable": False,
 }
 
 try:
@@ -125,6 +143,13 @@ try:
     for vertex in reference.data.vertices:
         vertex.co.z = 0.3 * vertex.co.x * vertex.co.x
     reference.data.update()
+
+    # The sheet's own shape keys: a flat Basis and a curled key, for the
+    # shape-key source (checks J to N).
+    sheet.shape_key_add(name="Basis", from_mix=False)
+    curled = sheet.shape_key_add(name="Curled", from_mix=False)
+    for point in curled.data:
+        point.co.z = 0.3 * point.co.x * point.co.x
 
     # A grid of a different resolution, so its vertex count cannot match.
     bpy.ops.mesh.primitive_grid_add(
@@ -181,7 +206,6 @@ try:
             return {
                 "bend_ref_uuid": assigned.bend_ref_uuid,
                 "bend_ref_name": assigned.bend_ref_name,
-                "bend_ref_enable": bool(assigned.bend_ref_enable),
             }
         raise RuntimeError(
             "'%s' is not assigned to group %s" % (object_name, group_uuid)
@@ -239,7 +263,7 @@ try:
         5, "get_group_material_properties", {"group_uuid": shell_uuid}
     )
     flag_before = (
-        (props_before.get("properties") or {}).get("bend_rest_from_reference")
+        (props_before.get("properties") or {}).get("bend_rest_angle_source")
         or {}
     ).get("value")
 
@@ -249,11 +273,12 @@ try:
     message_a = refuse_a.get("message") or ""
     stored_a = rna_reference(shell_uuid, SHEET)
     mcp_check(
-        result, "A_reference_needs_group_flag",
-        flag_before is False
+        result, "A_reference_needs_group_source",
+        flag_before == "FLAT"
         and refuse_a.get("status") == "error"
         and raw_a.get("isError") is True
-        and "bend_rest_from_reference" in message_a
+        and "bend_rest_angle_source" in message_a
+        and "FROM_REFERENCE" in message_a
         and "set_group_material_properties" in message_a
         and SHEET in message_a
         and stored_a == EMPTY_REFERENCE,
@@ -294,7 +319,7 @@ try:
         "set_group_material_properties",
         {
             "group_uuid": shell_uuid,
-            "properties": {"bend_rest_from_reference": True},
+            "properties": {"bend_rest_angle_source": "FROM_REFERENCE"},
         },
     )
     if enabled.get("status") != "success":
@@ -310,10 +335,10 @@ try:
     expected_stored_c = {
         "bend_ref_uuid": ref_uuid,
         "bend_ref_name": REFERENCE,
-        "bend_ref_enable": True,
     }
     expected_reported_c = {
-        "enabled": True,
+        "source": "OBJECT",
+        "shape_key_name": "",
         "object_uuid": ref_uuid,
         "object_name": REFERENCE,
         "stored_name": REFERENCE,
@@ -323,7 +348,7 @@ try:
         set_c.get("status") == "success"
         and bool(ref_uuid)
         and set_c.get("reference_object_name") == REFERENCE
-        and set_c.get("bend_ref_enable") is True
+        and set_c.get("bend_ref_source") == "OBJECT"
         and set_c.get("object_name") == SHEET
         and stored_c == expected_stored_c
         and reported_c == expected_reported_c
@@ -336,7 +361,6 @@ try:
             "message": set_c.get("message"),
             "reference_object_name": set_c.get("reference_object_name"),
             "reference_object_uuid": ref_uuid,
-            "bend_ref_enable": set_c.get("bend_ref_enable"),
             "stored": stored_c,
             "expected_stored": expected_stored_c,
             "reported": reported_c,
@@ -427,42 +451,40 @@ try:
     listing_g = group_objects(15, shell_uuid)
     reported_g = reported_reference(listing_g, SHEET)
     expected_reported_g = {
-        "enabled": False,
+        "source": "OBJECT",
+        "shape_key_name": "",
         "object_uuid": "",
         "object_name": None,
         "stored_name": "",
     }
     mcp_check(
-        result, "G_empty_name_clears_and_disables",
+        result, "G_empty_name_clears",
         clear_g.get("status") == "success"
         and clear_g.get("reference_object_name") == ""
-        and clear_g.get("bend_ref_enable") is False
         and stored_g == EMPTY_REFERENCE
         and reported_g == expected_reported_g,
         {
             "status": clear_g.get("status"),
             "message": clear_g.get("message"),
             "reference_object_name": clear_g.get("reference_object_name"),
-            "bend_ref_enable": clear_g.get("bend_ref_enable"),
             "stored": stored_g,
             "reported": reported_g,
             "expected_reported": expected_reported_g,
         },
     )
 
-    # ----- H. enable=True with nothing to enable -------------------
+    # ----- H. the retired enable argument --------------------------
     refuse_h, raw_h = refuse(
         16,
         "set_bend_reference",
-        bend_args(shell_uuid, SHEET, "", enable=True),
+        bend_args(shell_uuid, SHEET, REFERENCE, enable=True),
     )
     message_h = refuse_h.get("message") or ""
     stored_h = rna_reference(shell_uuid, SHEET)
     mcp_check(
-        result, "H_enable_without_reference_is_refused",
+        result, "H_retired_enable_argument_refused",
         refuse_h.get("status") == "error"
         and raw_h.get("isError") is True
-        and "reference_object_name" in message_h
         and "enable" in message_h
         and stored_h == EMPTY_REFERENCE,
         {
@@ -473,42 +495,160 @@ try:
         },
     )
 
-    # ----- I. a reference recorded without being used --------------
-    set_i, _ = call(
+    # ----- I. the retired group flag --------------------------------
+    refuse_i, raw_i = refuse(
         17,
-        "set_bend_reference",
-        bend_args(shell_uuid, SHEET, REFERENCE, enable=False),
+        "set_group_material_properties",
+        {
+            "group_uuid": shell_uuid,
+            "properties": {"bend_rest_from_reference": True},
+        },
     )
-    stored_i = rna_reference(shell_uuid, SHEET)
-    listing_i = group_objects(18, shell_uuid)
-    reported_i = reported_reference(listing_i, SHEET)
-    expected_stored_i = {
+    message_i = refuse_i.get("message") or ""
+    mcp_check(
+        result, "I_retired_group_flag_refused",
+        refuse_i.get("status") == "error"
+        and raw_i.get("isError") is True
+        and "bend_rest_from_reference" in message_i,
+        {
+            "status": refuse_i.get("status"),
+            "is_error": raw_i.get("isError"),
+            "message": message_i,
+        },
+    )
+    reset_i, _ = call(
+        18, "set_bend_reference", bend_args(shell_uuid, SHEET, REFERENCE)
+    )
+    if reset_i.get("status") != "success":
+        raise RuntimeError("set_bend_reference again: %r" % (reset_i,))
+
+    def rna_shape_key(group_uuid, object_name):
+        group = groups.get_active_group_by_uuid(bpy.context.scene, group_uuid)
+        for assigned in group.assigned_objects:
+            if assigned.name == object_name:
+                return {
+                    "bend_ref_source": assigned.bend_ref_source,
+                    "bend_ref_shape_key": assigned.bend_ref_shape_key,
+                    "bend_ref_uuid": assigned.bend_ref_uuid,
+                }
+        raise RuntimeError(
+            "'%s' is not assigned to group %s" % (object_name, group_uuid)
+        )
+
+    def sk_args(group_uuid, object_name, shape_key_name, enable=None):
+        arguments = {
+            "group_uuid": group_uuid,
+            "object_name": object_name,
+            "shape_key_name": shape_key_name,
+        }
+        if enable is not None:
+            arguments["enable"] = enable
+        return arguments
+
+    # ----- J. a shape key of the object itself ---------------------
+    set_j, _ = call(
+        19, "set_bend_reference_shape_key", sk_args(shell_uuid, SHEET, "Curled")
+    )
+    stored_j = rna_shape_key(shell_uuid, SHEET)
+    reported_j = reported_reference(group_objects(20, shell_uuid), SHEET)
+    expected_stored_j = {
+        "bend_ref_source": "SHAPE_KEY",
+        "bend_ref_shape_key": "Curled",
         "bend_ref_uuid": ref_uuid,
-        "bend_ref_name": REFERENCE,
-        "bend_ref_enable": False,
     }
-    expected_reported_i = {
-        "enabled": False,
+    expected_reported_j = {
+        "source": "SHAPE_KEY",
         "object_uuid": ref_uuid,
         "object_name": REFERENCE,
         "stored_name": REFERENCE,
+        "shape_key_name": "Curled",
     }
     mcp_check(
-        result, "I_enable_false_records_without_using",
-        set_i.get("status") == "success"
-        and set_i.get("reference_object_name") == REFERENCE
-        and set_i.get("bend_ref_enable") is False
-        and stored_i == expected_stored_i
-        and reported_i == expected_reported_i,
+        result, "J_shape_key_assigned_and_reported",
+        set_j.get("status") == "success"
+        and set_j.get("shape_key_name") == "Curled"
+        and set_j.get("bend_ref_source") == "SHAPE_KEY"
+        and stored_j == expected_stored_j
+        and reported_j == expected_reported_j,
         {
-            "status": set_i.get("status"),
-            "message": set_i.get("message"),
-            "bend_ref_enable": set_i.get("bend_ref_enable"),
-            "stored": stored_i,
-            "expected_stored": expected_stored_i,
-            "reported": reported_i,
-            "expected_reported": expected_reported_i,
+            "reply": set_j,
+            "stored": stored_j,
+            "reported": reported_j,
+            "expected_reported": expected_reported_j,
         },
+    )
+
+    # ----- K. a shape key the object does not have -----------------
+    refuse_k, raw_k = refuse(
+        21, "set_bend_reference_shape_key", sk_args(shell_uuid, SHEET, "NoSuchKey")
+    )
+    message_k = refuse_k.get("message") or ""
+    stored_k = rna_shape_key(shell_uuid, SHEET)
+    mcp_check(
+        result, "K_unknown_shape_key_refused_by_name",
+        refuse_k.get("status") == "error"
+        and raw_k.get("isError") is True
+        and "NoSuchKey" in message_k
+        and SHEET in message_k
+        and stored_k == expected_stored_j,
+        {"message": message_k, "stored": stored_k},
+    )
+
+    # ----- L. clearing the reference object keeps the shape key ----
+    clear_l, _ = call(22, "set_bend_reference", bend_args(shell_uuid, SHEET, ""))
+    stored_l = rna_shape_key(shell_uuid, SHEET)
+    expected_stored_l = dict(expected_stored_j, bend_ref_uuid="")
+    mcp_check(
+        result, "L_clearing_object_keeps_shape_key",
+        clear_l.get("status") == "success"
+        and clear_l.get("bend_ref_source") == "SHAPE_KEY"
+        and stored_l == expected_stored_l,
+        {"reply": clear_l, "stored": stored_l},
+    )
+
+    # ----- M. an empty shape key name clears it ---------------------
+    clear_m, _ = call(
+        23, "set_bend_reference_shape_key", sk_args(shell_uuid, SHEET, "")
+    )
+    stored_m = rna_shape_key(shell_uuid, SHEET)
+    expected_stored_m = {
+        "bend_ref_source": "SHAPE_KEY",
+        "bend_ref_shape_key": "",
+        "bend_ref_uuid": "",
+    }
+    mcp_check(
+        result, "M_empty_shape_key_clears",
+        clear_m.get("status") == "success"
+        and stored_m == expected_stored_m,
+        {"reply": clear_m, "stored": stored_m},
+    )
+
+    # ----- N. a reference object switches the source back ----------
+    set_n, _ = call(24, "set_bend_reference", bend_args(shell_uuid, SHEET, REFERENCE))
+    stored_n = rna_shape_key(shell_uuid, SHEET)
+    mcp_check(
+        result, "N_reference_object_switches_source_back",
+        set_n.get("status") == "success"
+        and set_n.get("bend_ref_source") == "OBJECT"
+        and stored_n.get("bend_ref_source") == "OBJECT"
+        and bool(stored_n.get("bend_ref_uuid")),
+        {"reply": set_n, "stored": stored_n},
+    )
+
+    # ----- O. the whole shape-key mix as the source -----------------
+    set_o, _ = call(
+        25, "set_bend_reference_shape_key_mix",
+        {"group_uuid": shell_uuid, "object_name": SHEET},
+    )
+    stored_o = rna_shape_key(shell_uuid, SHEET)
+    reported_o = reported_reference(group_objects(26, shell_uuid), SHEET)
+    mcp_check(
+        result, "O_shape_key_mix_assigned_and_reported",
+        set_o.get("status") == "success"
+        and set_o.get("bend_ref_source") == "SHAPE_KEY_MIX"
+        and stored_o.get("bend_ref_source") == "SHAPE_KEY_MIX"
+        and reported_o.get("source") == "SHAPE_KEY_MIX",
+        {"reply": set_o, "stored": stored_o, "reported": reported_o},
     )
 
     mcp_mod.stop_mcp_server()

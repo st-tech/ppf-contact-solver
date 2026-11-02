@@ -1,8 +1,7 @@
 # File: encoder/dyn.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 from . import (
     _swap_axes,
     _to_solver,

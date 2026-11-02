@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_visualize.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The force field's Visualize overlay (owner's request): arrows at a sparse
 # PREVIEW grid, for drawing only (the solver evaluates a field at every vertex

@@ -578,7 +578,7 @@ pub fn stdout_error_log_paths(info_path: &str) -> (String, String) {
 /// passes; the user-facing error message string otherwise. Mirrors the
 /// early validation block in `FixedSession.start`.
 #[pyfunction]
-#[pyo3(signature = (driver_version=None, minimum=520))]
+#[pyo3(signature = (driver_version=None, minimum=580))]
 pub fn validate_driver_version(
     driver_version: Option<u32>,
     minimum: u32,

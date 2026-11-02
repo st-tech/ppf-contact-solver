@@ -1,7 +1,7 @@
 # File: state.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Immutable application state and orthogonal phase enums for the
 # event-driven state machine.  The entire addon state is captured by

@@ -1,7 +1,7 @@
 # File: scenarios/bl_bend_reference_rod_curve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Exercises the per-object "reference rest angle" feature for CURVE-based
 # ROD groups end-to-end on a no-GPU host (macOS), using the CUDA-free
@@ -137,7 +137,7 @@ try:
     mutation_mod._raw_create_pin(rod_group._uuid, rod.name, "AllPin")
 
     grp = _raw_group(dh, "Rod")
-    grp.bend_rest_from_reference = True
+    grp.bend_rest_angle_source = "FROM_REFERENCE"
     assigned = None
     for a in grp.assigned_objects:
         if a.uuid == rod_uuid:
@@ -145,7 +145,6 @@ try:
             break
     if assigned is None:
         raise RuntimeError("assigned object for curve rod not found in group")
-    assigned.bend_ref_enable = True
     assigned.bend_ref_uuid = ref_uuid
     dh.log("reference_configured")
 

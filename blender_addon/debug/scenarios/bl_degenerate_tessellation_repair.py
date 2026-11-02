@@ -1,7 +1,7 @@
 # File: scenarios/bl_degenerate_tessellation_repair.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The repair offered when a Transfer is refused for a degenerate tessellation.
 #

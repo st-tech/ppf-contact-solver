@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Per-assigned-object and per-pin operation handlers.
 
 Covers surfaces that all hang off an AssignedObject or PinVertexGroupItem:
@@ -1528,11 +1529,27 @@ def set_object_locks(
 
 
 # ---------------------------------------------------------------------------
-# Bending reference rest angle (per object; SHELL and ROD). The group flag
-# bend_rest_from_reference switches the group's bending rest angle over to
-# reference geometry, and the reference object itself lives on the assigned
-# object, so every shell or rod in the group points at its own copy.
+# Bending reference rest angle (per object; SHELL and ROD). A group whose
+# bend_rest_angle_source is FROM_REFERENCE takes every object's bending rest
+# angle from that object's own reference, which lives on the assigned object:
+# another object, one of its shape keys, or its whole shape-key mix.
 # ---------------------------------------------------------------------------
+
+
+def _require_reference_group(group, group_uuid, object_name, what):
+    """Refuse a reference write that would land where nothing reads it."""
+    if group.object_type not in ("SHELL", "ROD"):
+        raise MCPError(
+            "A bending reference applies to a SHELL or ROD group; group "
+            f"{group_uuid} is {group.object_type}"
+        )
+    if group.bend_rest_angle_source != "FROM_REFERENCE":
+        raise MCPError(
+            f"Group {group_uuid} does not take its bending rest angle from "
+            f"reference geometry, so {what} on '{object_name}' would sit where "
+            "nothing reads it. Set bend_rest_angle_source to FROM_REFERENCE "
+            "with set_group_material_properties first."
+        )
 
 
 @group_handler
@@ -1540,7 +1557,6 @@ def set_bend_reference(
     group_uuid: str,
     object_name: str,
     reference_object_name: str,
-    enable: Optional[bool] = None,
 ):
     """Point one assigned object's bending rest angle at a reference object.
 
@@ -1553,14 +1569,18 @@ def set_bend_reference(
     sampled there. Anything that fails the comparison is refused here, naming
     the mismatch, rather than at scene build.
 
-    The group's own bend_rest_from_reference flag is what makes the group read
-    a reference at all, so it has to be on before a reference can be set; turn
-    it on with set_group_material_properties. Only SHELL and ROD groups carry
-    that flag.
+    The group's bend_rest_angle_source must be FROM_REFERENCE (set it with
+    set_group_material_properties); only SHELL and ROD groups have one. In
+    such a group every object reads its reference, and the scene build refuses
+    an object that has none.
 
-    Pass an empty reference_object_name to clear the reference, which also
-    stops this object reading one. Clearing is accepted whatever the group
-    flag holds, so a stale reference can always be taken off.
+    Setting a reference object makes it this object's reference source,
+    replacing a shape key or the shape-key mix (a shape key name stays
+    stored, unread).
+
+    Pass an empty reference_object_name to clear the reference object.
+    Clearing is accepted whatever the group's source is, so a stale reference
+    can always be taken off.
 
     Args:
         group_uuid: UUID of the SHELL or ROD group
@@ -1568,9 +1588,6 @@ def set_bend_reference(
             the reference
         reference_object_name: Name of the reference object, or "" to clear
             the reference this object holds
-        enable: Whether this object reads its reference. Defaults to True when
-            a reference is given and False when one is cleared, so it is worth
-            naming only to record a reference without using it yet
     """
     from ...core.utils import validate_bend_reference
     from ...core.uuid_registry import get_or_create_object_uuid
@@ -1579,35 +1596,18 @@ def set_bend_reference(
     reference_object_name = (reference_object_name or "").strip()
 
     if not reference_object_name:
-        if enable:
-            raise ValidationError(
-                "enable=True needs a reference object: name one in "
-                "reference_object_name, or leave enable out to clear"
-            )
         assigned.bend_ref_uuid = ""
         assigned.bend_ref_name = ""
-        assigned.bend_ref_enable = False
         return {
-            "message": f"Cleared the bending reference of '{object_name}'",
+            "message": f"Cleared the bending reference object of '{object_name}'",
             "group_uuid": group_uuid,
             "object_name": object_name,
             "object_uuid": obj_uuid,
             "reference_object_name": "",
-            "bend_ref_enable": False,
+            "bend_ref_source": assigned.bend_ref_source,
         }
 
-    if group.object_type not in ("SHELL", "ROD"):
-        raise MCPError(
-            "A bending reference applies to a SHELL or ROD group; group "
-            f"{group_uuid} is {group.object_type}"
-        )
-    if not group.bend_rest_from_reference:
-        raise MCPError(
-            f"Group {group_uuid} does not take its bending rest angle from "
-            f"reference geometry, so a reference on '{object_name}' would sit "
-            "where nothing reads it. Set bend_rest_from_reference on the "
-            "group with set_group_material_properties first."
-        )
+    _require_reference_group(group, group_uuid, object_name, "a reference")
 
     source_obj = bpy.data.objects.get(object_name)
     ref_obj = bpy.data.objects.get(reference_object_name)
@@ -1631,7 +1631,7 @@ def set_bend_reference(
 
     assigned.bend_ref_uuid = ref_uuid
     assigned.bend_ref_name = ref_obj.name
-    assigned.bend_ref_enable = True if enable is None else bool(enable)
+    assigned.bend_ref_source = "OBJECT"
     return {
         "message": (
             f"Bending rest angle of '{object_name}' now comes from "
@@ -1642,7 +1642,131 @@ def set_bend_reference(
         "object_uuid": obj_uuid,
         "reference_object_name": ref_obj.name,
         "reference_object_uuid": ref_uuid,
-        "bend_ref_enable": bool(assigned.bend_ref_enable),
+        "bend_ref_source": "OBJECT",
+    }
+
+
+@group_handler
+def set_bend_reference_shape_key(
+    group_uuid: str,
+    object_name: str,
+    shape_key_name: str,
+):
+    """Take one assigned object's bending rest angle from one of its own shape
+    keys.
+
+    The rest angle is computed from the shape key's STORED shape, the one
+    Blender displays with Shape Key Lock on: it does not depend on the key's
+    Value slider or on any other key, and no modifier is applied to it. Any
+    key qualifies, Basis included, so a mesh whose deformed pose is a shape
+    key can keep its undeformed Basis as the rest angle. A shape key stores
+    one position per vertex in the mesh's own vertex order, so no topology
+    comparison is needed. Only a mesh object carries usable shape keys: a
+    curve rod or Hair Curves object is refused; give it a reference object
+    with set_bend_reference instead.
+
+    Setting a shape key makes it this object's reference source, replacing a
+    reference object (which stays stored, unread) or the shape-key mix. The
+    shape key is stored by name, so renaming or removing it makes the scene
+    build refuse the object until it is set again.
+
+    The group's bend_rest_angle_source must be FROM_REFERENCE (set it with
+    set_group_material_properties); only SHELL and ROD groups have one.
+
+    Pass an empty shape_key_name to clear the shape key. Clearing is accepted
+    whatever the group's source is.
+
+    Args:
+        group_uuid: UUID of the SHELL or ROD group
+        object_name: Name of the assigned mesh object whose rest angle comes
+            from its shape key
+        shape_key_name: Name of one of that object's shape keys, or "" to
+            clear the shape key this object holds
+    """
+    from ...core.utils import validate_bend_shape_key
+
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    shape_key_name = shape_key_name or ""
+
+    if not shape_key_name.strip():
+        assigned.bend_ref_shape_key = ""
+        return {
+            "message": f"Cleared the bending shape key of '{object_name}'",
+            "group_uuid": group_uuid,
+            "object_name": object_name,
+            "object_uuid": obj_uuid,
+            "shape_key_name": "",
+            "bend_ref_source": assigned.bend_ref_source,
+        }
+
+    _require_reference_group(group, group_uuid, object_name, "a shape key")
+    ok, message = validate_bend_shape_key(
+        bpy.data.objects.get(object_name), shape_key_name
+    )
+    if not ok:
+        raise MCPError(message)
+
+    assigned.bend_ref_shape_key = shape_key_name
+    assigned.bend_ref_source = "SHAPE_KEY"
+    return {
+        "message": (
+            f"Bending rest angle of '{object_name}' now comes from its shape "
+            f"key '{shape_key_name}'"
+        ),
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+        "shape_key_name": shape_key_name,
+        "bend_ref_source": "SHAPE_KEY",
+    }
+
+
+@group_handler
+def set_bend_reference_shape_key_mix(
+    group_uuid: str,
+    object_name: str,
+):
+    """Take one assigned object's bending rest angle from its whole shape-key
+    mix, and let it follow the mix when the mix is animated.
+
+    The rest shape is the object's relative shape-key blend as Blender
+    evaluates it, before modifiers: the reference key plus every unmuted
+    key's Value times its offset, weighted by the key's vertex group. When
+    the keys' Values are animated (keyframes, drivers or NLA), the scene
+    build samples the mix at every solve frame and the solver interpolates
+    the hinge rest angles between the samples, so the rest angle animates
+    with the mix. When nothing animates them, the rest angle is the mix at
+    the starting frame.
+
+    An animated mix is refused at scene build in a ROD group: only shell hinge
+    rest angles animate. Absolute shape keys (Relative off) are refused here,
+    since their mix follows an Evaluation Time rather than key weights.
+
+    This makes the mix this object's reference source, replacing a reference
+    object or a single shape key (both stay stored, unread). The group's
+    bend_rest_angle_source must be FROM_REFERENCE (set it with
+    set_group_material_properties).
+
+    Args:
+        group_uuid: UUID of the SHELL or ROD group
+        object_name: Name of the assigned mesh object
+    """
+    from ...core.utils import validate_bend_shape_key_mix
+
+    group, assigned, obj_uuid = _resolve_assigned(group_uuid, object_name)
+    _require_reference_group(group, group_uuid, object_name, "a shape-key mix")
+    ok, message = validate_bend_shape_key_mix(bpy.data.objects.get(object_name))
+    if not ok:
+        raise MCPError(message)
+    assigned.bend_ref_source = "SHAPE_KEY_MIX"
+    return {
+        "message": (
+            f"Bending rest angle of '{object_name}' now follows its shape-key mix"
+        ),
+        "group_uuid": group_uuid,
+        "object_name": object_name,
+        "object_uuid": obj_uuid,
+        "bend_ref_source": "SHAPE_KEY_MIX",
     }
 
 

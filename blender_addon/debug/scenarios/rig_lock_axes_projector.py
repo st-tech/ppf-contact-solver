@@ -1,7 +1,7 @@
 # File: scenarios/rig_lock_axes_projector.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Every Lock Translation / Lock Rotation mode driven through the
 # solver, asserting the invariant each one names.

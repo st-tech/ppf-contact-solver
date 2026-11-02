@@ -1,7 +1,7 @@
 # File: shell_intersection_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Resolve All Intersections, the second entry of Intersection Correction in the
 # "Mesh Repair" panel.
@@ -288,7 +288,7 @@ def _pinned_vertices(scene) -> dict:
 def _same_pose(rest: np.ndarray, shipped: np.ndarray) -> bool:
     """Whether the pose Transfer ships is the stored mesh, to single precision.
 
-    A rest-pose armature or an identity lattice evaluates a few units of
+    A rest-pose armature or an identity Lattice evaluates a few units of
     resolution off the stored coordinates, which is not a deformation.
     """
     if rest.shape != shipped.shape:

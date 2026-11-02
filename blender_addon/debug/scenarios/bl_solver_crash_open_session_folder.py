@@ -1,7 +1,7 @@
 # File: scenarios/bl_solver_crash_open_session_folder.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A crash report is a summary plus a detail plus two log tails, and only the
 # first two fit in a panel. `Open Session Folder` is how a user reaches the

@@ -1,7 +1,7 @@
 # File: scenarios/rig_existing_intersection_build.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Which scenes Allow Existing Intersections lets build and which it refuses,
 # with no solve. The cases and their controls are listed in

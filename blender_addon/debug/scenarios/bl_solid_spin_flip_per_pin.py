@@ -1,7 +1,7 @@
 # File: scenarios/bl_solid_spin_flip_per_pin.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Two SPIN pins on ONE object must each rotate in their OWN direction, for a
 # SOLID exactly as for a SHELL.

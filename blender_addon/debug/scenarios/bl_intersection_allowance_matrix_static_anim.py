@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowance_matrix_static_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The intersection allowance matrix, HELD object an ANIMATED STATIC collider:
 # a 1 m grid lying flat at z = 0 in a STATIC group, moved 1 mm over the clip by

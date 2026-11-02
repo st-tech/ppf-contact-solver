@@ -1,7 +1,7 @@
 # File: scenarios/bl_intersection_allowance_matrix_self.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The intersection allowance matrix, SELF layout: ONE object holding a pinned
 # lower part (the held shape, top at z = 0) and a free upper part (the falling

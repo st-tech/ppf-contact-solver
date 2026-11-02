@@ -1,7 +1,7 @@
 # File: scenarios/rig_coincident_contact_pair.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: two sheets at bit-identical coordinates,
 # one of them flagged `allow-inter-object-intersection`, build and run to the

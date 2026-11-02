@@ -1,7 +1,7 @@
 # File: _field_eval_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 
 """The reference evaluator of a field object, in double precision.
 
@@ -19,8 +19,9 @@ scale along those axes, the rest T long), spaced ``step`` seconds from
 ``start``. Every length is in scene units and solver world axes.
 
 THIS MODULE IMPORTS NOTHING FROM THE SOLVER, and nothing from the rest of the
-frontend but the noise, so the add-on can carry a byte-identical copy
-(``blender_addon/core/field_eval.py``), as it does the noise.
+frontend but the noise, so the add-on can carry a copy
+(``blender_addon/core/field_eval.py``), identical but for its license line,
+as it does the noise.
 """
 
 from __future__ import annotations

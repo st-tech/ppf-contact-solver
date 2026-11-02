@@ -1,7 +1,7 @@
 # File: scenarios/bl_save_state_on_finish.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # "Save State on Finish" round-trip. Verifies the save_state_on_finish param
 # flows addon state -> encoder ("save-state-on-finish") -> param.toml

@@ -1,8 +1,7 @@
 # File: core/encode_progress.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Progress state for the synchronous scene-encode phase.
 
 Encoding the scene (validation, mesh extraction, CBOR) and the click-time

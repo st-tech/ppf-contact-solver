@@ -109,6 +109,7 @@ impl IntoPyErr for ParamError {
         match self {
             ParamError::NotFound(_) => PyKeyError::new_err(self.to_string()),
             ParamError::UnknownObjectKind(_) => PyValueError::new_err(self.to_string()),
+            ParamError::StepSize(_) => PyValueError::new_err(self.to_string()),
         }
     }
 }

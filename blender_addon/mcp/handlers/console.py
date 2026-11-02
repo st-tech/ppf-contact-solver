@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Console and status handlers."""
 
 from ...core.client import communicator as com

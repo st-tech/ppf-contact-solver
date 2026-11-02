@@ -1,7 +1,7 @@
 # File: scenarios/bl_spatial_material_map.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A spatial material map has to vary the parameter ACROSS the surface.
 #

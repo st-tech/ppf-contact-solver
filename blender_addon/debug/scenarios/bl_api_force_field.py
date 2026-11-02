@@ -1,7 +1,7 @@
 # File: scenarios/bl_api_force_field.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The add-on Python API's read-only force field listing,
 # `solver.get_force_fields()`: one row per field object Transfer considers,

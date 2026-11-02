@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_transform_sampling.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A moving STATIC collider reaches the solver as its world transform sampled
 # at EVERY frame of the solve, and the samples are Blender's own evaluation.

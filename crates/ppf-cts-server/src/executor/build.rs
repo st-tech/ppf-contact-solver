@@ -1396,7 +1396,7 @@ mod tests {
             "filename=None filename2=None ",
             "| at frontend/_mesh_.py:899 in _run_ftetwild_subprocess ",
             "| while: Tetrahedralizing Rock (1/1, new)... ",
-            "| python 3.11.9 win32 at C:\\dev\\python.exe",
+            "| python 3.11.9 win32 at C:\\Python311\\python.exe",
         )
         .to_string();
         let msg = enrich_build_failure(
@@ -1416,7 +1416,7 @@ mod tests {
             concat!(
                 "ModuleNotFoundError: No module named 'pytetwild' ",
                 "| at frontend/_mesh_.py:820 in tetrahedralize ",
-                "| python 3.11.9 win32 at C:\\dev\\python.exe",
+                "| python 3.11.9 win32 at C:\\Python311\\python.exe",
             )
             .to_string(),
             Path::new("/usr/bin/python3"),
@@ -1560,16 +1560,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_backend_is_what_the_solver_answers() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         // A release build beside a debug one: release is asked, as
         // `frontend._find_cdylib` prefers it.
+        //
+        // THE FAKE SOLVER IS WRITTEN BY A CHILD `sh`, NOT BY THIS PROCESS. A
+        // file this process holds open for writing is inherited by any child
+        // another test forks in that instant, and exec'ing the file while that
+        // child still holds it fails with ETXTBSY ("Text file busy"), about one
+        // run in fifty. Written by a child that exits first, no descriptor to
+        // it ever exists in this process to be inherited.
         for (profile, word) in [("release", "cpu"), ("debug", "cuda")] {
             let profile_dir = dir.path().join(profile);
             std::fs::create_dir_all(&profile_dir).unwrap();
             let solver = profile_dir.join(SOLVER_EXE);
-            std::fs::write(&solver, format!("#!/bin/sh\necho {word}\n")).unwrap();
-            std::fs::set_permissions(&solver, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let written = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf '#!/bin/sh\\necho {word}\\n' > \"$0\" && chmod 755 \"$0\""))
+                .arg(&solver)
+                .status()
+                .unwrap();
+            assert!(written.success(), "writing the fake solver failed: {written}");
         }
         assert_eq!(ask_solver_backend(dir.path(), dir.path()).unwrap(), "cpu");
     }

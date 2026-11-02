@@ -1,7 +1,7 @@
 # File: param_introspect.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Runtime introspection helpers for parameter copy/paste. Walks
 # ``bl_rna.properties`` so clipboard operations pick up newly added

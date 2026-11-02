@@ -1,7 +1,7 @@
 # File: scenarios/bl_transfer_skip_delete_when_no_data.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression: clicking Transfer on a fresh project (server reports
 # ``data="NO_DATA"``) used to dispatch a "Deleting Remote Data..."

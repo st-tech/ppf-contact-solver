@@ -1,5 +1,5 @@
 # File: core/uuid_registry.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Stable UUID-based identification for Blender objects.
 # UUIDs are stored as custom properties on objects and persist across renames.

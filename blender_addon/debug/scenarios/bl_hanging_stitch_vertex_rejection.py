@@ -1,7 +1,7 @@
 # File: scenarios/bl_hanging_stitch_vertex_rejection.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hanging-stitch-vertex rejection coverage.
 #

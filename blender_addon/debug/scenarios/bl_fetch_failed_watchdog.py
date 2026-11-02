@@ -1,7 +1,7 @@
 # File: scenarios/bl_fetch_failed_watchdog.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Fetch failure + watchdog recovery (commit a8766a08).
 #

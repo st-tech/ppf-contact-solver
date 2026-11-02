@@ -1,7 +1,7 @@
 # File: scenarios/rig_server_idle_stop.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # `ppf-cts-server --idle-timeout N` stops itself N seconds after its last
 # request ended, when no solve or build is running, and a request keeps it up.

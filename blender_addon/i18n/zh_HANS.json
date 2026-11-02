@@ -1662,5 +1662,22 @@
   "Last run: aborted": "上次运行：已中止",
   "Resolving shell intersections: {stage}, iteration {iteration}, {pairs} pair(s) inside their margin": "正在消除 SHELL 相交：{stage}，第 {iteration} 次迭代，{pairs} 对处于余量内",
   "{name} was edited while the run was going, so the result was not written. Run again": "{name} 在运行期间被编辑，因此未写入结果。请重新运行",
-  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "中止“全部相交解决”。第 1 步中 SHELL 保持原样，第 2 步中保留已达到的状态"
+  "Stop Resolve All Intersections. In the first step the shells stay as they were; in the second step the surfaces keep the state reached so far": "中止“全部相交解决”。第 1 步中 SHELL 保持原样，第 2 步中保留已达到的状态",
+  "Reference (per object):": "参考（每个物体）：",
+  "Mix is not animated: the rest angle is the current mix": "混合未设置动画：静止角度为当前混合",
+  "An animated mix needs a Shell group": "动画混合需要壳组",
+  "Mix is animated: the rest angle follows it": "混合已设置动画：静止角度随之变化",
+  "Shape-key rest angles need a mesh object": "形态键静止角度需要网格物体",
+  "This object has no shape keys": "该物体没有形态键",
+  "No shape key set: Transfer refuses this object": "未设置形态键：传输不接受该物体",
+  "Missing shape key: {name}": "缺少形态键：{name}",
+  "Each object takes its rest angle from its own reference: another object (a topological copy whose vertices were moved), one of its shape keys, or its shape-key mix (animated with it). Every object in the group must have one. Bend Plasticity does not apply": "每个物体从自己的参考获取静止角度：另一个物体（移动了顶点的拓扑副本）、自身的某个形态键，或其形态键混合（随之动画）。组内每个物体都必须有参考。弯曲塑性不适用",
+  "Reference Source": "参考来源",
+  "Reference Object": "参考物体",
+  "Take the rest angle from another object, a topological copy of this one whose vertices were moved": "从另一个物体（移动了顶点的本物体的拓扑副本）获取静止角度",
+  "Shape Key": "形态键",
+  "Take the rest angle from one of this object's own shape keys, read as the key's stored shape (independent of its Value slider, before modifiers)": "从本物体自身的某个形态键获取静止角度，按该键存储的形状读取（与其数值滑块无关，在修改器之前）",
+  "Shape Key Mix (Animated)": "形态键混合（动画）",
+  "Take the rest angle from this object's whole shape-key mix as Blender plays it (every key's Value, before modifiers). When the mix is animated, the rest angle follows it through the simulation": "从 Blender 播放的本物体完整形态键混合（每个键的数值，在修改器之前）获取静止角度。当混合设置了动画时，静止角度在整个模拟中随之变化",
+  "Shape key of this object whose stored shape gives the bending rest angle": "其存储形状决定弯曲静止角度的本物体形态键"
 }

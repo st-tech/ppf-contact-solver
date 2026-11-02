@@ -1,7 +1,7 @@
 # File: scenarios/bl_server_stop_is_real.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Stop Server has to stop the server, and only the socket can say so.
 #

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SPIN around an ABSOLUTE world-space pivot.
 
 from __future__ import annotations

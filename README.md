@@ -163,7 +163,7 @@ A GPU is recommended, but not required. The right backend is picked for you when
 
 | Hardware | Backend | Runs on | Good to know |
 | --- | --- | --- | --- |
-| 🟩 NVIDIA GPU | CUDA 12.8+ | Linux (x86_64, arm64), Windows (x86_64) | RTX 4090 / 5090 for large scenes; 3090 / 4070 / 5070 for small to medium ones |
+| 🟩 NVIDIA GPU | CUDA 13.2+ | Linux (x86_64, arm64), Windows (x86_64) | Turing (RTX 20 / GTX 16 / T4) or newer with driver 580+; RTX 4090 / 5090 for large scenes; 3090 / 4070 / 5070 for small to medium ones |
 | 🟥 AMD GPU | ROCm | Linux (x86_64), Windows (x86_64) | gfx9 through gfx12 |
 | 🍎 Apple silicon | Metal | macOS | M1 / A14 generation or newer |
 | 💻 Any CPU | CPU (x86_64, arm64) | macOS, Windows, Linux | SIMD-optimized using AVX2 and NEON instructions |
@@ -840,7 +840,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 
 ### 📦 Deploying on [Amazon Web Services](https://aws.amazon.com/en/)
 
-- Amazon Machine Image (AMI): `Deep Learning Base AMI with Single CUDA (Ubuntu 22.04)`
+- Amazon Machine Image (AMI): `Deep Learning Base AMI with Single CUDA (Ubuntu 24.04)`
 - Instance Type: `g6.2xlarge` (Recommended)
 - This setup costs around $1 per hour.
 - *Do not skip* the Docker container creation in the installation process; it is required.
@@ -850,7 +850,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - Select `GPUs`. We recommend the GPU type `NVIDIA L4` because it's affordable and accessible, as it does not require a high quota. You may select `T4` instead for testing purposes.
 - Do **not** check `Enable Virtual Workstation (NVIDIA GRID)`.
 - We recommend the machine type `g2-standard-8`.
-- Choose the OS type `Deep Learning VM with CUDA 12.4 M129` and set the disk size to `50GB`.
+- Choose a Deep Learning VM OS image from the family `common-cu129-ubuntu-2404-nvidia-580` (NVIDIA driver 580) and set the disk size to `50GB`.
 - As of late 2024, this configuration costs approximately $0.86 per hour in `us-central1 (Iowa)` and $1.00 per hour in `asia-east1 (Taiwan)`.
 - Port number `8080` is reserved by the OS image. Set `$MY_WEB_PORT` to `8888`. When connecting via `gcloud`, use the following format:  `gcloud compute ssh --zone "xxxx" "instance-name" -- -L 8080:localhost:8888`.
 - *Do not skip* the Docker container creation in the installation process; it is required.
@@ -970,13 +970,15 @@ If you post about it on [X.com](https://x.com), please consider using the [**#ZO
 
 This project is released under the [Apache License 2.0](./LICENSE). In plain terms, you may use, modify, and redistribute the code in commercial products, including proprietary software, without paying royalties or open-sourcing your own code. You only need to preserve the license notice and the attribution required by the license.
 
+The one exception is the code that calls Blender's Python API (`bpy`). Blender requires an add-on to preserve the same freedoms Blender grants, so the Blender add-on (`blender_addon/`), its example scripts (`examples/blender/`) and the tests that load it (`addon_host_tests/`) are licensed under the [GNU General Public License, version 3 or later](./blender_addon/LICENSE) (`GPL-3.0-or-later`). Everything else, including the solver and the Python frontend, remains Apache 2.0. [LICENSING.md](./LICENSING.md) maps each path to its license.
+
 If you build something on top of this solver, we would love to hear about it, but you are not obligated to disclose anything.
 
 ### 🔧 Building Your Own Solver
 
 If you like, we suggest taking the whole source code apart and building your own solver tailored to your specific needs. With the recent advances in coding agents, this is very likely possible even without any expertise in physics or coding.
 
-Once you build your own, you are free to publish it as your own project or commercialize it, as long as you follow the Apache License 2.0 terms described above.
+Once you build your own, you are free to publish it as your own project or commercialize it, as long as you follow the license terms described above.
 
 You don't need to use this project as is. Customize it as you like!
 
@@ -1057,7 +1059,7 @@ Examples include pinned panels driven through each other ([#116](https://github.
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
 | You forked other repo and just made small changes? | No. Everything is written from scratch. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
-| I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE), you are free to distribute and commercialize your own. |
+| I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE) (and, for the Blender add-on, the [GPL-3.0-or-later](./blender_addon/LICENSE)), you are free to distribute and commercialize your own. |
 
 ## 🙏 Acknowledgements
 

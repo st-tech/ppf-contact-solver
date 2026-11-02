@@ -1,7 +1,7 @@
 # File: force_field_targets.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Which object groups a force field source reaches, answered in ONE place for
 # the panel, the encoder, the MCP tools and the Python API.

@@ -22,9 +22,8 @@ Both instances should have:
 - SSH access configured
 
 **No system-wide build tools required** - warmup.bat installs everything locally:
-- 7-Zip (portable)
 - MinGit (portable)
-- CUDA Toolkit (extracted locally)
+- CUDA Toolkit (NVIDIA's redistributable components, unpacked locally)
 - MSVC compiler (portable)
 - Rust (local installation)
 - Python (embedded)
@@ -46,7 +45,7 @@ From your local machine, create and transfer the source archive:
 cd ~/ppf-contact-solver
 zip -rq /tmp/repo.zip . -x '.git/*' -x 'target/*' -x 'build-win-native/downloads/*' \
     -x 'build-win-native/python/*' -x 'build-win-native/rust/*' -x 'build-win-native/msvc/*' \
-    -x 'build-win-native/cuda/*' -x 'build-win-native/7zip/*' -x 'build-win-native/mingit/*' \
+    -x 'build-win-native/cuda/*' -x 'build-win-native/mingit/*' \
     -x 'build-win-native/dist/*' -x 'crates/ppf-cts-solver/src/kernels/build/*'
 
 # Transfer to the build instance
@@ -68,9 +67,8 @@ Remove-Item 'C:\source.zip'
 ### 1.3 Run Warmup (First Time Setup)
 
 The warmup script downloads and installs locally (no admin required):
-- 7-Zip (portable, for CUDA extraction)
 - MinGit (portable)
-- CUDA Toolkit 12.8.1 (extracted locally via 7-Zip)
+- CUDA Toolkit 13.2.2 (NVIDIA's redistributable components, each checked against its SHA256 in `scripts\downloads.txt` and unpacked locally)
 - MSVC compiler (VS 2022, portable via [portable-msvc](https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977))
 - Rust (local installation)
 - Embedded Python 3.11.9 with pip and packages
@@ -83,8 +81,7 @@ warmup.bat /nopause
 ```
 
 This creates:
-- `build-win-native\7zip\` - Portable 7-Zip
-- `build-win-native\cuda\` - CUDA Toolkit (extracted)
+- `build-win-native\cuda\` - CUDA Toolkit (assembled from the component archives)
 - `build-win-native\msvc\` - Portable MSVC compiler
 - `build-win-native\python\` - Embedded Python environment
 - `build-win-native\rust\` - Local Rust installation
@@ -134,7 +131,7 @@ bundle.bat /nopause
 This creates a self-contained distribution in `build-win-native\dist\` containing:
 - `target\<backend>\release\ppf-cts-server.exe` - Rust solver host, one per backend (the Blender addon's `WIN_NATIVE` backend)
 - `target\<backend>\release\ppf-contact-solver.exe` - solver driver binary, one per backend
-- `bin\` - DLLs (libsimbackend_cuda.dll and cudart64_12.dll; libppfbe_rocm.dll and the HIP runtime where ROCm ships)
+- `bin\` - DLLs (libsimbackend_cuda.dll and cudart64_13.dll; libppfbe_rocm.dll and the HIP runtime where ROCm ships)
 - `python\` - Embedded Python environment
 - `mingit\` - MinGit for repository cloning
 - `frontend\` - Python frontend module

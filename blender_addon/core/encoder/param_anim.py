@@ -1,7 +1,7 @@
 # File: encoder/param_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Sampling of Blender F-curves on a group's material sliders into the
 # per-object material schedules the solver reads.

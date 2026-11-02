@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_collision_windows.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The per-object frame-range families over MCP: collision windows, which say
 # when an object takes part in contact, and velocity keyframes and static ops,

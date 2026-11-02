@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_fcurve_anim.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # STATIC group with object-level transform keyframes (Case 1) drives
 # the soft-pin shell. The simulator's projected positions stream back

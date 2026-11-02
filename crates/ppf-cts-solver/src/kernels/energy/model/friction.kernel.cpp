@@ -23,11 +23,15 @@
 // ppf-cts-compute/metal/shader_compiler.mm under MSL. On MSL those two names are the correctly rounded precise:: forms,
 // which is a correctness requirement rather than caution.
 
-[[seam::device_fn]] inline void friction_evaluate(
+// `slide` is how far the contact slid in the last committed step, from the
+// friction's memory (`contact/friction_memory.kernel.cpp`), and zero for a
+// contact that has none; `friction_evaluate` below is this with no slide.
+[[seam::device_fn]] inline void friction_evaluate_anchored(
     const Vec3f &contact_force,
     const Vec3f &slip, const Vec3f &normal,
     float friction, float minimum_slip,
-    const Vec3f &drive, float drive_stiffness, Vec3f &gradient,
+    const Vec3f &drive, float drive_stiffness, float slide,
+    Vec3f &gradient,
     Mat3x3f &hessian, float &lambda, float &stiffness,
     Vec3f &tangent, Mat3x3f &projection,
     float &contact) {
@@ -51,13 +55,45 @@
         // `drive_stiffness`; inside the cone the excess is zero, the anchor is
         // the current slip, and `stiffness` equals `lambda`, which is the
         // lagged surrogate exactly.
+        //
+        // PAST THE CONE THE ANCHOR ADDS THE LARGER OF TWO SLIPS: the one the
+        // pair-local model predicts, and the one the contact actually slid in
+        // the last committed step. The prediction holds every other vertex
+        // still, so for a body that slides as a whole it reads the body's
+        // elastic stiffness where a translation meets none, and predicts a
+        // slip too small to release it: alone, a stiff sheet on a slope past
+        // its friction angle creeps by about minimum_slip * T / (mu N) a step.
+        // The last step's slide is the lagged anchor carried across the step
+        // boundary, so a contact the prediction holds back grows its slide by
+        // about T / (mu N) a step until it slides as loaded, where the
+        // prediction alone would hold it there for good. A contact inside the
+        // cone has no excess and is untouched either way.
+        //
+        // THE DRIVE IS THE PAIR'S SHARE OF ITS VERTICES' LOAD, NOT THE
+        // VERTICES' WHOLE RESIDUAL. An anchor past |u| makes the surrogate lie
+        // above mu N |u| at the current slip, so it is not a majorizer touching
+        // there, and nothing then forces each iteration downhill. A contact
+        // whose drive reads past its cone while the contacts sharing its vertex
+        // together hold that vertex jumps out of the stick range, is pushed back
+        // by the stick spring the next iteration, and jumps out again: measured
+        // on a yarn strip hung on its pins, every Newton direction from the
+        // third iteration on was the exact negative of the one before
+        // (cosine -1.00, 2.6e-5 m), so 16 and 48 iterations ended at the same
+        // phase of the cycle and neither solved the step. Two things make the
+        // drive read past the cone falsely, and each alone keeps the cycle:
+        // several pairs each reading the vertex's whole load, and the load
+        // missing the normal forces of the other contacts at the vertex. The
+        // caller removes both (`friction_slip_prediction`, `share` and `load`,
+        // and `friction_memory.kernel.cpp`), and with both removed the same
+        // strip's Newton directions fall to round-off within a few iterations.
         float anchor = tangent_norm;
         if (drive_stiffness > 0.0f) {
             const Vec3f drive_tangent = drive - normal * normal.dot(drive);
             const float excess =
                 fmath::sqrt(drive_tangent.squaredNorm()) - cone;
             if (excess > 0.0f) {
-                anchor = anchor + fmath::div(excess, drive_stiffness);
+                anchor = anchor + fmath::max(
+                                      fmath::div(excess, drive_stiffness), slide);
             }
         }
         stiffness = fmath::div(cone, fmath::max(minimum_slip, anchor));
@@ -111,6 +147,38 @@
     hessian = stiffness * projection;
 }
 
+[[seam::device_fn]] inline void friction_evaluate(
+    const Vec3f &contact_force,
+    const Vec3f &slip, const Vec3f &normal,
+    float friction, float minimum_slip,
+    const Vec3f &drive, float drive_stiffness, Vec3f &gradient,
+    Mat3x3f &hessian, float &lambda, float &stiffness,
+    Vec3f &tangent, Mat3x3f &projection,
+    float &contact) {
+    friction_evaluate_anchored(contact_force, slip, normal, friction,
+                               minimum_slip, drive, drive_stiffness, 0.0f,
+                               gradient, hessian, lambda, stiffness, tangent,
+                               projection, contact);
+}
+
+// THE FRACTION OF A VERTEX'S RESIDUAL ONE FRICTIONAL PAIR READS, from the
+// pair's own cone at the vertex `own` (|w_i| mu N) and the vertex's cone `sum`
+// over `pairs` pairs in the last Newton iteration
+// (`friction_memory.kernel.cpp`, "THE VERTEX'S CONE IS SHARED"). A vertex that
+// carried at most one pair gives the whole residual: its sum was that one
+// pair's cone, so the fraction is one, and reading it as the ratio of this
+// iteration's normal force to the last one's would make a lone contact's
+// release depend on how much its own load changed between two iterations. The
+// ratio is capped at one for the same reason, for a pair whose load grew past
+// the lagged sum.
+[[seam::device_fn]] inline float friction_cone_fraction(float own, float sum,
+                                                        float pairs) {
+    if (pairs <= 1.0f || !(own > 0.0f)) {
+        return 1.0f;
+    }
+    return fmath::div(own, fmath::max(sum, own));
+}
+
 // A quadratic form t^T M t written out rather than as `t.dot(M * t)`: a small
 // dense matrix-vector product written as an expression is a documented
 // silent-miscompile hazard in device code, and a scalar accumulation is not.
@@ -160,6 +228,22 @@
 // moves or the residual has no tangential part, and the anchor then falls back
 // to the current slip.
 //
+// `load` IS EACH VERTEX'S LOAD, three floats a vertex: its residual before
+// any contact force plus the barrier forces of the contacts at it
+// (`friction_cone_gather`), gathered by the caller.
+//
+// `share` IS THE FRACTION OF EACH VERTEX THIS PAIR OWNS, the pair's cone over
+// the vertex's summed cone (`friction_cone_fraction`): one pair of several at
+// a vertex is driven by its part of the load, not by all of it, and moves its
+// part of the vertex's mass and stiffness, not all of them. Both halves are
+// needed. Scaling only the drive would predict, for a vertex past its summed
+// cone S under load T, a slip s (T - S) / k per pair instead of the vertex's
+// (T - S) / k, so a contact that should slide would release at a fraction of
+// its speed; scaling both gives every pair the vertex's own slip exactly. The
+// stiffness is scaled as D K D with D = diag(sqrt(s_i)), which keeps it a
+// quadratic form of the same sign. A vertex with one pair has a share of
+// one.
+//
 // `local_hessian` IS THE PAIR'S ELASTIC BLOCKS ALREADY GATHERED, the same
 // 3N x 3N the elasticity-inclusive contact stiffness is read out of, so this
 // re-reads no CSR row. `residual` is a device array indexed by vertex and is
@@ -167,21 +251,21 @@
 // address space MSL alone demands, so there is none here.
 template <unsigned N>
 [[seam::device_fn]] inline bool friction_slip_prediction(
-    const unsigned *index,
     const SVecf<N> &weight,
     const SVecf<N> &mass,
     const SMatf<3 * N, 3 * N> &local_hessian,
-    const float *residual,
+    const SVecf<3 * N> &load,
+    const SVecf<N> &share,
     const Vec3f &normal, float dt, Vec3f &drive,
     float &stiffness) {
     float weight2 = 0.0f;
     Vec3f residual_sum = Vec3f::Zero();
     for (unsigned i = 0; i < N; ++i) {
         if (weight[i] != 0.0f) {
-            const unsigned row = 3u * index[i];
             residual_sum = residual_sum +
-                           weight[i] * Vec3f(residual[row], residual[row + 1u],
-                                             residual[row + 2u]);
+                           (weight[i] * share[i]) *
+                               Vec3f(load[3u * i], load[3u * i + 1u],
+                                     load[3u * i + 2u]);
             weight2 = weight2 + weight[i] * weight[i];
         }
     }
@@ -204,18 +288,22 @@ template <unsigned N>
         if (weight[i] == 0.0f) {
             continue;
         }
-        k = k + weight[i] * weight[i] * fmath::div(mass[i], dt * dt);
+        k = k + weight[i] * weight[i] * share[i] *
+                    fmath::div(mass[i], dt * dt);
         for (unsigned j = 0; j < N; ++j) {
             if (weight[j] == 0.0f) {
                 continue;
             }
+            const float owned = share[i] == share[j]
+                                    ? share[i]
+                                    : fmath::sqrt(share[i] * share[j]);
             Mat3x3f block;
             for (unsigned a = 0; a < 3; ++a) {
                 for (unsigned b = 0; b < 3; ++b) {
                     block(a, b) = local_hessian(3u * i + a, 3u * j + b);
                 }
             }
-            k = k + weight[i] * weight[j] *
+            k = k + weight[i] * weight[j] * owned *
                         friction_quadratic_form(block, direction);
         }
     }

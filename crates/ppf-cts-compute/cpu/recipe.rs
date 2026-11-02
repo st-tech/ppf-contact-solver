@@ -11,7 +11,6 @@
 //! every target compiles one source and cannot drift in the arithmetic.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// What a caller names, and it is all it names.
 ///
@@ -107,7 +106,7 @@ pub fn compile_shim(plan: &HostShim) -> HostShimArtifact {
 /// It is the VALIDATOR as well as the renderer: a construct it does not
 /// understand is an error with a file, line and column, never a pass-through.
 fn transcompiler() -> PathBuf {
-    let seam = Path::new(env!("CARGO_MANIFEST_DIR")).join("seam/kernelgen.py");
+    let seam = super::kernelgen::transcompiler();
     assert!(
         seam.exists(),
         "ppf-cts-compute: the transcompiler is missing at {}. It ships with this \
@@ -123,13 +122,21 @@ fn transcompiler() -> PathBuf {
 /// The renderings land under `<out_dir>/kernelgen`, mirroring their path under
 /// the kernel root, exactly as the Metal build places theirs.
 ///
+/// Every rendering is one job for `super::kernelgen::render`, which runs them on
+/// all cores and reuses one whose recorded inputs are unchanged. The outcomes come
+/// back in job order, so the first failure reported is the one a serial loop
+/// over `plan.kernels` would have stopped at.
+///
 /// The transcompiler is the validator as well as the renderer, so a failure here
 /// is reported with its own output rather than summarized.
 fn render_kernels(plan: &HostShim) -> (PathBuf, Vec<String>) {
     let generator = transcompiler();
-    println!("cargo:rerun-if-changed={}", generator.display());
     let generated_root = plan.out_dir.join("kernelgen");
     let mut declaring: Vec<String> = Vec::new();
+    let mut jobs: Vec<super::kernelgen::Job> = Vec::new();
+    // What each job is, for the message if it fails: the source, and `None` for
+    // the body or `Some(target)` for an entry rendering.
+    let mut labels: Vec<(PathBuf, Option<&str>)> = Vec::new();
     for kernel in plan.kernels {
         let source = plan.kernel_root.join(format!("{kernel}.kernel.cpp"));
         if !source.exists() {
@@ -145,136 +152,123 @@ fn render_kernels(plan: &HostShim) -> (PathBuf, Vec<String>) {
         std::fs::create_dir_all(rendered.parent().unwrap()).unwrap_or_else(|e| {
             panic!("ppf-cts-compute: cannot create {}: {e}", rendered.display())
         });
-        let out = Command::new("python3")
-        .arg("-B")
-            .arg(&generator)
-            .arg("--target")
-            .arg("cpp")
-            .arg("--out")
-            .arg(&rendered)
-            .arg(&source)
-            .output()
-            .unwrap_or_else(|e| {
-                panic!(
-                    "ppf-cts-compute: cannot run python3 {}: {e}. The host \
-                     target renders its kernels at build time, so python3 is a \
-                     build requirement for it.",
-                    generator.display()
-                )
-            });
-        if !out.status.success() {
+        jobs.push(super::kernelgen::Job {
+            args: vec!["--target".into(), "cpp".into()],
+            out: rendered,
+            source: source.clone(),
+        });
+        labels.push((source.clone(), None));
+        if declares_entry(&source) {
+            for (target, args) in entry_jobs(plan.kernel_root, kernel, plan.handle_fields) {
+                let suffix = if target == "cpp" { "entry.cpp" } else { "entry.rs" };
+                jobs.push(super::kernelgen::Job {
+                    args,
+                    out: generated_root.join(format!("{kernel}.{suffix}")),
+                    source: source.clone(),
+                });
+                labels.push((source.clone(), Some(target)));
+            }
+            declaring.push((*kernel).to_string());
+        }
+    }
+    let outcomes = super::kernelgen::render(&jobs, &plan.out_dir.join("kernelgen-cache"));
+    for (outcome, (source, target)) in outcomes.into_iter().zip(&labels) {
+        let out = outcome.unwrap_or_else(|e| {
             panic!(
-                "ppf-cts-compute: rendering {} failed.\nstdout:\n{}\nstderr:\n{}",
-                source.display(),
+                "ppf-cts-compute: cannot run python3 {}: {e}. The host \
+                 target renders its kernels at build time, so python3 is a \
+                 build requirement for it.",
+                generator.display()
+            )
+        });
+        if !out.success {
+            let what = match target {
+                None => format!("rendering {}", source.display()),
+                Some(target) => {
+                    format!("rendering the {target} entry for {}", source.display())
+                }
+            };
+            panic!(
+                "ppf-cts-compute: {what} failed.\nstdout:\n{}\nstderr:\n{}",
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
             );
-        }
-        if render_entry_artifacts(
-            &generator,
-            plan.kernel_root,
-            &source,
-            kernel,
-            &generated_root,
-            plan.handle_fields,
-        ) {
-            declaring.push((*kernel).to_string());
         }
     }
     declaring.sort();
     (generated_root, declaring)
 }
 
-/// Renders the entry point and argument record a neutral kernel declares.
+/// Whether a neutral kernel declares an entry point, read off the source rather
+/// than kept in a list here.
 ///
-/// An entry point is an argument record plus a thread index plus a call into
-/// the neutral body, all three
-/// mechanical, so writing one by hand is writing a mirror pair by hand. What
-/// this produces is the `cpp` half, which the caller's entry translation unit
-/// compiles, and the `rust` half, which the caller's kernel table includes. Both
-/// come from the one declaration beside the body, so the record cannot disagree
-/// with the shim.
+/// A declaration opens at column zero with one of the two attributes that mark
+/// it, so a mention of either in prose (which is always inside a `//` comment) is
+/// not one, and neither is the `[[seam::device_fn]]` that opens an ordinary body.
+/// A miss here is loud rather than silent: `cpp_cpu/entries.cpp` names the
+/// artifact it expects, so a declaration this test did not see fails the build
+/// at that include.
 ///
-/// WHICH KERNELS: the ones that declare an entry, read off the source rather
-/// than kept in a list here. A declaration opens at column zero with one of the
-/// two attributes that mark it, so a mention of either in prose (which is
-/// always inside a `//` comment) is not one, and neither is the
-/// `[[seam::device_fn]]` that opens an ordinary body. A miss here is loud
-/// rather than silent: `cpp_cpu/entries.cpp` names the artifact it expects, so
-/// a declaration this test did not see fails the build at that include.
+/// This is the same verdict that decides whether the entry artifacts exist, and
+/// the caller is told it rather than left to re-derive it, so nothing downstream
+/// can spell this test a second way.
+fn declares_entry(source: &Path) -> bool {
+    let text = std::fs::read_to_string(source)
+        .unwrap_or_else(|e| panic!("ppf-cts-compute: cannot read {}: {e}", source.display()));
+    text.lines().any(|line| {
+        line.starts_with("[[seam::args]]")
+            || line.starts_with("[[seam::entry]]")
+            || line.starts_with("[[seam::entry(")
+    })
+}
+
+/// The two entry renderings of a kernel that declares one: the argument record
+/// plus thread index plus call into the neutral body.
+///
+/// An entry point is all three, all mechanical, so writing one by hand is
+/// writing a mirror pair by hand. What this asks for is the `cpp` half, which the
+/// caller's entry translation unit compiles, and the `rust` half, which the
+/// caller's kernel table includes. Both come from the one declaration beside the
+/// body, so the record cannot disagree with the shim.
 ///
 /// A kernel that declares an entry and is NOT compiled by the caller's entry
 /// translation unit is not an error: the declaration may exist for another
 /// target, and the host target fails at LINK if a dispatch names a symbol it did
 /// not compile.
-///
-/// Returns whether the source declared an entry, which is the same verdict that
-/// decided whether the two artifacts exist. The caller is told rather than left
-/// to re-derive it, so nothing downstream can spell this test a second way.
-fn render_entry_artifacts(
-    generator: &Path,
+fn entry_jobs(
     kernel_root: &Path,
-    source: &Path,
     kernel: &str,
-    generated_root: &Path,
     handle_fields: &[(&str, &str)],
-) -> bool {
-    let text = std::fs::read_to_string(source)
-        .unwrap_or_else(|e| panic!("ppf-cts-compute: cannot read {}: {e}", source.display()));
-    let declares_entry = text
-        .lines()
-        .any(|line| {
-            line.starts_with("[[seam::args]]")
-                || line.starts_with("[[seam::entry]]")
-                || line.starts_with("[[seam::entry(")
-        });
-    if !declares_entry {
-        return false;
-    }
-    for (target, suffix) in [("cpp", "entry.cpp"), ("rust", "entry.rs")] {
-        let rendered = generated_root.join(format!("{kernel}.{suffix}"));
-        let mut command = Command::new("python3");
-        command
-            .arg("-B")
-            .arg(generator)
-            .arg("--target")
-            .arg(target)
-            .arg("--emit")
-            .arg("entry")
-            .arg("--out")
-            .arg(&rendered)
+) -> Vec<(&'static str, Vec<std::ffi::OsString>)> {
+    ["cpp", "rust"]
+        .into_iter()
+        .map(|target| {
             // The generated entry includes headers from the caller's kernel
-            // tree, and this script does not sit inside it, so the root is
+            // tree, and the transcompiler does not sit inside it, so the root is
             // passed rather than deduced.
-            .arg("--kernel-root")
-            .arg(kernel_root);
-        // Only the Rust twin has a choice to make: every C++ rendering spells a
-        // buffer field as an `ArenaHandle` whatever the caller puts in it, and
-        // the transcompiler refuses the flag on those targets rather than
-        // ignoring it.
-        if target == "rust" {
-            for (stem, field) in handle_fields {
-                if *stem == kernel {
-                    command.arg("--handle-field").arg(field);
+            let mut args: Vec<std::ffi::OsString> = vec![
+                "--target".into(),
+                target.into(),
+                "--emit".into(),
+                "entry".into(),
+                "--kernel-root".into(),
+                kernel_root.into(),
+            ];
+            // Only the Rust twin has a choice to make: every C++ rendering
+            // spells a buffer field as an `ArenaHandle` whatever the caller puts
+            // in it, and the transcompiler refuses the flag on those targets
+            // rather than ignoring it.
+            if target == "rust" {
+                for (stem, field) in handle_fields {
+                    if *stem == kernel {
+                        args.push("--handle-field".into());
+                        args.push((*field).into());
+                    }
                 }
             }
-        }
-        let out = command
-            .arg(source)
-            .output()
-            .unwrap_or_else(|e| {
-                panic!("ppf-cts-compute: cannot run python3 {}: {e}", generator.display())
-            });
-        if !out.status.success() {
-            panic!(
-                "ppf-cts-compute: rendering the {target} entry for {} failed.\nstdout:\n{}\nstderr:\n{}",
-                source.display(),
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-    }
-    true
+            (target, args)
+        })
+        .collect()
 }
 
 /// Compiles the caller's translation units against the renderings.

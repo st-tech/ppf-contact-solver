@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Data-evolution chain: each ``data_retransfer`` adds a vertex
 # (topology change) and re-uploads. Catches missed mesh-hash
 # invalidations and stale runner._fetched lists across rebuilds.

@@ -1,7 +1,7 @@
 # File: scenarios/_world_scaling_invariance.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Shared driver library for the world_scaling SCALE-INVARIANCE
 # scenarios (Design 2).

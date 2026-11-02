@@ -213,15 +213,19 @@ def test_a_scene_below_the_bound_is_refused_by_name_and_builds_at_a_smaller_dt(s
 
 
 def test_dt_is_capped_at_one_frame_and_scaled_by_playback(scene):
-    assert longest_step(session_param(dt=0.05, fps=60.0)) == pytest.approx(1 / 60)
+    # 0.02 s is the longest step the solver takes, and it is longer than one
+    # frame at 60 fps, so the frame is what caps it.
+    assert longest_step(session_param(dt=0.02, fps=60.0)) == pytest.approx(1 / 60)
     assert longest_step(session_param(dt=0.01, fps=60.0)) == 0.01
     assert longest_step(session_param(dt=0.01, fps=60.0, playback=0.5)) == 0.005
     # A gap one frame's step can solve is accepted however long `dt` asks for.
-    two_bodies(scene, 1.5 * (1 / 60) / 4096.0)
+    # It solves a step up to 1.1 frames at 60 fps, so the full 0.02 s that
+    # 30 fps leaves uncapped is refused.
+    two_bodies(scene, 1.1 * (1 / 60) / 4096.0)
     fixed = scene.build(quiet=True)
-    refuse_unsolvable_scene(fixed, session_param(dt=0.05, fps=60.0))
+    refuse_unsolvable_scene(fixed, session_param(dt=0.02, fps=60.0))
     with pytest.raises(ValueError, match="between 'left' and 'right'"):
-        refuse_unsolvable_scene(fixed, session_param(dt=0.05, fps=30.0))
+        refuse_unsolvable_scene(fixed, session_param(dt=0.02, fps=30.0))
 
 
 def test_a_scheduled_step_is_judged_at_its_longest():

@@ -1,7 +1,7 @@
 # File: scenarios/bl_frame_start_leadin.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A solve that starts at frame S must leave frames 1..S-1 to the artist.
 #

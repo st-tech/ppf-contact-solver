@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_move_by.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling kinematic round-trip: a fully pinned plane driven by a
 # MOVE_BY pin op, simulated by the solver with world_scaling=10

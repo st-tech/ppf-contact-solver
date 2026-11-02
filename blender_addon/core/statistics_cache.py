@@ -1,8 +1,7 @@
 # File: blender_addon/core/statistics_cache.py
 # Code: GitHub Copilot
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Local cache for solver-produced per-object timeline statistics."""
 
 from __future__ import annotations

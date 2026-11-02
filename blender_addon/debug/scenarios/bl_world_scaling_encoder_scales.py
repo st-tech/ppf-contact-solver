@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_encoder_scales.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Encode-level check of the addon-side world_scaling decisions (no
 # build / run). The encoder is the half of world_scaling that decides

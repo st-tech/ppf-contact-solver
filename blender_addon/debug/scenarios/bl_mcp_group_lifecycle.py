@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_group_lifecycle.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The dynamics group lifecycle over MCP, from create to clear_solver. A group
 # is the unit the solver simulates, so this is the arc every agent-driven

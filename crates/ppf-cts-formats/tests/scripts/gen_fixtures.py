@@ -16,60 +16,47 @@
 # Run:
 #   .venv/bin/python crates/ppf-cts-formats/tests/scripts/gen_fixtures.py
 #
-# Re-run after any schema or addon-encoder change. Fixture files are
+# Re-run after any schema or encoder change. Fixture files are
 # checked in so the Rust test is reproducible without invoking Python.
 
 from __future__ import annotations
 
 import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[4]
-ADDON_ENCODER = REPO / "blender_addon" / "core" / "encoder" / "cbor_encode.py"
+FRONTEND_ENCODER = REPO / "frontend" / "_cbor_bridge_.py"
 OUT = Path(__file__).resolve().parents[1] / "cbor_fixtures"
 OUT.mkdir(parents=True, exist_ok=True)
 
 
-def _load_addon_encoder():
-    """Import the addon's CBOR encoder without dragging in bpy.
+def _load_encoder():
+    """Import the frontend's CBOR bridge by path, without ``import frontend``.
 
-    Side-steps blender_addon's relative-import init chain so we can
-    drive the same dumps_envelope() the addon will call at upload time.
-    The encoder's lazy ``from ..module import get_cbor2`` is satisfied by
-    registering minimal stub parent packages, so we never import
-    blender_addon's bpy-dependent __init__ chain.
+    ``frontend/__init__.py`` loads the compiled extension and fails without
+    it, while the bridge needs only cbor2 and numpy. Its ``dumps_envelope``
+    is the Apache-licensed twin of the Blender add-on's encoder, so this
+    script runs no add-on code (the add-on is GPL-3.0-or-later). The twin's
+    agreement with the add-on is checked inside Blender by
+    ``bl_cbor_twin_agrees``, a rig scenario.
     """
-    def _ensure_pkg(name):
-        if name not in sys.modules:
-            pkg = types.ModuleType(name)
-            pkg.__path__ = []  # mark as a package so submodules resolve
-            sys.modules[name] = pkg
-        return sys.modules[name]
-
-    _ensure_pkg("blender_addon")
-    _ensure_pkg("blender_addon.core")
-    _ensure_pkg("blender_addon.core.encoder")
-    core_module = _ensure_pkg("blender_addon.core.module")
-    core_module.get_cbor2 = lambda: __import__("cbor2")
-
-    fqname = "blender_addon.core.encoder.cbor_encode"
-    spec = importlib.util.spec_from_file_location(fqname, ADDON_ENCODER)
+    fqname = "ppf_cts_cbor_bridge"
+    spec = importlib.util.spec_from_file_location(fqname, FRONTEND_ENCODER)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[fqname] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
-_addon = _load_addon_encoder()
+_encoder = _load_encoder()
 
 
 def dumps(kind: str, payload: object) -> bytes:
-    """Single chokepoint: every fixture goes through the addon encoder."""
-    return _addon.dumps_envelope(kind, payload)
+    """Single chokepoint: every fixture goes through the frontend encoder."""
+    return _encoder.dumps_envelope(kind, payload)
 
 
 def make_scene_payload() -> list:

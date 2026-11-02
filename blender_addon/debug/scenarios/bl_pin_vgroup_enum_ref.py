@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_vgroup_enum_ref.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Behavior guard for the reported bug: a pin vertex-group dropdown garbled
 # when the vertex group had a non-ASCII (Japanese) name.

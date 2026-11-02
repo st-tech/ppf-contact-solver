@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_solve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Blender force fields and the exact script move simulated cloth end to end
 # (issue #114): encode -> build -> solve -> fetch through a real server and

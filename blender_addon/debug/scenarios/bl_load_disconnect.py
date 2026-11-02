@@ -1,7 +1,7 @@
 # File: scenarios/bl_load_disconnect.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Loading a different .blend (or starting a new file) while the addon
 # is connected must drop the connection. The communicator and engine

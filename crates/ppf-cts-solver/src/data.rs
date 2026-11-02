@@ -967,6 +967,13 @@ pub struct Stitch {
     pub index: Vec6u,
     pub weight: Vec6f,
     pub stiffness: f32,
+    /// The authored rest length, read only when `has_rest_length` is nonzero.
+    /// A stitch without one derives its rest length from the contact gaps of
+    /// its six slots, and a separate flag rather than a reserved value of this
+    /// field says which, since every positive float is a length someone could
+    /// mean.
+    pub rest_length: f32,
+    pub has_rest_length: u32,
 }
 
 #[repr(C)]

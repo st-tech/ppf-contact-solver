@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Cross-platform utility functions for MCP server operations."""
 
 import socket

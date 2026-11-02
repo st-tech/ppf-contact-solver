@@ -45,6 +45,7 @@
 #include "aabb_traversal.kernel.cpp"
 #include "distance.hpp"
 #include "pair_filter.kernel.cpp"
+#include "friction_memory.kernel.cpp"
 
 // The three barrier families `barrier_*` dispatches over, before the body
 // that dispatches over them: it names them unqualified, so an includer supplies
@@ -115,14 +116,19 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned barrier_id, float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, and the substep it is
-    // divided by. It is a COPY of the force vector taken before this pass, not
-    // the force vector itself: every contact here deposits into that vector
-    // through atomics, so reading it directly would hand one pair a residual
-    // another pair had already moved. The copy holds the momentum, elastic and
-    // strain-limit terms plus the analytic and collision-mesh contacts, which
-    // assemble first for exactly this reason.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // The pair's key in the memory: its kind, `left`, and what `left` slides
+    // against (`friction_memory.kernel.cpp` says which, per kind).
+    unsigned friction_kind, unsigned memory_other,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *index,
     const SVecf<N> &weight, float ghat, float offset,
     float friction, unsigned multiplicity, bool include_friction, unsigned left,
@@ -200,16 +206,17 @@ template <unsigned N>
     }
     const Vec3f relative_step = (ex - ex0).cast<float>();
     const Vec3f normal = separation.normalized();
-    // A GRAIN PAIR'S FRICTION SEES THE CONTACT-POINT SLIP, not the relative
-    // center step: the two surfaces meet at a point that each grain's own spin
-    // is already carrying, and exactly that is subtracted here before the
-    // friction term. The clamp inside keeps the pair from over-rolling and
-    // letting friction propel them apart.
-    const Vec3f slip =
-        has_grain ? relative_step - grain_pair_clamp_spin(spin_displacement,
-                                                              relative_step,
-                                                              normal)
-                  : relative_step;
+    // A PAIR WHOSE SIDES HAVE A FRAME SLIPS BY ITS RELATIVE STEP LESS ITS TURN
+    // (`friction_memory.kernel.cpp`, "A PAIR THAT TURNS AS ONE BODY DOES NOT
+    // SLIP"): `rotation[k]` is the turn's part of the slip Jacobian, filled in
+    // with the carried slip below and zero for a pair without a frame. A grain
+    // pair has its own spin substitution and no frame.
+    const unsigned frame =
+        has_grain ? FRICTION_FRAME_NONE : friction_frame_of(friction_kind, N);
+    Mat3x3f rotation[FRICTION_MEMORY_VERTICES];
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        rotation[k] = Mat3x3f::Zero();
+    }
     out_normal = normal;
     out_friction_gradient = Vec3f::Zero();
     out_friction_stiffness = 0.0f;
@@ -220,9 +227,14 @@ template <unsigned N>
         stiffness * barrier_edge_gradient(separation, ghat, offset, barrier);
     Mat3x3f hessian =
         stiffness * barrier_edge_hessian(separation, ghat, offset, barrier);
-    if (include_friction) {
-        Vec3f friction_gradient;
-        Mat3x3f friction_hessian;
+    // A PAIR'S FRICTION IS APPLIED BY THE FROZEN PASS from the record the
+    // step's first iteration writes (`friction_memory.kernel.cpp`, "THE RECORD
+    // IS ALSO THE STEP'S FRICTION"), so this pass evaluates it only to record
+    // it, and only then. A grain pair is the exception: its slip carries the
+    // grains' spin, and it applies its own friction every iteration.
+    Vec3f friction_gradient = Vec3f::Zero();
+    Mat3x3f friction_hessian = Mat3x3f::Zero();
+    if (include_friction && (has_grain || record_capacity > 0u)) {
         Vec3f tangent;
         Mat3x3f projection;
         float lambda;
@@ -240,19 +252,94 @@ template <unsigned N>
                 vertex_prop[index[i]].fix_index == 0u && mass[i] > 0.0f;
             free_weight[i] = owns_dof ? weight[i] : 0.0f;
         }
+        // EACH VERTEX'S SHARE, this pair's cone there over the cone of every
+        // frictional pair at that vertex in the last iteration
+        // (`friction_cone_fraction`). The cone is the normal force the barrier
+        // just produced, the same `-normal . force` the friction law reads.
+        const float pair_cone =
+            friction * fmath::max(0.0f, -normal.dot(force));
+        // AND EACH VERTEX'S LOAD, its residual plus the barrier forces of
+        // every contact at it, formed once an iteration by
+        // `friction_load_prepare` (`friction_memory.kernel.cpp`, "THE ANCHOR'S
+        // RELEASE TEST IS PER VERTEX"). The pair's own deposit counts
+        // `multiplicity` times, so its cone does too.
+        SVecf<N> share;
+        SVecf<3 * N> load;
+        for (unsigned i = 0; i < N; ++i) {
+            float sum, pairs;
+            friction_cone_lagged(friction_cone, index[i], sum, pairs);
+            share[i] = friction_cone_fraction(
+                fmath::abs(weight[i]) * (float)multiplicity * pair_cone, sum,
+                pairs);
+            const unsigned row = 3u * index[i];
+            for (unsigned d = 0; d < 3u; ++d) {
+                load[3u * i + d] = friction_load[row + d];
+            }
+        }
         Vec3f drive = Vec3f::Zero();
         float drive_stiffness = 0.0f;
-        if (!friction_slip_prediction<N>(index, free_weight, mass,
-                                             local_hessian, residual, normal,
+        if (!friction_slip_prediction<N>(free_weight, mass,
+                                             local_hessian, load, share, normal,
                                              dt, drive, drive_stiffness)) {
             drive_stiffness = 0.0f;
         }
-        friction_evaluate(force, slip, normal, friction, friction_eps, drive,
-                              drive_stiffness, friction_gradient,
+        // THE SLIP SINCE THE PAIR STUCK: what it carried out of the last
+        // committed step, in this step's tangent plane, plus this step's own
+        // (`friction_memory.kernel.cpp`).
+        const Vec2u memory_key =
+            friction_memory_key(friction_kind, left, memory_other);
+        float slide;
+        const Vec3f carried = friction_memory_tangential(
+            friction_memory_lookup(memory_key, memory_word0, memory_word1,
+                                   memory_slip, memory_count, slide),
+            normal);
+        // THE STEP'S OWN SLIP, its turn removed and the carried slip turned
+        // with the pair (`friction_frame_jacobian`, the lever `d0 - carried`).
+        Vec3f moved = relative_step;
+        if (frame != FRICTION_FRAME_NONE) {
+            unsigned frame_vertex[FRICTION_MEMORY_VERTICES];
+            for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+                frame_vertex[k] = k < N ? index[k] : FRICTION_MEMORY_UNUSED;
+            }
+            friction_frame_jacobian(frame, x0, frame_vertex,
+                                    ex0.cast<float>() - carried, rotation);
+            for (unsigned k = 0; k < N; ++k) {
+                const Vec3f xk = x[index[k]];
+                const Vec3f x0k = x0[index[k]];
+                moved += rotation[k] * (xk - x0k).cast<float>();
+            }
+        }
+        // A GRAIN PAIR'S FRICTION SEES THE CONTACT-POINT SLIP, not the relative
+        // center step: the two surfaces meet at a point that each grain's own spin
+        // is already carrying, and `contact.cu:576` subtracts exactly that before
+        // the friction term. The clamp inside keeps the pair from over-rolling and
+        // letting friction propel them apart.
+        const Vec3f slip =
+            has_grain ? relative_step - grain_pair_clamp_spin(spin_displacement,
+                                                                  relative_step,
+                                                                  normal)
+                      : moved;
+        const Vec3f held_slip = slip + carried;
+        friction_evaluate_anchored(force, held_slip, normal, friction, friction_eps,
+                              drive, drive_stiffness, slide, friction_gradient,
                               friction_hessian, lambda, friction_stiffness,
                               tangent, projection, normal_force);
-        force += friction_gradient;
-        hessian += friction_hessian;
+        if (friction * normal_force > 0.0f) {
+            float memory_weight[N];
+            for (unsigned i = 0; i < N; ++i) {
+                memory_weight[i] = weight[i];
+            }
+            friction_memory_record(memory_key, held_slip - moved, normal,
+                                   normal_force, friction,
+                                   (float)multiplicity, index, memory_weight, N,
+                                   !has_grain, record_word0,
+                                   record_word1, record_vertex, record_float,
+                                   record_count, record_capacity);
+        }
+        if (has_grain) {
+            force += friction_gradient;
+            hessian += friction_hessian;
+        }
         out_friction_gradient = friction_gradient;
         // THE SURROGATE'S STIFFNESS, NOT THE FORCE'S SECANT. The grain Schur
         // block pairs with the friction HESSIAN, so it must carry the curvature
@@ -264,6 +351,27 @@ template <unsigned N>
     SMatf<3 * N, 3 * N> extended_hessian = SMatf<3 * N, 3 * N>::Zero();
     extend_contact_force_hessian<N>(weight, force, hessian, extended_force,
                                         extended_hessian);
+    // THE FRICTION'S TURN PART belongs to whoever applies the friction: a grain
+    // pair here (which has no frame, so this never runs), every other pair in
+    // the frozen pass (`friction_frozen_embed`), which carries `J_k^T g` and
+    // `J_k^T H J_l` of `J_k = w_k I + R_k` itself.
+    if (has_grain && frame != FRICTION_FRAME_NONE) {
+        for (unsigned i = 0; i < N; ++i) {
+            const Vec3f turn_force = rotation[i].transpose() * friction_gradient;
+            for (unsigned d = 0; d < 3u; ++d) {
+                extended_force.m[3 * i + d] += turn_force[d];
+            }
+        }
+        for (unsigned i = 0; i < N; ++i) {
+            for (unsigned j = 0; j < N; ++j) {
+                const Mat3x3f block =
+                    weight[i] * (friction_hessian * rotation[j]) +
+                    weight[j] * (rotation[i].transpose() * friction_hessian) +
+                    rotation[i].transpose() * friction_hessian * rotation[j];
+                extended_hessian.template block<3, 3>(3 * i, 3 * j) += block;
+            }
+        }
+    }
     // The multiplicity scale. A matrix times a scalar is that scalar applied
     // to each of its stored floats, and an `SMat`'s whole storage is one flat
     // `float[R * C]`, so the elementwise form is the same expression on the
@@ -352,7 +460,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     unsigned first_index, unsigned second_index,
     unsigned *out_slot,
     compute::atomic_float_t *out_vertex_force,
@@ -438,7 +552,15 @@ template <unsigned N>
     Vec3f unused_normal;
     const bool accepted = embed_contact<4>(
                     x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value,
-                    row_count, barrier_id, friction_eps, residual, dt, index,
+                    row_count, barrier_id, friction_eps,
+                    memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+                    // A vertex slides across a surface's faces and edges alike, so the
+                    // memory names the surface's object and side, not the face.
+                    friction_memory_surface_kind(
+                        ((t1 - t0).cast<float>()).cross((t2 - t0).cast<float>()),
+                        (p - t0).cast<float>()),
+                    vertex_prop[index[1]].object_index,
+                    friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, 1u, true, vertex_index, face_index,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
@@ -485,7 +607,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     unsigned first_index, unsigned second_index,
     unsigned *out_slot,
     compute::atomic_float_t *out_vertex_force,
@@ -575,6 +703,19 @@ template <unsigned N>
     if (multiplicity == 0u) {
         return false;
     }
+    // THE SIDE, from a face the edge bounds, so the key agrees with the one
+    // the vertex had on that face; an edge bounding no face (a rod) has one.
+    unsigned surface_kind = FRICTION_KIND_POINT_SURFACE;
+    if (has_edge_face != 0u &&
+        edge_face_offset[edge_index + 1] > edge_face_offset[edge_index]) {
+        const Vec3u g = face[edge_face_index[edge_face_offset[edge_index]]];
+        const Vec3f g0 = x[g[0]];
+        const Vec3f g1 = x[g[1]];
+        const Vec3f g2 = x[g[2]];
+        surface_kind = friction_memory_surface_kind(
+            ((g1 - g0).cast<float>()).cross((g2 - g0).cast<float>()),
+            (p - g0).cast<float>());
+    }
     unsigned index[4];
     index[0] = vertex_index;
     index[1] = f[0];
@@ -595,7 +736,10 @@ template <unsigned N>
     Vec3f unused_normal;
     const bool accepted = embed_contact<3>(
                     x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value,
-                    row_count, barrier_id, friction_eps, residual, dt, index,
+                    row_count, barrier_id, friction_eps,
+                    memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+                    surface_kind, vertex_prop[index[1]].object_index,
+                    friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, multiplicity, include_friction,
                     vertex_index, edge_index,
@@ -644,9 +788,15 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
     // `dt` IS NOT REPEATED HERE. The grain block below already carries it, and
     // the friction anchor divides the pair's mass by the same substep.
-    const float *residual,
+    const float *friction_load, const float *friction_cone,
     unsigned first_index, unsigned second_index,
     // THE SAND GRAIN INPUTS. A non-zero inverse inertia is what makes a vertex
     // a grain, and `dt` turns its angular velocity into the surface
@@ -819,7 +969,12 @@ template <unsigned N>
     }
     const bool accepted = embed_contact<2>(
                     x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value,
-                    row_count, barrier_id, friction_eps, residual, dt, index,
+                    row_count, barrier_id, friction_eps,
+                    memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+                    // A grain touches several grains of one object at once, so
+                    // the memory names the other vertex.
+                    FRICTION_KIND_POINT_POINT, other,
+                    friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, multiplicity, include_friction,
                     vertex_index, other, out_vertex_force, out_fixed_value,
@@ -892,7 +1047,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     unsigned first_index, unsigned second_index,
     unsigned *out_slot,
     compute::atomic_float_t *out_vertex_force,
@@ -979,7 +1140,12 @@ template <unsigned N>
     Vec3f unused_normal;
     const bool accepted = embed_contact<4>(
                     x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value,
-                    row_count, barrier_id, friction_eps, residual, dt, index,
+                    row_count, barrier_id, friction_eps,
+                    memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+                    // An edge slides along the other yarn's segments, so the
+                    // memory names the other edge's object.
+                    FRICTION_KIND_EDGE_EDGE, vertex_prop[index[2]].object_index,
+                    friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, 1u, true, edge_index, other,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
@@ -1047,9 +1213,21 @@ struct ContactPointFaceEmbed {
     unsigned friction_mode;
     unsigned barrier_id;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -1086,7 +1264,7 @@ struct ContactPointFaceEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1124,9 +1302,16 @@ struct ContactPointFaceEmbed {
     unsigned friction_mode,
     unsigned barrier_id,
     float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1148,7 +1333,7 @@ struct ContactPointFaceEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointFaceEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactPointFaceEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1170,9 +1355,16 @@ struct ContactPointFaceEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index,
@@ -1203,7 +1395,7 @@ struct ContactPointFaceEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_face_at(x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, vertex_param, face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1244,9 +1436,21 @@ struct ContactPointEdgeEmbed {
     unsigned friction_mode;
     unsigned barrier_id;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -1280,7 +1484,7 @@ struct ContactPointEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1313,9 +1517,16 @@ struct ContactPointEdgeEmbed {
     unsigned friction_mode,
     unsigned barrier_id,
     float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1337,7 +1548,7 @@ struct ContactPointEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1361,9 +1572,16 @@ struct ContactPointEdgeEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index,
@@ -1394,7 +1612,7 @@ struct ContactPointEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1441,9 +1659,21 @@ struct ContactPointPointEmbed {
     unsigned friction_mode;
     unsigned barrier_id;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     const float *grain_inv_inertia;
     const Vec3f *grain_omega;
@@ -1486,7 +1716,7 @@ struct ContactPointPointEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (!contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, query_index, primitive, grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, torque, stiffness, normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (!contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, query_index, primitive, grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, torque, stiffness, normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
             out_overlap[query_index] = overlap;
         }
@@ -1539,9 +1769,16 @@ struct ContactPointPointEmbed {
     unsigned friction_mode,
     unsigned barrier_id,
     float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone,
     const float *grain_inv_inertia,
     const Vec3f *grain_omega,
     float dt,
@@ -1570,7 +1807,7 @@ struct ContactPointPointEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointPointEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, grain_inv_inertia, grain_omega, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, grain_torque_vertex,
+    ContactPointPointEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, grain_inv_inertia, grain_omega, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, grain_torque_vertex,
                                  grain_stiffness_vertex, grain_normal_vertex,
                                  grains_present, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
@@ -1598,9 +1835,16 @@ struct ContactPointPointEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone,
     const unsigned *pair, unsigned k,
     // THE SAND GRAIN INPUTS. A non-zero inverse inertia is what makes a vertex
     // a grain, and `dt` turns its angular velocity into the surface
@@ -1648,7 +1892,7 @@ struct ContactPointPointEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, pair[2 * k], pair[2 * k + 1], grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, grain_torque, grain_stiffness, grain_normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_point_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, vertex_edge_index, vertex_edge_offset, has_vertex_edge, vertex_face_index, vertex_face_offset, has_vertex_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, pair[2 * k], pair[2 * k + 1], grain_inv_inertia, grain_omega, dt, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, grain_torque, grain_stiffness, grain_normal, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1690,9 +1934,21 @@ struct ContactEdgeEdgeEmbed {
     unsigned friction_mode;
     unsigned barrier_id;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -1726,7 +1982,7 @@ struct ContactEdgeEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1754,9 +2010,16 @@ struct ContactEdgeEdgeEmbed {
     unsigned friction_mode,
     unsigned barrier_id,
     float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1778,7 +2041,7 @@ struct ContactEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1799,9 +2062,16 @@ struct ContactEdgeEdgeEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, unsigned barrier_id, float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index,
@@ -1832,7 +2102,7 @@ struct ContactEdgeEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1840,4 +2110,160 @@ struct ContactEdgeEdgeEmbed {
         out_index[4u * k + i] = slot[i];
     }
     active[k] = accepted ? 1u : 0u;
+}
+
+// THE STEP'S FRICTION, applied from its frozen record (`friction_memory.kernel.cpp`,
+// "THE RECORD IS ALSO THE STEP'S FRICTION"), one thread per entry the step's
+// first Newton iteration wrote. Each entry carries its pair's vertices and
+// closest-point weights, its normal, its normal force and coefficient at the
+// step's start pose x0, and the slip it carried out of the last committed step.
+// The slip at the iterate x is that carried slip plus the pair's relative
+// motion since x0 less its turn, the same rule the commit evaluates, and the
+// friction law (`friction_evaluate`) turns it into a tangential force and its
+// majorizer block, spread over the vertices through the slip's Jacobian. Nothing here reads
+// the iterate's contacts, so every iteration of a step assembles the same
+// friction potential. An entry whose pass applies its own friction (a grain
+// pair, `held` zero) is skipped. The count is read on the device, so the
+// dispatch covers the record's capacity.
+[[seam::entry(entry)]]
+[[seam::device_fn]] inline void friction_frozen_embed(
+    const Vec3f *x0, const Vec3f *x, const unsigned *record_word0,
+    const unsigned *record_vertex, const float *record_float,
+    const unsigned *record_count, unsigned record_capacity, float friction_eps,
+    const unsigned *fixed_index, const unsigned *fixed_offset,
+    unsigned row_count,
+    compute::atomic_float_t *out_vertex_force,
+    compute::atomic_float_t *out_diagonal,
+    compute::atomic_float_t *out_fixed_value,
+    compute::atomic_uint_t *dyn_claim, unsigned *dyn_row,
+    unsigned *dyn_column, float *dyn_block, unsigned dyn_capacity,
+    unsigned entry) {
+    if (entry >= record_count[0] || entry >= record_capacity) {
+        return;
+    }
+    const float *in = record_float + FRICTION_MEMORY_FLOATS * entry;
+    const float normal_force = in[10];
+    const float friction = in[11];
+    const float multiplicity = in[12];
+    const bool held = in[13] != 0.0f;
+    if (!held || !(friction * normal_force > 0.0f)) {
+        return;
+    }
+    unsigned v[FRICTION_MEMORY_VERTICES];
+    float w[FRICTION_MEMORY_VERTICES];
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        v[k] = record_vertex[FRICTION_MEMORY_VERTICES * entry + k];
+        w[k] = in[6u + k];
+    }
+    const Vec3f normal(in[3], in[4], in[5]);
+    // THE SLIP IS THE PAIR'S RELATIVE STEP LESS ITS TURN, by the same rule the
+    // commit evaluates (`friction_memory.kernel.cpp`, "A PAIR THAT TURNS AS ONE
+    // BODY DOES NOT SLIP"): `sum_k J_k (x_k - x0_k)` with
+    // `J_k = w_k I + rotation[k]`, the turn's part read from the primitives at
+    // x0, so it is the same linear map at every iteration of the step. Each
+    // vertex's step is formed as `x - x0` before anything scales it.
+    const unsigned frame = friction_frame_of(
+        record_word0[entry] >> FRICTION_KIND_SHIFT, friction_record_arity(v));
+    Mat3x3f rotation[FRICTION_MEMORY_VERTICES];
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        rotation[k] = Mat3x3f::Zero();
+    }
+    // The lever is `d0 - carried`: the slip carried into the step turns with
+    // the pair, as in the commit (`friction_frame_step`).
+    const Vec3f carried(in[0], in[1], in[2]);
+    if (frame != FRICTION_FRAME_NONE) {
+        friction_frame_jacobian(frame, x0, v,
+                                friction_frame_separation(x0, v, w) - carried,
+                                rotation);
+    }
+    Mat3x3f jacobian[FRICTION_MEMORY_VERTICES];
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        jacobian[k] = w[k] * Mat3x3f::Identity() + rotation[k];
+    }
+    Vec3f moved = Vec3f::Zero();
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        if (v[k] != FRICTION_MEMORY_UNUSED) {
+            const Vec3f xv = x[v[k]];
+            const Vec3f x0v = x0[v[k]];
+            moved += jacobian[k] * (xv - x0v).cast<float>();
+        }
+    }
+    const Vec3f slip = carried + moved;
+    Vec3f gradient;
+    Mat3x3f hessian;
+    float lambda;
+    float stiffness;
+    Vec3f tangent;
+    Mat3x3f projection;
+    float contact;
+    // No anchor: within a step the surrogate is tight at the current slip,
+    // the lagged choice, whose Hessian is consistent with the frozen force.
+    friction_evaluate(-normal_force * normal, slip, normal, friction,
+                      friction_eps, Vec3f::Zero(), 0.0f, gradient, hessian,
+                      lambda, stiffness, tangent, projection, contact);
+    // THE FORCE REACHES EACH VERTEX THROUGH THE SLIP'S JACOBIAN, `J_k^T g`. A
+    // vertex the weights skip can still carry the turn's part (an edge's far
+    // end), so the test is on the whole Jacobian, not on the weight.
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        if (v[k] == FRICTION_MEMORY_UNUSED) {
+            continue;
+        }
+        const Vec3f force = jacobian[k].transpose() * gradient;
+        for (unsigned d = 0; d < 3u; ++d) {
+            const float term = multiplicity * force[d];
+            if (term != 0.0f) {
+                compute::atomic_add(out_vertex_force + 3u * v[k] + d, term);
+            }
+        }
+    }
+    // A VERTEX'S OWN BLOCK GOES TO THE OPERATOR'S BLOCK DIAGONAL, where the
+    // analytic colliders deposit theirs, so it has a slot whether or not the
+    // vertex belongs to an element of the fixed pattern; a coupling between two
+    // vertices goes to the fixed pattern, or to the dynamic matrix past it.
+    // Only the upper triangle, as `embed_contact` offers it. Each block is
+    // `J_a^T H J_b`, a congruence of the PSD friction Hessian, so the
+    // assembled friction stays PSD.
+    for (unsigned a = 0; a < FRICTION_MEMORY_VERTICES; ++a) {
+        if (v[a] == FRICTION_MEMORY_UNUSED) {
+            continue;
+        }
+        for (unsigned b = 0; b < FRICTION_MEMORY_VERTICES; ++b) {
+            const unsigned row = v[a];
+            const unsigned column = v[b];
+            if (column == FRICTION_MEMORY_UNUSED || row > column) {
+                continue;
+            }
+            const Mat3x3f product =
+                jacobian[a].transpose() * hessian * jacobian[b];
+            Mat3x3f block;
+            bool any = false;
+            for (unsigned e = 0; e < 9u; ++e) {
+                block.m[e] = multiplicity * product.m[e];
+                any = any || block.m[e] != 0.0f;
+            }
+            if (!any) {
+                continue;
+            }
+            if (row == column) {
+                for (unsigned e = 0; e < 9u; ++e) {
+                    compute::atomic_add(out_diagonal + 9u * row + e, block.m[e]);
+                }
+                continue;
+            }
+            if (fixed_csr_atomic_push(fixed_index, fixed_offset,
+                                      out_fixed_value, row_count, row, column,
+                                      block)) {
+                continue;
+            }
+            const unsigned slot = compute::atomic_add(dyn_claim, 1u);
+            if (slot >= dyn_capacity) {
+                continue;
+            }
+            dyn_row[slot] = row;
+            dyn_column[slot] = column;
+            for (unsigned e = 0; e < 9u; ++e) {
+                dyn_block[9u * slot + e] = block.m[e];
+            }
+        }
+    }
 }

@@ -1,7 +1,7 @@
 # File: test_pin_capture.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression tests for Capture Pin Deformation. Runs inside Blender
 # via the debug port (matches tests/test_redraw.py's contract).

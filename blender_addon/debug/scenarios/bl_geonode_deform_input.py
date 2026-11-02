@@ -1,7 +1,7 @@
 # File: scenarios/bl_geonode_deform_input.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Geometry-Nodes deform as solver input. A SHELL plane carries a
 # Set-Position wave (z = A*sin(k*(t+y))) driven by Scene Time, with one

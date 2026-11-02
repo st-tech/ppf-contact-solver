@@ -35,3 +35,8 @@
 // the seam; `src/lib.rs` says why that is `host`.
 #[path = "../../cpu/recipe.rs"]
 pub mod host;
+
+// Running the transcompiler, shared by every recipe that renders kernels and by
+// a caller rendering fragments of its own: parallel, and reusing a rendering
+// whose recorded inputs are unchanged.
+pub mod kernelgen;

@@ -103,6 +103,90 @@ def _visible_rows(
     return ~invisible[index].any(axis=1)
 
 
+def stitch_endpoint_distance(
+    vertex: np.ndarray, ind: np.ndarray, w: np.ndarray
+) -> np.ndarray:
+    """The distance between each stitch's two barycentric points.
+
+    Slots 0..2 of a row of ``ind`` and ``w`` are the source point and slots
+    3..5 the target, each a weighted sum of three vertices of ``vertex``.
+
+    Args:
+        vertex (np.ndarray): ``(N, 3)`` positions the indices name.
+        ind (np.ndarray): ``(M, 6)`` vertex indices.
+        w (np.ndarray): ``(M, 6)`` barycentric weights.
+
+    Returns:
+        np.ndarray: ``(M,)`` float64 distances.
+
+    Raises:
+        ValueError: If a stitch's two points coincide, since a spring with
+            no length has no direction to pull along.
+    """
+    vertex = np.asarray(vertex, dtype=np.float64)
+    ind = np.asarray(ind, dtype=np.int64).reshape(-1, 6)
+    w = np.asarray(w, dtype=np.float64).reshape(-1, 6)
+    source = np.einsum("mk,mkd->md", w[:, 0:3], vertex[ind[:, 0:3]])
+    target = np.einsum("mk,mkd->md", w[:, 3:6], vertex[ind[:, 3:6]])
+    distance = np.linalg.norm(source - target, axis=1)
+    if len(distance) and not (distance > 0.0).all():
+        row = int(np.flatnonzero(~(distance > 0.0))[0])
+        raise ValueError(
+            f"stitch {row} joins two points at the same position, so it has "
+            "no initial length to rest at; give it a rest length, or none to "
+            "derive one from the contact gaps"
+        )
+    return distance
+
+
+# How a stitch row's rest length is decided, as the scene build carries it from
+# `Scene.cross_stitch` and `Object.stitch` to `FixedScene.set_stitch`.
+_STITCH_REST_DERIVED = 0  # half the mean contact gap of the six vertices
+_STITCH_REST_AUTHORED = 1  # the number the caller gave
+_STITCH_REST_INITIAL = 2  # measured from the built scene's positions
+
+
+def _stitch_rest_rows(rest_length, rows: int, what: str):
+    """Resolve a ``rest_length`` argument into per-row lengths and modes.
+
+    Returns a float64 ``(rows,)`` length array, meaningful where the mode is
+    authored, and a uint8 ``(rows,)`` mode array of the ``_STITCH_REST_*``
+    values.
+    """
+    lengths = np.zeros(rows, dtype=np.float64)
+    if rest_length is None:
+        return lengths, np.full(rows, _STITCH_REST_DERIVED, dtype=np.uint8)
+    if isinstance(rest_length, str):
+        if rest_length != "initial":
+            raise ValueError(
+                f"{what} rest_length is None, 'initial', a number or a "
+                f"per-stitch array, got the string {rest_length!r}"
+            )
+        return lengths, np.full(rows, _STITCH_REST_INITIAL, dtype=np.uint8)
+    given = np.asarray(rest_length, dtype=np.float64)
+    if given.ndim == 0:
+        given = np.full(rows, float(given))
+    if given.shape != (rows,):
+        raise ValueError(
+            f"{what} rest_length holds {given.shape} entries for {rows} "
+            "stitches; it is one number, or one per stitch"
+        )
+    bad = ~(np.isfinite(given) & (given > 0.0))
+    if bad.any():
+        row = int(np.flatnonzero(bad)[0])
+        raise ValueError(
+            f"{what} rest length of row {row} is {given[row]}; a rest length "
+            "is a finite positive distance"
+        )
+    return given, np.full(rows, _STITCH_REST_AUTHORED, dtype=np.uint8)
+
+
+def _rest_inputs(rest_length, rows: int, what: str) -> dict:
+    """The two per-row rest-length arrays the scene assembly carries."""
+    lengths, mode = _stitch_rest_rows(rest_length, rows, what)
+    return {"stitch_rest_length": lengths, "stitch_rest_mode": mode}
+
+
 class ValidationError(ValueError):
     """ValueError with structured violation data for visualization."""
 
@@ -223,6 +307,8 @@ class FixedScene:
         param_anim_times: Optional[list[float]] = None,
         bend_rest_vert: Optional[np.ndarray] = None,
         bend_rest_vert_mask: Optional[np.ndarray] = None,
+        bend_rest_vert_anim: Optional[np.ndarray] = None,
+        bend_rest_vert_times: Optional[np.ndarray] = None,
         pdrd_body_rows: Optional[list[float]] = None,
         pdrd_vert_index: Optional[np.ndarray] = None,
         pdrd_vert_list: Optional[list[int]] = None,
@@ -327,6 +413,8 @@ class FixedScene:
         self._rest_vert_times = rest_vert_times
         self._bend_rest_vert = bend_rest_vert
         self._bend_rest_vert_mask = bend_rest_vert_mask
+        self._bend_rest_vert_anim = bend_rest_vert_anim
+        self._bend_rest_vert_times = bend_rest_vert_times
         # PDRD per-body data, written to bin files at export time.
         # `pdrd_body_rows` is a flat list of 23 f32 per body (see the
         # PDRD body table builder); empty when the scene has no PDRD bodies.
@@ -408,6 +496,8 @@ class FixedScene:
         self._stitch_ind = np.zeros((0, 0))
         self._stitch_w = np.zeros((0, 0))
         self._stitch_stiffness = np.zeros(0)
+        self._stitch_rest_length = np.zeros(0, dtype=np.float32)
+        self._stitch_has_rest_length = np.zeros(0, dtype=bool)
         self._static_param = {}
         self._static_transform_animations: list[tuple[int, TransformAnimation]] = []
         self._wall = wall
@@ -1105,6 +1195,15 @@ class FixedScene:
             f.write(
                 f"has_bend_rest_vert = {str(self._bend_rest_vert is not None).lower()}\n"
             )
+            f.write(
+                "has_bend_rest_vert_anim = "
+                f"{str(self._bend_rest_vert_anim is not None).lower()}\n"
+            )
+            n_bend_frames = (
+                len(self._bend_rest_vert_times)
+                if self._bend_rest_vert_times is not None else 0
+            )
+            f.write(f"bend_rest_vert_anim_frames = {n_bend_frames}\n")
             f.write("\n")
 
             if self._static_transform_animations:
@@ -1274,6 +1373,13 @@ class FixedScene:
                 self._bend_rest_vert_mask.astype(np.uint8).tofile(
                     os.path.join(bin_path, "bend_rest_vert_mask.bin")
                 )
+        if self._bend_rest_vert_anim is not None:
+            self._bend_rest_vert_anim.astype(np.float64).tofile(
+                os.path.join(bin_path, "bend_rest_vert_anim.bin")
+            )
+            self._bend_rest_vert_times.astype(np.float64).tofile(
+                os.path.join(bin_path, "bend_rest_vert_times.bin")
+            )
         # Lock Translation: one normalized world-space axis per displacement
         # group (dmap entry), aligned with vert_dmap/displacement.bin
         # ordering, beside one uint32 mode per group. Absent entirely when
@@ -1545,6 +1651,25 @@ class FixedScene:
                     "stitch has the stiffness its object gives it"
                 )
             stiffness.tofile(os.path.join(bin_path, "stitch_stiffness.bin"))
+            # Per-stitch authored rest lengths and their presence flags,
+            # written as a pair and only when some stitch authors one. With
+            # neither file the solver derives every rest length from the
+            # contact gaps, so a scene that authors none writes exactly the
+            # files it always did.
+            has_rest = np.asarray(self._stitch_has_rest_length, dtype=bool)
+            rest = np.asarray(self._stitch_rest_length, dtype=np.float32)
+            if has_rest.shape != (n_stitch,) or rest.shape != (n_stitch,):
+                raise ValueError(
+                    f"this scene carries {n_stitch} stitches but "
+                    f"{rest.shape[0] if rest.ndim else 0} stitch rest lengths "
+                    f"and {has_rest.shape[0] if has_rest.ndim else 0} presence "
+                    "flags; set them through FixedScene.set_stitch"
+                )
+            if has_rest.any():
+                rest.tofile(os.path.join(bin_path, "stitch_rest_length.bin"))
+                has_rest.astype(np.uint8).tofile(
+                    os.path.join(bin_path, "stitch_has_rest_length.bin")
+                )
         pbar.update(1)
 
         def write_pin_bins(section: str, i: int, pin: PinData) -> None:
@@ -1778,16 +1903,42 @@ class FixedScene:
             self._invisible_static_vert = invisible
 
     def set_stitch(
-        self, ind: np.ndarray, w: np.ndarray, stiffness: Optional[np.ndarray] = None
+        self,
+        ind: np.ndarray,
+        w: np.ndarray,
+        stiffness: Optional[np.ndarray] = None,
+        rest_length=None,
+        rest_length_given: Optional[np.ndarray] = None,
     ):
         """Set the stitch data.
 
         Args:
-            ind (np.ndarray): The stitch indices.
-            w (np.ndarray): The stitch weights.
+            ind (np.ndarray): The stitch indices, ``(M, 6)`` in the scene's
+                own vertex numbering.
+            w (np.ndarray): The stitch weights, ``(M, 6)``.
             stiffness (Optional[np.ndarray]): Per-stitch-row stiffness (M,),
                 resolved from each stitch's owning object. Defaults to all
                 ones when omitted.
+            rest_length (optional): The length each stitch's spring holds its
+                two points at. ``None`` (the default) derives it from the
+                contact gaps of the stitch's six vertices, half their
+                weighted mean, which closes a seam to contact distance.
+                ``"initial"`` measures it from the two points' positions in
+                this scene, so a stitch between bodies that rest apart holds
+                them there with no preload. A positive number applies to
+                every stitch, and an ``(M,)`` array gives one per stitch.
+                The spring's energy is in strain units, ``l / l0 - 1``, so a
+                longer rest length makes the same ``stiffness`` a softer
+                spring: the force at an extension ``d`` is
+                ``stiffness * d / l0``.
+            rest_length_given (Optional[np.ndarray]): With an ``(M,)``
+                ``rest_length`` array, which rows it applies to; the others
+                derive theirs from the contact gaps. Defaults to every row.
+
+        Raises:
+            ValueError: If a rest length is not a finite positive distance,
+                an array does not hold one entry per stitch, or
+                ``"initial"`` meets a stitch whose two points coincide.
 
         Example:
             Typically invoked internally by :meth:`Scene.build`, but can be
@@ -1795,12 +1946,64 @@ class FixedScene:
 
                 fixed = scene.build()
                 fixed.set_stitch(stitch_indices, stitch_weights)
+
+            Hold every stitch at the distance its two points start at::
+
+                fixed.set_stitch(ind, w, stiffness, rest_length="initial")
         """
         self._stitch_ind = ind
         self._stitch_w = w
         if stiffness is None:
             stiffness = np.ones(len(ind), dtype=np.float32)
         self._stitch_stiffness = np.ascontiguousarray(stiffness, dtype=np.float32)
+        n_stitch = len(ind)
+        if rest_length is None:
+            if rest_length_given is not None:
+                raise ValueError(
+                    "rest_length_given names the rows a rest_length array "
+                    "applies to, and no rest_length was given"
+                )
+            lengths = np.zeros(n_stitch, dtype=np.float64)
+            given = np.zeros(n_stitch, dtype=bool)
+        else:
+            if isinstance(rest_length, str):
+                if rest_length != "initial":
+                    raise ValueError(
+                        f"rest_length is None, 'initial', a number or an "
+                        f"array, got the string {rest_length!r}"
+                    )
+                lengths = stitch_endpoint_distance(
+                    self.vertex(True), np.asarray(ind), np.asarray(w)
+                )
+            else:
+                lengths = np.asarray(rest_length, dtype=np.float64)
+                if lengths.ndim == 0:
+                    lengths = np.full(n_stitch, float(lengths))
+            if lengths.shape != (n_stitch,):
+                raise ValueError(
+                    f"rest_length holds {lengths.shape} entries for "
+                    f"{n_stitch} stitches"
+                )
+            if rest_length_given is None:
+                given = np.ones(n_stitch, dtype=bool)
+            else:
+                given = np.asarray(rest_length_given, dtype=bool)
+                if given.shape != (n_stitch,):
+                    raise ValueError(
+                        f"rest_length_given holds {given.shape} entries for "
+                        f"{n_stitch} stitches"
+                    )
+            chosen = lengths[given]
+            bad = ~(np.isfinite(chosen) & (chosen > 0.0))
+            if bad.any():
+                row = int(np.flatnonzero(given)[np.flatnonzero(bad)[0]])
+                raise ValueError(
+                    f"stitch {row} has the rest length {lengths[row]}; a rest "
+                    "length is a finite positive distance"
+                )
+            lengths = np.where(given, lengths, 0.0)
+        self._stitch_rest_length = np.ascontiguousarray(lengths, dtype=np.float32)
+        self._stitch_has_rest_length = np.ascontiguousarray(given, dtype=bool)
 
     def time(self, time: float) -> np.ndarray:
         """Compute the vertex positions at a specific time.
@@ -2589,6 +2792,7 @@ class Scene:
         ind,
         w,
         stiffness: float = 1.0,
+        rest_length=None,
     ) -> "Scene":
         """Stitch points on one object to points on another.
 
@@ -2599,9 +2803,9 @@ class Scene:
         tetrahedral mesh), and ``w`` holds each point's barycentric weights,
         which sum to one on each side. A point at a single vertex ``i`` is
         ``[i, i, i]`` with weights ``[1, 0, 0]``. The solver pulls the two
-        points together with a spring whose rest length comes from the
-        contact gaps of the six vertices, so the seam closes to contact
-        distance rather than to zero.
+        points together with a spring whose rest length, unless
+        ``rest_length`` gives one, comes from the contact gaps of the six
+        vertices, so the seam closes to contact distance rather than to zero.
 
         This is a soft stitch, not a weld: both objects keep their own
         vertices and contact still applies between them. Each call adds a set
@@ -2707,6 +2911,15 @@ class Scene:
                 f"cross-stitch stiffness must be finite and non-negative, got "
                 f"{stiffness}"
             )
+        # Resolved now so a malformed rest length is refused at the call
+        # that names it; the build resolves it again against the rows.
+        _stitch_rest_rows(
+            rest_length,
+            int(ind_arr.shape[0]),
+            f"cross-stitch '{labels[source]}' to '{labels[target]}'",
+        )
+        if rest_length is not None and not isinstance(rest_length, str):
+            rest_length = np.array(rest_length, dtype=np.float64)
         self._cross_stitch.append(
             {
                 "source_name": source,
@@ -2714,6 +2927,7 @@ class Scene:
                 "ind": ind_arr,
                 "w": w_arr,
                 "stitch_stiffness": stiffness,
+                "rest_length": rest_length,
             }
         )
         return self
@@ -2947,6 +3161,37 @@ class Scene:
                 "plasticity to 0 or stop tracking"
             )
 
+    @staticmethod
+    def _check_bend_rest_anim(name: str, obj: "Object") -> None:
+        """Refuse an animated bending rest shape that cannot be honored.
+
+        Bend plasticity creeps each hinge's rest angle every step, and the
+        animated bending rest shape overwrites the same angles every step, so
+        an object may carry one or the other. The keyframe vertices must line
+        up one to one with the object's own.
+        """
+        anim = getattr(obj, "_bend_rest_vert_anim", None)
+        if anim is None:
+            return
+        label = Scene._label(name, obj)
+        n_vert = len(obj.get("V"))
+        if anim.shape[1] != n_vert:
+            raise ValueError(
+                f"'{label}': its animated bending rest shape has "
+                f"{anim.shape[1]} vertices per keyframe but the object has {n_vert}"
+            )
+        keys = obj.param.key_list()
+        if "bend-plasticity" in keys and (
+            float(obj.param.get("bend-plasticity") or 0.0) > 0.0
+            or "bend-plasticity" in obj.param_anim
+            or "bend-plasticity" in obj.param_spatial
+        ):
+            raise ValueError(
+                f"'{label}': its bending rest angle is animated and it carries "
+                "'bend-plasticity'; both rewrite the rest angle, so set the bend "
+                "plasticity to 0 or stop animating the rest angle"
+            )
+
     def build(self, progress_callback=None, quiet: bool = False) -> FixedScene:
         """Build the fixed scene from the current scene.
 
@@ -2994,6 +3239,7 @@ class Scene:
             obj.update_static(stitched=name in stitched)
             self._check_static_material(name, obj)
             self._check_rest_shape_tracking(name, obj)
+            self._check_bend_rest_anim(name, obj)
         pbar.update(1)
         advance("Building scene: preparing objects...")
 
@@ -3157,6 +3403,11 @@ class Scene:
                     if stitch_w is not None else None
                 ),
                 "stitch_stiffness": float(obj.param.get("stitch-stiffness")),
+                **_rest_inputs(
+                    getattr(obj, "_stitch_rest_length", None),
+                    0 if stitch_ind is None else len(stitch_ind),
+                    f"object '{name}' stitch",
+                ),
             }
 
         dyn_inputs = [_pack_dyn_input(name, obj) for name, obj in dyn_objects]
@@ -3168,7 +3419,14 @@ class Scene:
             vert = obj.get("V")
             tri = obj.get("F")
             if vert is None or tri is None:
-                return None
+                # Object.update_static keeps an object without vertices or
+                # faces solved, so reaching here is a broken invariant.
+                # Skipping it would remove an obstacle from the scene.
+                raise ValueError(
+                    f"'{self._label(name, obj)}' was classified static but has "
+                    f"no {'vertices' if vert is None else 'faces'}; the "
+                    "collision mesh holds triangles only"
+                )
             color = obj.get("color")
             return {
                 "name": name,
@@ -3181,12 +3439,9 @@ class Scene:
             }
 
         static_inputs = [
-            d for d in (
-                _pack_static_input(name, obj)
-                for name, obj in self._object.items()
-                if obj.static
-            )
-            if d is not None
+            _pack_static_input(name, obj)
+            for name, obj in self._object.items()
+            if obj.static
         ]
 
         # ----- dmap order: every object (dyn + static) in insertion order -----
@@ -3211,6 +3466,11 @@ class Scene:
                 "ind": np.ascontiguousarray(np.asarray(cs["ind"]), dtype=np.int64).reshape(-1, 6),
                 "w": np.ascontiguousarray(np.asarray(cs["w"]), dtype=np.float64).reshape(-1, 6),
                 "stitch_stiffness": float(cs.get("stitch_stiffness", 1.0)),
+                **_rest_inputs(
+                    cs.get("rest_length"),
+                    len(np.asarray(cs["ind"]).reshape(-1, 6)),
+                    f"cross-stitch '{cs['source_name']}' to '{cs['target_name']}'",
+                ),
             }
             for cs in self._cross_stitch
         ]
@@ -4176,6 +4436,10 @@ class Scene:
         bend_rest_vert_mask = np.zeros(concat_count, dtype=np.uint8)
         for name, obj in dyn_objects:
             brv = getattr(obj, "_bend_rest_vert", None)
+            if brv is None and getattr(obj, "_bend_rest_vert_anim", None) is not None:
+                # An animated reference with no static one builds with its
+                # first keyframe.
+                brv = obj._bend_rest_vert_anim[0]
             if brv is None:
                 continue
             indices = np.asarray(map_by_name[name], dtype=np.int64)
@@ -4189,6 +4453,44 @@ class Scene:
             )
             bend_rest_vert_mask[indices] = 1
         has_bend_rest_vert = bool(bend_rest_vert_mask.any())
+
+        # ----- Time-varying bending reference -----
+        # Objects with an animated bending reference each carry their own
+        # keyframe times. The solver streams one schedule, so it is sampled at
+        # the union of those times: an object is linearly interpolated at a
+        # time between its own keyframes (and holds its end keyframe outside
+        # them), and every other row keeps its static reference above.
+        bend_anim = [
+            (name, obj) for name, obj in dyn_objects
+            if getattr(obj, "_bend_rest_vert_anim", None) is not None
+        ]
+        bend_rest_vert_anim = None
+        bend_rest_vert_times = None
+        if bend_anim:
+            union = np.unique(np.concatenate(
+                [obj._bend_rest_vert_times for _, obj in bend_anim]
+            ))
+            frames = []
+            for t in union:
+                frame = concat_bend_rest_vert.copy()
+                for name, obj in bend_anim:
+                    ts, vs = obj._bend_rest_vert_times, obj._bend_rest_vert_anim
+                    hi = int(np.searchsorted(ts, t, side="left"))
+                    if hi <= 0:
+                        pos = vs[0]
+                    elif hi >= len(ts):
+                        pos = vs[-1]
+                    elif ts[hi] == t:
+                        pos = vs[hi]
+                    else:
+                        a = (t - ts[hi - 1]) / (ts[hi] - ts[hi - 1])
+                        pos = vs[hi - 1] + a * (vs[hi] - vs[hi - 1])
+                    indices = np.asarray(map_by_name[name], dtype=np.int64)
+                    frame[indices] = pos
+                frames.append(frame)
+            bend_rest_vert_anim = np.concatenate(frames, axis=0).astype(np.float64)
+            bend_rest_vert_times = union.astype(np.float64)
+        has_bend_rest_vert_anim = bend_rest_vert_anim is not None
 
         # ----- Time-varying rest shape (captured full-pin deformation) -----
         # A pin flagged rest_shape_track is a FULL pin (every vertex captured;
@@ -4457,6 +4759,8 @@ class Scene:
             param_anim_times=param_anim_times or None,
             bend_rest_vert=concat_bend_rest_vert if has_bend_rest_vert else None,
             bend_rest_vert_mask=bend_rest_vert_mask if has_bend_rest_vert else None,
+            bend_rest_vert_anim=bend_rest_vert_anim if has_bend_rest_vert_anim else None,
+            bend_rest_vert_times=bend_rest_vert_times if has_bend_rest_vert_anim else None,
             collider_vert_mask=collider_vert_mask,
             object_vert_index=object_vert_index,
             intersect_policy=intersect_policy,
@@ -4528,10 +4832,27 @@ class Scene:
             )
 
         if concat_stitch_ind_arr.shape[0] and concat_stitch_w_arr.shape[0]:
+            # The rows the assembly carried as "initial" are measured here,
+            # against the built scene's own positions, which is where the
+            # two points of a cross-object stitch first share one frame.
+            rest_mode = np.asarray(assembled["concat_stitch_rest_mode"])
+            rest_length = np.array(
+                assembled["concat_stitch_rest_length"], dtype=np.float64
+            )
+            initial = rest_mode == _STITCH_REST_INITIAL
+            if initial.any():
+                rest_length[initial] = stitch_endpoint_distance(
+                    fixed.vertex(True),
+                    concat_stitch_ind_arr[initial],
+                    concat_stitch_w_arr[initial],
+                )
+            given = rest_mode != _STITCH_REST_DERIVED
             fixed.set_stitch(
                 concat_stitch_ind_arr,
                 concat_stitch_w_arr,
                 concat_stitch_stiffness_arr,
+                rest_length=rest_length if given.any() else None,
+                rest_length_given=given if given.any() else None,
             )
 
         fixed._contact_gap_participants = tuple(

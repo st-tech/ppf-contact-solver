@@ -2238,7 +2238,7 @@ mod tests {
             "test.zero_diagonal",
         );
         let inverse = a.inverse(&mut device);
-        let mut x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
+        let x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-5, 500).expect("the solve returns a report rather than an error");
@@ -2471,7 +2471,7 @@ mod tests {
             *v = -*v;
         }
         let inverse = staged_block(&mut device, &inverse_host, "test.negated_inverse");
-        let mut x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
+        let x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-5, 500).expect("the solve returns a report rather than an error");
@@ -2984,7 +2984,7 @@ mod tests {
         let inverse = a.inverse(&mut device);
 
         let x_host = vec![0.0f32; n];
-        let mut x = staged_block(&mut device, &x_host, "test.x");
+        let x = staged_block(&mut device, &x_host, "test.x");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-5, 500).expect("solve");
@@ -2997,7 +2997,7 @@ mod tests {
         // Verify independently: recompute the residual from the returned x
         // rather than trusting the loop's own bookkeeping.
         let mut ax = vec![0.0f32; n];
-        let mut ax_d = staged_block(&mut device, &ax, "test.ax");
+        let ax_d = staged_block(&mut device, &ax, "test.ax");
         // Safety: every handle names a live allocation on this device.
         unsafe {
             spmv::fixed_csr_spmv(
@@ -3010,7 +3010,6 @@ mod tests {
         }
         .expect("the fixed-pattern matvec dispatches");
         ax_d.read(&mut device, 0, &mut ax).expect("ax reads back");
-        let x = read_back(&mut device, &x, n);
         let residual: f32 = reduce::sum_abs(
             &b.iter().zip(ax.iter()).map(|(p, q)| p - q).collect::<Vec<f32>>(),
         );
@@ -3040,7 +3039,7 @@ mod tests {
         let inverse = a.inverse(&mut device);
 
         let x1_host = vec![0.0f32; n];
-        let mut x1 = staged_block(&mut device, &x1_host, "test.x1");
+        let x1 = staged_block(&mut device, &x1_host, "test.x1");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let with = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x1.handle(), &mut work, None, 1.0e-6, 2000).expect("solve");
@@ -3052,7 +3051,7 @@ mod tests {
             identity_host[9 * i + 8] = 1.0;
         }
         let x2_host = vec![0.0f32; n];
-        let mut x2 = staged_block(&mut device, &x2_host, "test.x2");
+        let x2 = staged_block(&mut device, &x2_host, "test.x2");
         // NO SECOND DEVICE. `b_in` and `x2` are handles into the arena the first
         // one opened, and a fresh backend resolves the same arena index against
         // its own empty table: the unpreconditioned solve saw a zero right-hand
@@ -3092,7 +3091,7 @@ mod tests {
 
         let reference = {
             let x_host = vec![0.0f32; n];
-            let mut x = staged_block(&mut device, &x_host, "test.x");
+            let x = staged_block(&mut device, &x_host, "test.x");
             let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
             let r = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-6, 500).expect("solve");
@@ -3105,7 +3104,7 @@ mod tests {
                 .expect("thread pool");
             let got = pool.install(|| {
                 let x_host = vec![0.0f32; n];
-                let mut x = staged_block(&mut device, &x_host, "test.x");
+                let x = staged_block(&mut device, &x_host, "test.x");
                 let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
                 let r = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-6, 500).expect("solve");
@@ -3146,7 +3145,7 @@ mod tests {
         let inverse = a.inverse(&mut device);
 
         let answer_host = vec![0.0f32; n];
-        let mut answer = staged_block(&mut device, &answer_host, "test.answer");
+        let answer = staged_block(&mut device, &answer_host, "test.answer");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let converged = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), answer.handle(), &mut work, None, 1.0e-7, 2000).expect("solve");
@@ -3166,13 +3165,13 @@ mod tests {
 
         // ONE DEVICE throughout: every buffer here is a handle into its arena.
         let from_zero_host = vec![0.0f32; n];
-        let mut from_zero = staged_block(&mut device, &from_zero_host, "test.from_zero");
+        let from_zero = staged_block(&mut device, &from_zero_host, "test.from_zero");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), from_zero.handle(), &mut work, None, 1.0e-12, 1).expect("solve");
 
         // Warm-started from the converged answer rather than from zero.
-        let mut from_answer = staged_block(&mut device, &answer_values, "test.from_answer");
+        let from_answer = staged_block(&mut device, &answer_values, "test.from_answer");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), from_answer.handle(), &mut work, None, 1.0e-12, 1).expect("solve");
@@ -3211,7 +3210,7 @@ mod tests {
         let inverse = a.inverse(&mut device);
 
         let answer_host = vec![0.0f32; n];
-        let mut answer = staged_block(&mut device, &answer_host, "test.answer");
+        let answer = staged_block(&mut device, &answer_host, "test.answer");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let cold = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), answer.handle(), &mut work, None, 1.0e-6, 2000).expect("solve");
@@ -3220,7 +3219,7 @@ mod tests {
         // The warm start is a COPY of the converged answer, staged as its own
         // allocation so the cold solve's result is not overwritten.
         let answer_values = read_back(&mut device, &answer, n);
-        let mut warm = staged_block(&mut device, &answer_values, "test.warm");
+        let warm = staged_block(&mut device, &answer_values, "test.warm");
         let resident = a.upload(&mut device);
         let mut work = a.work(&mut device);
         let warm_report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), warm.handle(), &mut work, None, 1.0e-6, 2000).expect("solve");
@@ -4382,7 +4381,9 @@ pub unsafe fn solve_cosserat<D: Device>(
         )?;
         let slot_args = CosseratApplySlotRowArgs {
             edge_nodes: frames.edge_nodes,
-            self_block: frames.self_block,
+            // The row sum, which the site pass's differences complete
+            // (`cosserat_apply_slot_row`).
+            self_block: frames.row_sum,
             coupling_from: frames.coupling_from,
             coupling_to: frames.coupling_to,
             input: input.handle(),
@@ -4524,7 +4525,9 @@ pub unsafe fn solve_cosserat<D: Device>(
     {
         let slot_args = CosseratApplySlotRowArgs {
             edge_nodes: frames.edge_nodes,
-            self_block: frames.self_block,
+            // The row sum, which the site pass's differences complete
+            // (`cosserat_apply_slot_row`).
+            self_block: frames.row_sum,
             coupling_from: frames.coupling_from,
             coupling_to: frames.coupling_to,
             input: coarse_in.handle(),

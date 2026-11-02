@@ -1,7 +1,7 @@
 # File: scenarios/bl_solid_loose_edge_stitch.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A SOLID's own loose-edge stitch reaches the solver, placed on the
 # tetrahedralized surface, and pulls.

@@ -1,7 +1,7 @@
 # File: scenarios/_driver_lib.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Source-string library for Blender-side scenario drivers.
 #

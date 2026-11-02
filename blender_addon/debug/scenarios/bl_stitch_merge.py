@@ -1,7 +1,7 @@
 # File: scenarios/bl_stitch_merge.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Cloth-to-cloth stitching across two SHELL pieces. Every supported
 # pair (including shell-shell) is now a soft, mass-scaled stitch plus a

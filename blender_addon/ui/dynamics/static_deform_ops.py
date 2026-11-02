@@ -1,7 +1,7 @@
 # File: static_deform_ops.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Capture Deformation: sample Blender's depsgraph for a STATIC mesh
 # collider whose modifier stack deforms vertices (Armature, MeshDeform,

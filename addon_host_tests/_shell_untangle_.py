@@ -1,7 +1,7 @@
 # File: addon_host_tests/_shell_untangle_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The pieces of the shell untangler (`core/shell_untangle.py`), each against an
 # answer computed another way.
@@ -646,6 +646,36 @@ def test_an_error_in_the_child_is_raised_by_result(su):
     assert run.wait(60.0)
     with pytest.raises(ValueError, match="not finite"):
         run.result()
+
+
+def test_progress_is_replaced_while_the_caller_reads_it(su, tmp_path):
+    # Issue #159: on Windows a replace onto a file the caller has open (as
+    # `Run._refresh` does at every poll) is refused with WinError 5 until the
+    # file is closed, and one refusal ended the whole run.
+    import threading
+
+    target, source = tmp_path / "progress.json", tmp_path / "progress.json.tmp"
+    target.write_text("old", encoding="utf-8")
+    source.write_text("new", encoding="utf-8")
+    reader = open(target, encoding="utf-8")  # noqa: SIM115 - closed by the timer
+    closer = threading.Timer(0.2, reader.close)
+    closer.start()
+    try:
+        su._replace_while_read(str(source), str(target))
+    finally:
+        closer.join()
+    assert target.read_text(encoding="utf-8") == "new"
+    assert not source.exists()
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="POSIX replaces an open file")
+def test_progress_held_open_past_the_wait_raises(su, tmp_path, monkeypatch):
+    monkeypatch.setattr(su, "_REPLACE_WAIT_SECONDS", 0.1)
+    target, source = tmp_path / "progress.json", tmp_path / "progress.json.tmp"
+    target.write_text("old", encoding="utf-8")
+    source.write_text("new", encoding="utf-8")
+    with open(target, encoding="utf-8"), pytest.raises(PermissionError):
+        su._replace_while_read(str(source), str(target))
 
 
 def test_a_run_refuses_what_cannot_cross_to_a_child(su, monkeypatch):

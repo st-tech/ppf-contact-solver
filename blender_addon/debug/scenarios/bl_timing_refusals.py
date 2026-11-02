@@ -1,7 +1,7 @@
 # File: scenarios/bl_timing_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Frame windows and keyframes the solve cannot place are REFUSED at encode, by
 # name, rather than reshaped into timing the artist did not author.

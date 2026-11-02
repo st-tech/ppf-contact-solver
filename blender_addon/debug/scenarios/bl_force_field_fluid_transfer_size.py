@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_transfer_size.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What a LONG Fluid Flow sequence costs on the way to the solver: the
 # parameter payload, its decode in the build worker, the session on disk, and

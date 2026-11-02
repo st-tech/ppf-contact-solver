@@ -1,7 +1,7 @@
 # File: scenarios/bl_material_map_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Everything a spatial material map REFUSES, and the one source it accepts.
 #

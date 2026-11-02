@@ -321,6 +321,10 @@
 // its slot in the FIXED pattern.
 #include "contact/contact_assembly.entry.cpp"
 
+// The friction's memory: the sort's gather and the commit that turns a step's
+// record into the next step's memory.
+#include "contact/friction_memory.entry.cpp"
+
 // The four narrow-phase visitors, one per pair kind. Each turns a broad-phase
 // candidate into an extended force and Hessian or into nothing, and each
 // declares a `[[seam::diag]]` lane: the separation assert they carry is the

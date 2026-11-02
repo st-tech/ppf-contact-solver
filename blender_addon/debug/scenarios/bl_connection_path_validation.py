@@ -1,7 +1,7 @@
 # File: scenarios/bl_connection_path_validation.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Backend Connection path validation. A connection path that holds a space
 # or a shell-unsafe character (& | ; ... ) breaks once it is interpolated

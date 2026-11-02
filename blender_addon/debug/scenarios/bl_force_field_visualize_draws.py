@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_visualize_draws.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The force field's Visualize overlay builds its GPU batches: one per kind of
 # arrow drawn (field objects' pushes and the script's).

@@ -1,8 +1,7 @@
 # File: animation.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 from ..models.groups import get_addon_data, iterate_active_object_groups
 from .pc2 import cleanup_mesh_cache, has_mesh_cache
 from .utils import _get_fcurves

@@ -369,14 +369,18 @@ def test_every_listed_builtin_compiles_and_nothing_else_does(capsys):
     assert all(sig in printed for _, entries in api.SECTIONS for _, sig, _ in entries)
 
 
-def test_the_add_on_carries_byte_identical_copies_of_the_noise_and_the_laws():
+def test_the_add_on_carries_identical_copies_of_the_noise_and_the_laws():
     # The add-on cannot import the frontend, so it carries copies; Visualize
-    # draws what the solver computes only while they stay identical.
+    # draws what the solver computes only while they stay identical. Each copy
+    # carries the license of its own directory, so the `# License:` line is the
+    # one line allowed to differ.
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     for ours, theirs in (("frontend/_noise_.py", "blender_addon/core/noise.py"),
                          ("frontend/_field_eval_.py", "blender_addon/core/field_eval.py")):
         with open(os.path.join(root, ours), "rb") as a, open(os.path.join(root, theirs), "rb") as b:
-            assert a.read() == b.read(), f"{theirs} is no longer a copy of {ours}"
+            a_lines = [x for x in a.read().splitlines(True) if not x.startswith(b"# License: ")]
+            b_lines = [x for x in b.read().splitlines(True) if not x.startswith(b"# License: ")]
+            assert a_lines == b_lines, f"{theirs} is no longer a copy of {ours}"
 
 
 def test_noise_amount_gusts_are_divergence_free_bounded_and_drift_with_a_wind():
@@ -1445,9 +1449,10 @@ def test_a_rebuild_reads_the_fluid_from_any_session_that_still_holds_it(tmp_path
     data = np.fromfile(os.path.join(fluid, "bricks-00001.bin"), dtype="<f4")
     (data + 1.0).tofile(os.path.join(fluid, "bricks-00001.bin"))
     before = _listing(a.info.path)
+    # The message names the session directories with the host's separator.
     with pytest.raises(ValueError, match=r"fluid frame 1 was written to 2 places, and none "
-                                         r"holds it any more: .*/b/.* is gone; .*/a/.* hold "
-                                         r"other values"):
+                                         r"holds it any more: .*[/\\]b[/\\].* is gone; "
+                                         r".*[/\\]a[/\\].* hold other values"):
         again.session.select("a").build()
     assert _listing(a.info.path) == before and "fixed_session.pickle" in before
 

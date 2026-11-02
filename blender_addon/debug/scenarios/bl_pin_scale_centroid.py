@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # SCALE around the pinned-vertex CENTROID. Shrink to 0.5 over the range.
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # File: scenarios/rig_degenerate_tet_rest_shape.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The TET arm of the solver's build-time rest-shape gate,
 # `builder::invert_rest_or_panic3`.

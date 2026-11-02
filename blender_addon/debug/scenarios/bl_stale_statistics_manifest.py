@@ -1,7 +1,7 @@
 # File: scenarios/bl_stale_statistics_manifest.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Changing a scene's dynamics groups between two runs must not leave the
 # runner decoding the new run's frames against the previous run's statistics

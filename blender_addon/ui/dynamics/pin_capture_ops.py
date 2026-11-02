@@ -1,7 +1,7 @@
 # File: pin_capture_ops.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Capture Deformation for SHELL/SOLID/ROD pins. Walks the scene frame
 # range on a modal timer, samples the depsgraph-evaluated mesh (or the

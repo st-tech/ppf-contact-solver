@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_smooth_by_angle_no_capture.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard: a STATIC mesh collider whose only Geometry Nodes
 # modifier is Blender 4.1+'s auto-added "Smooth by Angle" (it sets

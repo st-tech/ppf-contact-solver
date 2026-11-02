@@ -1,7 +1,7 @@
 # File: scenarios/bl_real_solid_smoke.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Real-backend end-to-end smoke for the partially-pinned SOLID path.
 #

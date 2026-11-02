@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_object_settings.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The remaining per-object and per-group settings over MCP: pin settings, the
 # tetrahedralizer overrides a SOLID object carries, the PDRD hinge, the group

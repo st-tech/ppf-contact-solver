@@ -1,7 +1,7 @@
 # File: scenarios/bl_clear_anim_poll.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression guard for the "Clear Local Animation" enable/disable signal.
 #

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Save/resume chain: catch state leak across the save_and_quit /
 # resume boundary. Save mid-run, resume, fetch, clear, run again.
 

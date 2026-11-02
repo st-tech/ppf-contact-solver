@@ -1,8 +1,7 @@
 # File: operations.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import gpu  # pyright: ignore
 
 from gpu_extras.batch import batch_for_shader  # pyright: ignore

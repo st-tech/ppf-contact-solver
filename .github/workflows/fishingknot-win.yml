@@ -25,6 +25,8 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+          - ap-northeast-3
+          - ap-northeast-2
 
 jobs:
   run-example:
@@ -97,8 +99,8 @@ jobs:
             exit 1
           fi
 
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in region $AWS_REGION"
             exit 1
           fi
@@ -110,11 +112,11 @@ jobs:
           fi
 
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
-          echo "VPC: $VPC_ID, Subnet: $SUBNET_ID, SG: $SG_ID"
+          echo "VPC: $VPC_ID, Subnets: $SUBNET_IDS, SG: $SG_ID"
 
       - name: Generate unique identifiers
         id: ids
@@ -150,22 +152,37 @@ jobs:
         id: instance
         run: |
           echo "Launching Windows EC2 instance..."
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data file:///tmp/user-data.ps1 \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Branch,Value=${{ env.BRANCH }}},{Key=Example,Value=fishingknot}]" \
-              "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' \
-            --region "$AWS_REGION" \
-            --output text)
+          # A subnet pins the availability zone, and a zone may not offer this
+          # instance type at all or may have no capacity for it right now, while
+          # another zone in the same VPC would take it. Try each subnet in turn, and
+          # report every refusal if none launches.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --key-name "${{ steps.keypair.outputs.KEY_NAME }}" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data file:///tmp/user-data.ps1 \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=100,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner},{Key=Workflow,Value=${{ github.workflow }}},{Key=RunId,Value=${{ github.run_id }}},{Key=Branch,Value=${{ env.BRANCH }}},{Key=Example,Value=fishingknot}]" \
+                "ResourceType=volume,Tags=[{Key=Name,Value=gpu-runner-win-fishingknot-${{ steps.ids.outputs.TIMESTAMP }}-volume},{Key=ManagedBy,Value=GitHubActions},{Key=Purpose,Value=WindowsGPURunner}]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' \
+              --region "$AWS_REGION" \
+              --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch the instance in $AWS_REGION"
+            exit 1
+          fi
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "Instance launched: $INSTANCE_ID"
 

@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_check.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Compile and Check (owner's request): the add-on asks the RUNNING server to
 # compile the force-field script with the frontend's compiler, and shows the

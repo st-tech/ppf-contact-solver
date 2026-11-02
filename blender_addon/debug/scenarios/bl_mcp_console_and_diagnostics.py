@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_console_and_diagnostics.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The diagnostic surface over MCP: the escape hatch that runs Python inside
 # Blender, the console and error readers, the UI element report, and the mesh

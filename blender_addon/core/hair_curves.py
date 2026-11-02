@@ -1,7 +1,7 @@
 # File: hair_curves.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Hair Curves as rods. Single source of truth for everything the add-on
 # reads from or writes to a Hair Curves object (Blender object type

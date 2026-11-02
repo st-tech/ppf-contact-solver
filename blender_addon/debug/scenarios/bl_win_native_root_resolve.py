@@ -1,7 +1,7 @@
 # File: scenarios/bl_win_native_root_resolve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Windows Native solver-root resolution. In Windows Native mode the user
 # points the addon at the directory that holds ``ppf-cts-server.exe`` (a

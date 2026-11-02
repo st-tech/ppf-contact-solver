@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """MCP Task Processing System for thread-safe Blender operations with integrated decorator support."""
 
 import threading

@@ -1,7 +1,7 @@
 # File: manifest.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Project manifest: a single JSON document at the project root that
 # describes what the addon knows about this project — addon version,

@@ -1,7 +1,7 @@
 # File: scenarios/bl_server_ping_keeps_it_up.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The add-on's ping is what keeps a server up while Blender is connected and
 # idle, and the server's idle stop is what ends one an artist forgot.

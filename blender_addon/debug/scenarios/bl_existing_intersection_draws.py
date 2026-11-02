@@ -1,7 +1,7 @@
 # File: scenarios/bl_existing_intersection_draws.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The viewport overlay turns an Allow Existing Intersections record into a GPU
 # batch and a label, the way it draws a build's exemptions on the start frame.

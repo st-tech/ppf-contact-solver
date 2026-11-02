@@ -1,7 +1,7 @@
 # File: scenarios/bl_resume_from_frame.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Resume-from-an-explicit-frame round-trip. Covers the "resume a simulation
 # from an arbitrary already-simulated frame" feature end to end:

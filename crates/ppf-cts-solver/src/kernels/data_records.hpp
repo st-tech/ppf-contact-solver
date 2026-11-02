@@ -377,6 +377,10 @@ struct Stitch {
     Vec6u index;
     Vec6f weight;
     float stiffness;
+    // The authored rest length, read only when `has_rest_length` is nonzero;
+    // otherwise the spring derives one from the six slots' contact gaps.
+    float rest_length;
+    unsigned has_rest_length;
 };
 
 struct Sphere {

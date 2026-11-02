@@ -1,7 +1,7 @@
 # File: scenarios/bl_geonode_capture_range_frame_count.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Capture Deformation frame-range selection for the Geometry Nodes path.
 #

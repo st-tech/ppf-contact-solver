@@ -7,7 +7,7 @@
 # Installs the NVIDIA DRIVER and nothing else on a plain Ubuntu instance, for
 # release.yml's verification of the Linux distribution:
 #
-#     install-nvidia-driver.sh [MIN_BRANCH]      (default 570)
+#     install-nvidia-driver.sh [MIN_BRANCH]      (default 580)
 #
 # WHAT IT INSTALLS IS WHAT A USER OF THE DISTRIBUTION IS ASSUMED TO HAVE: the
 # kernel module, the user-space compute library that carries libcuda.so.1, and
@@ -15,8 +15,8 @@
 # meta package, no libcudart.
 #
 # THE BRANCH IS THE LOWEST ONE AT OR ABOVE MIN_BRANCH THAT UBUNTU PUBLISHES A
-# PREBUILT MODULE FOR ON THE RUNNING KERNEL. 570 is the oldest branch the CUDA
-# 12.8 runtime supports, so it is the default minimum, but the archive does not
+# PREBUILT MODULE FOR ON THE RUNNING KERNEL. 580 is the oldest branch the CUDA
+# 13 runtime supports, so it is the default minimum, but the archive does not
 # build every branch for every kernel. Measured on Ubuntu 24.04 with a 7.0 AWS
 # kernel: only the 535, 580 and 595 server branches carried modules, and asking
 # ubuntu-drivers for 570 there installed a 580 user space with no module at all,
@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-MIN_BRANCH="${1:-570}"
+MIN_BRANCH="${1:-580}"
 case "$MIN_BRANCH" in
     '' | *[!0-9]*) echo "ERROR: MIN_BRANCH must be a driver branch number, got '$MIN_BRANCH'" >&2; exit 2 ;;
 esac

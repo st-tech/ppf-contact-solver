@@ -1,7 +1,7 @@
 # File: scenarios/bl_race_state_machine.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Race / guard-rejection coverage for the addon's state machine.
 # Each subtest dispatches an event sequence the guards are supposed

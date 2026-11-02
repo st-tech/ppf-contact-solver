@@ -1,5 +1,5 @@
 # File: scenarios/bl_lock_translation_free.py
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Exact Lock Translation in the solver's implicit ARAP global solve.
 # A free sheet receives gravity with allowed X and forbidden Z components.

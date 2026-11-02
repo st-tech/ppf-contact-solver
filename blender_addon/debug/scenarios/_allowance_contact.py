@@ -1,7 +1,7 @@
 # File: scenarios/_allowance_contact.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The probe the `rig_intersection_allowance_contact*` scenarios share, and the
 # runner that drives one section of it.

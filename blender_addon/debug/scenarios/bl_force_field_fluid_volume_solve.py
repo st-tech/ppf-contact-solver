@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_volume_solve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A Fluid Flow reading a Volume object's VDB SEQUENCE whose voxels move from
 # frame to frame, held to a closed form end to end: payload and solve.

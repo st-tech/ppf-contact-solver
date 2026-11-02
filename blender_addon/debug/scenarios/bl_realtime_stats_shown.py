@@ -1,7 +1,7 @@
 # File: scenarios/bl_realtime_stats_shown.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Realtime Statistics: live ``summary`` dict during simulation.
 #

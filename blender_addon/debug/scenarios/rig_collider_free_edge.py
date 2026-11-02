@@ -1,7 +1,7 @@
 # File: scenarios/rig_collider_free_edge.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One contract, asserted end to end: a cloth dropped astride the FREE EDGE of a
 # static collision mesh is caught by that edge and hangs on it.

@@ -1,7 +1,7 @@
 # File: scenarios/bl_existing_intersection.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The ADD-ON half of Allow Existing Intersections: the group checkbox, its
 # "Apply to All Objects" narrowing, and the encoder that ships it.

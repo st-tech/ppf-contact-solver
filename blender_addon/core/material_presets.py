@@ -1,7 +1,7 @@
 # File: material_presets.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Bundled material-preset library loaded from ``presets/materials.toml``.
 # Presets set physically-grounded material parameters on a dynamics group

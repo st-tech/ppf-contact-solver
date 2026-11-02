@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_colliders.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling with INVISIBLE COLLIDERS present (an invisible wall and
 # an invisible sphere), contact enabled. A pinned sheet drapes under

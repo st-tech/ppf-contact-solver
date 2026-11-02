@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# License: GPL-3.0-or-later
 """Fetch cbor2 wheels listed in blender_manifest.toml from PyPI.
 
 The Blender extension manifest references ten cbor2 wheels (cp311/cp313

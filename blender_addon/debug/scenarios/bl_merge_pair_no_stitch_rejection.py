@@ -1,7 +1,7 @@
 # File: scenarios/bl_merge_pair_no_stitch_rejection.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A merge pair whose stitch cannot reach the solver is REFUSED by name, at
 # Transfer and at every encode, and nothing rewrites the pair on the way.

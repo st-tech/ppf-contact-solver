@@ -1,8 +1,7 @@
 # File: handlers/presets.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """MCP handlers for material presets, parameter profiles, and the clipboards.
 
 A PRESET is bundled with the addon and read only. ``presets/materials.toml``

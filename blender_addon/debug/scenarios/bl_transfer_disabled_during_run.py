@@ -1,7 +1,7 @@
 # File: scenarios/bl_transfer_disabled_during_run.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression: clicking "Run" must leave no window where "Transfer" (or a
 # second Run / Update Params) stays clickable. Two gates cover the two

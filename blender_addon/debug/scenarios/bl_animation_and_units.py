@@ -1,7 +1,7 @@
 # File: scenarios/bl_animation_and_units.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What the encoder samples over time, what it reads once, and which units the
 # payload carries, checked at encode. Encode-only: no build and no run.

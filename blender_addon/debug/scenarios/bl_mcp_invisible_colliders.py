@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_invisible_colliders.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The invisible collider family over MCP: walls and spheres that shape the
 # motion without appearing in the scene, their properties, and their per-frame

@@ -1,8 +1,7 @@
 # File: output.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Response-formatting helpers shared by every CLI in this package.
 
 Unified because MCP ``tools/call`` and the debug TCP ``exec`` port return

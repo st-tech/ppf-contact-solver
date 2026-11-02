@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_make_keyframe_writes_fcurves.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Pin keyframe animation is authored as native vertex-co fcurves on
 # the mesh action, signaled by an ``EMBEDDED_MOVE`` op pinned to

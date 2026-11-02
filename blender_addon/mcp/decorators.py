@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """MCP handler decorators for simplified and clean handler implementation.
 
 This module provides decorators that eliminate boilerplate code by automatically:

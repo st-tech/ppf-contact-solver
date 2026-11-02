@@ -1,7 +1,7 @@
 # File: scenarios/bl_material_keyframe_animates.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A keyframe on a material slider has to reach the solver.
 #

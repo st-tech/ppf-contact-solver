@@ -1,7 +1,7 @@
 # File: scenarios/bl_pdrd_surface_winding.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # What a PDRD body's surface has to be for Transfer to accept it, driven from
 # real Blender meshes.

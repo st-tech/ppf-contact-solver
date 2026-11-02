@@ -1,8 +1,7 @@
 # File: encoder/params.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import json
 
 import numpy as np
@@ -38,6 +37,7 @@ from . import (
     solver_wind,
 )
 from .curve_refusal import refuse_unsampled_curves
+from ..limits import step_size_refusal
 from .dyn import _encode_dyn_params, _encode_invisible_colliders
 from .scene_anim import encode_scene_param_anim
 from .param_anim import encode_param_anim
@@ -158,6 +158,13 @@ def _encode_scene_params(context, state, fps):
     # Scaling is applied to it here; gravity and wind are physical constants
     # and are not scaled (see resolve_world_scaling).
     world_scaling = resolve_world_scaling(state)
+
+    # THE STEP-SIZE LIMIT, refused here with the sentence the panel shows: the
+    # field's maximum keeps a slider inside it, but not a value set by script
+    # or carried in from elsewhere, and the solver would refuse it anyway.
+    refusal = step_size_refusal(float(state.step_size))
+    if refusal is not None:
+        raise ValueError(refusal)
 
     scene_params = {
         "dt": np.float32(state.step_size),

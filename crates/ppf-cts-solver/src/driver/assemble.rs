@@ -1583,6 +1583,8 @@ pub unsafe fn stitch<D: Device>(
         stitch_weight: state.stitch.weight.handle(),
         length_factor: state.stitch.length_factor.handle(),
         stiffness: state.stitch.stiffness.handle(),
+        rest_length: state.stitch.rest_length.handle(),
+        has_rest_length: state.stitch.has_rest_length.handle(),
         gradient: state.stitch.gradient.handle(),
         hessian: state.stitch.hessian.handle(),
         count,
@@ -1598,8 +1600,9 @@ pub unsafe fn stitch<D: Device>(
 
     // THE RESULT IS REFUSED IF IT IS NOT A NUMBER, and the check is here rather
     // than several stages later at the solve. The body divides by two lengths
-    // this walk may not form for itself: the rest length, which is the
-    // barycentric mean of the six slots' contact gaps halved, and the measured
+    // this walk may not form for itself: the rest length, which unless the
+    // stitch authors one is the barycentric mean of the six slots' contact
+    // gaps halved, and the measured
     // length, which is zero when the two endpoints coincide exactly. So the
     // divisors cannot be tested before the call; what can be tested is whether
     // the result is foldable. The gradient alone is scanned because it passes
@@ -3128,13 +3131,30 @@ pub(crate) mod tests {
         }
     }
 
+    /// See `a_stitch_without_a_rest_length_assembles_the_same_bits_as_before_the_field_existed`.
+    ///
+    /// ONE GOLDEN FOR EVERY ARCHITECTURE. The tree before the field existed
+    /// (the published one) assembles these bits on x86-64 (g++ 13.3, CPU and
+    /// CUDA builds) and on aarch64 (clang, apple-m1) alike, measured with this
+    /// same fixture.
+    const STITCH_DERIVED_REST_LENGTH_GOLDEN: [u64; 2] = [0x6eeb_6a05_ae11_a4b6, 0x7169_5d3c_c22d_0677];
+
     /// A stitch record from six slot indices, six weights and a stiffness.
     fn seam(index: [u32; 6], weight: [f32; 6], stiffness: f32) -> Stitch {
         Stitch {
             index: Vec6u::from_row_slice(&index),
             weight: Vec6f::from_row_slice(&weight),
             stiffness,
+            rest_length: 0.0,
+            has_rest_length: 0,
         }
+    }
+
+    /// The same record with an authored rest length.
+    fn with_rest_length(mut record: Stitch, rest_length: f32) -> Stitch {
+        record.rest_length = rest_length;
+        record.has_rest_length = 1;
+        record
     }
 
     /// The vertex-to-vertex form: one vertex named three times per endpoint,
@@ -3390,6 +3410,177 @@ pub(crate) mod tests {
             text.contains("-1"),
             "the refusal must name the stiffness it found, got {text}"
         );
+    }
+
+    /// The bits of everything one stitch assembles: the vertex forces and the
+    /// dense Hessian, folded through FNV-1a so a single flipped bit anywhere
+    /// moves the answer.
+    fn assembled_bits(assembled: &Assembled, vertices: usize) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut fold = |value: f32| {
+            for byte in value.to_bits().to_le_bytes() {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for vertex in 0..vertices {
+            for value in assembled.vertex_force(vertex) {
+                fold(value);
+            }
+        }
+        for &value in &assembled.dense {
+            fold(value);
+        }
+        hash
+    }
+
+    /// A barycentric stitch in a general position, stretched but below its cap,
+    /// and the same configuration past the cap, both with the gap-derived rest
+    /// length. Shared by the bit-identity golden below.
+    fn derived_rest_length_bits() -> [u64; 2] {
+        let record = seam(
+            [0, 1, 2, 3, 4, 5],
+            [0.2, 0.3, 0.5, 0.6, 0.15, 0.25],
+            1.7,
+        );
+        let mut answer = [0u64; 2];
+        for (case, spread) in [0.37f32, 2.9].into_iter().enumerate() {
+            let mut fixture = Seam::new(6, 0.013, 0.002, record);
+            fixture.place(0, 0.011, -0.023, 0.031);
+            fixture.place(1, 0.052, 0.017, -0.009);
+            fixture.place(2, -0.019, 0.041, 0.006);
+            fixture.place(3, spread, 0.029, -0.044);
+            fixture.place(4, spread + 0.037, -0.013, 0.021);
+            fixture.place(5, spread - 0.026, 0.008, 0.015);
+            let assembled = fixture.assemble(4.0, 6).expect("the stitch assembles");
+            answer[case] = assembled_bits(&assembled, 6);
+        }
+        answer
+    }
+
+    #[test]
+    fn a_stitch_without_a_rest_length_assembles_the_same_bits_as_before_the_field_existed() {
+        // THE GOLDEN WAS PRINTED BY THE TREE BEFORE STITCHES COULD CARRY A REST
+        // LENGTH, running this same function there. A stitch that names none
+        // must take the gap-derived rest length through exactly the arithmetic
+        // it always did, so the force and the Hessian of a
+        // general barycentric stitch, below its cap and past it, match to the
+        // bit. A drift here is a change to every stitched scene.
+        let bits = derived_rest_length_bits();
+        println!("derived rest length bits: {:#018x} {:#018x}", bits[0], bits[1]);
+        assert_eq!(
+            bits, STITCH_DERIVED_REST_LENGTH_GOLDEN,
+            "a stitch with no authored rest length no longer assembles the bits it did"
+        );
+    }
+
+    #[test]
+    fn an_authored_rest_length_equal_to_the_derived_one_assembles_the_same_bits() {
+        // Gap 0.5 derives l0 = 0.5 exactly, so authoring 0.5 must select the
+        // same float and change nothing downstream of it.
+        let mut derived = Seam::new(2, 0.5, 0.0, degenerate(0, 1, 3.0));
+        derived.place(0, 0.0, 0.0, 0.0);
+        derived.place(1, 1.0, 0.25, 0.0);
+        let derived = derived.assemble(4.0, 2).expect("the stitch assembles");
+        let mut authored = Seam::new(2, 0.5, 0.0, with_rest_length(degenerate(0, 1, 3.0), 0.5));
+        authored.place(0, 0.0, 0.0, 0.0);
+        authored.place(1, 1.0, 0.25, 0.0);
+        let authored = authored.assemble(4.0, 2).expect("the stitch assembles");
+        assert_eq!(assembled_bits(&derived, 2), assembled_bits(&authored, 2));
+    }
+
+    #[test]
+    fn a_stitch_resting_at_its_authored_rest_length_pulls_with_no_force() {
+        // Two endpoints 0.4 apart, the distance between two yarn center lines a
+        // couching tack holds, with a contact gap of 0.01 that would derive a
+        // rest length of 0.005 and stretch the spring to its cap. Authored at
+        // 0.4 the strain l / l0 - 1 is zero, so there is no force, and the
+        // Hessian is the axial term alone, c0 = 1 / l0 along the stitch:
+        //   r = 0, c0 = 1 / 0.4 = 2.5, c1 = 0, (a, a) block = 2.5 diag(1, 0, 0)
+        // times the stiffness of 3.
+        let record = with_rest_length(degenerate(0, 1, 3.0), 0.4);
+        let mut fixture = Seam::new(2, 0.01, 0.0, record);
+        fixture.place(0, 0.0, 0.0, 0.0);
+        fixture.place(1, 0.4, 0.0, 0.0);
+        let assembled = fixture.assemble(4.0, 2).expect("the stitch assembles");
+        // The endpoint and the rest length are the same float, so the strain is
+        // zero to round-off.
+        for vertex in 0..2 {
+            let force = assembled.vertex_force(vertex);
+            for (k, value) in force.iter().enumerate() {
+                assert!(
+                    value.abs() <= 1e-5,
+                    "endpoint {vertex} carries a force {value} along axis {k} at its rest \
+                     length"
+                );
+            }
+        }
+        let entry = |row: usize, column: usize| assembled.dense[assembled.width * row + column];
+        assert!((entry(0, 0) - 7.5).abs() <= TOLERANCE * 7.5, "axial entry {}", entry(0, 0));
+        assert!(entry(1, 1).abs() <= 1e-5, "transverse entry {}", entry(1, 1));
+        assert!((entry(0, 3) + 7.5).abs() <= TOLERANCE * 7.5, "coupling {}", entry(0, 3));
+
+        // The same pair under the gap-derived rest length is pulled hard: that
+        // preload is what the authored rest length removes.
+        let mut preloaded = Seam::new(2, 0.01, 0.0, degenerate(0, 1, 3.0));
+        preloaded.place(0, 0.0, 0.0, 0.0);
+        preloaded.place(1, 0.4, 0.0, 0.0);
+        let preloaded = preloaded.assemble(4.0, 2).expect("the stitch assembles");
+        assert!(
+            preloaded.vertex_force(0)[0] < -1.0,
+            "the gap-derived spring should be stretched to its cap here, got {:?}",
+            preloaded.vertex_force(0)
+        );
+    }
+
+    #[test]
+    fn a_stitch_with_an_authored_rest_length_restores_toward_it() {
+        // Rest length 0.4, endpoints 0.6 apart (stretched) and 0.3 apart
+        // (compressed), cap 4 * 0.4 = 1.6 never reached:
+        //   stretched:  t = (-0.6, 0, 0), n = (-1, 0, 0),
+        //               dedt = (0.6 / 0.4 - 1) n = (-0.5, 0, 0)
+        //   compressed: t = (-0.3, 0, 0), n = (-1, 0, 0),
+        //               dedt = (0.3 / 0.4 - 1) n = (0.25, 0, 0)
+        // times the stiffness of 3. The stretched gradient has the sign of the
+        // pull-together case above and the compressed one the opposite sign,
+        // so both point the endpoints back toward 0.4.
+        for (spread, strain) in [(0.6f32, 0.5f32), (0.3, -0.25)] {
+            let record = with_rest_length(degenerate(0, 1, 3.0), 0.4);
+            let mut fixture = Seam::new(2, 0.01, 0.0, record);
+            fixture.place(0, 0.0, 0.0, 0.0);
+            fixture.place(1, spread, 0.0, 0.0);
+            let assembled = fixture.assemble(4.0, 2).expect("the stitch assembles");
+            let pull = 3.0 * strain;
+            assert_close(assembled.vertex_force(0), [-pull, 0.0, 0.0], "endpoint a");
+            assert_close(assembled.vertex_force(1), [pull, 0.0, 0.0], "endpoint b");
+            // PSD by construction holds at the authored rest length too.
+            for probe in [
+                [1.0f64, 0.0, 0.0, -1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0, -1.0, 0.0],
+                [1.0, -2.0, 3.0, 0.5, 0.25, -1.5],
+            ] {
+                let energy = assembled.quadratic_form(&probe);
+                assert!(energy >= -1e-5, "indefinite along {probe:?}: {energy}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_stitch_with_a_rest_length_that_is_not_a_positive_distance_stops_the_run() {
+        for bad in [0.0f32, -0.1, f32::NAN, f32::INFINITY] {
+            let fixture = Seam::new(2, 0.5, 0.0, degenerate(0, 1, 3.0));
+            let Seam { mut state, mut device, .. } = fixture;
+            state
+                .stash_stitches(&mut device, &[with_rest_length(degenerate(0, 1, 3.0), bad)])
+                .expect_err("a rest length that is not a finite positive distance is refused");
+        }
+        let fixture = Seam::new(2, 0.5, 0.0, degenerate(0, 1, 3.0));
+        let Seam { mut state, mut device, .. } = fixture;
+        let mut record = degenerate(0, 1, 3.0);
+        record.has_rest_length = 2;
+        state
+            .stash_stitches(&mut device, &[record])
+            .expect_err("a presence flag other than 0 or 1 is refused");
     }
 
     #[test]

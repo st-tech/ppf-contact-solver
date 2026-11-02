@@ -1,7 +1,7 @@
 # File: scenarios/bl_snap_parented_move.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Snap repositioning must move a PARENTED object by the intended world
 # distance, even when the parent is scaled. _apply_world_translation maps a

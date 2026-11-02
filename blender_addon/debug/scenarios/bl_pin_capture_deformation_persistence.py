@@ -1,7 +1,7 @@
 # File: scenarios/bl_pin_capture_deformation_persistence.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Persistence + load_post reconciliation for Capture Pin Deformation.
 #

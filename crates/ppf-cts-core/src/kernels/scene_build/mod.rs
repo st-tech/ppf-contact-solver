@@ -36,6 +36,7 @@ pub use assembly::{
     is_shell_shrink_strain_limit_conflict, rod_tri_contact_offset_check,
     AssembleObject, AssembleObjectStats, AssembleResult, AssembleStaticObject,
     AssembleStaticResult, CrossStitch, RodTriOffsetViolation, SceneAssemblyError,
+    STITCH_REST_AUTHORED, STITCH_REST_DERIVED, STITCH_REST_INITIAL,
 };
 pub use bbox::{axis_min_max, bbox, bbox_displaced, object_bbox_no_translate};
 pub use color_uv::{

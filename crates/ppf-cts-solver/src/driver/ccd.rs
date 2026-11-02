@@ -422,6 +422,19 @@ impl Sweep {
     }
 }
 
+/// A fraction of the step a sweep certified, checked before it meets a
+/// `min`: `f32::min` returns its non-NaN operand, so a NaN fraction would
+/// vanish there and the step would commit uncertified. A NaN, an infinity or a
+/// negative value stops the run, naming the sweep.
+pub fn certified_fraction(value: f32, what: &str) -> f32 {
+    assert!(
+        value.is_finite() && value >= 0.0,
+        "the {what} is {value}, not a finite nonnegative number; the step \
+         cannot proceed on it"
+    );
+    value
+}
+
 /// One step's CCD filter: the smallest time of impact over every pair, and the
 /// first pair that reported an overlapping start.
 ///

@@ -1,7 +1,7 @@
 # File: scenarios/bl_pdrd_driven_translate.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # PDRD Driven Motion: a Translate step, encoding round-trip.
 #

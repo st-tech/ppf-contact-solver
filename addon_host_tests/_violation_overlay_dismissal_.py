@@ -1,7 +1,7 @@
 # File: addon_host_tests/_violation_overlay_dismissal_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The violation overlay of a refused Transfer is taken down by an edit that
 # moves the geometry it points at, and stays down.

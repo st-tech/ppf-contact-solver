@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_panel_draws.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The STATIC group's Transform panel draws without error, and each op
 # editor draws its own fields.

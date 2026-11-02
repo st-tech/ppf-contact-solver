@@ -2,8 +2,7 @@
 # File: perf.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """Draw-time profiler CLI — drives ``blender_addon/ui/perf.py`` inside
 Blender over the debug/MCP transport provided by ``client.py``.
 

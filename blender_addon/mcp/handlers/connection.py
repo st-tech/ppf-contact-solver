@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Connection management handlers (SSH, Docker, and the three natives)."""
 
 from typing import Optional

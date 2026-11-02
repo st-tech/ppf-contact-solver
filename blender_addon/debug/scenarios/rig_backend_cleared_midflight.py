@@ -1,7 +1,7 @@
 # File: scenarios/rig_backend_cleared_midflight.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A DISCONNECT LANDING MID-OPERATION IS A TRANSPORT FAILURE, NEVER AN
 # AttributeError (``blender_addon/core/effect_runner.py``).

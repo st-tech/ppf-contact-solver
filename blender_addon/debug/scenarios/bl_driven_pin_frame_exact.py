@@ -1,7 +1,7 @@
 # File: scenarios/bl_driven_pin_frame_exact.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A driven (kinematic) fix pin must land EXACTLY on its prescribed path in
 # every OUTPUT frame, even when output frames fall strictly between the

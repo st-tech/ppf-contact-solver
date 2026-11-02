@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_merge_and_snap.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Merge pairs and snapping over MCP. A merge pair stitches two objects
 # together where they meet, and carries its own stitch stiffness, which is a

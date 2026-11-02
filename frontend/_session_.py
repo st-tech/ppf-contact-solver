@@ -17,10 +17,12 @@ tests, and Blender integration import names directly from
 """
 
 import asyncio
+import contextlib
 import os
 import pickle
 import platform
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -54,6 +56,99 @@ if TYPE_CHECKING:
 # Shared default cadence (seconds) for the FixedSession UI poll loops
 # (preview render, table refresh, terminal log stream).
 UI_POLL_INTERVAL_SEC = 0.1
+
+
+# How long a solver gets to exit after SIGTERM before it is killed.
+SOLVER_STOP_GRACE_SEC = 10.0
+
+
+class _DriverSignaled(BaseException):
+    """A terminating signal reached the driver while it waited on a solver.
+
+    A BaseException, like KeyboardInterrupt, so no `except Exception` in the
+    wait path absorbs it."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _stop_solver_process(process: subprocess.Popen) -> None:
+    """Stop a solver this process started, and its shell, and wait for it.
+
+    The solver is launched through a shell in a SESSION OF ITS OWN
+    (`start_new_session`), so its process group id is the shell's pid and the
+    group holds exactly this run. Signaling the group reaches the solver
+    itself, which a signal to the shell alone would not, and reaches nothing
+    else: a solver another driver started is in another group.
+    """
+    if process.poll() is not None:
+        return
+    if platform.system() == "Windows":
+        # CREATE_NEW_PROCESS_GROUP: the tree under the shell is this run.
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+        )
+        process.wait()
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=SOLVER_STOP_GRACE_SEC)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+@contextlib.contextmanager
+def _solver_bound_to_caller(process: subprocess.Popen):
+    """Tie a solver's lifetime to the blocking call waiting on it.
+
+    A blocking `start` is one call that runs one solve. The solver sits in a
+    session of its own (so a notebook's interrupt does not reach it), which
+    also means nothing that ends the DRIVER reaches it: unguarded, a Ctrl-C,
+    a `timeout` wrapper's SIGTERM or a dropped terminal's SIGHUP kills the
+    Python process and leaves the solver running on the GPU with no reader,
+    holding the device and making the next run on the host report "Solver is
+    already running".
+
+    Inside this context those end the solver too. Any exception leaving the
+    wait (KeyboardInterrupt included) stops the solver before propagating.
+    SIGTERM and SIGHUP, while their disposition is the default (so a caller's
+    own handler, or `nohup`'s ignore, is respected), are turned into an
+    exception for the duration; after the solver is stopped the signal is
+    delivered again under its default action, so the driver still dies by it
+    and its parent sees the same status as before. Handlers can only be
+    installed from the main thread, so a wait on another thread gets the
+    exception path alone.
+    """
+    installed: dict[int, Any] = {}
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGHUP"):
+            signum = getattr(signal, name, None)
+            if signum is None or signal.getsignal(signum) != signal.SIG_DFL:
+                continue
+
+            def _raise(received, _frame):
+                raise _DriverSignaled(received)
+
+            installed[signum] = signal.signal(signum, _raise)
+    try:
+        yield
+    except BaseException as exc:
+        _stop_solver_process(process)
+        if isinstance(exc, _DriverSignaled):
+            for signum, previous in installed.items():
+                signal.signal(signum, previous)
+            installed.clear()
+            os.kill(os.getpid(), exc.signum)
+        raise
+    finally:
+        for signum, previous in installed.items():
+            signal.signal(signum, previous)
 
 
 class SessionManager:
@@ -675,9 +770,10 @@ class FixedSession:
             #
             # NVIDIA driver validation and diagnostic dumps apply only to the
             # CUDA backend. Utils.check_gpu() has already asked the resolved
-            # solver whether its device is usable.
+            # solver whether its device is usable. 580 is the oldest driver
+            # branch the CUDA 13 runtime the backend links can run on.
             err = _rust.validate_driver_version(
-                Utils.get_driver_version(), 520
+                Utils.get_driver_version(), 580
             )
             if err is not None:
                 raise ValueError(err)
@@ -795,107 +891,8 @@ class FixedSession:
                     else:
                         raise ValueError(_rust.solver_failed_to_start_message(rc))
             if blocking:
-                if process.poll() is not None:
-                    log_lines = _rust.read_lines_with_newlines(log_path)
-                    err_lines = _rust.read_lines_with_newlines(err_path)
-                    display_log(log_lines)
-                    display_log(err_lines)
-
-                    error_message = self._analyze_solver_error(log_lines, err_lines)
-                    if error_message:
-                        raise ValueError(error_message)
-                    else:
-                        raise ValueError("Solver failed to start")
-                else:
-                    time.sleep(1)
-                    while self.is_running():
-                        if self.initialize_finished():
-                            break
-                        time.sleep(1)
-                    if not self.initialize_finished():
-                        log_lines = _rust.read_lines_with_newlines(log_path)
-                        err_lines = _rust.read_lines_with_newlines(err_path)
-                        display_log(log_lines)
-                        display_log(err_lines)
-
-                        error_message = self._analyze_solver_error(log_lines, err_lines)
-                        if error_message:
-                            raise ValueError(error_message)
-                        else:
-                            raise ValueError(
-                                "Solver initialization failed - check log files for details"
-                            )
-                print(f">>> Log path: {log_path}")
-                print(">>> Waiting for solver to finish...")
-                total_frames = self._param.get("frames")
-                assert isinstance(total_frames, int)
-                # Fast-check mode forces frames=1 in the exported param.toml
-                # (see the Rust to_toml_string override), so mirror it here or
-                # the progress bar would never reach its configured total.
-                if Utils.is_fast_check():
-                    total_frames = 1
-                with tqdm(total=total_frames, desc="progress") as pbar:
-                    last_frame = 0
-                    while process.poll() is None:
-                        frame = self.get.latest_frame()
-                        if frame > last_frame:
-                            pbar.update(frame - last_frame)
-                            last_frame = frame
-                        time.sleep(1)
-                # The loop above ended because the child exited, so its status
-                # is available and it is the authoritative verdict: the solver
-                # exits 0 on a clean finish and non-zero on every abort,
-                # including a FATAL raised after initialize succeeded. Read it
-                # BEFORE anything else can overwrite it.
-                returncode = process.poll()
-                err_lines = _rust.read_lines_with_newlines(err_path)
-                if len(err_lines) > 0:
-                    print("*** Solver FAILED ***")
-                else:
-                    print("*** Solver finished ***")
-                n_logs = 32
-                log_lines = _rust.read_lines_with_newlines(log_path)
-                print(">>> Log:")
-                for line in log_lines[-n_logs:]:
-                    print(line.rstrip())
-                if len(err_lines) > 0:
-                    print(">>> Error:")
-                    for line in err_lines:
-                        print(line.rstrip())
-                    print(f">>> Error log path: {err_path}")
-                # A DEAD SOLVER MUST NOT RETURN A LIVE SESSION. Printing the
-                # failure and returning normally leaves the caller to continue
-                # into preview, stream and export against a truncated frame set
-                # and exit 0, which reports success for a run that aborted. The
-                # sibling branch above already raises when the solver dies
-                # during initialize; this is the same rule applied to a death
-                # after it, which is the case the notebooks meet.
-                #
-                # The test is the exit status alone. Non-empty stderr decides
-                # only what is PRINTED, because the solver writes diagnostics
-                # there on runs that go on to finish cleanly, so raising on it
-                # would fail a successful run.
-                if returncode != 0:
-                    message = self._analyze_solver_error(log_lines, err_lines)
-                    if not message:
-                        message = (
-                            "Solver exited with status "
-                            f"{returncode}; see {err_path}"
-                        )
-                    raise RuntimeError(message)
-                # Crash by absence, the second half of the same rule. The solver
-                # writes `finished.txt` on every normal return from its run
-                # loop, the frames-done and save-and-quit exits included, so a
-                # zero status with no marker is a death that did not manage to
-                # report itself. This is the check every notebook spells as
-                # `if app.ci: assert session.finished()`, which never runs
-                # outside CI; making it here covers every caller of a blocking
-                # start instead, and needs no environment to be true.
-                if not self.finished():
-                    raise RuntimeError(
-                        "Solver exited with status 0 but wrote no completion "
-                        f"marker, so the run did not finish; see {err_path}"
-                    )
+                with _solver_bound_to_caller(process):
+                    self._wait_for_solver(process, log_path, err_path)
 
             fixed_scene = self.fixed_scene
             vals = (
@@ -911,6 +908,113 @@ class FixedSession:
         else:
             raise ValueError("Command path is not set. Call build() first.")
         return self
+
+    def _wait_for_solver(
+        self, process: subprocess.Popen, log_path: str, err_path: str
+    ) -> None:
+        """Wait for a solver this session started to finish, and raise if it
+        did not finish cleanly. The blocking half of :meth:`start`."""
+        if process.poll() is not None:
+            log_lines = _rust.read_lines_with_newlines(log_path)
+            err_lines = _rust.read_lines_with_newlines(err_path)
+            display_log(log_lines)
+            display_log(err_lines)
+
+            error_message = self._analyze_solver_error(log_lines, err_lines)
+            if error_message:
+                raise ValueError(error_message)
+            else:
+                raise ValueError("Solver failed to start")
+        else:
+            time.sleep(1)
+            while self.is_running():
+                if self.initialize_finished():
+                    break
+                time.sleep(1)
+            if not self.initialize_finished():
+                log_lines = _rust.read_lines_with_newlines(log_path)
+                err_lines = _rust.read_lines_with_newlines(err_path)
+                display_log(log_lines)
+                display_log(err_lines)
+
+                error_message = self._analyze_solver_error(log_lines, err_lines)
+                if error_message:
+                    raise ValueError(error_message)
+                else:
+                    raise ValueError(
+                        "Solver initialization failed - check log files for details"
+                    )
+        print(f">>> Log path: {log_path}")
+        print(">>> Waiting for solver to finish...")
+        total_frames = self._param.get("frames")
+        assert isinstance(total_frames, int)
+        # Fast-check mode forces frames=1 in the exported param.toml
+        # (see the Rust to_toml_string override), so mirror it here or
+        # the progress bar would never reach its configured total.
+        if Utils.is_fast_check():
+            total_frames = 1
+        with tqdm(total=total_frames, desc="progress") as pbar:
+            last_frame = 0
+            while process.poll() is None:
+                frame = self.get.latest_frame()
+                if frame > last_frame:
+                    pbar.update(frame - last_frame)
+                    last_frame = frame
+                time.sleep(1)
+        # The loop above ended because the child exited, so its status
+        # is available and it is the authoritative verdict: the solver
+        # exits 0 on a clean finish and non-zero on every abort,
+        # including a FATAL raised after initialize succeeded. Read it
+        # BEFORE anything else can overwrite it.
+        returncode = process.poll()
+        err_lines = _rust.read_lines_with_newlines(err_path)
+        if len(err_lines) > 0:
+            print("*** Solver FAILED ***")
+        else:
+            print("*** Solver finished ***")
+        n_logs = 32
+        log_lines = _rust.read_lines_with_newlines(log_path)
+        print(">>> Log:")
+        for line in log_lines[-n_logs:]:
+            print(line.rstrip())
+        if len(err_lines) > 0:
+            print(">>> Error:")
+            for line in err_lines:
+                print(line.rstrip())
+            print(f">>> Error log path: {err_path}")
+        # A DEAD SOLVER MUST NOT RETURN A LIVE SESSION. Printing the
+        # failure and returning normally leaves the caller to continue
+        # into preview, stream and export against a truncated frame set
+        # and exit 0, which reports success for a run that aborted. The
+        # sibling branch above already raises when the solver dies
+        # during initialize; this is the same rule applied to a death
+        # after it, which is the case the notebooks meet.
+        #
+        # The test is the exit status alone. Non-empty stderr decides
+        # only what is PRINTED, because the solver writes diagnostics
+        # there on runs that go on to finish cleanly, so raising on it
+        # would fail a successful run.
+        if returncode != 0:
+            message = self._analyze_solver_error(log_lines, err_lines)
+            if not message:
+                message = (
+                    "Solver exited with status "
+                    f"{returncode}; see {err_path}"
+                )
+            raise RuntimeError(message)
+        # Crash by absence, the second half of the same rule. The solver
+        # writes `finished.txt` on every normal return from its run
+        # loop, the frames-done and save-and-quit exits included, so a
+        # zero status with no marker is a death that did not manage to
+        # report itself. This is the check every notebook spells as
+        # `if app.ci: assert session.finished()`, which never runs
+        # outside CI; making it here covers every caller of a blocking
+        # start instead, and needs no environment to be true.
+        if not self.finished():
+            raise RuntimeError(
+                "Solver exited with status 0 but wrote no completion "
+                f"marker, so the run did not finish; see {err_path}"
+            )
 
     def _terminate_button(self, description: str = "Terminate Solver"):
         """Create a terminate button.
@@ -1141,8 +1245,14 @@ class FixedSession:
         if blocking is None:
             blocking = not Utils.in_jupyter_notebook()
         if blocking:
-            while self.is_running():
-                time.sleep(0.2)
+            process = self._process
+            with (
+                _solver_bound_to_caller(process)
+                if process is not None
+                else contextlib.nullcontext()
+            ):
+                while self.is_running():
+                    time.sleep(0.2)
             if not self.finished():
                 log_path, err_path = _rust.stdout_error_log_paths(self.info.path)
                 tail = ""

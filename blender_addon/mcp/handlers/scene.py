@@ -1,7 +1,7 @@
 # File: handlers/scene.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # MCP handlers for scene-level setup: invisible colliders, merge pairs,
 # and snap-to-vertices.  Thin adapters over ``core.mutation``: validate

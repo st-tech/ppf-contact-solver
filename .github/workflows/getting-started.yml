@@ -67,6 +67,8 @@ on:
           - us-east-1
           - us-east-2
           - ap-northeast-1
+          - ap-northeast-3
+          - ap-northeast-2
 
 jobs:
   headless:
@@ -140,8 +142,8 @@ jobs:
             exit 1
           fi
 
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ "$SUBNET_ID" = "None" ] || [ -z "$SUBNET_ID" ]; then
+          SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].SubnetId' --output text | tr '\t' ' ')
+          if [ "$SUBNET_IDS" = "None" ] || [ -z "$SUBNET_IDS" ]; then
             echo "ERROR: no subnet found in github-actions-vpc ($VPC_ID) in region $AWS_REGION"
             exit 1
           fi
@@ -153,11 +155,11 @@ jobs:
           fi
 
           echo "::add-mask::$VPC_ID"
-          echo "::add-mask::$SUBNET_ID"
+          for subnet in $SUBNET_IDS; do echo "::add-mask::$subnet"; done
           echo "::add-mask::$SG_ID"
-          echo "SUBNET_ID=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "SUBNET_IDS=$SUBNET_IDS" >> $GITHUB_OUTPUT
           echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
-          echo "VPC: $VPC_ID, Subnet: $SUBNET_ID, SG: $SG_ID"
+          echo "VPC: $VPC_ID, Subnets: $SUBNET_IDS, SG: $SG_ID"
 
       - name: Generate unique identifiers and SSH key
         id: ids
@@ -220,35 +222,50 @@ jobs:
           # Base64 encode for AWS
           USER_DATA=$(base64 -w 0 /tmp/user-data.sh)
 
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "${{ steps.setup.outputs.AMI_ID }}" \
-            --instance-type "$INSTANCE_TYPE" \
-            --subnet-id "${{ steps.setup.outputs.SUBNET_ID }}" \
-            --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
-            --associate-public-ip-address \
-            --user-data "$USER_DATA" \
-            --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
-            --tag-specifications \
-              "ResourceType=instance,Tags=[\
-                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}},\
-                {Key=ManagedBy,Value=GitHubActions},\
-                {Key=Purpose,Value=GPURunner},\
-                {Key=Workflow,Value=${{ github.workflow }}},\
-                {Key=RunId,Value=${{ github.run_id }}},\
-                {Key=Branch,Value=${{ env.BRANCH }}},\
-                {Key=Example,Value=getting-started}\
-              ]" \
-              "ResourceType=volume,Tags=[\
-                {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}-volume},\
-                {Key=ManagedBy,Value=GitHubActions},\
-                {Key=Purpose,Value=GPURunner},\
-                {Key=Workflow,Value=${{ github.workflow }}},\
-                {Key=Example,Value=getting-started}\
-              ]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --query 'Instances[0].InstanceId' \
-            --region "$AWS_REGION" \
-            --output text)
+          # A subnet pins the availability zone, and a zone may not offer this
+          # instance type at all or may have no capacity for it right now, while
+          # another zone in the same VPC would take it. Try each subnet in turn, and
+          # report every refusal if none launches.
+          INSTANCE_ID=""
+          for SUBNET in ${{ steps.setup.outputs.SUBNET_IDS }}; do
+            if INSTANCE_ID=$(aws ec2 run-instances \
+              --image-id "${{ steps.setup.outputs.AMI_ID }}" \
+              --instance-type "$INSTANCE_TYPE" \
+              --subnet-id "$SUBNET" \
+              --security-group-ids "${{ steps.setup.outputs.SG_ID }}" \
+              --associate-public-ip-address \
+              --user-data "$USER_DATA" \
+              --block-device-mappings "DeviceName=/dev/sda1,Ebs={VolumeSize=256,VolumeType=gp3,DeleteOnTermination=true}" \
+              --tag-specifications \
+                "ResourceType=instance,Tags=[\
+                  {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}},\
+                  {Key=ManagedBy,Value=GitHubActions},\
+                  {Key=Purpose,Value=GPURunner},\
+                  {Key=Workflow,Value=${{ github.workflow }}},\
+                  {Key=RunId,Value=${{ github.run_id }}},\
+                  {Key=Branch,Value=${{ env.BRANCH }}},\
+                  {Key=Example,Value=getting-started}\
+                ]" \
+                "ResourceType=volume,Tags=[\
+                  {Key=Name,Value=gpu-runner-${{ steps.ids.outputs.TIMESTAMP }}-volume},\
+                  {Key=ManagedBy,Value=GitHubActions},\
+                  {Key=Purpose,Value=GPURunner},\
+                  {Key=Workflow,Value=${{ github.workflow }}},\
+                  {Key=Example,Value=getting-started}\
+                ]" \
+              --instance-initiated-shutdown-behavior terminate \
+              --query 'Instances[0].InstanceId' \
+              --region "$AWS_REGION" \
+              --output text 2>/tmp/run-instances.err); then
+              break
+            fi
+            cat /tmp/run-instances.err
+            INSTANCE_ID=""
+          done
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "ERROR: no subnet in the VPC could launch the instance in $AWS_REGION"
+            exit 1
+          fi
 
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "Instance launched: $INSTANCE_ID"
@@ -343,17 +360,16 @@ jobs:
           set -e
           cd ${WORKDIR}
 
-          # Pin CUDA 12.8 before anything compiles. The Deep Learning AMI
+          # Pin CUDA 13.2 before anything compiles. The Deep Learning AMI
           # ships several toolkits and points /usr/local/cuda at whichever it
-          # prefers, which is 13.2 as shipped, and the solver Makefile compiles
-          # through that symlink by ABSOLUTE path
-          # (crates/ppf-cts-compute/cuda/Makefile:6), so setting PATH alone
-          # cannot steer it. The CUDA backend's be_open preflight reads
-          # cudaDeviceProp::kernelExecTimeoutEnabled, which CUDA 13 removed, so
-          # an unpinned runner fails to compile rather than misbehaving quietly.
-          CUDA_DIR=/usr/local/cuda-12.8
+          # prefers, and the solver Makefile compiles through that symlink by
+          # ABSOLUTE path (PPF_CUDA_ROOT in crates/ppf-cts-compute/cuda/Makefile),
+          # so setting PATH alone cannot steer it. The solver's build.rs refuses
+          # any other release, so an unpinned runner fails before compiling
+          # rather than producing a binary no other host has measured.
+          CUDA_DIR=/usr/local/cuda-13.2
           if [ ! -x "$CUDA_DIR/bin/nvcc" ]; then
-            echo "ERROR: CUDA 12.8 not found at $CUDA_DIR" >&2
+            echo "ERROR: CUDA 13.2 not found at $CUDA_DIR" >&2
             echo "Toolkits present on this AMI:" >&2
             ls -d /usr/local/cuda-* 2>/dev/null | sed 's/^/  /' >&2 || true
             exit 1
@@ -376,13 +392,13 @@ jobs:
           # Assert the version, do not merely report it. The second check is not
           # redundant: it tests the exact binary the solver Makefile invokes,
           # which is a different selector from the PATH one above.
-          if ! nvcc --version | grep -q "release 12\.8"; then
-            echo "ERROR: nvcc on PATH is not CUDA 12.8" >&2
+          if ! nvcc --version | grep -q "release 13\.2"; then
+            echo "ERROR: nvcc on PATH is not CUDA 13.2" >&2
             nvcc --version >&2
             exit 1
           fi
-          if ! /usr/local/cuda/bin/nvcc --version | grep -q "release 12\.8"; then
-            echo "ERROR: /usr/local/cuda/bin/nvcc is not CUDA 12.8" >&2
+          if ! /usr/local/cuda/bin/nvcc --version | grep -q "release 13\.2"; then
+            echo "ERROR: /usr/local/cuda/bin/nvcc is not CUDA 13.2" >&2
             exit 1
           fi
 
@@ -606,7 +622,7 @@ jobs:
           curl -fSsL -O https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get -y install cuda-toolkit-12-8
+          sudo apt-get -y install cuda-toolkit-13-2
 
       - name: read the GPU
         id: gpu
@@ -624,16 +640,16 @@ jobs:
       - name: 'GPU is sm_37 (Kepler, K80) -- NOT buildable, CUDA 12 dropped it'
         if: steps.gpu.outputs.sm == '37'
         run: 'true'
-      - name: 'GPU is sm_52 (Maxwell, M60)'
+      - name: 'GPU is sm_52 (Maxwell, M60) -- NOT buildable, CUDA 13 dropped it'
         if: steps.gpu.outputs.sm == '52'
         run: 'true'
-      - name: 'GPU is sm_60 (Pascal, P100)'
+      - name: 'GPU is sm_60 (Pascal, P100) -- NOT buildable, CUDA 13 dropped it'
         if: steps.gpu.outputs.sm == '60'
         run: 'true'
-      - name: 'GPU is sm_61 (Pascal, P40 / GTX 10-series) -- requested, not shipped'
+      - name: 'GPU is sm_61 (Pascal, P40 / GTX 10-series) -- NOT buildable, CUDA 13 dropped it'
         if: steps.gpu.outputs.sm == '61'
         run: 'true'
-      - name: 'GPU is sm_70 (Volta, V100)'
+      - name: 'GPU is sm_70 (Volta, V100) -- NOT buildable, CUDA 13 dropped it'
         if: steps.gpu.outputs.sm == '70'
         run: 'true'
       - name: 'GPU is sm_75 (Turing, T4 / RTX 20 / GTX 16) -- requested, shipped'
@@ -656,8 +672,8 @@ jobs:
       # `detected` answers "does the solver work on this architecture" before
       # the shipped manifest is changed for every user. The floor drops with the
       # cubin because the -dlto IR must sit at or below every target it is
-      # lowered to; measured on an L40S, lowering it to compute_61 leaves the
-      # sm_89 cubin byte-identical, so the floor is not what makes this risky.
+      # lowered to. CUDA 13 compiles no floor below 75, so on an older GPU this
+      # rewrite fails the build by name rather than answering the question.
       - name: rewrite cuda_arch.txt for the detected GPU
         if: github.event.inputs.arch_source == 'detected'
         run: |

@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Solver handler subpackage: re-exports all handlers for backward compatibility."""
 
 from .connection import *  # noqa: F401, F403

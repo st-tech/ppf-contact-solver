@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Simulation control handlers (transfer, run, resume, fetch, etc.)."""
 
 import bpy  # pyright: ignore

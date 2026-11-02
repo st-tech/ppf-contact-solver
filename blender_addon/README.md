@@ -3,7 +3,7 @@
 A Blender 5.0+ addon for physics-based contact simulation. Spawns the `ppf-cts-server` Rust binary (locally or on a remote host) and talks to it as a subprocess over TCP, transferring scene geometry and material parameters as CBOR envelopes (schema in `crates/ppf-cts-formats`), driving simulations, and fetching animation results back into Blender.
 
 **Package ID:** `ppf_contact_solver`
-**License:** Apache-2.0
+**License:** GPL-3.0-or-later
 **GitHub:** https://github.com/st-tech/ppf-contact-solver
 
 ---

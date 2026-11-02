@@ -1,7 +1,7 @@
 # File: scenarios/bl_server_unknown_recovery.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Regression test for the "Status stuck at Initializing / Waiting for
 # Server Start..." bug. Reproduces the failure mode and asserts the

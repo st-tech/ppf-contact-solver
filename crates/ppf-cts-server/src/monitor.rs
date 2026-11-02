@@ -1474,10 +1474,8 @@ mod tests {
     // ---- Whole-tick tests over the `exit_watch` slot -----------------------
     //
     // The slot is process-wide and holds one entry, so these run one at a
-    // time. Two of them concurrently would each observe the other's arm.
-    // A tokio mutex because half of these tests await `tick` while holding it;
-    // a `std` guard across an await is what `clippy::await_holding_lock` is for.
-    static EXIT_WATCH_SLOT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    // time, and with every other test that arms it (`exit_watch::TEST_LOCK`).
+    use crate::executor::solver::exit_watch::TEST_LOCK as EXIT_WATCH_SLOT;
 
     /// An engine already in `Solver::Running` for `root`, with no grace
     /// period, so one `tick` reaches a verdict with no sleeping.

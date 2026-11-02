@@ -126,7 +126,7 @@ SUPPRESS_WARNINGS=1222 2527 2529 2651 2653 2668 2669 2670 2671 2735 2737 2739 20
 # dependency: the in-house crates/.../kernels/linalg headers replaced Eigen, so
 # there is no -I<eigen> or -DEIGEN_WARNINGS_DISABLED here (Eigen now lives only
 # in a host-only compile, which carries its own include).
-NVCC_FLAGS=-std=c++17 -O3 -MMD -MP --device-c -Xcompiler -fPIC -D__NVCC__ --expt-relaxed-constexpr --extended-lambda -Wno-deprecated-gpu-targets
+NVCC_FLAGS=-std=c++17 -O3 -MMD -MP --device-c -Xcompiler -fPIC -D__NVCC__ --expt-relaxed-constexpr --extended-lambda
 # Compiling a NEUTRAL kernel directly is a build error, by design.
 #
 # A `*.kernel.cpp` carries `[[seam::device_fn]]` and `[[seam::thread]]`, and
@@ -157,7 +157,7 @@ NVCC_FLAGS += $(foreach warn,$(SUPPRESS_WARNINGS),--diag-suppress=$(warn))
 # and the caller measured here roughly halved the cost of its hottest kernel by
 # gaining that one inline.
 #
-# The LTO IR sits at the floor virtual arch (compute_61 as shipped), and every
+# The LTO IR sits at the floor virtual arch (compute_75 as shipped), and every
 # device target in the link below emits native SASS from that IR.
 # IMPORTANT: device LTO CANNOT embed a JIT-able PTX. The -dlto link lowers its IR
 # straight to SASS; a code=compute_XX request is silently dropped (verified with
@@ -202,6 +202,31 @@ NVCC_CPP_FLAGS=-std=c++17 -O3 -MMD -MP -Xcompiler -fPIC,-Wall,-Wno-unused-functi
 # anyway, by its banner, and that is the loud half of the same guard.
 KERNELGEN := ../seam/kernelgen.py
 KERNELGEN_DIR := $(OUT_DIR)/kernelgen
+
+# EVERY FILE OF THE NEUTRAL TREE, because that is what a rendering is read
+# from. The generator reads more than the source it is handed: the sources that
+# include it and that it includes (an includer's entry declarations seed the
+# address-space inference), and every header and kernel for the record layouts,
+# whose sizes it writes into the argument records. A rule naming only its own
+# source would leave those renderings stale after an edit elsewhere: a record
+# grown in data_records.hpp, with the kernels reading it untouched, would be
+# compiled at its old size against the new struct.
+#
+# Naming the whole tree re-runs every rendering after any edit to it, and the
+# generator writes its output only when the text changed, so an unchanged
+# rendering keeps its time and nothing compiled from it rebuilds. That is also
+# why each rendering goes through a STAMP: a rule whose output keeps an older
+# time than a prerequisite would otherwise run again on every build. The stamp
+# records that the rendering is current; the output's own rule (no work unless
+# the file has gone missing, when it removes the stamp and renders it again)
+# is what downstream rules name, so they see the output's time.
+KERNEL_TREE := $(shell find $(KERNEL_ROOT) -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print)
+
+# The stamps are produced only as prerequisites, so make would otherwise DELETE
+# them as intermediate files after the build that made them, and the next build
+# would render everything again.
+.SECONDARY:
+
 KERNEL_SRCS := $(sort $(shell find $(KERNEL_ROOT) -name '*.kernel.cpp' -print \
                                 | sed 's|^$(KERNEL_ROOT)/||'))
 KERNEL_CU := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.kernel.cu,$(KERNEL_SRCS))
@@ -265,40 +290,58 @@ KERNEL_TABLE_RUST := $(KERNELGEN_DIR)/kernel_table.rs
 #                     into every file that crosses it.
 NVCC_FLAGS += -I$(KERNELGEN_DIR) -I. -I$(KERNEL_ROOT)
 
-$(KERNELGEN_DIR)/%.kernel.cu: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.kernel.cu.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
-	python3 -B $(KERNELGEN) --target cu --out $@ $<
+	python3 -B $(KERNELGEN) --target cu --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.kernel.cu: $(KERNELGEN_DIR)/%.kernel.cu.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.entry.cu: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.entry.cu.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	# --kernel-root is passed rather than left to the generator's fallback:
 	# a generated ENTRY point includes headers from the neutral tree, and the
 	# transcompiler lives in this crate, so it cannot deduce where that tree
 	# is from its own location.
-	python3 -B $(KERNELGEN) --target cu --emit entry --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target cu --emit entry --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.entry.cu: $(KERNELGEN_DIR)/%.entry.cu.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.args.cuh: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.args.cuh.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	# --kernel-root for the same reason as the entry rule above: the record
 	# names ArenaHandle, whose header is in the neutral tree.
-	python3 -B $(KERNELGEN) --target cu --emit args --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target cu --emit args --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.args.cuh: $(KERNELGEN_DIR)/%.args.cuh.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.table.inc: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.table.inc.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	# --kernel-root because a fragment spells the argument header its rows are
 	# written against from the generated root, so that the concatenation below
 	# can be a plain cat rather than an include list.
-	python3 -B $(KERNELGEN) --target cu --emit table --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target cu --emit table --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.table.inc: $(KERNELGEN_DIR)/%.table.inc.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.diagfile.inc: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.diagfile.inc.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	# EVERY source gets a row, including one that declares no entry point: an
 	# assert does not need an entry to exist.
-	python3 -B $(KERNELGEN) --target cu --emit diagfile --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target cu --emit diagfile --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.diagfile.inc: $(KERNELGEN_DIR)/%.diagfile.inc.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.table.rs: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.table.rs.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
-	python3 -B $(KERNELGEN) --target rust --emit table --kernel-root $(KERNEL_ROOT) --out $@ $<
+	python3 -B $(KERNELGEN) --target rust --emit table --kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.table.rs: $(KERNELGEN_DIR)/%.table.rs.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # The concatenations. Order is $(KERNEL_SRCS)'s, which is sorted, and the two
 # recipes read the same variable, so the id a row gets is the same number on
@@ -498,15 +541,11 @@ $(OUT_DIR)/cpp/%.o: $(KERNEL_ROOT)/%.cpp Makefile
 # also runs sm_87 (Jetson Orin) and sm_89 (Ada: RTX 40, L40S); each new MAJOR
 # needs its own cubin. A brand-new arch not listed here fails to launch ("named
 # symbol not found") until its cubin is added and the lib rebuilt.
-#   sm_61  Pascal     GTX 10, Titan Xp       (oldest shipped; issue #141. Covers
-#                                             sm_61 and higher minors only, so
-#                                             sm_60 (Tesla P100) is NOT included.
-#                                             nvcc 12.8 warns that targets below
-#                                             75 are deprecated and will be
-#                                             dropped in a future CUDA release,
-#                                             which is when this row has to go.)
-#   sm_75  Turing     RTX 20, GTX 16, T4     (requested, and the self-hosted CI
-#                                             runner's card)
+#   sm_75  Turing     RTX 20, GTX 16, T4     (oldest shipped: CUDA 13 compiles
+#                                             nothing below 75, so Pascal and
+#                                             Volta GPUs run the CPU backend.
+#                                             Also the self-hosted CI runner's
+#                                             card.)
 #   sm_86  Ampere     RTX 30, A10/A40/A6000  (+ sm_87 Orin, sm_89 Ada via compat)
 #   sm_89  Ada        RTX 40, L40S, L4       (native; perf on the dev/CI GPU)
 #   sm_90  Hopper     H100, H200, GH200
@@ -556,12 +595,7 @@ $(OUT_DIR)/cpp/%.o: $(KERNEL_ROOT)/%.cpp Makefile
 $(LIBDIR)/libppfbe_cuda.so: $(MECHANISM_OBJS) $(ABI_OBJS) $(ENTRY_OBJS) \
                             $(SIMPLELOG_OBJS) $(STUB_OBJS) $(CUDA_ARCH_FILE)
 	mkdir -p $(LIBDIR)
-	# -Wno-deprecated-gpu-targets is on the compile flags too. It is needed HERE
-	# as well because the -gencode list lands at the device link, and nvcc 12.8
-	# warns once per deprecated target: the floor and the sm_61 cubin are both
-	# below the 75 it now considers current. The Makefile arch table says when
-	# that row has to come out; this only keeps the link log readable until then.
-	$(NVCC) -shared -dlto -t 0 -Wno-deprecated-gpu-targets $(CUDA_GENCODE) -o $@ $(filter-out $(CUDA_ARCH_FILE),$^)
+	$(NVCC) -shared -dlto -t 0 $(CUDA_GENCODE) -o $@ $(filter-out $(CUDA_ARCH_FILE),$^)
 
 # Built on request rather than by `all`, because a build that is not routing
 # the driver at CUDA pays a second five-architecture device link for an image

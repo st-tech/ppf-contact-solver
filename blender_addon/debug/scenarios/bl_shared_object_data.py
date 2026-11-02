@@ -1,7 +1,7 @@
 # File: scenarios/bl_shared_object_data.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Shared geometry deduplication: multiple objects sharing the same
 # local-space mesh content must share a single canonical entry on the

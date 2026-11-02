@@ -1,7 +1,7 @@
 # File: scenarios/bl_static_capture_cache_boundary.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Capture Deformation on a STATIC collider reads the stack CUT at the cache
 # boundary, the same pose the encoder and the pin capture read.

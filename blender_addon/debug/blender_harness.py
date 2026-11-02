@@ -1,7 +1,7 @@
 # File: blender_harness.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Per-worker Blender process management. Used by scenarios that drive
 # the actual addon UI through its operators rather than just talking to

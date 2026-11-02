@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 # Abort cycles: confirm the addon and server come back to a usable
 # state after aborts at different stages (mid-build and during run).
 

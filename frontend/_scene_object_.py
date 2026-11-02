@@ -23,7 +23,7 @@ from . import _rust  # type: ignore[attr-defined]
 
 from ._asset_ import AssetManager
 from ._param_ import ParamHolder, object_param
-from ._scene_ import EnumColor
+from ._scene_ import EnumColor, _stitch_rest_rows
 from ._scene_pin_ import PinHolder
 from ._scene_transform_ import (
     TransformAnimation,
@@ -622,8 +622,14 @@ class Object:
         # by the decoder from the per-object ``bend_rest_vert`` scene field
         # (already transformed to world space, matching ``vertex(True)``).
         self._bend_rest_vert: Optional[np.ndarray] = None
+        # Optional time-varying bending reference: keyframe times (seconds)
+        # and per-keyframe world-space vertices, set by
+        # ``set_bend_rest_vert_anim``.
+        self._bend_rest_vert_times: Optional[np.ndarray] = None
+        self._bend_rest_vert_anim: Optional[np.ndarray] = None
         self._normalize = False
         self._stitch = None
+        self._stitch_rest_length = None
         self._uv = None
         self._transform_animation: Optional[TransformAnimation] = None
         # Flagged by the decoder when the object is a static-moving mesh
@@ -703,7 +709,8 @@ class Object:
         resolution independent: refining a rod's segments leaves its
         rigidities unchanged. The rod
         key ``bend`` defaults to 0 here, since the frames carry the bending.
-        A Cosserat rod and a static collider are mutually exclusive.
+        A rod is never a static collider, so a Cosserat rod pinned at every
+        vertex stays in the solve, held exactly, as an obstacle.
 
         Returns:
             Object: ``self``, to allow chaining with placement and
@@ -721,8 +728,6 @@ class Object:
             raise ValueError(
                 f"as_cosserat() requires a Rod asset; got {self.obj_type!r}"
             )
-        if self._static:
-            raise ValueError("as_cosserat() cannot be applied to a static object")
         self._is_cosserat = True
         self._param = ParamHolder(object_param("cosserat"))
         return self
@@ -1951,6 +1956,20 @@ class Object:
             self._static = False
             return
 
+        # ONLY A SURFACE CAN BE A COLLISION MESH. The static pool holds
+        # triangles, and every contact, CCD and intersection pass that reaches
+        # it walks faces and their edges and vertices, so a rod or a point set
+        # has nothing to contribute there: built as static it would leave the
+        # scene, and every other object would pass through where it stands.
+        # A faceless object therefore stays solved however it is pinned, every
+        # vertex held exactly by its fix pins, which is what a cross-stitch
+        # endpoint does above. A fully pinned rod is then a prescribed obstacle
+        # in the solved namespace, where the pair filter admits a contact pair
+        # whenever either side is free.
+        if self.get("F") is None:
+            self._static = False
+            return
+
         self._static = _rust.scene_all_vertices_pinned(
             int(len(vert)),
             [list(p.index) for p in self._pin],
@@ -1960,8 +1979,10 @@ class Object:
             allow_intersection: bool = False) -> PinHolder:
         """Set specified vertices as pinned.
 
-        An object with every vertex pinned is a *static collider*:
-        its motion is prescribed, not simulated. Use the returned
+        A surface object (triangles or tetrahedra) with every vertex pinned
+        is a *static collider*: its motion is prescribed, not simulated. A
+        rod or a point set pinned whole stays in the solve, every vertex held
+        exactly, and other objects collide with it the same way. Use the returned
         :class:`PinHolder` to animate it via
         :meth:`PinHolder.move_by`, :meth:`PinHolder.move_to`, or
         :meth:`PinHolder.transform_keyframes`.
@@ -1998,20 +2019,40 @@ class Object:
         self._pin.append(holder)
         return holder
 
-    def stitch(self, name: str) -> "Object":
+    def stitch(self, name: str, rest_length=None) -> "Object":
         """Apply stitch to the object.
 
         Args:
             name (str): The name of stitch registered in the asset manager.
+            rest_length (optional): The length each stitch's spring holds its
+                two points at. ``None`` (the default) derives it from the
+                contact gaps of the stitch's vertices, half their weighted
+                mean, which closes the seam to contact distance.
+                ``"initial"`` measures it at :meth:`Scene.build` from the two
+                points' positions in the built scene, so points that rest
+                apart are held there with no preload. A positive number
+                applies to every stitch of the asset, and an array gives one
+                per stitch row. The spring's energy is in strain units,
+                ``l / l0 - 1``, so a longer rest length makes the same
+                ``stitch-stiffness`` a softer spring: the force at an
+                extension ``d`` is ``stiffness * d / l0``.
 
         Returns:
             Object: The stitched object.
+
+        Raises:
+            ValueError: If ``rest_length`` is not one of the forms above, or a
+                rest length is not a finite positive distance.
 
         Example:
             Attach a glue stitch registered earlier in the asset manager::
 
                 app.asset.add.stitch("glue", stitch_data)
                 scene.add("dress").stitch("glue").rotate(-90, "x")
+
+            Hold each stitch at the distance its two points start at::
+
+                scene.add("dress").stitch("glue", rest_length="initial")
         """
         # Static check first (matches Python source: avoids asset fetch
         # when the object is already pinned every-vertex).
@@ -2020,7 +2061,11 @@ class Object:
         _rust.scene_validate_stitch_attach(
             False, "Ind" in stitch, "W" in stitch
         )
+        # Resolved now so a malformed rest length is refused at the call
+        # that names it; the build resolves it again against the rows.
+        _stitch_rest_rows(rest_length, len(stitch["Ind"]), f"stitch '{name}'")
         self._stitch = (stitch["Ind"], stitch["W"])
+        self._stitch_rest_length = rest_length
         return self
 
     def set_uv(self, uv: list[np.ndarray]) -> "Object":
@@ -2054,6 +2099,54 @@ class Object:
         the object's own initial pose.
         """
         self._bend_rest_vert = np.ascontiguousarray(vert, dtype=np.float64)
+        return self
+
+    def set_bend_rest_vert_anim(self, times, verts) -> "Object":
+        """Animate the reference vertices of the bending rest angle.
+
+        The rest angle of every hinge of this shell then follows the reference
+        shape over time: the solver measures each keyframe's hinge rest angles
+        from ``verts[k]`` and interpolates them linearly between keyframes,
+        holding the first keyframe before it and the last one after it. The
+        static reference (:meth:`set_bend_rest_vert`) is the shape the scene
+        is built with; when it is not set, the first keyframe is used.
+
+        Bend plasticity also rewrites the rest angle, so an object carrying
+        both is refused when the scene is built. Only shells take an animated
+        bending rest shape.
+
+        Args:
+            times: Keyframe times in seconds, strictly increasing, the first
+                at or after 0.
+            verts: ``(len(times), N, 3)`` world-space vertices in the same
+                vertex order and space as :meth:`vertex` ``(True)``.
+
+        Example:
+            Fold a sheet along a crease over its first second::
+
+                sheet.set_bend_rest_vert_anim([0.0, 1.0], [flat, folded])
+        """
+        times = np.ascontiguousarray(times, dtype=np.float64).reshape(-1)
+        verts = np.ascontiguousarray(verts, dtype=np.float64)
+        if self.obj_type != "tri":
+            raise ValueError(
+                "an animated bending rest shape applies to a shell; this "
+                f"object is a {self.obj_type}"
+            )
+        if times.size == 0:
+            raise ValueError("an animated bending rest shape needs a keyframe")
+        if not np.all(np.isfinite(times)) or times[0] < 0.0:
+            raise ValueError("bending rest keyframe times must be finite and >= 0")
+        if np.any(np.diff(times) <= 0.0):
+            raise ValueError("bending rest keyframe times must strictly increase")
+        if verts.ndim != 3 or verts.shape[0] != times.size or verts.shape[2] != 3:
+            raise ValueError(
+                f"verts must have shape ({times.size}, N, 3), got {verts.shape}"
+            )
+        if not np.all(np.isfinite(verts)):
+            raise ValueError("bending rest keyframe vertices must be finite")
+        self._bend_rest_vert_times = times
+        self._bend_rest_vert_anim = verts
         return self
 
     def direction(self, _ex: list[float], _ey: list[float]) -> "Object":

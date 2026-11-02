@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_connection_refusals.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Every tool that needs a solver host, driven with no connection.
 #

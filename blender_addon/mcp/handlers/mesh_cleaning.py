@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Mesh cleaning and mesh utility handlers (scan, repair, triangulate).
 
 These wrap the Mesh Cleaning operators of the Mesh Repair panel. Two shapes are

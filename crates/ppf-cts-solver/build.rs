@@ -223,16 +223,16 @@ fn rocm_toolkit_present() -> bool {
 ///
 /// Windows exposes the toolkit via ``CUDA_PATH``. ``PATH`` is still asked, last,
 /// so a toolkit reachable only that way still selects CUDA and
-/// [`require_cuda_12_8`] then names the path the recipe uses, which is the
+/// [`require_cuda_release`] then names the path the recipe uses, which is the
 /// actionable half.
 ///
 /// Spelled exactly as `ppf-cts-compute/build.rs` spells it, which says why the
 /// two must agree.
 ///
 /// A set ``PPF_CUDA_ROOT`` answers yes without looking inside it: naming a
-/// toolkit root asks for CUDA, and [`require_cuda_12_8`] then fails by name if
-/// that root holds no 12.8 ``nvcc``, rather than a different backend being
-/// selected quietly.
+/// toolkit root asks for CUDA, and [`require_cuda_release`] then fails by name
+/// if that root holds no ``nvcc`` of the pinned release, rather than a
+/// different backend being selected quietly.
 fn cuda_toolkit_present() -> bool {
     if env::var("CUDA_PATH").map_or(false, |p| !p.trim().is_empty()) {
         return true;
@@ -286,21 +286,23 @@ fn metal_unavailable_reason() -> Option<String> {
 
 /// The CUDA release every host in this project builds with.
 ///
-/// It is a hard requirement rather than a preference: the CUDA backend's
-/// `be_open` preflight reads `cudaDeviceProp::kernelExecTimeoutEnabled`, which
-/// CUDA 13 removed, so that file does not merely behave differently on a newer
-/// toolkit, it fails to compile. Whether anything ELSE here breaks on 13 is
-/// unmeasured, since every host and every CI leg builds with 12.8. This
-/// constant is the only place the pin is written down.
-const REQUIRED_CUDA_RELEASE: &str = "release 12.8";
+/// It is a hard requirement rather than a preference. A different `nvcc` emits
+/// different SASS from the same source, so a build on another release is a
+/// different solver binary that no host or CI leg has measured. It also
+/// fixes the architecture floor: CUDA 13 compiles no target below sm_75, which
+/// is what `cuda_arch.txt` ships, and an older toolkit would accept a floor
+/// this release cannot build. This constant is the only place in the Rust
+/// build the pin is written down; the workflows, Docker files and native build
+/// scripts each name the same release and say so.
+const REQUIRED_CUDA_RELEASE: &str = "release 13.2";
 
 /// Fail before `make` runs if the toolkit is not [`REQUIRED_CUDA_RELEASE`].
 ///
 /// This is the one chokepoint every path that compiles the solver crosses, so
 /// it is where the check is worth having: the per-example CI workflows, the dev
 /// hosts, and any workflow added later that forgets to pin all arrive here. The
-/// alternative is what prompted it, three `cudaDeviceProp` errors on a runner
-/// whose AMI had silently moved its default to 13.2.
+/// alternative is a compile on whatever toolkit an AMI happens to point
+/// `/usr/local/cuda` at, which changes without notice when the image updates.
 ///
 /// It interrogates the nvcc the CUDA recipe itself compiles with, by asking the
 /// recipe through its `print-nvcc` target. That is `$(PPF_CUDA_ROOT)/bin/nvcc`,
@@ -310,7 +312,7 @@ const REQUIRED_CUDA_RELEASE: &str = "release 12.8";
 /// decides what actually compiles. Asking the recipe rather than reading its
 /// text is what keeps an override from being checked in one place and ignored
 /// in the other.
-fn require_cuda_12_8(cpp_dir: &str, kernel_root: &Path) {
+fn require_cuda_release(cpp_dir: &str, kernel_root: &Path) {
     use std::process::Command;
 
     println!("cargo:rerun-if-env-changed=PPF_CUDA_ROOT");
@@ -362,13 +364,13 @@ fn require_cuda_12_8(cpp_dir: &str, kernel_root: &Path) {
              \x20 required : {REQUIRED_CUDA_RELEASE}\n\
              \x20 found    : {found}\n\
              \x20 via      : {nvcc}\n\
-             The CUDA backend reads cudaDeviceProp::kernelExecTimeoutEnabled, which \
-             CUDA 13 removed, so this would fail to compile.\n\
+             Every host and CI leg builds with this release, and a different \
+             nvcc emits a different, unmeasured solver binary.\n\
              On an AWS Deep Learning AMI several toolkits are installed at once \
              and /usr/local/cuda points at the newest by default; repoint that \
-             symlink at /usr/local/cuda-12.8 (see the CUDA pin in \
+             symlink at /usr/local/cuda-13.2 (see the CUDA pin in \
              .github/workflows/template/aws-template.yml), or export \
-             PPF_CUDA_ROOT naming a 12.8 toolkit root, which is how \
+             PPF_CUDA_ROOT naming a 13.2 toolkit root, which is how \
              build-linux-native/build.sh selects the toolkit it provisions."
         );
     }
@@ -615,7 +617,7 @@ fn guard_cpu() {
 /// both in the list below now, each having landed in the change that removed its
 /// entry from `refusal.rs`. `sand_rigid` needs `contact/grain_pair` with it,
 /// the per-grain angular accumulators being contact's to produce.
-const KERNELS: [&str; 91] = [
+const KERNELS: [&str; 92] = [
     // The linear solve.
     "solver/spmv",
     "solver/block_jacobi",
@@ -764,6 +766,10 @@ const KERNELS: [&str; 91] = [
     // narrow-phase renderings include them, and a rendered body resolves a
     // quoted include against the generated tree.
     "contact/contact_statistics",
+    // THE FRICTION'S MEMORY of where each contact stuck: the lookup and the
+    // record the narrow phases and the analytic contacts include, and the two
+    // entries that turn a step's record into the next step's memory.
+    "contact/friction_memory",
     "contact/contact_narrow",
     "contact/collision_narrow",
     // The CCD line search, fused: one dispatch per (query kind, tree) pair,
@@ -819,6 +825,190 @@ const KERNELS: [&str; 91] = [
 /// typo cannot quietly leave a buffer unmigrated: the transcompiler prints the
 /// buffer fields that file does declare.
 const HANDLE_FIELDS: &[(&str, &str)] = &[
+    // THE FRICTION'S MEMORY (`contact/friction_memory`), device-resident
+    // in `driver/friction_memory.rs`.
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_count"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.record_count"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_count"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.record_count"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_count"),
+    ("contact/contact_narrow", "ContactPointPointArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactPointPointArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactPointPointArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactPointPointArgs.record_word0"),
+    ("contact/contact_narrow", "ContactPointPointArgs.record_word1"),
+    ("contact/contact_narrow", "ContactPointPointArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactPointPointArgs.record_float"),
+    ("contact/contact_narrow", "ContactPointPointArgs.record_count"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_word0"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_word1"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_float"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_count"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_word0"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_word1"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_slip"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_word0"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_word1"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_vertex"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_float"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_count"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_float"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_count"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_float"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_count"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_float"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_count"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.record_float"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.record_count"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.record_float"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.record_count"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.memory_word0"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.memory_word1"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.memory_slip"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.record_word0"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.record_word1"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.record_vertex"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.record_float"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.record_count"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.memory_word0"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.memory_word1"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.memory_slip"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.record_word0"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.record_word1"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.record_vertex"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.record_float"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.record_count"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.memory_word0"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.memory_word1"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.memory_slip"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.record_word0"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.record_word1"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.record_vertex"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.record_float"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.record_count"),
+    ("contact/friction_memory", "FrictionMemoryGatherWordArgs.word"),
+    ("contact/friction_memory", "FrictionMemoryGatherWordArgs.order"),
+    ("contact/friction_memory", "FrictionMemoryGatherWordArgs.out"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.x0"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.x"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.record_word0"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.record_word1"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.record_vertex"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.record_float"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.first"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.second"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.sorted_word0"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.sorted_word1"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.sorted_slip"),
+    ("contact/friction_memory", "FrictionMemorySettleArgs.sorted_force"),
+    ("contact/friction_memory", "FrictionMemoryHeadArgs.sorted_word0"),
+    ("contact/friction_memory", "FrictionMemoryHeadArgs.sorted_word1"),
+    ("contact/friction_memory", "FrictionMemoryHeadArgs.head"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.sorted_word0"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.sorted_word1"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.sorted_slip"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.sorted_force"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.head"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.slot"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.memory_word0"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.memory_word1"),
+    ("contact/friction_memory", "FrictionMemoryMergeArgs.memory_slip"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.x0"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.x"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.record_word0"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.record_vertex"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.record_float"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.record_count"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.fixed_index"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.fixed_offset"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.out_vertex_force"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.out_diagonal"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.out_fixed_value"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.dyn_claim"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.dyn_row"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.dyn_column"),
+    ("contact/contact_narrow", "FrictionFrozenEmbedArgs.dyn_block"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.x0"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.x"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.record_word0"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.record_vertex"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.record_float"),
+    ("contact/friction_memory", "FrictionConeGatherArgs.cone"),
+    ("contact/friction_memory", "FrictionLoadPrepareArgs.residual"),
+    ("contact/friction_memory", "FrictionLoadPrepareArgs.cone"),
+    ("contact/friction_memory", "FrictionLoadPrepareArgs.load"),
+    ("contact/friction_memory", "FrictionLoadSettleArgs.force"),
+    ("contact/friction_memory", "FrictionLoadSettleArgs.residual"),
+    ("contact/friction_memory", "FrictionLoadSettleArgs.cone"),
     ("energy/external_field", "ExternalFieldArgs.current"),
     ("energy/external_field", "ExternalFieldArgs.previous"),
     ("energy/external_field", "ExternalFieldArgs.prop"),
@@ -907,21 +1097,36 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF. It is a COPY of the force
     // vector, made on the device by the same `fill`/`copy` the force itself
     // lives under, so it is device-resident on exactly the terms `force` is.
-    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.residual"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.residual"),
-    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.residual"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.residual"),
-    ("contact/contact_narrow", "ContactPointPointTraverseArgs.residual"),
-    ("contact/contact_narrow", "ContactPointPointArgs.residual"),
-    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.residual"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.residual"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.residual"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.residual"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.residual"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.residual"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.residual"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.residual"),
-    ("contact/vertex_constraint", "VertexConstraintArgs.residual"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointFaceTraverseArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointFaceArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointEdgeArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointPointTraverseArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactPointPointArgs.friction_load"),
+    ("contact/contact_narrow", "ContactPointPointArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.friction_load"),
+    ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.friction_cone"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.friction_load"),
+    ("contact/contact_narrow", "ContactEdgeEdgeArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.friction_cone"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.friction_load"),
+    ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.friction_cone"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.friction_load"),
+    ("contact/vertex_constraint", "VertexConstraintArgs.friction_cone"),
     ("contact/vertex_constraint", "VertexConstraintArgs.fixed_index"),
     ("contact/vertex_constraint", "VertexConstraintArgs.fixed_offset"),
     ("contact/contact_narrow", "ContactPointFaceArgs.fixed_index"),
@@ -1494,6 +1699,9 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("energy/model/cosserat", "CosseratApplySiteRowArgs.site_block"),
     ("energy/model/cosserat", "CosseratApplySiteRowArgs.input"),
     ("energy/model/cosserat", "CosseratApplySiteRowArgs.output"),
+    ("energy/model/cosserat", "CosseratRowSumSiteRowArgs.bend_slots"),
+    ("energy/model/cosserat", "CosseratRowSumSiteRowArgs.site_block"),
+    ("energy/model/cosserat", "CosseratRowSumSiteRowArgs.row_sum"),
     ("energy/model/cosserat", "CosseratPrescribeRowArgs.edge_nodes"),
     ("energy/model/cosserat", "CosseratPrescribeRowArgs.fixed"),
     ("energy/model/cosserat", "CosseratPrescribeRowArgs.dof_mask"),
@@ -2114,6 +2322,10 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // kernel to begin with, so a plain `Buffer` served it.
     ("energy/model/stitch", "StitchForceHessianGatheredArgs.stitch_weight"),
     ("energy/model/stitch", "StitchForceHessianGatheredArgs.stiffness"),
+    // The authored rest length and its presence flag, the same shape as the
+    // stiffness: host-written once per constraint update, kernel-read after.
+    ("energy/model/stitch", "StitchForceHessianGatheredArgs.rest_length"),
+    ("energy/model/stitch", "StitchForceHessianGatheredArgs.has_rest_length"),
     // The rest of the stitch inputs. The slot indices are host-written AND
     // host-read (the slot bound check, and the CSR push that reads a row and
     // column out of them), which a `StagedBuffer` serves: `host()` answers off
@@ -2701,6 +2913,40 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/vertex_constraint", "VertexConstraintArgs.floor"),
     ("contact/vertex_constraint", "VertexConstraintSweepArgs.sphere"),
     ("contact/vertex_constraint", "VertexConstraintSweepArgs.floor"),
+    // SURFACE TRIANGLES AND EDGES AGAINST THE STATIC SOLID SPHERES: the
+    // barrier, the sweep and the step-end check. Every array is the mesh's,
+    // the collider set above, or a buffer the collider layer owns on the
+    // device; the counts it reads back are a `ReadbackBuffer`.
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.eval_x"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.current"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.face"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.edge"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.edge_face_index"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.edge_face_offset"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.vertex_prop"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.vertex_param"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.sphere"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.fixed_index"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.fixed_offset"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.fixed_value"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.friction_load"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.friction_cone"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.force"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.out_fixed_value"),
+    ("contact/vertex_constraint", "SphereFeatureConstraintArgs.out_missing"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.x0"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.x1"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.face"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.edge"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.vertex_prop"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.sphere"),
+    ("contact/vertex_constraint", "SphereFeatureSweepArgs.out_toi"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.x"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.face"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.edge"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.vertex_prop"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.sphere"),
+    ("contact/vertex_constraint", "SphereFeatureGateArgs.out_count"),
     // THE CONTACT NARROW-PHASE STAGING, and it is the largest single residency
     // unit in the driver: six buffers spent across seven records, 56 call sites.
     // The visitor WRITES `active`, `arity`, `index`, `force` and `hessian` and
@@ -4001,7 +4247,10 @@ fn check_launch_seam() {
             continue;
         }
         println!("cargo:rerun-if-changed={}", script.display());
-        let out = match Command::new("python3").arg(&script).output() {
+        // -B: a check imports the transcompiler, and a `__pycache__` written into
+        // the compute crate is a new file under a directory `arch_literal_guard`
+        // watches, which reruns this script and relinks the backend next build.
+        let out = match Command::new("python3").arg("-B").arg(&script).output() {
             Ok(out) => out,
             // No python3 is not this check's failure to report.
             Err(_) => continue,
@@ -4085,41 +4334,54 @@ fn generate_launch_thunks() {
 ///
 /// The generator renders a banner beside its output, and which lines carry the
 /// content differs per emit kind, so the caller supplies the predicate. Sources
-/// are sorted, which is what makes the concatenation reproducible.
+/// are sorted, which is what makes the concatenation reproducible, and each
+/// source renders into a fragment file of its own, because the renderings run
+/// in parallel and `compute::build::kernelgen::render` hands them back in job
+/// order, so the concatenation is the serial one.
 fn render_kernel_fragments(emit: &str, keep: impl Fn(&str) -> bool) -> Option<String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let root = manifest.parent().and_then(Path::parent)?;
-    let generator = root.join("crates/ppf-cts-compute/seam/kernelgen.py");
+    let generator = compute::build::kernelgen::transcompiler();
     let kernels = manifest.join("src/kernels");
     if !generator.exists() || !kernels.is_dir() {
         return None;
     }
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
-    let fragment = Path::new(&out_dir).join(format!("launch_{emit}.fragment"));
+    let out_dir = std::path::PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let fragments = out_dir.join(format!("launch_{emit}.fragments"));
     let mut sources: Vec<std::path::PathBuf> = Vec::new();
     collect_kernel_sources(&kernels, &mut sources);
     sources.sort();
+    let jobs: Vec<compute::build::kernelgen::Job> = sources
+        .iter()
+        .map(|source| {
+            let relative = source.strip_prefix(&kernels).expect("a source under the kernel tree");
+            compute::build::kernelgen::Job {
+                args: vec![
+                    "--target".into(),
+                    "rust".into(),
+                    "--emit".into(),
+                    emit.into(),
+                    "--kernel-root".into(),
+                    kernels.clone().into_os_string(),
+                ],
+                out: fragments.join(relative).with_extension("fragment"),
+                source: source.clone(),
+            }
+        })
+        .collect();
+    let outcomes = compute::build::kernelgen::render(&jobs, &out_dir.join("kernelgen-cache"));
     let mut body = String::new();
-    for source in &sources {
-        let out = Command::new("python3")
-            .arg(&generator)
-            .arg("--target").arg("rust")
-            .arg("--emit").arg(emit)
-            .arg("--out").arg(&fragment)
-            .arg("--kernel-root").arg(&kernels)
-            .arg(source)
-            .output();
-        let Ok(out) = out else { return None };
-        if !out.status.success() {
+    for (outcome, job) in outcomes.into_iter().zip(&jobs) {
+        let Ok(out) = outcome else { return None };
+        if !out.success {
             panic!(
                 "ppf-cts-solver: rendering the {} block for {} failed.\n{}{}",
                 emit,
-                source.display(),
+                job.source.display(),
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        if let Ok(text) = std::fs::read_to_string(&fragment) {
+        if let Ok(text) = std::fs::read_to_string(&job.out) {
             for line in text.lines() {
                 if keep(line) {
                     body.push_str(line);
@@ -4144,6 +4406,10 @@ fn collect_kernel_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 fn main() {
+    // First, before anything writes to OUT_DIR: a build directory whose
+    // recorded inputs changed under an unchanged time is emptied, so nothing
+    // below is built over objects from another tree (`source_freshness`).
+    source_freshness::check(Path::new(&env::var("OUT_DIR").expect("cargo sets OUT_DIR for a build script")));
 
     // Every CUDA architecture this project targets comes from cuda_arch.txt.
     // `arch_guard` below checks the ARTIFACT matches the manifest; this checks
@@ -4351,7 +4617,7 @@ fn main() {
         // cuobjdump. Metal has neither, so they key on the selected backend
         // rather than on the backend merely not being CUDA.
         if backend == Backend::Cuda {
-            require_cuda_12_8(cpp_dir, &kernel_root_arg);
+            require_cuda_release(cpp_dir, &kernel_root_arg);
         }
         // THE C ABI LIBRARY IS A SECOND ARTIFACT FROM THE SAME RECIPE, asked
         // for by name so a build that is not routing the driver at this target
@@ -4689,7 +4955,7 @@ mod arch_literal_guard {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Build outputs and vendored trees carry generated makefiles that
             // are not ours to police.
-            if matches!(name, "target" | "build-tests" | ".git" | "node_modules") {
+            if matches!(name, "target" | "build-tests" | ".git" | "node_modules" | "__pycache__") {
                 continue;
             }
             if p.is_dir() {
@@ -5168,5 +5434,231 @@ mod fp64_guard {
              PPF_ALLOW_FP64=1 to build anyway while investigating.",
             offenders.len()
         );
+    }
+}
+
+// A build output is fresh only if the clock that dated its inputs is honest.
+//
+// cargo and make both decide what to rebuild by modification time: an output
+// newer than its inputs is taken as built from them. A copy that PRESERVES the
+// times of the files it copies breaks that, because a file can arrive with new
+// content and an old time. `rsync -a` from a tree whose last commit is older
+// than a box's last build does exactly this, and the result is a build that
+// succeeds over objects compiled from the previous tree: renderings asserting a
+// record layout the sources no longer declare, or a crate compiled before a
+// variant its dependents now name. Touching build.rs reruns this script and
+// make, and make, reading the same times, still rebuilds nothing.
+//
+// So this script keeps a record of every input's content and time, and reads a
+// lie off the pair: content that differs from the record while its time did not
+// move past the recorded one. An edit, a checkout and a merge all write a new
+// time, so they never read as one; only a time-preserving copy can.
+//
+//   * A lie in what this script or its make recipe read (this crate's kernels,
+//     entry points and build script, the compute crate, the eigensystem
+//     headers), or a deletion there, empties OUT_DIR before anything writes to
+//     it, so every rendering, object and library below is rebuilt from the
+//     sources as they are.
+//   * A lie in the rest of this crate needs nothing: cargo compiles this crate
+//     after running this script, from the sources as they are.
+//   * A lie in another crate's sources cannot be repaired from here: cargo
+//     compiled that crate before running this script. Its files get the present
+//     time, so the next build recompiles them, and the build stops naming them.
+//
+// It runs only when cargo runs this script, which is itself decided by time, so
+// it does not replace a copy that keeps times honest (`rsync -rlpc`, which
+// gives every file whose content changed the present time); it is what makes
+// the usual repair, touching build.rs, actually repair.
+mod source_freshness {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// The trees whose content is recorded, relative to this crate: every crate
+    /// of the workspace, and the eigensystem headers the CUDA recipe includes.
+    const ROOTS: &[&str] = &["..", "../../eigsys/eig-hpp"];
+
+    /// The part of `ROOTS` that this script and the make recipe read, so whose
+    /// lie or deletion OUT_DIR is emptied for. Prefixes of the paths as `walk`
+    /// spells them.
+    const RECIPE_INPUTS: &[&str] = &[
+        "../ppf-cts-solver/src/kernels/",
+        "../ppf-cts-solver/entrypoints/",
+        "../ppf-cts-solver/build.rs",
+        "../ppf-cts-compute/",
+        "../../eigsys/eig-hpp/",
+    ];
+
+    /// Directories that hold build products or interpreter caches, never inputs.
+    const SKIP_DIRS: &[&str] = &["target", "__pycache__", ".git", "node_modules"];
+
+    const RECORD: &str = "source-record.txt";
+
+    struct Entry {
+        hash: u64,
+        mtime_ns: u128,
+    }
+
+    /// FNV-1a over the file's bytes: stable across toolchains and runs, which a
+    /// hasher seeded per process is not, and fast enough for the 12 MB the
+    /// workspace's sources come to.
+    fn content_hash(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    fn mtime_ns(path: &Path) -> u128 {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos())
+    }
+
+    fn walk(dir: &Path, out: &mut BTreeMap<String, Entry>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                if !SKIP_DIRS.contains(&name.as_ref()) {
+                    walk(&path, out);
+                }
+            } else if kind.is_file() && !name.ends_with(".pyc") {
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                let key = path.to_string_lossy().replace('\\', "/");
+                out.insert(key, Entry { hash: content_hash(&bytes), mtime_ns: mtime_ns(&path) });
+            }
+        }
+    }
+
+    fn sources() -> BTreeMap<String, Entry> {
+        let mut out = BTreeMap::new();
+        for root in ROOTS {
+            walk(Path::new(root), &mut out);
+        }
+        out
+    }
+
+    fn read_record(path: &Path) -> Option<BTreeMap<String, Entry>> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut out = BTreeMap::new();
+        for line in text.lines() {
+            let mut parts = line.splitn(3, ' ');
+            let (Some(hash), Some(time), Some(name)) = (parts.next(), parts.next(), parts.next()) else {
+                return None;
+            };
+            let (Ok(hash), Ok(mtime_ns)) = (u64::from_str_radix(hash, 16), time.parse::<u128>()) else {
+                return None;
+            };
+            out.insert(name.to_string(), Entry { hash, mtime_ns });
+        }
+        Some(out)
+    }
+
+    fn write_record(path: &Path, now: &BTreeMap<String, Entry>) {
+        let mut text = String::new();
+        for (name, e) in now {
+            text.push_str(&format!("{:016x} {} {name}\n", e.hash, e.mtime_ns));
+        }
+        std::fs::write(path, text)
+            .unwrap_or_else(|e| panic!("build.rs: writing {}: {e}", path.display()));
+    }
+
+    fn is_recipe_input(name: &str) -> bool {
+        RECIPE_INPUTS.iter().any(|p| name.starts_with(p))
+    }
+
+    /// This crate's own sources, as `walk` spells them.
+    const OWN: &str = "../ppf-cts-solver/";
+
+    fn listing(names: &[&String]) -> String {
+        let shown: Vec<&str> = names.iter().take(8).map(|s| s.as_str()).collect();
+        let more = names.len().saturating_sub(shown.len());
+        format!("{}{}", shown.join(", "), if more > 0 { format!(" and {more} more") } else { String::new() })
+    }
+
+    /// Empties `out_dir` if a recipe input lied or was deleted since the last
+    /// run, refreshes and refuses on a lie elsewhere, and records the sources.
+    /// Called before anything writes to `out_dir`.
+    pub fn check(out_dir: &Path) {
+        let record_path = out_dir.join(RECORD);
+        let now = sources();
+        let Some(before) = read_record(&record_path) else {
+            // No record: OUT_DIR is new, or was written by a build that kept
+            // none. Nothing can be told about it, so it is rebuilt from scratch
+            // rather than trusted.
+            empty(out_dir);
+            write_record(&record_path, &now);
+            return;
+        };
+        let lied: Vec<&String> = now
+            .iter()
+            .filter(|(name, e)| before.get(*name).is_some_and(|b| b.hash != e.hash && e.mtime_ns <= b.mtime_ns))
+            .map(|(name, _)| name)
+            .collect();
+        let deleted: Vec<&String> =
+            before.keys().filter(|name| is_recipe_input(name) && !now.contains_key(*name)).collect();
+        let (recipe, rest): (Vec<&String>, Vec<&String>) = lied.iter().partition(|name| is_recipe_input(name));
+        let elsewhere: Vec<&String> = rest.into_iter().filter(|name| !name.starts_with(OWN)).collect();
+        if !recipe.is_empty() || !deleted.is_empty() {
+            println!(
+                "cargo:warning=the last run of this build script emptied {} and rebuilt it from scratch: {} recipe \
+                 input(s) had changed content without a newer modification time ({}), {} were deleted ({})",
+                out_dir.display(),
+                recipe.len(),
+                listing(&recipe),
+                deleted.len(),
+                listing(&deleted)
+            );
+            empty(out_dir);
+        }
+        if elsewhere.is_empty() {
+            write_record(&record_path, &now);
+            return;
+        }
+        let present = SystemTime::now();
+        for name in &elsewhere {
+            let file = std::fs::File::options()
+                .write(true)
+                .open(name)
+                .unwrap_or_else(|e| panic!("build.rs: opening {name} to refresh its time: {e}"));
+            file.set_modified(present)
+                .unwrap_or_else(|e| panic!("build.rs: refreshing the time of {name}: {e}"));
+        }
+        write_record(&record_path, &sources());
+        panic!(
+            "\n\n  {} source file(s) outside this crate's recipe changed content without their modification time \
+             moving past the last build's ({}). A copy that preserves times (rsync -a) does this, and cargo, which \
+             decides by time, compiled the crates holding them from their previous content. Their times are now the \
+             present one, so building again recompiles them. Copy trees by content without their times (rsync -rlpc), \
+             which keeps times honest.\n\n",
+            elsewhere.len(),
+            listing(&elsewhere)
+        );
+    }
+
+    /// Removes everything under `dir`, keeping `dir` itself, which cargo made.
+    fn empty(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path: PathBuf = entry.path();
+            let result = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            result.unwrap_or_else(|e| panic!("build.rs: removing {}: {e}", path.display()));
+        }
     }
 }

@@ -1,9 +1,7 @@
 # File: collection_utils.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
-
+# License: GPL-3.0-or-later
 def sort_keyframes_by_frame(keyframes):
     """Sort a Blender keyframe collection in-place by frame number (insertion sort)."""
     n = len(keyframes)

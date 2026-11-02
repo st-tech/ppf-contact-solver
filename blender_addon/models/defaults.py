@@ -1,7 +1,7 @@
 # File: defaults.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Canonical port defaults shared across the addon.
 # Every module that needs these values should import from here

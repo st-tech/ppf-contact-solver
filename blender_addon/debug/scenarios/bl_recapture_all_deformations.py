@@ -1,7 +1,7 @@
 # File: scenarios/bl_recapture_all_deformations.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # "Re-capture All Deformations": one Solver-panel button that rebuilds every
 # deforming STATIC collider's deformation cache AND every animated pin's

@@ -1,7 +1,7 @@
 # File: encoder/curve_refusal.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # One encode-time check for animation the encoder does not sample.
 #

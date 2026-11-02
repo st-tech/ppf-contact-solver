@@ -1259,7 +1259,18 @@ mod tests {
             .find(|p| p.exists())?;
         let dir = tempfile::tempdir().ok()?;
         let bin = dir.path().join("ppf-contact-sibling");
-        std::fs::copy(&sleep_bin, &bin).ok()?;
+        // COPIED BY A CHILD `cp`, NOT BY THIS PROCESS: a file this process
+        // holds open for writing is inherited by any child another test forks
+        // in that instant, and exec'ing it then fails with ETXTBSY ("Text file
+        // busy"). A child that exits first leaves no descriptor here.
+        let copied = std::process::Command::new("cp")
+            .arg(&sleep_bin)
+            .arg(&bin)
+            .status()
+            .ok()?;
+        if !copied.success() {
+            return None;
+        }
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).ok()?;
         Some((dir, bin))
     }
@@ -1646,8 +1657,6 @@ mod tests {
         // A shipped cubin covers its own arch and higher minors in the same
         // major (SASS forward minor-compat), but never a different major or a
         // lower minor.
-        assert!(sm_is_supported(61)); // Pascal (GTX 10, Titan Xp)
-        assert!(sm_is_supported(62)); // Pascal minor bump: sm_61 cubin, 1 <= 2
         assert!(sm_is_supported(75)); // Turing (RTX 20, GTX 16, T4)
         assert!(sm_is_supported(86)); // Ampere (RTX 30, A40)
         assert!(sm_is_supported(87)); // Jetson Orin: sm_86 cubin, 6 <= 7
@@ -1658,7 +1667,8 @@ mod tests {
         assert!(sm_is_supported(121)); // hypothetical Blackwell minor bump
 
         assert!(!sm_is_supported(80)); // A100: same major but minor 0 < 6
-        assert!(!sm_is_supported(60)); // Tesla P100: Pascal major, minor 0 < 1
+        assert!(!sm_is_supported(61)); // Pascal (GTX 10): CUDA 13 has no target below 75
+        assert!(!sm_is_supported(70)); // Volta (V100): same
         assert!(!sm_is_supported(52)); // Maxwell (GTX 900): no cubin shipped
         assert!(!sm_is_supported(130)); // future major, no cubin shipped yet
     }

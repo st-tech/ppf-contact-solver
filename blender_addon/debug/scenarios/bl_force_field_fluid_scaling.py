@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_fluid_scaling.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The cloth rides a fluid PER BLENDER FRAME, whatever the clocks: under World
 # Scaling, Time Scale and an explicit Frame Rate a sheet carried by a Fluid

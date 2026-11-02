@@ -1,7 +1,7 @@
 # File: scenarios/bl_force_field_encode.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The add-on's force-field ENCODE (issue #114): Blender field objects sent as
 # FIELD OBJECTS, their settings and a track of per-frame samples in solver

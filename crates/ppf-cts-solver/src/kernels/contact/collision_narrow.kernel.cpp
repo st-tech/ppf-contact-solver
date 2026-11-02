@@ -44,6 +44,7 @@
 #include "contact_assembly.kernel.cpp"
 #include "contact_statistics.kernel.cpp"
 #include "pair_filter.kernel.cpp"
+#include "friction_memory.kernel.cpp"
 
 // One collision-mesh contact's extended force and Hessian over the N DYNAMIC
 // vertices its weights name.
@@ -61,11 +62,18 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     float friction_eps,
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, and the substep it is
-    // divided by. A COPY of the force vector taken before this pass: all three
-    // collision-mesh passes deposit into that vector through atomics, so
-    // reading it directly would hand one pair a residual another had moved.
-    const float *residual, float dt, const unsigned *index,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    // The pair's key in the memory: its kind and the two elements it joins.
+    unsigned friction_kind, unsigned key_a, unsigned key_b,
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load, const float *friction_cone, float dt, const unsigned *index,
     const SVecf<N> &weight,
     const Vec3f &separation, float ghat, float offset,
     float friction, unsigned left, unsigned right,
@@ -139,40 +147,79 @@ template <unsigned N>
     const float signed_distance = (separation - projected).dot(normal);
     Vec3f force = stiffness * push_gradient(signed_distance, normal, ghat);
     Mat3x3f hessian = stiffness * push_hessian(signed_distance, normal, ghat);
-    Vec3f friction_gradient;
-    Mat3x3f friction_hessian;
-    Vec3f tangent;
-    Mat3x3f projection;
-    float lambda;
-    float friction_stiffness;
-    float normal_force;
-    // A VERTEX WITHOUT A DEGREE OF FREEDOM CARRIES WEIGHT ZERO IN THE
-    // PREDICTION, an exact fix pin or a massless vertex of a static solid: its
-    // row is eliminated, so it does not move however hard it is pushed. THE
-    // COLLIDER SIDE IS NOT IN `index` AT ALL, which is what makes one form
-    // serve all three passes: the dynamic side is one vertex against a collider
-    // face, the three vertices of a mesh face under a collider vertex, or the
-    // two of a mesh edge, and `weight` is already the barycentric weights of
-    // whichever it is.
-    SVecf<N> free_weight;
-    for (unsigned i = 0; i < N; ++i) {
-        const bool owns_dof =
-            vertex_prop[index[i]].fix_index == 0u && mass[i] > 0.0f;
-        free_weight[i] = owns_dof ? weight[i] : 0.0f;
+    // THE FRICTION IS APPLIED BY THE FROZEN PASS from the record the step's
+    // first iteration writes (`friction_memory.kernel.cpp`, "THE RECORD IS ALSO
+    // THE STEP'S FRICTION"), so this pass evaluates it only to record it, and
+    // only then; it deposits the barrier alone.
+    if (record_capacity > 0u) {
+        Vec3f friction_gradient;
+        Mat3x3f friction_hessian;
+        Vec3f tangent;
+        Mat3x3f projection;
+        float lambda;
+        float friction_stiffness;
+        float normal_force;
+        // A VERTEX WITHOUT A DEGREE OF FREEDOM CARRIES WEIGHT ZERO IN THE
+        // PREDICTION, an exact fix pin or a massless vertex of a static solid: its
+        // row is eliminated, so it does not move however hard it is pushed. THE
+        // COLLIDER SIDE IS NOT IN `index` AT ALL, which is what makes one form
+        // serve all three passes: the dynamic side is one vertex against a collider
+        // face, the three vertices of a mesh face under a collider vertex, or the
+        // two of a mesh edge, and `weight` is already the barycentric weights of
+        // whichever it is.
+        SVecf<N> free_weight;
+        for (unsigned i = 0; i < N; ++i) {
+            const bool owns_dof =
+                vertex_prop[index[i]].fix_index == 0u && mass[i] > 0.0f;
+            free_weight[i] = owns_dof ? weight[i] : 0.0f;
+        }
+        // EACH VERTEX'S SHARE AND LOAD (`friction_cone_fraction`, and the
+        // residual plus the lagged non-friction contact load), as `embed_contact`.
+        const float pair_cone = friction * fmath::max(0.0f, -normal.dot(force));
+        SVecf<N> share;
+        SVecf<3 * N> load;
+        for (unsigned i = 0; i < N; ++i) {
+            float sum, pairs;
+            friction_cone_lagged(friction_cone, index[i], sum, pairs);
+            share[i] = friction_cone_fraction(fmath::abs(weight[i]) * pair_cone, sum,
+                                              pairs);
+            const unsigned row = 3u * index[i];
+            for (unsigned d = 0; d < 3u; ++d) {
+                load[3u * i + d] = friction_load[row + d];
+            }
+        }
+        Vec3f drive = Vec3f::Zero();
+        float drive_stiffness = 0.0f;
+        if (!friction_slip_prediction<N>(free_weight, mass, local_hessian,
+                                             load, share, normal, dt, drive,
+                                             drive_stiffness)) {
+            drive_stiffness = 0.0f;
+        }
+        // THE SLIP SINCE THE PAIR STUCK (`friction_memory.kernel.cpp`).
+        const Vec2u memory_key = friction_memory_key(friction_kind, key_a, key_b);
+        float slide;
+        const Vec3f held_slip =
+            slip + friction_memory_tangential(
+                       friction_memory_lookup(memory_key, memory_word0, memory_word1,
+                                              memory_slip, memory_count, slide),
+                       normal);
+        friction_evaluate_anchored(force, held_slip, normal, friction, friction_eps,
+                              drive, drive_stiffness, slide, friction_gradient,
+                              friction_hessian,
+                              lambda, friction_stiffness, tangent, projection,
+                              normal_force);
+        if (friction * normal_force > 0.0f) {
+            float memory_weight[N];
+            for (unsigned i = 0; i < N; ++i) {
+                memory_weight[i] = weight[i];
+            }
+            friction_memory_record(memory_key, held_slip - slip, normal,
+                                   normal_force, friction, 1.0f, index,
+                                   memory_weight, N, true, record_word0, record_word1,
+                                   record_vertex, record_float, record_count,
+                                   record_capacity);
+        }
     }
-    Vec3f drive = Vec3f::Zero();
-    float drive_stiffness = 0.0f;
-    if (!friction_slip_prediction<N>(index, free_weight, mass, local_hessian,
-                                         residual, normal, dt, drive,
-                                         drive_stiffness)) {
-        drive_stiffness = 0.0f;
-    }
-    friction_evaluate(force, slip, normal, friction, friction_eps, drive,
-                          drive_stiffness, friction_gradient, friction_hessian,
-                          lambda, friction_stiffness, tangent, projection,
-                          normal_force);
-    force += friction_gradient;
-    hessian += friction_hessian;
     out_force = SMatf<3, N>::Zero();
     out_hessian = SMatf<3 * N, 3 * N>::Zero();
     extend_contact_force_hessian<N>(weight, force, hessian, out_force,
@@ -268,7 +315,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt, unsigned vertex_index,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt, unsigned vertex_index,
     unsigned face_index, unsigned *out_slot,
     SMatf<3, 1> &out_local_force,
     SMatf<3, 3> &out_local_hessian,
@@ -324,7 +377,9 @@ template <unsigned N>
     weight[0] = 1.0f;
     const bool accepted = embed_collision<1>(
         x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value, row_count,
-        friction_eps, residual, dt, index, weight, separation, ghat, offset, friction,
+        friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+        // The collision mesh is one surface to a vertex sliding over it.
+        FRICTION_KIND_MESH_TO_COLLIDER, vertex_index, 0u, friction_load, friction_cone, dt, index, weight, separation, ghat, offset, friction,
         vertex_index, face_index, out_local_force, out_local_hessian, out_overlap, diag);
     if (out_overlap.flagged != 0u) {
         // Kind 7: the reference names this pair as (vertex_index, fc[0]); the
@@ -366,7 +421,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index, float *out_force,
@@ -393,7 +454,7 @@ template <unsigned N>
     const bool accepted = collision_point_face_m2c_at(
         x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face,
         static_face_prop, static_face_param, fixed_index, fixed_offset,
-        fixed_value, row_count, friction_mode, friction_eps, residual, dt,
+        fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt,
         pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
         statistics_contact_count, statistics_contact_count_size,
         statistics_object_index, statistics_object_index_size,
@@ -435,7 +496,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     unsigned vertex_index, unsigned face_index,
     unsigned *out_slot,
     SMatf<3, 3> &out_local_force,
@@ -498,7 +565,10 @@ template <unsigned N>
     weight[2] = c[2];
     const bool accepted = embed_collision<3>(
         x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value, row_count,
-        friction_eps, residual, dt, index, weight, separation, ghat, offset, friction, fc[0],
+        friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+        // A collider vertex slides across the faces of one object.
+        FRICTION_KIND_COLLIDER_TO_MESH, vertex_index,
+        vertex_prop[fc[0]].object_index, friction_load, friction_cone, dt, index, weight, separation, ghat, offset, friction, fc[0],
         vertex_index, out_local_force, out_local_hessian, out_overlap, diag);
     if (out_overlap.flagged != 0u) {
         // Kind 8: the reference names this pair as (fc[0], vertex_index); the
@@ -536,7 +606,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index, float *out_force,
@@ -563,7 +639,7 @@ template <unsigned N>
     const bool accepted = collision_point_face_c2m_at(
         x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x,
         static_vertex_prop, static_vertex_param, fixed_index, fixed_offset,
-        fixed_value, row_count, friction_mode, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
+        fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
         statistics_contact_count, statistics_contact_count_size,
         statistics_object_index, statistics_object_index_size,
         statistics_static_object_index, statistics_static_object_index_size,
@@ -605,7 +681,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     unsigned edge_index, unsigned other_index,
     unsigned *out_slot,
     SMatf<3, 2> &out_local_force,
@@ -678,7 +760,9 @@ template <unsigned N>
     weight[1] = c[1];
     const bool accepted = embed_collision<2>(
         x0, x, vertex_prop, fixed_index, fixed_offset, fixed_value, row_count,
-        friction_eps, residual, dt, index, weight, separation, ghat, offset, friction,
+        friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
+        // An edge slides along the collision mesh's edges.
+        FRICTION_KIND_EDGE_COLLIDER_EDGE, edge_index, 0u, friction_load, friction_cone, dt, index, weight, separation, ghat, offset, friction,
         edge_index, other_index, out_local_force, out_local_hessian, out_overlap, diag);
     if (out_overlap.flagged != 0u) {
         // Kind 9: the reference names this pair as (me[0], ce[0]); the
@@ -717,7 +801,13 @@ template <unsigned N>
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     const unsigned *pair, unsigned k,
     unsigned *active, unsigned *arity,
     unsigned *out_index, float *out_force,
@@ -744,7 +834,7 @@ template <unsigned N>
     const bool accepted = collision_edge_edge_at(
         x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x,
         static_edge, static_edge_prop, static_edge_param, fixed_index,
-        fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
+        fixed_offset, fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, local_force, local_hessian,
         statistics_contact_count, statistics_contact_count_size,
         statistics_object_index, statistics_object_index_size,
         statistics_static_object_index, statistics_static_object_index_size,
@@ -800,9 +890,21 @@ struct CollisionPointFaceM2cEmbed {
     unsigned row_count;
     unsigned friction_mode;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -851,7 +953,7 @@ struct CollisionPointFaceM2cEmbed {
         if (collision_point_face_m2c_at(
                 x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face,
                 static_face_prop, static_face_param, fixed_index, fixed_offset,
-                fixed_value, row_count, friction_mode, friction_eps, residual, dt, query_index, primitive, slot, local_force,
+                fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, local_force,
                 local_hessian, statistics_contact_count, statistics_contact_count_size,
                 statistics_object_index, statistics_object_index_size,
                 statistics_static_object_index,
@@ -894,9 +996,21 @@ struct CollisionPointFaceC2mEmbed {
     unsigned row_count;
     unsigned friction_mode;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -946,7 +1060,7 @@ struct CollisionPointFaceC2mEmbed {
                 x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x,
                 static_vertex_prop, static_vertex_param, fixed_index,
                 fixed_offset, fixed_value, row_count, friction_mode,
-                friction_eps, residual, dt, query_index, primitive, slot,
+                friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot,
                 local_force,
                 local_hessian, statistics_contact_count, statistics_contact_count_size,
                 statistics_object_index, statistics_object_index_size,
@@ -991,9 +1105,21 @@ struct CollisionEdgeEdgeEmbed {
     unsigned row_count;
     unsigned friction_mode;
     float friction_eps;
-    // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF, a copy of the force vector
-    // taken before this pass, and the substep it is divided by.
-    const float *residual;
+    const unsigned *memory_word0;
+    const unsigned *memory_word1;
+    const float *memory_slip;
+    unsigned memory_count;
+    unsigned *record_word0;
+    unsigned *record_word1;
+    unsigned *record_vertex;
+    float *record_float;
+    compute::atomic_uint_t *record_count;
+    unsigned record_capacity;
+    // THE LOAD THE FRICTION ANCHOR IS READ OFF, each vertex's residual before
+    // any contact plus its lagged non-friction contact load, formed once an
+    // iteration (`friction_load_prepare`), and the substep it is divided by.
+    const float *friction_load;
+    const float *friction_cone;
     float dt;
     compute::atomic_float_t *out_vertex_force;
     compute::atomic_float_t *out_fixed_value;
@@ -1043,7 +1169,7 @@ struct CollisionEdgeEdgeEmbed {
                 x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x,
                 static_edge, static_edge_prop, static_edge_param, fixed_index,
                 fixed_offset, fixed_value, row_count, friction_mode,
-                friction_eps, residual, dt, query_index, primitive, slot,
+                friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot,
                 local_force,
                 local_hessian, statistics_contact_count, statistics_contact_count_size,
                 statistics_object_index, statistics_object_index_size,
@@ -1078,7 +1204,13 @@ struct CollisionEdgeEdgeEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1100,7 +1232,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionPointFaceM2cEmbed embed{x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face, static_face_prop, static_face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionPointFaceM2cEmbed embed{x0, x, vertex_prop, start_link_index, start_link_offset, has_start_link, vertex_param, static_x, static_face, static_face_prop, static_face_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1129,7 +1261,13 @@ struct CollisionEdgeEdgeEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1151,7 +1289,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionPointFaceC2mEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x, static_vertex_prop, static_vertex_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionPointFaceC2mEmbed embed{x0, x, face, vertex_prop, start_link_index, start_link_offset, has_start_link, face_prop, face_param, static_x, static_vertex_prop, static_vertex_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1181,7 +1319,13 @@ struct CollisionEdgeEdgeEmbed {
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
     unsigned friction_mode, float friction_eps,
-    const float *residual, float dt,
+    // THE FRICTION'S MEMORY (`friction_memory.kernel.cpp`): the last committed
+    // step's pairs, sorted by key, and this iteration's record of every pair.
+    const unsigned *memory_word0, const unsigned *memory_word1,
+    const float *memory_slip, unsigned memory_count,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex, float *record_float,
+    compute::atomic_uint_t *record_count, unsigned record_capacity,
+    const float *friction_load, const float *friction_cone, float dt,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -1203,7 +1347,7 @@ struct CollisionEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    CollisionEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x, static_edge, static_edge_prop, static_edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, residual, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
+    CollisionEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, static_x, static_edge, static_edge_prop, static_edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, statistics_static_object_index, statistics_static_object_index_size, out_overlap, element, diag, 0u, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);

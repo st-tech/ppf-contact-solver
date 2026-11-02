@@ -19,8 +19,9 @@ scale along those axes, the rest T long), spaced ``step`` seconds from
 ``start``. Every length is in scene units and solver world axes.
 
 THIS MODULE IMPORTS NOTHING FROM THE SOLVER, and nothing from the rest of the
-frontend but the noise, so the add-on can carry a byte-identical copy
-(``blender_addon/core/field_eval.py``), as it does the noise.
+frontend but the noise, so the add-on can carry a copy
+(``blender_addon/core/field_eval.py``), identical but for its license line,
+as it does the noise.
 """
 
 from __future__ import annotations

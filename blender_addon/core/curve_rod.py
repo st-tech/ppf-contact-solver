@@ -1,7 +1,7 @@
 # File: curve_rod.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Curve-to-Rod encode/decode. Single source of truth for
 # curve sampling, parameterization, and least-squares fitting.

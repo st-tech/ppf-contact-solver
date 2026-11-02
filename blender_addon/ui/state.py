@@ -1,8 +1,7 @@
 # File: state.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 import json
 import os
 
@@ -64,6 +63,7 @@ from .state_types import (
     CollisionWindowEntry,
 )
 from .object_group import ObjectGroup
+from ..core.limits import MAX_STEP_SIZE
 
 
 def _sync_scene_timeline_to_sim(self, context):
@@ -609,11 +609,13 @@ class State(PropertyGroup):
         name="Step Size",
         default=0.01,
         min=0.001,
-        max=0.01,
+        # The solver's limit (`core/limits.py`), so the field cannot be set past
+        # what the solver accepts.
+        max=MAX_STEP_SIZE,
         precision=3,
         unit="TIME",
         soft_min=0.001,
-        soft_max=0.01,
+        soft_max=MAX_STEP_SIZE,
         description="Simulation step size",
     )  # pyright: ignore
     min_newton_steps: IntProperty(

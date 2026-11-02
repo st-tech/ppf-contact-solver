@@ -1,7 +1,7 @@
 # File: debug_ops.py
 # Code: Claude Code and Codex
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # All DEBUG_OT_* operators and WM_OT_OpenGitHubLink.
 

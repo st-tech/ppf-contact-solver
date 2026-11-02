@@ -1,7 +1,7 @@
 # File: scenarios/bl_mcp_ui_element_status.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # get_ui_element_status, the tool that reports the add-on's operator and
 # property surface, against a real Blender.

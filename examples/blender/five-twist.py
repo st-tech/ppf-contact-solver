@@ -1,7 +1,7 @@
 # File: five-twist.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Launch inside Blender (Scripting workspace, or `blender --python five-twist.py`)
 # to build the same five-cylinder twist scene as examples/five-twist.ipynb,

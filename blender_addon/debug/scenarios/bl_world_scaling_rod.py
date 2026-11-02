@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_rod.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling SCALE-INVARIANCE for a ROD (edge-chain). A straight
 # edge-chain rod is fully pinned and driven by a MOVE_BY pin op. We run

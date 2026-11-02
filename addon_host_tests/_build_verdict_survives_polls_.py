@@ -1,7 +1,7 @@
 # File: addon_host_tests/_build_verdict_survives_polls_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A verdict is read the same way every time the server reports it.
 #

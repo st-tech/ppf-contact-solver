@@ -1,7 +1,7 @@
 # File: addon_host_tests/_native_gpu_backend_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # WHICH ACCELERATOR a local native connection runs, once Compute Device says
 # GPU and the root holds more than one GPU build.

@@ -1,7 +1,7 @@
 # File: scenarios/bl_mac_native_root_resolve.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # macOS Native solver-root resolution. In macOS Native mode the user points
 # the addon at the directory that holds ``target/release/ppf-cts-server``,

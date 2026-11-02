@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_fluid.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The Fluid field held to the reference evaluator in the
 # kernel, through the "fluid" section of `_force_field_probe.py`, which

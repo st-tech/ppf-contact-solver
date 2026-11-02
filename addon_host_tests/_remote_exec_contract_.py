@@ -1,8 +1,7 @@
 # File: addon_host_tests/_remote_exec_contract_.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
-
+# License: GPL-3.0-or-later
 """What a remote backend GUARANTEES about the command it sends.
 
 Two properties that everything above them assumes, that nothing asserted, and

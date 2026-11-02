@@ -1,7 +1,7 @@
 # File: scenarios/bl_api_stale_pin_proxy.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A pin proxy from the Python API that outlives its pin REFUSES every write,
 # naming what is gone, rather than returning itself as though the write had

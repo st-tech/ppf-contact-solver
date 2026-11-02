@@ -1,7 +1,7 @@
 # File: scenarios/rig_force_field_targets.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # A force field source reaches every object, or only the groups it names:
 # group-targeted field objects and scripts move only their groups, an ungrouped

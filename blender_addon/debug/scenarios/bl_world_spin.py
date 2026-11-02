@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_spin.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Fixed WORLD-axis angular velocity overwrite, through the CUDA-free
 # solver's implicit ARAP elastic solver on a no-GPU host.

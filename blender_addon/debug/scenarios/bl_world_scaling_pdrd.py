@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_pdrd.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling with a PDRD rigid body. The original world_scaling
 # commit (2ada05b5) HARD-ERRORED when world_scaling != 1.0 was combined

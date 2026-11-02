@@ -132,6 +132,31 @@ MM_SRCS := bringup.mm metal_context.mm arena.mm diagnostics.mm \
 # host rendering carries the same `.kernel.cpp` name as its source.
 KERNELGEN := ../seam/kernelgen.py
 KERNELGEN_DIR := $(OUT_DIR)/kernelgen
+
+# EVERY FILE OF THE NEUTRAL TREE, because that is what a rendering is read
+# from. The generator reads more than the source it is handed: the sources that
+# include it and that it includes (an includer's entry declarations seed the
+# address-space inference), and every header and kernel for the record layouts,
+# whose sizes it writes into the argument records. A rule naming only its own
+# source would leave those renderings stale after an edit elsewhere: a record
+# grown in data_records.hpp, with the kernels reading it untouched, would be
+# compiled at its old size against the new struct.
+#
+# Naming the whole tree re-runs every rendering after any edit to it, and the
+# generator writes its output only when the text changed, so an unchanged
+# rendering keeps its time and nothing compiled from it rebuilds. That is also
+# why each rendering goes through a STAMP: a rule whose output keeps an older
+# time than a prerequisite would otherwise run again on every build. The stamp
+# records that the rendering is current; the output's own rule (no work unless
+# the file has gone missing, when it removes the stamp and renders it again)
+# is what downstream rules name, so they see the output's time.
+KERNEL_TREE := $(shell find $(KERNEL_ROOT) -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) -print)
+
+# The stamps are produced only as prerequisites, so make would otherwise DELETE
+# them as intermediate files after the build that made them, and the next build
+# would render everything again.
+.SECONDARY:
+
 KERNEL_SRCS := $(sort $(patsubst $(KERNEL_ROOT)/%,%,\
                  $(shell find $(KERNEL_ROOT) -path '$(KERNEL_ROOT)/build' -prune -o \
                                      -name '*.kernel.cpp' -print)))
@@ -140,13 +165,19 @@ KERNEL_METAL := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.kernel.metal,\
 KERNEL_HOST := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.kernel.cpp,\
                  $(KERNEL_SRCS))
 
-$(KERNELGEN_DIR)/%.kernel.metal: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.kernel.metal.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
-	python3 -B $(KERNELGEN) --target metal --out $@ $<
+	python3 -B $(KERNELGEN) --target metal --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.kernel.metal: $(KERNELGEN_DIR)/%.kernel.metal.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
-$(KERNELGEN_DIR)/%.kernel.cpp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.kernel.cpp.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
-	python3 -B $(KERNELGEN) --target cpp --out $@ $<
+	python3 -B $(KERNELGEN) --target cpp --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.kernel.cpp: $(KERNELGEN_DIR)/%.kernel.cpp.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # ---------------------------------------------------------------------------
 # THE GENERATED ENTRY POINTS, AND A COMPILER THAT READS THEM.
@@ -267,10 +298,13 @@ ENTRY_AIR := $(patsubst %.kernel.cpp,$(ENTRY_CHECK_DIR)/%.air,\
 KERNEL_ARGS_H := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.args.h,\
                    $(KERNEL_ENTRY_SRCS))
 
-$(KERNELGEN_DIR)/%.args.h: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.args.h.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	python3 -B $(KERNELGEN) --target metal --emit args \
-		--kernel-root $(KERNEL_ROOT) --out $@ $<
+		--kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.args.h: $(KERNELGEN_DIR)/%.args.h.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # THE GENERATED KERNEL TABLE, one fragment per neutral source concatenated in
 # SORTED SOURCE ORDER, because a kernel id is a row's POSITION in the result.
@@ -282,10 +316,13 @@ KERNEL_TABLE_FRAGS := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.table.h,\
                         $(KERNEL_ENTRY_SRCS))
 KERNEL_TABLE_METAL := $(KERNELGEN_DIR)/kernel_table_metal.h
 
-$(KERNELGEN_DIR)/%.table.h: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.table.h.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	python3 -B $(KERNELGEN) --target metal --emit table \
-		--kernel-root $(KERNEL_ROOT) --out $@ $<
+		--kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.table.h: $(KERNELGEN_DIR)/%.table.h.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # A PLAIN `cat`, which is what the fragment's spelling is arranged to allow: a
 # metal row is pure data and includes nothing, so the concatenation needs no
@@ -304,10 +341,13 @@ KERNEL_TABLE_RS := $(patsubst %.kernel.cpp,$(KERNELGEN_DIR)/%.table.rs,\
                      $(KERNEL_ENTRY_SRCS))
 KERNEL_TABLE_RUST := $(KERNELGEN_DIR)/kernel_table.rs
 
-$(KERNELGEN_DIR)/%.table.rs: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.table.rs.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	python3 -B $(KERNELGEN) --target rust --emit table \
-		--kernel-root $(KERNEL_ROOT) --out $@ $<
+		--kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.table.rs: $(KERNELGEN_DIR)/%.table.rs.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 $(KERNEL_TABLE_RUST): $(KERNEL_TABLE_RS)
 	mkdir -p $(@D)
@@ -317,12 +357,15 @@ $(KERNEL_TABLE_METAL): $(KERNEL_TABLE_FRAGS)
 	mkdir -p $(@D)
 	cat $(KERNEL_TABLE_FRAGS) > $@
 
-$(KERNELGEN_DIR)/%.entry.metal: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN)
+$(KERNELGEN_DIR)/%.entry.metal.stamp: $(KERNEL_ROOT)/%.kernel.cpp $(KERNELGEN) $(KERNEL_TREE)
 	mkdir -p $(@D)
 	# --kernel-root because the generator no longer sits inside the neutral
 	# tree and an entry rendering resolves headers against it.
 	python3 -B $(KERNELGEN) --target metal --emit entry \
-		--kernel-root $(KERNEL_ROOT) --out $@ $<
+		--kernel-root $(KERNEL_ROOT) --out $(basename $@) $<
+	touch $@
+$(KERNELGEN_DIR)/%.entry.metal: $(KERNELGEN_DIR)/%.entry.metal.stamp
+	@test -f $@ || { rm -f $<; $(MAKE) --no-print-directory $<; }
 
 # The prologue is READ out of the two files that define it, never copied. A
 # check that compiled an entry point against its own spelling of ARENA_PTR

@@ -1,7 +1,7 @@
 # File: scenarios/rig_log_decoding.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Guard for how the rig DECODES the logs it collects. Every one of them was
 # written by another process: the server's `stdout.log` and `stderr.log` are

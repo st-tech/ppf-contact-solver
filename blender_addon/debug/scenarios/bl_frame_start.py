@@ -1,7 +1,7 @@
 # File: scenarios/bl_frame_start.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The simulation's starting frame has two possible sources, and exactly one of
 # them may reach the encoders:

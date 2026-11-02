@@ -1,7 +1,7 @@
 # File: scenarios/bl_progress_simulating.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # UX progress: live solver progress during ``Simulation Running``.
 #

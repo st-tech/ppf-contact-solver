@@ -119,7 +119,7 @@ $bw = Join-Path $Src "build-win-native"
 $bwDest = Join-Path $Dest "build-win-native"
 Copy-Tree (Join-Path $bw "python") (Join-Path $bwDest "python") @()
 Copy-Tree (Join-Path $bw "mingit") (Join-Path $bwDest "mingit") @()
-Copy-Tree (Join-Path $bw "cuda\bin") (Join-Path $bwDest "cuda\bin") @()
+Copy-Tree (Join-Path $bw "cuda\bin\x64") (Join-Path $bwDest "cuda\bin\x64") @()
 if ($backends -contains "rocm") {
     Copy-Tree (Join-Path $bw "rocm\bin") (Join-Path $bwDest "rocm\bin") @()
 }

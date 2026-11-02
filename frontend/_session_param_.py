@@ -172,7 +172,9 @@ class ParamManager:
             ParamManager: The updated ParamManager object.
 
         Raises:
-            ValueError: If no dynamic key is currently selected.
+            ValueError: If no dynamic key is currently selected, or the key is
+                ``dt`` and the value is outside the step-size limit that
+                :meth:`set` applies.
 
         Example:
             Slow playback to 10% after the third second via a dynamic key::
@@ -186,6 +188,8 @@ class ParamManager:
         if self._key is None:
             raise ValueError("Key is not set")
         else:
+            if self._key == "dt":
+                _rust.scene_validate_step_size(float(value))
             if self._key in self._dyn_param:
                 self._dyn_param[self._key].append((self._time, value))
             else:

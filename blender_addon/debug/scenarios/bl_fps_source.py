@@ -1,7 +1,7 @@
 # File: scenarios/bl_fps_source.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The simulation's frame rate has two possible sources, and exactly one of
 # them may reach the solver:

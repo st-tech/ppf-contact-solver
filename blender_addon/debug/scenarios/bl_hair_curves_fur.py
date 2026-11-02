@@ -1,7 +1,7 @@
 # File: scenarios/bl_hair_curves_fur.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Blender's own Fur, simulated (issue #146). Object > Quick Effects > Quick
 # Fur builds the stack an artist actually has: a few guide curves in the

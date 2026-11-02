@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# License: GPL-3.0-or-later
 # capture.sh — Launch Blender headlessly, capture UI widget screenshots, quit.
 #
 # ============================================================================

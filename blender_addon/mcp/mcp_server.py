@@ -1,3 +1,4 @@
+# License: GPL-3.0-or-later
 """Pure Socket-based MCP Server for Blender integration."""
 
 import contextlib

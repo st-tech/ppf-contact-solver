@@ -1,7 +1,7 @@
 # File: scenarios/_force_field_probe.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # The shared probe behind the `rig_force_field_*` and `rig_frame_step`
 # scenarios: the external force field (issues #151 and #114) and the

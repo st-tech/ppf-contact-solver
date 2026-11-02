@@ -1,7 +1,7 @@
 # File: scenarios/rig_session_artifact_identity.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # Guard for the identity the runner's cached session artifacts carry.
 #

@@ -1,7 +1,7 @@
 # File: scenarios/bl_world_scaling_static_pin.py
 # Code: Claude Code
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
-# License: Apache v2.0
+# License: GPL-3.0-or-later
 #
 # world_scaling round-trip for STATIC pins and INITIAL GEOMETRY,
 # world_scaling=10. A fully pinned plane holds every vertex at its
