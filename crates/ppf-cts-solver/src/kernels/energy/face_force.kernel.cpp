@@ -139,8 +139,8 @@ template <typename D>
     const Vec3f &x2, float pressure,
     Mat3x3f &gradient, Mat9x9f &hessian) {
     Vec3f v0 = x0;
-    Vec3f e1 = (x1 - x0).cast<float>();
-    Vec3f e2 = (x2 - x0).cast<float>();
+    Vec3f e1 = x1 - x0;
+    Vec3f e2 = x2 - x0;
     Vec3f v1 = v0 + e1;
     Vec3f v2 = v0 + e2;
     gradient = face_pressure_gradient(pressure, v0, e1, e2);

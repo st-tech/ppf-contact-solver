@@ -40,7 +40,7 @@
 [[seam::device_fn]] inline Vec3f
 rewind_fix_position(const Vec3f &position,
                         const Vec3f &step_delta, float back) {
-    return position - (back * step_delta).cast<float>();
+    return position - (back * step_delta);
 }
 
 // THE PIN'S OWN RECORD IS WHAT THE STEP UPDATES, so this composition takes the

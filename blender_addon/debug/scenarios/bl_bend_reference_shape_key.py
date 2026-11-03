@@ -379,7 +379,7 @@ try:
     dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
                project_name=root.state.project_name)
     dh.log("connected")
-    dh.build_and_wait(data_bytes, param_bytes, "bend-ref-shape-key:build",
+    dh.build_and_wait(data_bytes, param_bytes, "bend-reference-shape-key:build",
                       timeout=120.0)
     solver_name = dh.facade.engine.state.solver.name
     dh.record(

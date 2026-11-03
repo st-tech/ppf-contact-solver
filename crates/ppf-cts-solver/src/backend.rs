@@ -77,6 +77,23 @@ type RestShapeKeyframe = (f64, Vec<Mat2x2f>, Vec<Mat3x3f>, Vec<u8>, Vec<u8>);
 /// element is excluded if it is near-singular in *either* bracketing keyframe
 /// (OR of the masks), so a element collapsing between two samples is dropped
 /// for the whole interval (its interpolated inv_rest is unused while excluded).
+/// Object index -> the user's name for it, from the session's statistics input.
+/// Empty when the session carries none, and the report then says "object N".
+fn object_names(input_dir: &str) -> std::collections::HashMap<u32, String> {
+    let path = std::path::Path::new(input_dir).join(ppf_cts_formats::files::STATISTICS_INPUT);
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| ppf_cts_formats::statistics::decode_statistics_input(&bytes).ok())
+        .map(|input| {
+            input
+                .objects
+                .into_iter()
+                .map(|object| (object.object_index, object.object_name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn interp_rest_shape(keyframes: &[RestShapeKeyframe], time: f64) -> RestShapeUpdate {
     debug_assert!(
         keyframes.windows(2).all(|w| w[0].0 < w[1].0),
@@ -1580,7 +1597,7 @@ impl Backend {
                     result.pin_feasible,
                     result.contact_separated,
                 );
-                let detail = format!(
+                let mut detail = format!(
                     "advance failed at frame {} (ccd={}, pcg={}, \
                      intersection_free={}, newton_progress={}, \
                      pin_feasible={}, contact_separated={})",
@@ -1592,6 +1609,21 @@ impl Backend {
                     result.pin_feasible,
                     result.contact_separated
                 );
+                // A STALL THAT A PINNED COLLIDER CAUSED NAMES THE COLLIDER (issue
+                // #160), in the user's words for the objects, so the panel says
+                // what to change rather than which cloth vertex was stuck.
+                if let Some(pinch) = crate::driver::pinch::take() {
+                    let names = object_names(&program_args.path);
+                    let name = |object: Option<u32>| match object {
+                        Some(index) => match names.get(&index) {
+                            Some(name) => format!("'{name}'"),
+                            None => format!("object {index}"),
+                        },
+                        None => "an unnamed object".to_string(),
+                    };
+                    detail.push_str(". ");
+                    detail.push_str(&crate::driver::pinch::describe(&pinch, &name));
+                }
                 // The terminal record is the crash report proper, and it is
                 // stamped FIRST so nothing written afterward can cost it. It is
                 // durable (tmp + fsync + rename) and first-writer-wins, so once

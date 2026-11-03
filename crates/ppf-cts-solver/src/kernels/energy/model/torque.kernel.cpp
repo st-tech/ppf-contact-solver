@@ -264,7 +264,7 @@ torque_rperp_step(const Vec3f &r,
     const Vec3f &axis, float magnitude,
     float inv_r_perp_sq_sum, Vec3f &force,
     Mat3x3f &hessian) {
-    const Vec3f r = (y - center).cast<float>();
+    const Vec3f r = y - center;
     const Vec3f perpendicular = r - axis * axis.dot(r);
     const float scale = magnitude * inv_r_perp_sq_sum;
     force = axis.cross(perpendicular) * scale;
@@ -346,7 +346,7 @@ torque_rperp_step(const Vec3f &r,
     float covariance[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     for (unsigned k = start; k < last; ++k) {
         const Vec3f member_position = position[member[k].index];
-        const Vec3f offset = (member_position - center).template cast<float>();
+        const Vec3f offset = member_position - center;
         torque_covariance_step(offset, covariance);
     }
     torque_covariance_finish(covariance, group.vertex_count);
@@ -356,14 +356,14 @@ torque_rperp_step(const Vec3f &r,
     // commanded torque could reverse between two frames whose covariance barely
     // differs.
     const Vec3f hint_position = position[group.hint_vertex];
-    const Vec3f hint = (hint_position - center).template cast<float>();
+    const Vec3f hint = hint_position - center;
     Vec3f axis;
     torque_axis(covariance, group.axis_component, hint, axis);
 
     float r_perp_sq_sum = 0.0f;
     for (unsigned k = start; k < last; ++k) {
         const Vec3f member_position = position[member[k].index];
-        const Vec3f radius = (member_position - center).template cast<float>();
+        const Vec3f radius = member_position - center;
         torque_rperp_step(radius, axis, r_perp_sq_sum);
     }
 

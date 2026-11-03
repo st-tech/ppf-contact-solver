@@ -862,6 +862,34 @@ pub unsafe fn advance<D: Device>(
             if let Some(contact) = state.contact.as_mut() {
                 if let Some(clamp) = contact.clamp(device, prm.line_search_max_t)? {
                     log::message!("### {}", describe_clamp(&clamp, state.prop_vertex.host()));
+                    // WHICH COLLIDERS HOLD IT (issue #160). The clamp names the
+                    // cloth vertex; what an artist can change is the pinned
+                    // collider closing on it. Diagnosed here, at the stall, and
+                    // not before the step: `driver/pinch.rs` gives the reasons.
+                    use super::contact::ClampElement;
+                    let stuck = match clamp.element {
+                        ClampElement::Vertex(n) | ClampElement::VertexOrColliderVertex(n) => {
+                            Some(n as u32)
+                        }
+                        ClampElement::ColliderVertex(_) | ClampElement::Edge(_) => None,
+                    };
+                    if let Some(vertex) = stuck {
+                        state.positions.download(device)?;
+                        let pinch = super::pinch::find(
+                            data,
+                            state.positions.host(),
+                            state.prop_vertex.host(),
+                            vertex,
+                        );
+                        if let Some(pinch) = &pinch {
+                            let name = |object: Option<u32>| match object {
+                                Some(index) => format!("object {index}"),
+                                None => "an unnamed object".to_string(),
+                            };
+                            log::message!("### {}", super::pinch::describe(pinch, &name));
+                        }
+                        super::pinch::record(pinch);
+                    }
                 }
             }
             result.newton_progress = false;

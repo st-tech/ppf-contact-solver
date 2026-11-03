@@ -85,7 +85,7 @@ override_angular_seed(const Vec3f &curr,
     // The moment arm is translation-invariant: it only ever feeds
     // v = omega x r. So the pivot is subtracted here, ahead of the cross
     // product, and no absolute coordinate reaches a multiplication.
-    const Vec3f arm = (curr - pivot).cast<float>();
+    const Vec3f arm = curr - pivot;
     const Vec3f omega = Vec3f(wx, wy, wz);
     const Vec3f surface = omega.cross(arm);
     Vec3f seeded;

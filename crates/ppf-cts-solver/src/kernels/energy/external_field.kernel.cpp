@@ -1157,7 +1157,7 @@ struct FieldPoint {
                 // field's lengths, never a speed.
                 const Vec3f before = previous[i];
                 const Vec3f v = fmath::div(1.0f, previous_dt) *
-                                (position - before).cast<float>();
+                                (position - before);
                 const Vec3f vl(v.dot(ax), v.dot(ay), v.dot(az));
                 const Vec3f axis = shape == FIELD_PLANE ? Vec3f(0.0f, 0.0f, 1.0f)
                                                         : tangent;

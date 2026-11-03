@@ -495,7 +495,7 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     const Vec2u nodes = edge_nodes[slot];
     const Vec3f x_from = x[nodes[0]];
     const Vec3f x_to = x[nodes[1]];
-    const Vec3f e = (x_to - x_from).cast<float>();
+    const Vec3f e = x_to - x_from;
     const float length = e.norm();
     if (!(length > 0.0f)) {
         return;
@@ -789,8 +789,8 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
         const Vec3f from1 = eval_x[nodes[1]];
         const Vec3f to0 = target[nodes[0]];
         const Vec3f to1 = target[nodes[1]];
-        const Vec3f now = (from1 - from0).cast<float>();
-        const Vec3f goal = (to1 - to0).cast<float>();
+        const Vec3f now = from1 - from0;
+        const Vec3f goal = to1 - to0;
         const Vec3f a = now / now.norm();
         const Vec3f b = goal / goal.norm();
         const float one_plus_c = 1.0f + a.dot(b);
@@ -1239,8 +1239,8 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
         const Vec3f from1 = before[nodes[1]];
         const Vec3f to0 = after[nodes[0]];
         const Vec3f to1 = after[nodes[1]];
-        const Vec3f now = (from1 - from0).cast<float>();
-        const Vec3f next = (to1 - to0).cast<float>();
+        const Vec3f now = from1 - from0;
+        const Vec3f next = to1 - to0;
         const Vec3f a = now / now.norm();
         const Vec3f b = next / next.norm();
         const float one_plus_c = 1.0f + a.dot(b);

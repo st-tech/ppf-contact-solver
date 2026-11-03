@@ -166,7 +166,7 @@ template <unsigned N>
     }
     const Vec3f ex0 = weighted_separation<N>(x0, index, weight);
     const Vec3f ex = weighted_separation<N>(x, index, weight);
-    const Vec3f separation = ex.cast<float>();
+    const Vec3f separation = ex;
     // A PAIR THAT HAS ALREADY CLOSED TO THE CONTACT OFFSET, AT THE START POSE OR
     // AT THE ITERATE, IS REPORTED, NEVER ASSERTED. The barrier is singular there
     // and the pair carries no usable force: it contributes nothing and writes
@@ -190,7 +190,7 @@ template <unsigned N>
     // crossing pairs have a true distance of zero and fail the sweep on
     // exactly the runs a `<` here let past. The skip below shares the test,
     // `separation` being the vector the normal is `normalized()` from.
-    const float ex0_d2 = ex0.cast<float>().squaredNorm();
+    const float ex0_d2 = ex0.squaredNorm();
     const float ex_d2 = separation.squaredNorm();
     const float offset2 = offset * offset;
     if (!(ex0_d2 > offset2) || !(ex_d2 > offset2)) {
@@ -204,7 +204,7 @@ template <unsigned N>
         (void)right;
         return false;
     }
-    const Vec3f relative_step = (ex - ex0).cast<float>();
+    const Vec3f relative_step = ex - ex0;
     const Vec3f normal = separation.normalized();
     // A PAIR WHOSE SIDES HAVE A FRAME SLIPS BY ITS RELATIVE STEP LESS ITS TURN
     // (`friction_memory.kernel.cpp`, "A PAIR THAT TURNS AS ONE BODY DOES NOT
@@ -302,11 +302,11 @@ template <unsigned N>
                 frame_vertex[k] = k < N ? index[k] : FRICTION_MEMORY_UNUSED;
             }
             friction_frame_jacobian(frame, x0, frame_vertex,
-                                    ex0.cast<float>() - carried, rotation);
+                                    ex0 - carried, rotation);
             for (unsigned k = 0; k < N; ++k) {
                 const Vec3f xk = x[index[k]];
                 const Vec3f x0k = x0[index[k]];
-                moved += rotation[k] * (xk - x0k).cast<float>();
+                moved += rotation[k] * (xk - x0k);
             }
         }
         // A GRAIN PAIR'S FRICTION SEES THE CONTACT-POINT SLIP, not the relative
@@ -517,9 +517,9 @@ template <unsigned N>
     if (!(c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f)) {
         return false;
     }
-    const Vec3f e = c[0] * (p - t0).cast<float>() +
-                    c[1] * (p - t1).cast<float>() +
-                    c[2] * (p - t2).cast<float>();
+    const Vec3f e = c[0] * (p - t0) +
+                    c[1] * (p - t1) +
+                    c[2] * (p - t2);
     const VertexParam vparam =
         vertex_param[vertex_prop[vertex_index].param_index];
     const FaceParam fparam = face_param[face_prop[face_index].param_index];
@@ -557,8 +557,8 @@ template <unsigned N>
                     // A vertex slides across a surface's faces and edges alike, so the
                     // memory names the surface's object and side, not the face.
                     friction_memory_surface_kind(
-                        ((t1 - t0).cast<float>()).cross((t2 - t0).cast<float>()),
-                        (p - t0).cast<float>()),
+                        ((t1 - t0)).cross((t2 - t0)),
+                        (p - t0)),
                     vertex_prop[index[1]].object_index,
                     friction_load, friction_cone, dt, index,
                     weight, ghat,
@@ -661,7 +661,7 @@ template <unsigned N>
         return false;
     }
     const Vec3f e =
-        c[0] * (p - t0).cast<float>() + c[1] * (p - t1).cast<float>();
+        c[0] * (p - t0) + c[1] * (p - t1);
     const VertexParam vparam =
         vertex_param[vertex_prop[vertex_index].param_index];
     const EdgeParam eparam = edge_param[edge_prop[edge_index].param_index];
@@ -713,8 +713,8 @@ template <unsigned N>
         const Vec3f g1 = x[g[1]];
         const Vec3f g2 = x[g[2]];
         surface_kind = friction_memory_surface_kind(
-            ((g1 - g0).cast<float>()).cross((g2 - g0).cast<float>()),
-            (p - g0).cast<float>());
+            ((g1 - g0)).cross((g2 - g0)),
+            (p - g0));
     }
     unsigned index[4];
     index[0] = vertex_index;
@@ -846,7 +846,7 @@ template <unsigned N>
     }
     const Vec3f p = x[vertex_index];
     const Vec3f q = x[other];
-    const Vec3f e = (p - q).cast<float>();
+    const Vec3f e = p - q;
     const VertexParam vparam_a =
         vertex_param[vertex_prop[vertex_index].param_index];
     const VertexParam vparam_b = vertex_param[vertex_prop[other].param_index];
@@ -946,7 +946,7 @@ template <unsigned N>
         const Vec3f left_position = x[vertex_index];
         const Vec3f right_position = x[other];
         const Vec3f pair_normal =
-            (left_position - right_position).template cast<float>().normalized();
+            (left_position - right_position).normalized();
         Vec3f spin = Vec3f::Zero();
         if (grain_left) {
             const Vec3f omega_left = grain_omega[vertex_index];
@@ -1108,7 +1108,7 @@ template <unsigned N>
     }
     const Vec3f y0 = float(c[0]) * p0 + float(c[1]) * p1;
     const Vec3f y1 = float(c[2]) * q0 + float(c[3]) * q1;
-    const Vec3f e = (y0 - y1).cast<float>();
+    const Vec3f e = y0 - y1;
     const EdgeParam eparam_a = edge_param[edge_prop[edge_index].param_index];
     const EdgeParam eparam_b = edge_param[edge_prop[other].param_index];
     const float offset = eparam_a.offset + eparam_b.offset;
@@ -2185,7 +2185,7 @@ struct ContactEdgeEdgeEmbed {
         if (v[k] != FRICTION_MEMORY_UNUSED) {
             const Vec3f xv = x[v[k]];
             const Vec3f x0v = x0[v[k]];
-            moved += jacobian[k] * (xv - x0v).cast<float>();
+            moved += jacobian[k] * (xv - x0v);
         }
     }
     const Vec3f slip = carried + moved;

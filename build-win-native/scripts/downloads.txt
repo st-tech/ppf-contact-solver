@@ -111,8 +111,18 @@ URL_PYTHON_ARM64=https://github.com/astral-sh/python-build-standalone/releases/d
 FILE_PYTHON_ARM64=cpython-3.12.14-20260901-aarch64-pc-windows-msvc-install_only.tar.gz
 SHA256_PYTHON_ARM64=4e852236277eb8f7105cbe0f5adf45592f521af238bc0f700c351856e2c2e41a
 
-URL_GET_PIP=https://bootstrap.pypa.io/get-pip.py
+# Pinned to a get-pip revision, with its digest: bootstrap.pypa.io/get-pip.py is
+# mutable. From pypa/get-pip b6f17d79 (2026-10-28) on, the script runs its
+# bundled pip as `python <tmp>/pip install ...`, which leaves sys.argv[0] named
+# `pip`, and pip's Windows guard (protect_pip_from_modification_on_windows)
+# then refuses to upgrade pip ("To modify pip, please run ... -m pip"), so
+# warmup.bat stopped at "Failed to install pip". fa4e9030 (pip 26.2.2,
+# 2026-10-20) is the last revision that runs pip in-process; it still installs
+# the current pip from PyPI. The digest was read from that raw file on
+# 2026-11-03.
+URL_GET_PIP=https://raw.githubusercontent.com/pypa/get-pip/fa4e90301bf000c36309f3ad79c3ac720b55d6df/public/get-pip.py
 FILE_GET_PIP=get-pip.py
+SHA256_GET_PIP=f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424
 
 # Pinned to a specific gist revision: the raw pointer is mutable, and the
 # 2026-07-11 revision (1fd0e2a4) shipped a NameError in the msi-unpacking

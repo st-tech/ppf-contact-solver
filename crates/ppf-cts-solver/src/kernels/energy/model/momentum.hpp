@@ -56,7 +56,7 @@ SM_INLINE float energy(float dt, SM_THREAD const Vec3f &x,
 SM_INLINE Vec3f gradient(float dt, SM_THREAD const Vec3f &x,
                           SM_THREAD const Vec3f &y) {
     // DIVIDED, not multiplied by a reciprocal. `momentum.hpp`'s `gradient` in
-    // the reference is `(x - y).cast<float>() / (dt * dt)`, one IEEE division
+    // the reference is `(x - y) / (dt * dt)`, one IEEE division
     // per component; forming `1 / dt^2` first and multiplying rounds twice, and
     // this is the largest single term of a free vertex's right-hand side. The
     // two siblings below already divide, so this also makes the header
@@ -76,7 +76,7 @@ SM_INLINE Mat3x3f hessian(float dt) {
 SM_INLINE Vec3f isotropic_drag_gradient(float dt, SM_THREAD const Vec3f &y,
                                          SM_THREAD const Vec3f &x,
                                          float isotropic_air_friction) {
-    return isotropic_air_friction * (y - x).cast<float>() / (dt * dt);
+    return isotropic_air_friction * (y - x) / (dt * dt);
 }
 
 // PSD for any isotropic_air_friction >= 0: a non-negative multiple of the
@@ -110,7 +110,7 @@ SM_INLINE Vec3f fix_xz_gradient(float dt, SM_THREAD const Vec3f &y,
     float t = fix_xz_ramp(y, threshold);
     Vec3f n(0.0f, 1.0f, 0.0f);
     Mat3x3f P = Mat3x3f::Identity() - n * n.transpose();
-    return P * t * mass * (y - x).cast<float>() / (dt * dt);
+    return P * t * mass * (y - x) / (dt * dt);
 }
 
 // PSD for any t >= 0 and mass >= 0: a non-negative multiple of the projection

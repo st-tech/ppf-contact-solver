@@ -423,7 +423,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
     // Both operands copied into thread space: `x` above already is, and the
     // subtraction needs the two in one address space.
     const Vec3f current_i = current[i];
-    const Vec3f dx = (x - current_i).cast<float>();
+    const Vec3f dx = x - current_i;
 
     if (prop.fix_index > 0u) {
         // A fix pin is an exact Dirichlet BC: the driver eliminates its row,
@@ -435,7 +435,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
         if (prop.pdrd_body_index > 0u || disable_pin_dof_removal != 0u) {
             const FixPair pin = fix_pair[prop.fix_index - 1u];
             const Vec3f y = pin.position;
-            const Vec3f w = (x - y).cast<float>();
+            const Vec3f w = x - y;
             const float distance = w.norm();
             float gap = pin.ghat - distance;
             if (pin.kinematic) {
@@ -470,14 +470,14 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             center = (bowl && (x[1] > center[1]))
                          ? Vec3f(center[0], x[1], center[2])
                          : center;
-            const float d2 = (x - center).cast<float>().squaredNorm();
+            const float d2 = (x - center).squaredNorm();
             if (collider.kinematic) {
                 if (d2) {
-                    const Vec3f normal = (x - center).cast<float>().normalized();
+                    const Vec3f normal = (x - center).normalized();
                     const float eff_radius =
                         reverse ? (radius - ghat) : (radius + ghat);
                     const Vec3f target = eff_radius * normal;
-                    const Vec3f o = (x - center).cast<float>();
+                    const Vec3f o = x - center;
                     if (bowl) {
                         reverse = true;
                     }
@@ -540,9 +540,9 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                     statistics_record_analytic_contact(
                         statistics_contact_count, statistics_contact_count_size,
                         statistics_object_index, statistics_object_index_size, i, diag);
-                    Vec3f normal = (x - center).cast<float>().normalized();
+                    Vec3f normal = (x - center).normalized();
                     const Vec3f projected_x = radius * normal;
-                    const Vec3f o = (x - center).cast<float>();
+                    const Vec3f o = x - center;
                     if (reverse) {
                         normal = -normal;
                     }
@@ -611,7 +611,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             const Vec3f up = plane.up;
             const Vec3f ground =
                 plane.ground + float(ghat) * up;
-            const Vec3f e = (x - ground).cast<float>();
+            const Vec3f e = x - ground;
             if (e.dot(up) < 0.0f) {
                 const float depth = -e.dot(up);
                 if (plane.thickness > 0.0f && depth > plane.thickness) {
@@ -622,7 +622,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                     statistics_contact_count, statistics_contact_count_size,
                     statistics_object_index, statistics_object_index_size, i, diag);
                 const Vec3f projected_x = -e.dot(up) * up;
-                float gap = (x - plane.ground).cast<float>().dot(up);
+                float gap = (x - plane.ground).dot(up);
                 if (plane.kinematic) {
                     gap = fmath::max(gap, constraint_tol * ghat);
                 }
@@ -777,8 +777,8 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                                        ? Vec3f(center[0], p1[1], center[2])
                                        : center;
             const float r = collider.radius;
-            const float r0 = (p0 - center0).cast<float>().norm();
-            const float r1 = (p1 - center1).cast<float>().norm();
+            const float r0 = (p0 - center0).norm();
+            const float r1 = (p1 - center1).norm();
             // Signed feasible depth, matching the assembly above: outside
             // for a solid sphere, inside for a reversed one (a container).
             const float d0 = collider.reverse ? (r - r0) : (r0 - r);
@@ -792,8 +792,8 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             if (plane.kinematic) {
                 continue;
             }
-            const float h0 = plane.up.dot((p0 - plane.ground).cast<float>());
-            const float h1 = plane.up.dot((p1 - plane.ground).cast<float>());
+            const float h0 = plane.up.dot((p0 - plane.ground));
+            const float h1 = plane.up.dot((p1 - plane.ground));
             if (h0 >= 0.0f && h1 < 0.0f) {
                 out_infeasible[i] = 1u;
             }
@@ -806,8 +806,8 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
         if ((prop.pdrd_body_index > 0u || disable_pin_dof_removal != 0u) &&
             pin.kinematic == false) {
             const Vec3f position = pin.position;
-            const float r0 = (p0 - position).cast<float>().norm();
-            const float r1 = (p1 - position).cast<float>().norm();
+            const float r0 = (p0 - position).norm();
+            const float r1 = (p1 - position).norm();
             DIAG_ASSERT4(diag, r0 < pin.ghat, r0, pin.ghat, (float)i,
                         (float)prop.fix_index);
             // Clearance inside the ball, and the park short of its
@@ -847,8 +847,8 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                                        ? Vec3f(center[0], p1[1], center[2])
                                        : center;
             const float r = collider.radius;
-            const float r0 = (p0 - center0).cast<float>().norm();
-            const float r1 = (p1 - center1).cast<float>().norm();
+            const float r0 = (p0 - center0).norm();
+            const float r1 = (p1 - center1).norm();
             // A start already embedded past the thickness cutoff passes
             // through, which also keeps an ill-placed initial vertex from
             // failing the crossing test rather than the assembly's.
@@ -903,7 +903,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                     const float level =
                         accd::park_gap_analytic(gap0, collider.ghat, ccd_eps);
                     const float t = sphere_level_crossing(
-                        (p0 - center).cast<float>(), (p1 - p0).cast<float>(), r,
+                        (p0 - center), (p1 - p0), r,
                         false, gap0, level);
                     if (t <= 1.0f || t != t) {
                         out_toi[i] =
@@ -921,8 +921,8 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             }
             const Vec3f up = plane.up;
             const Vec3f ground = plane.ground;
-            const float h0 = up.dot((p0 - ground).cast<float>());
-            const float h1 = up.dot((p1 - ground).cast<float>());
+            const float h0 = up.dot((p0 - ground));
+            const float h1 = up.dot((p1 - ground));
             if (plane.thickness > 0.0f && -h0 > plane.thickness) {
                 continue;
             }
@@ -1055,9 +1055,9 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                     // The triangle's own test (`sphere_feature_gap`), on the
                     // same operands in the same order, so the two passes agree
                     // on every region.
-                    const Vec3f ge1 = (g1 - g0).cast<float>();
-                    const Vec3f ge2 = (g2 - g0).cast<float>();
-                    const Vec3f gp = (center - g0).cast<float>();
+                    const Vec3f ge1 = g1 - g0;
+                    const Vec3f ge2 = g2 - g0;
+                    const Vec3f gp = center - g0;
                     float gw[3];
                     const unsigned face_region =
                         triangle_closest_weights(ge1, ge2, gp, gw);
@@ -1082,7 +1082,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
         for (unsigned k = 0; k < n; ++k) {
             const Vec3f xk = eval_x[index[k]];
             const Vec3f ck = current[index[k]];
-            slip += w[k] * (xk - ck).cast<float>();
+            slip += w[k] * (xk - ck);
             const VertexProp prop = vertex_prop[index[k]];
             if (prop.fix_index == 0u && prop.mass > 0.0f) {
                 local_hess += w[k] * fixed_csr_read(fixed_index, fixed_offset,
@@ -1199,7 +1199,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
     for (unsigned k = 0; k < n; ++k) {
         const Vec3f a = Q0[k];
         const Vec3f b = Q1[k];
-        d[k] = (b - a).cast<float>();
+        d[k] = b - a;
         dmax = fmath::max(dmax, d[k].norm());
     }
     if (!(dmax > 0.0f)) {
@@ -1261,11 +1261,11 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                             2.0f * vnorm * (dist * 4.0e-6f + position_error);
         float second = -1.0f;
         float K = 0.0f;
-        const Vec3f e1 = (P[1] - P[0]).cast<float>();
+        const Vec3f e1 = P[1] - P[0];
         const Vec3f f1 = d[1] - d[0];
         Vec3f c = Vec3f::Zero();
         if (n == 3u) {
-            const Vec3f e2 = (P[2] - P[0]).cast<float>();
+            const Vec3f e2 = P[2] - P[0];
             const Vec3f f2 = d[2] - d[0];
             const float g11 = e1.dot(e1);
             const float g12 = e1.dot(e2);

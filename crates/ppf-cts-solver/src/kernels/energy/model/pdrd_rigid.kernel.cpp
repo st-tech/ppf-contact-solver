@@ -757,7 +757,7 @@ pdrd_rigid_anchor(const PdrdRigidState &s) {
     }
     const Vec3f anchor = positions[vert_list[bp.vertex_start]];
     const Vec3f here = positions[v];
-    const Vec3f d = (here - anchor).cast<float>();
+    const Vec3f d = here - anchor;
     compute::atomic_add(centroid + 3u * b + 0u, d[0]);
     compute::atomic_add(centroid + 3u * b + 1u, d[1]);
     compute::atomic_add(centroid + 3u * b + 2u, d[2]);
@@ -831,7 +831,7 @@ pdrd_rigid_anchor(const PdrdRigidState &s) {
     }
     const Vec3f anchor = positions[vert_list[bp.vertex_start]];
     const Vec3f here = positions[v];
-    const Vec3f d = (here - anchor).cast<float>();
+    const Vec3f d = here - anchor;
     compute::atomic_add(scratch + 12u * b + 0u, d[0]);
     compute::atomic_add(scratch + 12u * b + 1u, d[1]);
     compute::atomic_add(scratch + 12u * b + 2u, d[2]);
@@ -865,7 +865,7 @@ pdrd_rigid_anchor(const PdrdRigidState &s) {
                   centroid[12u * b + 2u] * inverse_count);
     const Vec3f anchor = positions[vert_list[bp.vertex_start]];
     const Vec3f here = positions[v];
-    const Vec3f y = (here - anchor).cast<float>() - c;
+    const Vec3f y = (here - anchor) - c;
     const Vec3f rest = rest_centered[j];
     for (unsigned col = 0; col < 3u; ++col) {
         for (unsigned row = 0; row < 3u; ++row) {

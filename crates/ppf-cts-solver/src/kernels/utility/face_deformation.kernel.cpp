@@ -44,10 +44,6 @@
 // so the [[seam::count]] guard says nothing about it; Metal returns 0.0 for an
 // out-of-bounds read rather than faulting, which would turn a corrupt index
 // list into a plausible deformation gradient instead of a stopped run.
-//
-// THE POSITIONS CROSS AS A LATTICE TYPE and never as floats. `Vec3f` is 12
-// bytes of int32, and the body differences two of them before any cast, which
-// is exact; a float image of either one is not.
 [[seam::entry(count)]] void face_deformation_gradient(
     [[seam::through]] const Vec3f *x,
     [[seam::indices(3)]] const unsigned *face,

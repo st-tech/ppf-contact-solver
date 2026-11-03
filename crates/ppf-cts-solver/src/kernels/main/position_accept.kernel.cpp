@@ -44,8 +44,8 @@
 [[seam::device_fn]] inline Vec3f
 position_accept(const Vec3f &origin,
                     const Vec3f &proposed, float fraction) {
-    const Vec3f offset = fraction * (proposed - origin).cast<float>();
-    return origin + offset.cast<float>();
+    const Vec3f offset = fraction * (proposed - origin);
+    return origin + offset;
 }
 
 // The entry point, declared once and rendered for four targets: the

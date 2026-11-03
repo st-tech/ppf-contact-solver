@@ -164,8 +164,8 @@
     const float midpoint_weight(0.5f);
     const Vec3f center = midpoint_weight * x0 + midpoint_weight * x1;
     Mat3x2f centered;
-    centered << (x0 - center).cast<float>(), //
-        (x1 - center).cast<float>();
+    centered << (x0 - center), //
+        (x1 - center);
     Vec6f shape;
     for (unsigned element = 0; element < 6; ++element) {
         shape[element] = centered.m[element];

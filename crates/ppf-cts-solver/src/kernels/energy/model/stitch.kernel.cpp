@@ -37,6 +37,14 @@
 // offending mode while the gradient above it stays exact, which is the
 // projected-Newton pattern the rest of the assembly uses.
 //
+// EVERY SUM OF PRODUCTS IS SPELLED AS AN `fmath::fma` NEST. A contracting
+// compiler (nvcc --fmad=true, Metal, the host at -ffp-contract=fast) may fuse
+// `a * b + c * d` either way or not at all, and each choice rounds
+// differently. CUDA 13.2 fused the centroid and the weighted sums the other
+// way from CUDA 12 and the host compilers, and the stitch golden moved by a few
+// ulp. With every product either alone or inside an explicit fma, no compiler
+// has a choice left, so all backends give the same bits.
+//
 // EVERY SCALAR DIVISION IS SPELLED `fmath::div`, which is `/` on CUDA (so the
 // CUDA arithmetic is unchanged) and `precise::divide` in MSL. The distinction
 // is load-bearing: MSL's plain `/` is not correctly rounded, and a backend whose
@@ -73,10 +81,11 @@
     // weighted by the same barycentric weights the spring itself uses, halved
     // because a gap is measured between two surfaces. An authored one replaces
     // it; the host has already refused one that is not finite and positive.
-    const float gap_rest_length =
-        fmath::div(w[0] * ghat[0] + w[1] * ghat[1] + w[2] * ghat[2] +
-                     w[3] * ghat[3] + w[4] * ghat[4] + w[5] * ghat[5],
-                 2.0f);
+    float gap_sum = w[0] * ghat[0];
+    for (unsigned k = 1; k < 6; ++k) {
+        gap_sum = fmath::fma(w[k], ghat[k], gap_sum);
+    }
+    const float gap_rest_length = fmath::div(gap_sum, 2.0f);
     const float l0 = has_rest_length != 0u ? rest_length : gap_rest_length;
     // The two endpoints' contact offsets, each the LARGEST over that
     // endpoint's three slots. A max rather than a barycentric blend, because
@@ -87,38 +96,55 @@
     const float target_offset =
         fmath::max(fmath::max(offset[3], offset[4]), offset[5]);
     const float l_cap =
-        stitch_length_factor * l0 + source_offset + target_offset;
+        fmath::fma(stitch_length_factor, l0, source_offset) + target_offset;
 
     // The centroid of the six slots, formed first so the differences below stay
     // at slot-separation scale. Differencing two large nearby coordinates
     // cancels their leading digits and leaves the round-off as the answer, so
     // the offsets are taken against this centroid rather than against each
-    // other.
-    const float s(fmath::div(1.0f, 6.0f));
-    const Vec3f cog =
-        s * x[0] + s * x[1] + s * x[2] + s * x[3] + s * x[4] + s * x[5];
-    Vec3f z0 = w[0] * (x[0] - cog).cast<float>() +
-               w[1] * (x[1] - cog).cast<float>() +
-               w[2] * (x[2] - cog).cast<float>();
-    Vec3f z1 = w[3] * (x[3] - cog).cast<float>() +
-               w[4] * (x[4] - cog).cast<float>() +
-               w[5] * (x[5] - cog).cast<float>();
-    const Vec3f t = z0 - z1;
+    // other. The centroid is a plain sum over six, with no product to fuse.
+    Vec3f cog;
+    Vec3f t;
+    for (unsigned d = 0; d < 3; ++d) {
+        float sum = x[0][d];
+        for (unsigned k = 1; k < 6; ++k) {
+            sum = sum + x[k][d];
+        }
+        cog[d] = fmath::div(sum, 6.0f);
+        float z0 = w[0] * (x[0][d] - cog[d]);
+        float z1 = w[3] * (x[3][d] - cog[d]);
+        for (unsigned k = 1; k < 3; ++k) {
+            z0 = fmath::fma(w[k], x[k][d] - cog[d], z0);
+            z1 = fmath::fma(w[k + 3], x[k + 3][d] - cog[d], z1);
+        }
+        t[d] = z0 - z1;
+    }
+    // The length as an fma nest too; `SMat::norm` sums plain products.
+    const float t_length = fmath::sqrt(
+        fmath::fma(t[2], t[2], fmath::fma(t[1], t[1], t[0] * t[0])));
     // The cap enters as a MINIMUM on the measured length, not as a branch: past
     // it the spring stops lengthening and `r` saturates, which is what makes
     // the two coefficients below reach their clamps.
-    const float l = fmath::min(l_cap, t.norm());
+    const float l = fmath::min(l_cap, t_length);
     Vec3f n;
     for (unsigned dimension = 0; dimension < 3; ++dimension) {
         n[dimension] = fmath::div(t[dimension], l);
     }
 
-    SMatf<3, 18> dtdx;
-    dtdx << w[0] * Mat3x3f::Identity(), w[1] * Mat3x3f::Identity(),
-        w[2] * Mat3x3f::Identity(), -w[3] * Mat3x3f::Identity(),
-        -w[4] * Mat3x3f::Identity(), -w[5] * Mat3x3f::Identity();
+    // dt/dx is w_k I for the source slots and -w_k I for the target ones, so
+    // g = dtdx^T n and dtdx^T dtdx are written entry by entry from the signed
+    // weights rather than as 18-wide matrix products.
+    float sw[6];
+    for (unsigned k = 0; k < 6; ++k) {
+        sw[k] = k < 3 ? w[k] : -w[k];
+    }
     const Vec3f dedt = (fmath::div(l, l0) - 1.0f) * n;
-    const SVecf<18> g = dtdx.transpose() * n;
+    SVecf<18> g;
+    for (unsigned k = 0; k < 6; ++k) {
+        for (unsigned d = 0; d < 3; ++d) {
+            g[3 * k + d] = sw[k] * n[d];
+        }
+    }
     const float r = fmath::div(l - l0, l);
     const float c0 = fmath::div(fmath::max(0.0f, 1.0f - r), l0);
     const float c1 = fmath::max(0.0f, fmath::div(r, l0));
@@ -129,7 +155,16 @@
     gradient.col(3) = -w[3] * dedt;
     gradient.col(4) = -w[4] * dedt;
     gradient.col(5) = -w[5] * dedt;
-    hessian = c0 * g * g.transpose() + c1 * dtdx.transpose() * dtdx;
+    // H = c0 g g^T + c1 dtdx^T dtdx. The second term is nonzero only where the
+    // two axes match, and there it is one fma with the first.
+    for (unsigned j = 0; j < 18; ++j) {
+        for (unsigned i = 0; i < 18; ++i) {
+            const float outer = c0 * g[i];
+            hessian(i, j) = i % 3 == j % 3
+                                ? fmath::fma(outer, g[j], (c1 * sw[i / 3]) * sw[j / 3])
+                                : outer * g[j];
+        }
+    }
 
     // The per-object stiffness is a RAW force factor: no mass and no time-scale
     // normalization, so the authored number is what the spring pulls with. It

@@ -99,9 +99,9 @@ shell_strain_energy(const Vec2f &shifted_sigma, float limit,
     const float third(1.0f / 3.0f);
     const Vec3f center = third * x0 + third * x1 + third * x2;
     Mat3x3f centered;
-    centered << (x0 - center).cast<float>(), //
-        (x1 - center).cast<float>(),         //
-        (x2 - center).cast<float>();
+    centered << (x0 - center), //
+        (x1 - center),         //
+        (x2 - center);
     Vec9f shape;
     for (unsigned element = 0; element < 9; ++element) {
         shape[element] = centered.m[element];

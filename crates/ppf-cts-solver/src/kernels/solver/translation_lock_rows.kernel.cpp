@@ -203,7 +203,7 @@
     }
     const LockFrame frame = frames[li];
     const Vec3f position = positions[i];
-    const Vec3f r = (position - lock.anchor).cast<float>() - frame.com_relative;
+    const Vec3f r = (position - lock.anchor) - frame.com_relative;
     const Vec3f dx(step[3u * i + 0u], step[3u * i + 1u], step[3u * i + 2u]);
     const Vec3f contribution = prop[i].mass * r.cross(dx);
     compute::atomic_add(torque + 3u * li + 0u, contribution[0]);
@@ -244,7 +244,7 @@
     const float mass = prop[i].mass;
     if (translation_lock::translation_lock_enabled(lock)) {
         const Vec3f anchor = initial[i];
-        const Vec3f delta = (position - anchor).cast<float>();
+        const Vec3f delta = position - anchor;
         // THROUGH `constrained_translation`, NOT `perpendicular`. An axis mode
         // leaves the component along its own axis free and an all-axes mode
         // constrains the whole vector, and the end-of-step invariant reads the

@@ -218,10 +218,10 @@ namespace {
 inline bool edge_triangle_intersect_fp(const Vec3f &a0, const Vec3f &a1,
                                        const Vec3f &b0, const Vec3f &b1,
                                        const Vec3f &b2) {
-    const Vec3f d1 = (b1 - b0).cast<float>();
-    const Vec3f d2 = (b2 - b0).cast<float>();
-    const Vec3f e0 = (a0 - b0).cast<float>();
-    const Vec3f e1 = (a1 - b0).cast<float>();
+    const Vec3f d1 = b1 - b0;
+    const Vec3f d2 = b2 - b0;
+    const Vec3f e0 = a0 - b0;
+    const Vec3f e1 = a1 - b0;
     const float zero[3] = {0.0f, 0.0f, 0.0f};
     const float e0a[3] = {e0[0], e0[1], e0[2]};
     const float e1a[3] = {e1[0], e1[1], e1[2]};
@@ -304,7 +304,7 @@ int edge_edge_proximity_abi(const Vec3f *vertex, uint32_t a0, uint32_t a1,
                 ;
         const Vec3f x0 = c[0] * p0 + c[1] * p1;
         const Vec3f x1 = c[2] * q0 + c[3] * q1;
-        const Vec3f e = (x0 - x1).cast<float>();
+        const Vec3f e = x0 - x1;
         return e.dot(e) < offset * offset ? 1 : 0;
     }
     const Vec2u ij[] = {Vec2u(0, 0), Vec2u(0, 1), Vec2u(1, 0), Vec2u(1, 1)};
@@ -325,8 +325,8 @@ int edge_edge_proximity_abi(const Vec3f *vertex, uint32_t a0, uint32_t a1,
             proximity::point_edge_distance_coeff_unclassified<float, float>(
                 q2, q0, q1)
                 ;
-        const Vec3f e_0 = ((c_0[0] * q0 + c_0[1] * q2) - q1).cast<float>();
-        const Vec3f e_1 = ((c_1[0] * q0 + c_1[1] * q1) - q2).cast<float>();
+        const Vec3f e_0 = ((c_0[0] * q0 + c_0[1] * q2) - q1);
+        const Vec3f e_1 = ((c_1[0] * q0 + c_1[1] * q1) - q2);
         const float sqr_d0 = e_0.dot(e_0);
         const float sqr_d1 = e_1.dot(e_1);
         const float smaller = sqr_d0 < sqr_d1 ? sqr_d0 : sqr_d1;
@@ -340,7 +340,7 @@ int edge_edge_proximity_abi(const Vec3f *vertex, uint32_t a0, uint32_t a1,
 // Two grains closer than `offset`. MIRRORS `PointPointIntersectTester`.
 int point_point_proximity_abi(const Vec3f *vertex, uint32_t a, uint32_t b,
                                   float offset) {
-    const Vec3f e = (vertex[a] - vertex[b]).cast<float>();
+    const Vec3f e = vertex[a] - vertex[b];
     return e.dot(e) < offset * offset ? 1 : 0;
 }
 

@@ -103,7 +103,7 @@
     const float mass = prop[i].mass * w;
     const Vec3f y = eval_x[i];
     const Vec3f x = current[i];
-    const Vec3f v = fmath::div(1.0f, dt) * (y - x).cast<float>();
+    const Vec3f v = fmath::div(1.0f, dt) * (y - x);
     const float speed = v.norm();
     Vec3f f = Vec3f::Zero();
     Mat3x3f H = Mat3x3f::Zero();

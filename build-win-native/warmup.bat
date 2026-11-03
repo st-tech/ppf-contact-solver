@@ -460,13 +460,15 @@ if not exist "%PYTHON%" (
         echo import site>> "%PYTHON_DIR%\python311._pth"
 
         REM Download and install pip
+        REM Fetched like every other pinned entry, so SHA256_GET_PIP is checked.
+        REM scripts\downloads.txt says why the revision is pinned.
         echo Downloading get-pip.py...
-        set "GET_PIP=%PYTHON_DIR%\%FILE_GET_PIP%"
-        curl.exe -fL -o "!GET_PIP!" "%URL_GET_PIP%"
+        call "%BUILD_WIN%\scripts\fetch-download.bat" GET_PIP
         if errorlevel 1 (
             echo ERROR: Failed to download get-pip.py
             exit /b 1
         )
+        set "GET_PIP=!DOWNLOADED_FILE!"
 
         echo Installing pip...
         "%PYTHON%" "!GET_PIP!"

@@ -89,7 +89,7 @@ template <class Pull, class TorqueVertex, class TorqueGroup>
         if (vert == pull[j].index) {
             Vec3f position = pull[j].position;
             float weight = pull[j].weight;
-            gradient += weight * (iterate - position).cast<float>();
+            gradient += weight * (iterate - position);
             hessian += weight * Mat3x3f::Identity();
             pulled = true;
             break;

@@ -321,7 +321,7 @@ enum : unsigned {
                                                      unsigned i, unsigned j) {
     const Vec3f xi = x[i];
     const Vec3f xj = x[j];
-    return (xj - xi).cast<float>();
+    return (xj - xi);
 }
 
 // The turn's coefficients `W_k` at the step's start `x0`, for the vertices
@@ -429,7 +429,7 @@ enum : unsigned {
         if (v[k] != FRICTION_MEMORY_UNUSED) {
             const Vec3f xv = x[v[k]];
             const Vec3f x0v = x0[v[k]];
-            moved += w[k] * (xv - x0v).cast<float>();
+            moved += w[k] * (xv - x0v);
         }
     }
     if (frame == FRICTION_FRAME_NONE) {
@@ -443,7 +443,7 @@ enum : unsigned {
         if (v[k] != FRICTION_MEMORY_UNUSED) {
             const Vec3f xv = x[v[k]];
             const Vec3f x0v = x0[v[k]];
-            moved += rotation[k] * (xv - x0v).cast<float>();
+            moved += rotation[k] * (xv - x0v);
         }
     }
     return moved;

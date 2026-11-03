@@ -2305,12 +2305,19 @@ jobs:
               --instance-ids "${{ steps.verify-instance.outputs.INSTANCE_ID }}" \
               --region "$AWS_REGION" || true
           fi
-          # Fallback: Find and terminate any instances tagged with this run ID
-          # This catches instances launched but not captured in step outputs (e.g., on cancellation)
-          echo "Searching for any orphaned instances from this run..."
+          # Fallback: find and terminate any instance THIS JOB launched but did
+          # not capture in a step output (e.g., on cancellation). The Purpose
+          # filter is load-bearing: the Linux jobs run their own instances
+          # under the same RunId at the same time, and a RunId-only sweep here
+          # terminated the x86_64 build and verify instances mid-build when
+          # warmup.bat failed (run 41540196560), which the Linux job then read
+          # as a build that never reported. Each job sweeps only its own
+          # Purpose tags; the final `cleanup` job sweeps the whole run.
+          echo "Searching for any orphaned instances from this job..."
           ORPHANED_INSTANCES=$(aws ec2 describe-instances \
             --filters \
               "Name=tag:RunId,Values=${{ github.run_id }}" \
+              "Name=tag:Purpose,Values=WindowsReleaseBuild,WindowsBundleVerification" \
               "Name=instance-state-name,Values=pending,running,stopping,stopped" \
             --query 'Reservations[].Instances[].InstanceId' \
             --region "$AWS_REGION" \

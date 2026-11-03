@@ -112,7 +112,7 @@ template <unsigned N>
         // subtraction it feeds is the same one on the same values.
         const Vec3f x_i = x[index[i]];
         const Vec3f x0_i = x0[index[i]];
-        slip += weight[i] * (x_i - x0_i).cast<float>();
+        slip += weight[i] * (x_i - x0_i);
     }
     // A PAIR WHOSE SEPARATION HAS ALREADY CLOSED TO THE CONTACT OFFSET. The
     // barrier's gap is non-positive there and `normal` below is a 0/0
@@ -355,9 +355,9 @@ template <unsigned N>
     const Vec3f c =
         proximity::point_triangle_distance_coeff_unclassified<float, float>(
             p, t0, t1, t2);
-    const Vec3f separation = c[0] * (p - t0).cast<float>() +
-                             c[1] * (p - t1).cast<float>() +
-                             c[2] * (p - t2).cast<float>();
+    const Vec3f separation = c[0] * (p - t0) +
+                             c[1] * (p - t1) +
+                             c[2] * (p - t2);
     const VertexParam vparam =
         vertex_param[vertex_prop[vertex_index].param_index];
     const FaceParam fparam =
@@ -538,9 +538,9 @@ template <unsigned N>
     const Vec3f c =
         proximity::point_triangle_distance_coeff_unclassified<float, float>(
             y, t0, t1, t2);
-    const Vec3f separation = c[0] * (t0 - y).cast<float>() +
-                             c[1] * (t1 - y).cast<float>() +
-                             c[2] * (t2 - y).cast<float>();
+    const Vec3f separation = c[0] * (t0 - y) +
+                             c[1] * (t1 - y) +
+                             c[2] * (t2 - y);
     const FaceParam fparam = face_param[face_prop[face_index].param_index];
     const VertexParam vparam =
         static_vertex_param[static_vertex_prop[vertex_index].param_index];
@@ -735,8 +735,8 @@ template <unsigned N>
     const Vec3f q1c = q1 - cog;
     const Vec4f c =
         proximity::edge_edge_distance_coeff<float, float>(p0c, p1c, q0c, q1c);
-    const Vec3f left = c[0] * p0c.cast<float>() + c[1] * p1c.cast<float>();
-    const Vec3f right = c[2] * q0c.cast<float>() + c[3] * q1c.cast<float>();
+    const Vec3f left = c[0] * p0c + c[1] * p1c;
+    const Vec3f right = c[2] * q0c + c[3] * q1c;
     const Vec3f separation = left - right;
     const EdgeParam eparam = edge_param[edge_prop[edge_index].param_index];
     const EdgeParam sparam =

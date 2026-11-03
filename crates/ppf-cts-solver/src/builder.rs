@@ -1899,7 +1899,7 @@ pub fn build(
 
     // Cosserat rods: a material frame for every marked rod edge and the rest
     // Darboux vector at every node between two of them (`cosserat.rs`). A
-    // tangent is the difference of the edge's endpoints, taken before any cast.
+    // tangent is the difference of the edge's endpoints.
     let cosserat_frames = {
         let mut inputs = Vec::new();
         for ei in 0..rod_count {

@@ -74,7 +74,7 @@ SM_INLINE float face_energy(float dt, SM_THREAD const Vec3f &x1,
                              SM_THREAD const Vec3f &x0,
                              SM_THREAD const Vec3f &normal,
                              SM_THREAD const Vec3f &wind, float air_friction) {
-    Vec3f z = (x1 - x0).cast<float>() - dt * wind;
+    Vec3f z = (x1 - x0) - dt * wind;
     Mat3x3f P = get_proj_op(normal);
     float f = normal.dot(z);
     Vec3f g = P * z;
@@ -86,7 +86,7 @@ SM_INLINE Vec3f face_gradient(float dt, SM_THREAD const Vec3f &x1,
                                SM_THREAD const Vec3f &normal,
                                SM_THREAD const Vec3f &wind,
                                float air_friction) {
-    Vec3f z = (x1 - x0).cast<float>() - dt * wind;
+    Vec3f z = (x1 - x0) - dt * wind;
     Mat3x3f P = get_proj_op(normal);
     return normal * normal.dot(z) / (dt * dt) +
            air_friction * P * z / (dt * dt);

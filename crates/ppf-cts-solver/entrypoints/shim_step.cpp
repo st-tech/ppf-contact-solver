@@ -57,25 +57,13 @@
 #include <cstddef>
 #include <cstdint>
 
-// The same reinterpretations kernel_shim.cpp licenses, restated here because a
+// The same reinterpretation kernel_shim.cpp licenses, restated here because a
 // translation unit cannot borrow another's static helpers and a second spelling
 // of a cast is exactly what these assertions exist to prevent.
-static_assert(sizeof(float) == sizeof(int32_t),
-              "a position component must be one 32-bit word for the int32 "
-              "array views below to be reinterpretations, not conversions");
-static_assert(sizeof(Vec3f) == 3 * sizeof(int32_t),
-              "Vec3f must be three packed 32-bit components");
 static_assert(sizeof(Mat3x3f) == 9 * sizeof(float),
               "SMat must be packed column-major storage with no padding");
 static_assert(alignof(Mat3x3f) == alignof(float),
               "SMat must carry natural alignment, not a vector alignment");
-
-static inline const Vec3f *step_position(const int32_t *p) {
-    return reinterpret_cast<const Vec3f *>(p);
-}
-static inline Vec3f *step_position_mut(int32_t *p) {
-    return reinterpret_cast<Vec3f *>(p);
-}
 template <class M> static inline M *step_mat_mut(float *p) {
     static_assert(sizeof(M) == sizeof(float) * M::Size,
                   "an SMat must be exactly its elements, with no padding");

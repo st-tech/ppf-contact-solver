@@ -163,7 +163,7 @@ that is to be shared, so the split is not yet available for them:
 (`contact.cu:2378`, `:2389`), `atomicMax` (`lbvh.cu:465`,
 `translation_lock.hpp:1011`) and `atomicSub` (`schwarz.cu:150`). Each is
 resolved by hoisting the latch to an out-parameter in the CUDA source, as
-`dev-mac-metal-port` already did for `accd::OverlapInfo`, or by growing this
+`accd::OverlapInfo` already does, or by growing this
 list. Do the first where the value is a diagnostic and the second where it is
 part of the algorithm.
 

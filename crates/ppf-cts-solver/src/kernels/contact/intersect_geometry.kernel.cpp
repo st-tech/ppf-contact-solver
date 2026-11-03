@@ -78,10 +78,10 @@
     const Vec3f &b2,
     float &signed_volume_first,
     float &signed_volume_second) {
-    Vec3f d1 = (b1 - b0).cast<float>();
-    Vec3f d2 = (b2 - b0).cast<float>();
-    Vec3f e0 = (a0 - b0).cast<float>();
-    Vec3f e1 = (a1 - b0).cast<float>();
+    Vec3f d1 = b1 - b0;
+    Vec3f d2 = b2 - b0;
+    Vec3f e0 = a0 - b0;
+    Vec3f e1 = a1 - b0;
     const float zero[3] = {0.0f, 0.0f, 0.0f};
     const float e0a[3] = {e0[0], e0[1], e0[2]};
     const float e1a[3] = {e1[0], e1[1], e1[2]};
@@ -106,7 +106,7 @@
                    ;
     Vec3f x0 = c[0] * p0 + c[1] * p1;
     Vec3f x1 = c[2] * q0 + c[3] * q1;
-    Vec3f e = (x0 - x1).cast<float>();
+    Vec3f e = x0 - x1;
     return e.dot(e) < offset * offset;
 }
 
@@ -132,9 +132,9 @@
                      free_second, shared, free_first)
                      ;
     Vec3f e_0 =
-        ((c_0[0] * shared + c_0[1] * free_second) - free_first).cast<float>();
+        ((c_0[0] * shared + c_0[1] * free_second) - free_first);
     Vec3f e_1 =
-        ((c_1[0] * shared + c_1[1] * free_first) - free_second).cast<float>();
+        ((c_1[0] * shared + c_1[1] * free_first) - free_second);
     float sqr_d0 = e_0.dot(e_0);
     float sqr_d1 = e_1.dot(e_1);
     // The smaller of the two, spelled as `std::min` expands rather than through
@@ -190,7 +190,7 @@
 point_point_intersect_proximity(const Vec3f &p,
                                     const Vec3f &q,
                                     float offset) {
-    Vec3f e = (p - q).cast<float>();
+    Vec3f e = p - q;
     return e.dot(e) < offset * offset;
 }
 

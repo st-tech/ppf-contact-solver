@@ -3131,13 +3131,14 @@ pub(crate) mod tests {
         }
     }
 
-    /// See `a_stitch_without_a_rest_length_assembles_the_same_bits_as_before_the_field_existed`.
+    /// See `a_stitch_without_a_rest_length_assembles_the_same_bits_on_every_backend`.
     ///
-    /// ONE GOLDEN FOR EVERY ARCHITECTURE. The tree before the field existed
-    /// (the published one) assembles these bits on x86-64 (g++ 13.3, CPU and
-    /// CUDA builds) and on aarch64 (clang, apple-m1) alike, measured with this
-    /// same fixture.
-    const STITCH_DERIVED_REST_LENGTH_GOLDEN: [u64; 2] = [0x6eeb_6a05_ae11_a4b6, 0x7169_5d3c_c22d_0677];
+    /// ONE GOLDEN FOR EVERY BACKEND, AND NOW BY CONSTRUCTION. The kernel spells
+    /// every sum of products as an `fmath::fma` nest, so a contracting
+    /// compiler has no fusion left to choose. The old spelling agreed across
+    /// g++, clang and CUDA 12 by luck: CUDA 13.2 fused the centroid and the
+    /// weighted sums the other way and moved these bits.
+    const STITCH_DERIVED_REST_LENGTH_GOLDEN: [u64; 2] = [0x67e0_f156_2a4c_6a37, 0x8175_fb89_35cb_8a28];
 
     /// A stitch record from six slot indices, six weights and a stiffness.
     fn seam(index: [u32; 6], weight: [f32; 6], stiffness: f32) -> Stitch {
@@ -3459,13 +3460,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_stitch_without_a_rest_length_assembles_the_same_bits_as_before_the_field_existed() {
-        // THE GOLDEN WAS PRINTED BY THE TREE BEFORE STITCHES COULD CARRY A REST
-        // LENGTH, running this same function there. A stitch that names none
-        // must take the gap-derived rest length through exactly the arithmetic
-        // it always did, so the force and the Hessian of a
-        // general barycentric stitch, below its cap and past it, match to the
-        // bit. A drift here is a change to every stitched scene.
+    fn a_stitch_without_a_rest_length_assembles_the_same_bits_on_every_backend() {
+        // A stitch that names no rest length takes the gap-derived one through a
+        // fixed arithmetic, so the force and the Hessian of a general
+        // barycentric stitch, below its cap and past it, match this golden to
+        // the bit on every backend. A drift here is a change to every stitched
+        // scene. The golden was reprinted when the kernel moved to explicit fma
+        // nests; that change is the only one it records.
         let bits = derived_rest_length_bits();
         println!("derived rest length bits: {:#018x} {:#018x}", bits[0], bits[1]);
         assert_eq!(

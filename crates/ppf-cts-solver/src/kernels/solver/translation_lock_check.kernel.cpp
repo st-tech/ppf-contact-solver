@@ -53,7 +53,7 @@
     // which MSL cannot bind to the thread-space reference the subtraction takes.
     const Vec3f current = positions[i];
     const Vec3f anchor = initial[i];
-    const Vec3f delta = (current - anchor).cast<float>();
+    const Vec3f delta = current - anchor;
     // THE SAME HELPER THE DRIFT ACCUMULATION USES, so the end-of-step invariant
     // and the constraint it verifies cannot disagree about which part of the
     // displacement is locked.

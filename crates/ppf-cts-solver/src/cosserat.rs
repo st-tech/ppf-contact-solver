@@ -40,9 +40,8 @@ use crate::data::Vec3f;
 use nalgebra as na;
 
 /// One Cosserat edge as handed to the frame builder. `v0`/`v1` are global
-/// vertex indices, `tangent` is the unit director from `v0` to `v1` (the
-/// caller differences the two endpoint positions before casting the result),
-/// and `length` is the edge rest length.
+/// vertex indices, `tangent` is the unit director from `v0` to `v1`, and
+/// `length` is the edge rest length.
 #[derive(Debug, Clone, Copy)]
 pub struct CosseratEdgeInput {
     pub edge: u32,
@@ -1027,14 +1026,11 @@ mod tests {
     #[test]
     fn near_straight_wobble_frames_are_finite() {
         // Regression geometry for the near-straight-rod NaN (a straight rod
-        // plus a tiny 3D sine wobble, snapped to a fine fixed grid and
-        // differenced in f32 exactly like the builder does). Every frame
-        // quaternion and rest Darboux must stay finite at every amplitude.
+        // plus a tiny 3D sine wobble, rounded to f32 as stored positions are
+        // and differenced like the builder does). Every frame quaternion and
+        // rest Darboux must stay finite at every amplitude.
         let n = 40usize;
-        let quant = |v: f64| {
-            let q = (1u64 << 27) as f64;
-            (v * q).round() / q
-        };
+        let quant = |v: f64| v as f32 as f64;
         for &seed in &[0.0f64, 5e-4, 1e-3, 2e-3, 3e-3, 4e-3, 5e-3, 8e-3] {
             let mut pts = Vec::new();
             for i in 0..n {

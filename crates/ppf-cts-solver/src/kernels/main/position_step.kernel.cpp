@@ -37,7 +37,7 @@
 position_step(const Vec3f &position,
                   const float *direction, unsigned vert,
                   float scale) {
-    return position - (scale * map<Vec3f>(direction + 3 * vert)).cast<float>();
+    return position - (scale * map<Vec3f>(direction + 3 * vert));
 }
 
 // The entry point, declared once and rendered for four targets: the

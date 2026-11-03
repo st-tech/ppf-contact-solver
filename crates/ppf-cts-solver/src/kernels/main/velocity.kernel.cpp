@@ -44,7 +44,7 @@
 vertex_velocity(const Vec3f &current,
                     const Vec3f &previous,
                     float previous_dt) {
-    return (current - previous).cast<float>() / previous_dt;
+    return (current - previous) / previous_dt;
 }
 
 // What one vertex contributes to the max-speed reduction, as a SQUARED speed:

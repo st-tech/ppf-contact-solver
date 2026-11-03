@@ -123,7 +123,7 @@ lock_row_coefficients(SM_THREAD const TranslationLock &lock,
         // r is a difference throughout: subtracting the anchor first takes the
         // absolute magnitude out before the cross products below scale it.
         const Vec3f r =
-            (position - lock.anchor).cast<float>() - frame.com_relative;
+            (position - lock.anchor) - frame.com_relative;
         if (frame.row_mask & LOCK_ROTATION_ROW0) {
             const Vec3f u = lock_matvec3(frame.inv_inertia, frame.rotation_basis0);
             out.row[LOCK_ROTATION_ROW_BASE + 0] = mass * u.cross(r);

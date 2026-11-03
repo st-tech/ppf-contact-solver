@@ -63,7 +63,7 @@ lock_frame_clear_row(LockFrame *frames, unsigned li) {
     // A DIFFERENCE of two positions, so the anchor's own magnitude leaves the
     // sum before the mass scales it.
     const Vec3f position = positions[i];
-    const Vec3f weighted = prop[i].mass * (position - lock.anchor).cast<float>();
+    const Vec3f weighted = prop[i].mass * (position - lock.anchor);
     compute::atomic_add(mass_weighted_sum + 3u * li + 0u, weighted[0]);
     compute::atomic_add(mass_weighted_sum + 3u * li + 1u, weighted[1]);
     compute::atomic_add(mass_weighted_sum + 3u * li + 2u, weighted[2]);
@@ -91,7 +91,7 @@ lock_frame_clear_row(LockFrame *frames, unsigned li) {
     }
     const LockFrame frame = frames[li];
     const Vec3f position = positions[i];
-    const Vec3f r = (position - lock.anchor).cast<float>() - frame.com_relative;
+    const Vec3f r = (position - lock.anchor) - frame.com_relative;
     const float mass = prop[i].mass;
     const float r2 = r.dot(r);
     for (unsigned row = 0; row < 3u; ++row) {

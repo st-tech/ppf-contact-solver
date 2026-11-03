@@ -141,6 +141,7 @@ mod refusal;
 pub(crate) mod run_state;
 /// The PDRD reduced six-DOF solve's host orchestration.
 mod pdrd;
+pub(crate) mod pinch;
 mod rest_shape;
 /// The PDRD reduction's topology: which vertices a rigid body carries, and
 /// where every free vertex sits in the reduced vector.

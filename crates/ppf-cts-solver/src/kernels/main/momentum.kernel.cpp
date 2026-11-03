@@ -123,7 +123,7 @@
         if (i == pull[j].index) {
             const Vec3f position = pull[j].position;
             const float weight = pull[j].weight;
-            f += weight * (y - position).cast<float>();
+            f += weight * (y - position);
             H += weight * Mat3x3f::Identity();
             pulled = true;
             break;

@@ -35,17 +35,17 @@
 #include "main/override_seed.kernel.cpp"
 
 // THE LAYOUT CONTRACT AT THE SEAM. Rust hands these buffers over as
-// `*const i32` / `*mut i32` because a flat 32-bit word is a type the C ABI can
+// `*const f32` / `*mut f32` because a flat float array is a type the C ABI can
 // state, while `Vec3f` is not. The buffer's real element type is `Vec3f` on
 // both sides (Rust `CVec<Vec3f>` allocated it), so the cast recovers the
 // original object type rather than inventing one. These two assertions are what
 // makes that recovery checkable rather than assumed: a widened component or a
 // padded vector would fail the build here instead of silently reading every
 // third component of someone else's vertex.
-static_assert(sizeof(Vec3f) == 3 * sizeof(int32_t),
-              "a position is three 32-bit components with no padding");
-static_assert(alignof(Vec3f) == alignof(int32_t),
-              "a position aligns like its 32-bit components");
+static_assert(sizeof(Vec3f) == 3 * sizeof(float),
+              "a position is three floats with no padding");
+static_assert(alignof(Vec3f) == alignof(float),
+              "a position aligns like its float components");
 
 extern "C" {
 

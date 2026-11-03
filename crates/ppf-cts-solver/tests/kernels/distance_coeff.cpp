@@ -424,11 +424,11 @@ static void run_sound(float *geom, float *toi_out, float *ang_out) {
             Vec3f a0e(shift - 0.5f * length * ca, -0.5f * length * sa, -h);
             Vec3f a1e(shift + 0.5f * length * ca, 0.5f * length * sa, -h);
 
-            Vec3f g[5] = {(a0 - b0).template cast<float>(),
-                          (a1 - b0).template cast<float>(),
-                          (a0e - b0).template cast<float>(),
-                          (a1e - b0).template cast<float>(),
-                          (b1 - b0).template cast<float>()};
+            Vec3f g[5] = {(a0 - b0),
+                          (a1 - b0),
+                          (a0e - b0),
+                          (a1e - b0),
+                          (b1 - b0)};
             for (int i = 0; i < 5; ++i) {
                 for (int k = 0; k < 3; ++k) {
                     geom[15 * c + 3 * i + k] = g[i][k];
@@ -489,11 +489,11 @@ static void run_sound_tangential(float *geom, float *toi_out, float *ang_out) {
             Vec3f a1e(shift + 0.5f * length * ca + gx,
                        0.5f * length * sa + gy, -h);
 
-            Vec3f g[5] = {(a0 - b0).template cast<float>(),
-                          (a1 - b0).template cast<float>(),
-                          (a0e - b0).template cast<float>(),
-                          (a1e - b0).template cast<float>(),
-                          (b1 - b0).template cast<float>()};
+            Vec3f g[5] = {(a0 - b0),
+                          (a1 - b0),
+                          (a0e - b0),
+                          (a1e - b0),
+                          (b1 - b0)};
             for (int i = 0; i < 5; ++i) {
                 for (int k = 0; k < 3; ++k) {
                     geom[15 * c + 3 * i + k] = g[i][k];

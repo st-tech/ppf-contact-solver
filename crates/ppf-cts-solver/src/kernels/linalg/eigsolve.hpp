@@ -232,8 +232,8 @@ static LA_HD M3 eigvectors3x3(SM_THREAD const M3 &A,
     // eigenvector resolution, every quantity find_ortho3x3 tests is of order
     // (split)^2 and falls below its absolute eps, both axis probes included,
     // and normalized() of the resulting exact zeros yields an all-zero triad.
-    // Downstream that zero basis reconstructs a ZERO matrix function (found on
-    // the dev-diffsim fork as an all-zero block-Jacobi preconditioner block on
+    // Downstream that zero basis reconstructs a ZERO matrix function (found as
+    // an all-zero block-Jacobi preconditioner block on
     // a free sand grain's mass/dt^2-dominated diagonal block, fed through the
     // eigendecomposition invert(): the vertex's DOF silently froze, since an
     // exactly-zero block contributes nothing to r.z/pAp and no SPD guard

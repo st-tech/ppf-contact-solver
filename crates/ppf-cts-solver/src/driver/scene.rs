@@ -186,7 +186,7 @@ impl SceneView {
         self.get().vertex.curr.size as usize
     }
 
-    /// The start-of-step positions, as flat `int32` components.
+    /// The start-of-step positions, as flat `f32` components.
     ///
     /// Flat rather than typed because this is what crosses the C ABI to
     /// `entrypoints/shim_override_seed.cpp`, which casts it back to `Vec3f`. The

@@ -42,7 +42,7 @@
 [[seam::device_fn]] inline float
 rod_stretch_ratio(const Vec3f &x0,
                       const Vec3f &x1, float initial_length) {
-    return fmath::div((x1 - x0).cast<float>().norm(), initial_length);
+    return fmath::div((x1 - x0).norm(), initial_length);
 }
 
 // THE GATE IS THE POINT OF THIS WRAPPER, exactly as it is for the two in

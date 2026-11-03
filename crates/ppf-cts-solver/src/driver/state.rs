@@ -674,7 +674,7 @@ pub(crate) fn reseed_positions(
 
 /// A device allocation holding a host slice of position components, for tests.
 ///
-/// THE POSITIONS ARE DEVICE-RESIDENT, so a test cannot hand a kernel a `&[i32]`
+/// THE POSITIONS ARE DEVICE-RESIDENT, so a test cannot hand a kernel a `&[f32]`
 /// directly: it needs an allocation for the handle to name. This is that, in
 /// one place rather than once per test module.
 #[cfg(test)]
@@ -711,7 +711,7 @@ pub struct SolverState {
     pub positions: ReadbackBuffer<f32>,
     pub positions_prev: ReadbackBuffer<f32>,
 
-    /// The Newton iterate, as flat position components (`3 * vertices` int32).
+    /// The Newton iterate, as flat position components (`3 * vertices` f32).
     ///
     /// IT MOVES WITH THE POSITIONS: two records fill one field from this at one
     /// call site and from `data.vertex.curr` at another, and a field is ONE

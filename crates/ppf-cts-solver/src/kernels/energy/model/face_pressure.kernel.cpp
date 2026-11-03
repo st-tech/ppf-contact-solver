@@ -159,8 +159,8 @@ face_pressure_hessian(float pressure, const Vec3f &v0,
         return;
     }
     const Vec3f v0 = x0;
-    const Vec3f e1 = (x1 - x0).template cast<float>();
-    const Vec3f e2 = (x2 - x0).template cast<float>();
+    const Vec3f e1 = x1 - x0;
+    const Vec3f e2 = x2 - x0;
     const Vec3f v1 = v0 + e1;
     const Vec3f v2 = v0 + e2;
     const Mat3x3f g = face_pressure_gradient(pressure, v0, e1, e2);

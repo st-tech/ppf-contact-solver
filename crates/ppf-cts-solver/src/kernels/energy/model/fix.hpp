@@ -31,7 +31,7 @@ namespace fix {
 // failure appears only once a second includer exists.
 __device__ inline Vec3f gradient(SM_THREAD const Vec3f &x,
                                  SM_THREAD const Vec3f &y) {
-    return (x - y).cast<float>();
+    return (x - y);
 }
 
 __device__ inline Mat3x3f hessian() { return Mat3x3f::Identity(); }

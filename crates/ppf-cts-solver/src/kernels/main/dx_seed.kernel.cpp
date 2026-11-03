@@ -47,7 +47,7 @@
 [[seam::device_fn]] inline Vec3f
 prescribed_increment(const Vec3f &current,
                          const Vec3f &target) {
-    return (current - target).cast<float>();
+    return (current - target);
 }
 
 // THE SEED PASS, which is consumer 1 of the three above.

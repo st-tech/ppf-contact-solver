@@ -299,7 +299,7 @@
     const float radius = params[prop[i].param_index].offset;
     const Vec3f curr_i = curr[i];
     const Vec3f prev_i = prev[i];
-    const Vec3f step = (curr_i - prev_i).cast<float>();
+    const Vec3f step = curr_i - prev_i;
     const Vec3f omega_i = omega[i];
     const Vec3f torque_i = torque[i];
     const Vec3f normal_sum_i = normal_sum[i];

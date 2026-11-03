@@ -48,8 +48,6 @@
 
 namespace accd {
 
-using _coord_ = float;
-
 // What a CCD call reports when a contact pair begins the step inside the
 // contact offset (d2 <= offset^2): two surfaces start out touching or
 // overlapping, which the conservative advance cannot resolve. Recorded through
@@ -211,7 +209,7 @@ __device__ float max_relative_u(SM_THREAD const SMat<T, R, C> &u) {
     float max_u = 0.0f;
     for (unsigned i = 0; i < SPLIT; i++) {
         for (unsigned j = SPLIT; j < C; j++) {
-            SVec<float, R> du = (u.col(i) - u.col(j)).template cast<float>();
+            SVec<float, R> du = (u.col(i) - u.col(j));
             max_u = SM_MAX(max_u, du.squaredNorm());
         }
     }
@@ -331,8 +329,8 @@ __device__ float directional_advance(SM_THREAD const SMat<T, R, C> &x,
     float step = SM_NUMERIC_MAX(float);
     for (unsigned i = 0; i < SPLIT; i++) {
         for (unsigned j = SPLIT; j < C; j++) {
-            SVec<float, R> gap = (x.col(j) - x.col(i)).template cast<float>();
-            SVec<float, R> rel = (dx.col(i) - dx.col(j)).template cast<float>();
+            SVec<float, R> gap = (x.col(j) - x.col(i));
+            SVec<float, R> rel = (dx.col(i) - dx.col(j));
             float err = round_slack * (w_abs.dot(gap.cwiseAbs()) +
                                        max_t * w_abs.dot(rel.cwiseAbs()) +
                                        park_w) +
@@ -653,9 +651,9 @@ __device__ inline float point_triangle_ccd(
     // point = col 0, triangle = cols 1..3 -> SPLIT = 1
     float u_max = max_relative_u<float, 3, 4, 1>(dx);
     if (u_max) {
-        PointTriangleSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<PointTriangleSquaredDist<_coord_, float>, _coord_, 3,
-                          4, 1>(x0.cast<_coord_>(), dx.cast<_coord_>(), u_max,
+        PointTriangleSquaredDist<float, float> dist_func;
+        return ccd_helper<PointTriangleSquaredDist<float, float>, float, 3,
+                          4, 1>(x0, dx, u_max,
                                 dist_func, scale * offset, scale * ccd_eps,
                                 scale * park_floor(ghat), max_t, overlap);
     } else {
@@ -687,9 +685,9 @@ __device__ inline float point_edge_ccd(
     // point = col 0, edge = cols 1..2 -> SPLIT = 1
     float u_max = max_relative_u<float, 3, 3, 1>(dx);
     if (u_max) {
-        PointEdgeSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<PointEdgeSquaredDist<_coord_, float>, _coord_, 3, 3,
-                          1>(x0.cast<_coord_>(), dx.cast<_coord_>(), u_max,
+        PointEdgeSquaredDist<float, float> dist_func;
+        return ccd_helper<PointEdgeSquaredDist<float, float>, float, 3, 3,
+                          1>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
                              scale * park_floor(ghat), max_t, overlap);
     } else {
@@ -719,9 +717,9 @@ __device__ inline float point_point_ccd(
     // point = col 0, point = col 1 -> SPLIT = 1 (only the single inter pair)
     float u_max = max_relative_u<float, 3, 2, 1>(dx);
     if (u_max) {
-        PointPointSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<PointPointSquaredDist<_coord_, float>, _coord_, 3, 2,
-                          1>(x0.cast<_coord_>(), dx.cast<_coord_>(), u_max,
+        PointPointSquaredDist<float, float> dist_func;
+        return ccd_helper<PointPointSquaredDist<float, float>, float, 3, 2,
+                          1>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
                              scale * park_floor(ghat), max_t, overlap);
     } else {
@@ -755,9 +753,9 @@ __device__ inline float edge_edge_ccd(
     // edge A = cols 0..1, edge B = cols 2..3 -> SPLIT = 2
     float u_max = max_relative_u<float, 3, 4, 2>(dx);
     if (u_max) {
-        EdgeEdgeSquaredDist<_coord_, float> dist_func;
-        return ccd_helper<EdgeEdgeSquaredDist<_coord_, float>, _coord_, 3, 4,
-                          2>(x0.cast<_coord_>(), dx.cast<_coord_>(), u_max,
+        EdgeEdgeSquaredDist<float, float> dist_func;
+        return ccd_helper<EdgeEdgeSquaredDist<float, float>, float, 3, 4,
+                          2>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
                              scale * park_floor(ghat), max_t, overlap);
     } else {

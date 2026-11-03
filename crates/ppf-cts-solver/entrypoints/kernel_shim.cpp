@@ -96,33 +96,17 @@
 #include <cstddef>
 #include <cstdint>
 
-// The position arrays and the dense-matrix pack are handed across the boundary
-// as the flat scalar arrays Rust already owns, so the two reinterpretations
-// below have to be exactly reinterpretations. `SMat` is documented as POD
-// `T[R*C]` at natural alignment and a position component is one 32-bit word,
+// The dense-matrix pack is handed across the boundary as the flat float array
+// Rust already owns, so the reinterpretation below has to be exactly a
+// reinterpretation. `SMat` is documented as POD `T[R*C]` at natural alignment,
 // but a layout change on either side would otherwise be a silent misread rather
 // than a build failure.
-static_assert(sizeof(float) == sizeof(int32_t),
-              "a position component must be one 32-bit word for the int32 "
-              "array views below to be reinterpretations, not conversions");
-static_assert(sizeof(Vec3f) == 3 * sizeof(int32_t),
-              "Vec3f must be three packed 32-bit components");
 static_assert(sizeof(Mat3x3f) == 9 * sizeof(float),
               "SMat must be packed column-major storage with no padding");
 static_assert(alignof(Mat3x3f) == alignof(float),
               "SMat must carry natural alignment, not a vector alignment");
 
-// The two views every entry point below uses to reach the caller's arrays.
-// They compute nothing; they are the reinterpretation the static_asserts above
-// license, named once so no call site spells a cast.
-static inline const Vec3f *position_abi(const int32_t *p) {
-    return reinterpret_cast<const Vec3f *>(p);
-}
-static inline Vec3f *position_mut_abi(int32_t *p) {
-    return reinterpret_cast<Vec3f *>(p);
-}
-
-// The same reinterpretation for the dense pack. `M` is an SMat, whose whole
+// The reinterpretation for the dense pack. `M` is an SMat, whose whole
 // storage is one `float[R * C]` in column-major order, so an array of them and a
 // flat float array with R * C floats per element are the same bytes. The two
 // assertions are what makes that a checked claim rather than a remembered one,

@@ -41,7 +41,7 @@
 vertex_normal_face_term(const Vec3f &z0,
                             const Vec3f &z1,
                             const Vec3f &z2) {
-    return (z1 - z0).cast<float>().cross((z2 - z0).cast<float>());
+    return (z1 - z0).cross((z2 - z0));
 }
 
 // Turns the accumulated area vectors into the unit normal. A vertex with no
