@@ -831,13 +831,15 @@ mod tests {
             .size(&mut device, 36, AllocLabel("test.pdrd.factor"))
             .expect("sizes");
 
-        let SolverState { rigid, rigid_staged, prop_vertex, .. } = &mut state;
+        let SolverState { rigid, rigid_staged, rigid_state, prop_vertex, .. } = &mut state;
         // The three the defect was about, taken exactly as `step.rs` takes them
         // when `operator.dynamic` is `None`.
         let inputs = PrecondInputs {
             vert_list: rigid_staged.vert_list.handle(),
             vertex_prop: prop_vertex.handle(),
-            state: rigid_staged.prot.handle(),
+            // The rigid state, as step.rs passes it; the positions buffer
+            // stood in here before.
+            state: rigid_state.handle(),
             rest_centered: rigid_staged.rest_centered.handle(),
             dyn_index: rigid_staged.empty_dyn_index.handle(),
             dyn_offset: rigid_staged.empty_dyn_offset.handle(),

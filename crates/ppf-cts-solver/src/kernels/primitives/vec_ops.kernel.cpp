@@ -85,7 +85,12 @@ vec_combine(const T *source_a,
 [[seam::host_device_fn]] inline void vec_combine_indirect(
     const float *source_a,
     const float *source_b, float *destination,
-    float a, const float *coefficient_b, unsigned index) {
+    float a, const float *coefficient_b, const float *skip, unsigned index) {
+    // `skip` is the PCG latch's combine flag (pcg.rs, `latch`): a frozen
+    // iteration leaves the direction as the freezing iteration left it.
+    if (*skip != 0.0f) {
+        return;
+    }
     destination[index] =
         a * source_a[index] + (*coefficient_b) * source_b[index];
 }

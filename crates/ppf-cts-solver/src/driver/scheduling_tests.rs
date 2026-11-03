@@ -126,6 +126,8 @@ fn exercise(
             .map(|i| if i % 9 % 4 == 0 { 0.125 } else { 0.0 })
             .collect::<Vec<_>>(),
     );
+    // The PCG latch the iteration kernels read, held unfrozen.
+    let idle_latch = f.floats(&[0.0; 4]);
     let dynamic = kernels::OperatorApplyDynamicFoldedArgs {
         dyn_index: f.indices(&index),
         dyn_value: values,
@@ -145,6 +147,7 @@ fn exercise(
         result,
         curvature_total: curvature,
         absolute_total: absolute,
+        latch: idle_latch,
         rows: rows as u32,
         count: groups as u32,
         seam_arena_count: 0,
@@ -161,6 +164,7 @@ fn exercise(
         result,
         curvature_total: curvature,
         absolute_total: absolute,
+        latch: idle_latch,
         rows: rows as u32,
         count: groups as u32,
         seam_arena_count: 0,
@@ -176,6 +180,7 @@ fn exercise(
         preconditioned: f.floats(&vec![0.0; rows * 3]),
         product_total: f.floats(&vec![0.0; update_groups]),
         residual_total: f.floats(&vec![0.0; update_groups]),
+        latch: idle_latch,
         rows: rows as u32,
         count: update_groups as u32,
         seam_arena_count: 0,

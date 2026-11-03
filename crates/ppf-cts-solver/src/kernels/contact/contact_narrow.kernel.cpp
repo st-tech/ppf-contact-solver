@@ -133,6 +133,10 @@ template <unsigned N>
     const SVecf<N> &weight, float ghat, float offset,
     float friction, unsigned multiplicity, bool include_friction, unsigned left,
     unsigned right,
+    // THE SIDES' COSSERAT FRAMES and contact offsets, which the record keeps for
+    // a framed pair's slip ("A SIDE WITH A FRAME SLIPS BY ITS SURFACE");
+    // FRICTION_MEMORY_UNUSED where a side has no frame.
+    unsigned frame_a, unsigned frame_b, float radius_a, float radius_b,
     compute::atomic_float_t *out_vertex_force,
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim,
@@ -329,10 +333,11 @@ template <unsigned N>
             for (unsigned i = 0; i < N; ++i) {
                 memory_weight[i] = weight[i];
             }
-            friction_memory_record(memory_key, held_slip - moved, normal,
+            friction_memory_record_framed(memory_key, held_slip - moved, normal,
                                    normal_force, friction,
                                    (float)multiplicity, index, memory_weight, N,
-                                   !has_grain, record_word0,
+                                   !has_grain, frame_a, frame_b, radius_a,
+                                   radius_b, record_word0,
                                    record_word1, record_vertex, record_float,
                                    record_count, record_capacity);
         }
@@ -563,6 +568,7 @@ template <unsigned N>
                     friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, 1u, true, vertex_index, face_index,
+                    FRICTION_MEMORY_UNUSED, FRICTION_MEMORY_UNUSED, 0.0f, 0.0f,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
                     dyn_column, dyn_block, dyn_capacity,
                     // INERT GRAIN ARGUMENTS: this pair is not two grains, so
@@ -601,6 +607,9 @@ template <unsigned N>
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
+    // Per mesh edge, the Cosserat frame slot riding on it, or
+    // FRICTION_MEMORY_UNUSED (`driver/cosserat.rs`, `edge_slot`).
+    const unsigned *edge_slot,
     const unsigned *edge_face_index,
     const unsigned *edge_face_offset, unsigned has_edge_face,
     const unsigned *fixed_index,
@@ -743,6 +752,11 @@ template <unsigned N>
                     weight, ghat,
                     offset, friction, multiplicity, include_friction,
                     vertex_index, edge_index,
+                    // The edge side reads its edge's Cosserat frame, as an
+                    // edge-edge pair's sides do, or a yarn rolling past a
+                    // vertex of the other reads its roll as slip. A vertex has
+                    // no frame of its own.
+                    FRICTION_MEMORY_UNUSED, edge_slot[edge_index], 0.0f, eparam.offset,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
                     dyn_column, dyn_block, dyn_capacity,
                     // INERT GRAIN ARGUMENTS: see the point-face site.
@@ -977,7 +991,9 @@ template <unsigned N>
                     friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, multiplicity, include_friction,
-                    vertex_index, other, out_vertex_force, out_fixed_value,
+                    vertex_index, other,
+                    FRICTION_MEMORY_UNUSED, FRICTION_MEMORY_UNUSED, 0.0f, 0.0f,
+                    out_vertex_force, out_fixed_value,
                     dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity,
                     has_grain, spin_displacement,
                     grain_friction, grain_stiffness_pair, grain_normal, out_overlap, diag)
@@ -1043,6 +1059,9 @@ template <unsigned N>
     unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
+    // Per mesh edge, the Cosserat frame slot riding on it, or
+    // FRICTION_MEMORY_UNUSED (`driver/cosserat.rs`, `edge_slot`).
+    const unsigned *edge_slot,
     const unsigned *fixed_index,
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
@@ -1148,6 +1167,9 @@ template <unsigned N>
                     friction_load, friction_cone, dt, index,
                     weight, ghat,
                     offset, friction, 1u, true, edge_index, other,
+                    // Each side's Cosserat frame, if its edge carries one.
+                    edge_slot[edge_index], edge_slot[other], eparam_a.offset,
+                    eparam_b.offset,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
                     dyn_column, dyn_block, dyn_capacity,
                     // INERT GRAIN ARGUMENTS: this pair is not two grains, so
@@ -1426,6 +1448,7 @@ struct ContactPointEdgeEmbed {
     const EdgeProp *edge_prop;
     const VertexParam *vertex_param;
     const EdgeParam *edge_param;
+    const unsigned *edge_slot;
     const unsigned *edge_face_index;
     const unsigned *edge_face_offset;
     unsigned has_edge_face;
@@ -1484,7 +1507,7 @@ struct ContactPointEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_slot, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -1507,6 +1530,9 @@ struct ContactPointEdgeEmbed {
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
+    // Per mesh edge, the Cosserat frame slot riding on it, or
+    // FRICTION_MEMORY_UNUSED (`driver/cosserat.rs`, `edge_slot`).
+    const unsigned *edge_slot,
     const unsigned *edge_face_index,
     const unsigned *edge_face_offset,
     unsigned has_edge_face,
@@ -1548,7 +1574,7 @@ struct ContactPointEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactPointEdgeEmbed embed{x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_slot, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -1566,6 +1592,9 @@ struct ContactPointEdgeEmbed {
     const EdgeProp *edge_prop,
     const VertexParam *vertex_param,
     const EdgeParam *edge_param,
+    // Per mesh edge, the Cosserat frame slot riding on it, or
+    // FRICTION_MEMORY_UNUSED (`driver/cosserat.rs`, `edge_slot`).
+    const unsigned *edge_slot,
     const unsigned *edge_face_index,
     const unsigned *edge_face_offset, unsigned has_edge_face,
     const unsigned *fixed_index,
@@ -1612,7 +1641,7 @@ struct ContactPointEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_point_edge_at(x0, x, face, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, vertex_param, edge_param, edge_slot, edge_face_index, edge_face_offset, has_edge_face, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -1927,6 +1956,7 @@ struct ContactEdgeEdgeEmbed {
     unsigned has_start_link;
     const EdgeProp *edge_prop;
     const EdgeParam *edge_param;
+    const unsigned *edge_slot;
     const unsigned *fixed_index;
     const unsigned *fixed_offset;
     const float *fixed_value;
@@ -1982,7 +2012,7 @@ struct ContactEdgeEdgeEmbed {
         overlap.elem1 = 0u;
         overlap.d2 = 0.0f;
         overlap.offset = 0.0f;
-        if (contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
+        if (contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, edge_slot, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, query_index, primitive, slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag)) {
             ++count;
         }
         if (overlap.flagged != 0u && out_overlap[query_index].flagged == 0u) {
@@ -2003,6 +2033,7 @@ struct ContactEdgeEdgeEmbed {
     unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
+    const unsigned *edge_slot,
     const unsigned *fixed_index,
     const unsigned *fixed_offset,
     const float *fixed_value,
@@ -2041,7 +2072,7 @@ struct ContactEdgeEdgeEmbed {
     if (!box.active) {
         return;
     }
-    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
+    ContactEdgeEdgeEmbed embed{x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, edge_slot, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, out_overlap, element, diag, 0u};
     aabb_query(node, node_count, tree_aabb, root, embed, box, diag);
     if (embed.count > 0u) {
         compute::atomic_add(assembled, embed.count);
@@ -2058,6 +2089,7 @@ struct ContactEdgeEdgeEmbed {
     unsigned has_start_link,
     const EdgeProp *edge_prop,
     const EdgeParam *edge_param,
+    const unsigned *edge_slot,
     const unsigned *fixed_index,
     const unsigned *fixed_offset,
     const float *fixed_value, unsigned row_count,
@@ -2102,7 +2134,7 @@ struct ContactEdgeEdgeEmbed {
     overlap.elem1 = 0u;
     overlap.d2 = 0.0f;
     overlap.offset = 0.0f;
-    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
+    const bool accepted = contact_edge_edge_at(x0, x, edge, vertex_prop, start_link_index, start_link_offset, has_start_link, edge_prop, edge_param, edge_slot, fixed_index, fixed_offset, fixed_value, row_count, friction_mode, barrier_id, friction_eps, memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity, friction_load, friction_cone, dt, pair[2 * k], pair[2 * k + 1], slot, out_vertex_force, out_fixed_value, dyn_claim, dyn_row, dyn_column, dyn_block, dyn_capacity, statistics_contact_count, statistics_contact_count_size, statistics_object_index, statistics_object_index_size, overlap, diag);
     if (overlap.flagged != 0u && out_overlap[k].flagged == 0u) {
         out_overlap[k] = overlap;
     }
@@ -2137,10 +2169,16 @@ struct ContactEdgeEdgeEmbed {
     compute::atomic_float_t *out_fixed_value,
     compute::atomic_uint_t *dyn_claim, unsigned *dyn_row,
     unsigned *dyn_column, float *dyn_block, unsigned dyn_capacity,
+    const float *quat, const float *quat_start,
+    compute::atomic_float_t *frame_gradient,
+    compute::atomic_float_t *frame_self_block, float *frozen_stiffness,
     unsigned entry) {
     if (entry >= record_count[0] || entry >= record_capacity) {
         return;
     }
+    // The matrix-free frame coupling (`friction_frame_apply`) reads this
+    // entry's tangential stiffness; zero is no coupling.
+    frozen_stiffness[entry] = 0.0f;
     const float *in = record_float + FRICTION_MEMORY_FLOATS * entry;
     const float normal_force = in[10];
     const float friction = in[11];
@@ -2152,42 +2190,27 @@ struct ContactEdgeEdgeEmbed {
     unsigned v[FRICTION_MEMORY_VERTICES];
     float w[FRICTION_MEMORY_VERTICES];
     for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        v[k] = record_vertex[FRICTION_MEMORY_VERTICES * entry + k];
+        v[k] = record_vertex[FRICTION_RECORD_WORDS * entry + k];
         w[k] = in[6u + k];
     }
     const Vec3f normal(in[3], in[4], in[5]);
-    // THE SLIP IS THE PAIR'S RELATIVE STEP LESS ITS TURN, by the same rule the
-    // commit evaluates (`friction_memory.kernel.cpp`, "A PAIR THAT TURNS AS ONE
-    // BODY DOES NOT SLIP"): `sum_k J_k (x_k - x0_k)` with
-    // `J_k = w_k I + rotation[k]`, the turn's part read from the primitives at
-    // x0, so it is the same linear map at every iteration of the step. Each
-    // vertex's step is formed as `x - x0` before anything scales it.
+    const unsigned slot[2] = {record_vertex[FRICTION_RECORD_WORDS * entry + 4u],
+                              record_vertex[FRICTION_RECORD_WORDS * entry + 5u]};
+    const float radius[2] = {in[14], in[15]};
+    // THE SLIP IS THE RECORD'S RULE, the one the commit evaluates
+    // (`friction_entry_step`): for a pair without a frame its relative step
+    // less its turn read from the primitives at x0 ("A PAIR THAT TURNS AS ONE
+    // BODY DOES NOT SLIP"), for a framed pair its surfaces' relative step ("A
+    // SIDE WITH A FRAME SLIPS BY ITS SURFACE"). Linear in the step, with the
+    // same Jacobian at every iteration of the step.
     const unsigned frame = friction_frame_of(
         record_word0[entry] >> FRICTION_KIND_SHIFT, friction_record_arity(v));
-    Mat3x3f rotation[FRICTION_MEMORY_VERTICES];
-    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        rotation[k] = Mat3x3f::Zero();
-    }
-    // The lever is `d0 - carried`: the slip carried into the step turns with
-    // the pair, as in the commit (`friction_frame_step`).
     const Vec3f carried(in[0], in[1], in[2]);
-    if (frame != FRICTION_FRAME_NONE) {
-        friction_frame_jacobian(frame, x0, v,
-                                friction_frame_separation(x0, v, w) - carried,
-                                rotation);
-    }
     Mat3x3f jacobian[FRICTION_MEMORY_VERTICES];
-    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        jacobian[k] = w[k] * Mat3x3f::Identity() + rotation[k];
-    }
-    Vec3f moved = Vec3f::Zero();
-    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        if (v[k] != FRICTION_MEMORY_UNUSED) {
-            const Vec3f xv = x[v[k]];
-            const Vec3f x0v = x0[v[k]];
-            moved += jacobian[k] * (xv - x0v);
-        }
-    }
+    Mat3x3f frame_jacobian[2];
+    const Vec3f moved =
+        friction_entry_step(frame, x0, x, v, w, slot, radius, normal, carried,
+                            quat, quat_start, jacobian, frame_jacobian);
     const Vec3f slip = carried + moved;
     Vec3f gradient;
     Mat3x3f hessian;
@@ -2214,6 +2237,30 @@ struct ContactEdgeEdgeEmbed {
             if (term != 0.0f) {
                 compute::atomic_add(out_vertex_force + 3u * v[k] + d, term);
             }
+        }
+    }
+    // A FRAME'S SHARE: the torque `G_s^T g` on its gradient row, and its own
+    // block `G_s^T H G_s` on its diagonal, which the augmented operator and its
+    // Schwarz preconditioner both read. The couplings of a frame to the other
+    // side and to the vertices are applied matrix free (`friction_frame_apply`)
+    // from the stiffness kept here, the Hessian being `stiffness * P`.
+    if (slot[0] != FRICTION_MEMORY_UNUSED || slot[1] != FRICTION_MEMORY_UNUSED) {
+        frozen_stiffness[entry] = multiplicity * stiffness;
+    }
+    for (unsigned s = 0; s < 2u; ++s) {
+        if (slot[s] == FRICTION_MEMORY_UNUSED) {
+            continue;
+        }
+        const Vec3f torque = frame_jacobian[s].transpose() * gradient;
+        const Mat3x3f block =
+            frame_jacobian[s].transpose() * hessian * frame_jacobian[s];
+        for (unsigned d = 0; d < 3u; ++d) {
+            compute::atomic_add(frame_gradient + 3u * slot[s] + d,
+                                multiplicity * torque[d]);
+        }
+        for (unsigned e = 0; e < 9u; ++e) {
+            compute::atomic_add(frame_self_block + 9u * slot[s] + e,
+                                multiplicity * block.m[e]);
         }
     }
     // A VERTEX'S OWN BLOCK GOES TO THE OPERATOR'S BLOCK DIAGONAL, where the

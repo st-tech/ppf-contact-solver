@@ -126,6 +126,9 @@ pub struct State {
     /// for; these receive them.
     fold_a: Buffer<f32>,
     fold_b: Buffer<f32>,
+    /// The PCG latch the operator's entry reads, held unfrozen: this
+    /// preconditioner's products always run.
+    idle_latch: Buffer<f32>,
     /// The operator's rows summed, which its difference form reads.
     row_sum: Buffer<f32>,
     /// A zero offset array of `rows + 1`, for a scene with no contact matrix.
@@ -247,6 +250,7 @@ pub unsafe fn build<D: Device>(
     state.product.size(device, (3 * n).max(1), AllocLabel("multigrid.product"))?;
     state.fold_a.size(device, n.max(1), AllocLabel("multigrid.fold_a"))?;
     state.fold_b.size(device, n.max(1), AllocLabel("multigrid.fold_b"))?;
+    upload(device, &mut state.idle_latch, &[0.0f32; 4], "multigrid.idle_latch")?;
     state.row_sum.size(device, (9 * n).max(1), AllocLabel("multigrid.row_sum"))?;
     upload(device, &mut state.empty_offset, &vec![0u32; n + 1], "multigrid.empty")?;
     let below = hierarchy.levels.first().map(|l| &l.transfer);
@@ -562,6 +566,7 @@ pub unsafe fn encode_cycle(
     let x = state.x.handle();
     let product = state.product.handle();
     let (fold_a, fold_b) = (state.fold_a.handle(), state.fold_b.handle());
+    let idle_latch = state.idle_latch.handle();
     let first = MultigridFirstSweepRowArgs {
         inverse,
         right: residual,
@@ -570,7 +575,7 @@ pub unsafe fn encode_cycle(
         seam_arena_count: 0,
     };
     encoder.elements(&first, vertices)?;
-    operator.encode_apply_folded(encoder, x, product, fold_a, fold_b)?;
+    operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch)?;
     if let Some(level) = state.levels.first().filter(|l| l.nodes > 0) {
         let restrict = MultigridFineRestrictRowArgs {
             gather_offset: level.gather_offset.handle(),
@@ -597,7 +602,7 @@ pub unsafe fn encode_cycle(
             seam_arena_count: 0,
         };
         encoder.elements(&prolong, vertices)?;
-        operator.encode_apply_folded(encoder, x, product, fold_a, fold_b)?;
+        operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch)?;
     }
     let last = MultigridFineSweepRowArgs {
         inverse,

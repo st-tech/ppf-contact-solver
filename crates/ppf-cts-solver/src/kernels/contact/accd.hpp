@@ -625,7 +625,90 @@ template <typename T, typename Y> struct PointTriangleSquaredDist {
     }
 };
 
-__device__ inline float point_triangle_ccd(
+// THE FAR-PAIR ANSWER, given before the advance is set up.
+//
+// A pair whose axis gap at the step start already exceeds the most it can close
+// over the whole horizon is a pair the advance answers with `max_t` from its
+// first stride: the stride is (d - dip) / u, the start distance d is at least
+// the axis gap, the dip is at most `reach` = offset + fc / 2, and u is the same
+// largest relative displacement computed here. Such a pair also starts outside
+// its offset, so it flags no overlap. Answering it here returns the bits the
+// advance would have returned and skips the centering, the rescale and the
+// closest-point solve, which is most of a line search on a moving scene.
+//
+// THE MARGINS COVER THE ROUNDING OF BOTH SIDES, with room. The relative one,
+// 1/16, covers the reach and the displacement; the absolute one, 2^-14 of
+// `span`, covers every rounding both paths take. Positions are floats here, so
+// the advance's centering rounds against the ABSOLUTE coordinates, and `span`
+// carries the largest of them as well as the pair's extent. `max_t` is held to
+// 4, the largest horizon the budget is stated for.
+//
+template <unsigned NA, unsigned NB>
+__device__ inline bool far_pair(SM_THREAD const Vec3f *a0,
+                                SM_THREAD const Vec3f *a1,
+                                SM_THREAD const Vec3f *b0,
+                                SM_THREAD const Vec3f *b1, float reach,
+                                float max_t) {
+    float sep = 0.0f;
+    float extent = 0.0f;
+    float disp = 0.0f;
+    float magnitude = 0.0f;
+    for (unsigned k = 0; k < 3; ++k) {
+        // The gap along this axis; each difference of two stored floats rounds
+        // once.
+        float lo = SM_NUMERIC_MAX(float), hi = -SM_NUMERIC_MAX(float);
+        float emin = 0.0f, emax = 0.0f;
+        for (unsigned i = 0; i < NA; ++i) {
+            for (unsigned j = 0; j < NB; ++j) {
+                const float d = b0[j][k] - a0[i][k];
+                lo = SM_MIN(lo, d);
+                hi = SM_MAX(hi, d);
+            }
+        }
+        sep = SM_MAX(sep, SM_MAX(lo, -hi));
+        // The extent of every vertex at both ends, measured from one of them,
+        // and the largest absolute coordinate.
+        for (unsigned i = 0; i < NA; ++i) {
+            const float p = a0[i][k] - a0[0][k];
+            const float q = a1[i][k] - a0[0][k];
+            const float m = a1[i][k] - a0[i][k];
+            emin = SM_MIN(emin, SM_MIN(p, q));
+            emax = SM_MAX(emax, SM_MAX(p, q));
+            disp = SM_MAX(disp, SM_MAX(m, -m));
+            magnitude = SM_MAX(magnitude, SM_MAX(SM_MAX(a0[i][k], -a0[i][k]),
+                                                 SM_MAX(a1[i][k], -a1[i][k])));
+        }
+        for (unsigned j = 0; j < NB; ++j) {
+            const float p = b0[j][k] - a0[0][k];
+            const float q = b1[j][k] - a0[0][k];
+            const float m = b1[j][k] - b0[j][k];
+            emin = SM_MIN(emin, SM_MIN(p, q));
+            emax = SM_MAX(emax, SM_MAX(p, q));
+            disp = SM_MAX(disp, SM_MAX(m, -m));
+            magnitude = SM_MAX(magnitude, SM_MAX(SM_MAX(b0[j][k], -b0[j][k]),
+                                                 SM_MAX(b1[j][k], -b1[j][k])));
+        }
+        extent = SM_MAX(extent, emax - emin);
+    }
+    // The largest relative displacement over the pairs the advance splits.
+    float u2 = 0.0f;
+    for (unsigned i = 0; i < NA; ++i) {
+        for (unsigned j = 0; j < NB; ++j) {
+            float n2 = 0.0f;
+            for (unsigned k = 0; k < 3; ++k) {
+                const float r = (a1[i][k] - a0[i][k]) - (b1[j][k] - b0[j][k]);
+                n2 += r * r;
+            }
+            u2 = SM_MAX(u2, n2);
+        }
+    }
+    const float u = SM_SQRT(u2);
+    const float span = extent + 2.0f * max_t * disp + magnitude;
+    return max_t <= 4.0f &&
+           sep > (reach + max_t * u) * 1.0625f + span * 6.103515625e-05f;
+}
+
+__device__ inline float point_triangle_ccd_advance(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &t00, SM_THREAD const Vec3f &t01,
     SM_THREAD const Vec3f &t02, SM_THREAD const Vec3f &t10,
@@ -661,7 +744,7 @@ __device__ inline float point_triangle_ccd(
     }
 }
 
-__device__ inline float point_edge_ccd(
+__device__ inline float point_edge_ccd_advance(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &e00, SM_THREAD const Vec3f &e01,
     SM_THREAD const Vec3f &e10, SM_THREAD const Vec3f &e11, float offset,
@@ -695,7 +778,7 @@ __device__ inline float point_edge_ccd(
     }
 }
 
-__device__ inline float point_point_ccd(
+__device__ inline float point_point_ccd_advance(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &q0, SM_THREAD const Vec3f &q1, float offset,
     float ghat, float max_t, float ccd_eps,
@@ -727,7 +810,7 @@ __device__ inline float point_point_ccd(
     }
 }
 
-__device__ inline float edge_edge_ccd(
+__device__ inline float edge_edge_ccd_advance(
     SM_THREAD const Vec3f &ea00, SM_THREAD const Vec3f &ea01,
     SM_THREAD const Vec3f &eb00, SM_THREAD const Vec3f &eb01,
     SM_THREAD const Vec3f &ea10, SM_THREAD const Vec3f &ea11,
@@ -761,6 +844,76 @@ __device__ inline float edge_edge_ccd(
     } else {
         return max_t;
     }
+}
+
+// The four queries the sweeps call: the far-pair answer first, then the
+// advance. See `far_pair` for why the two agree bit for bit.
+__device__ inline float point_triangle_ccd(
+    SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
+    SM_THREAD const Vec3f &t00, SM_THREAD const Vec3f &t01,
+    SM_THREAD const Vec3f &t02, SM_THREAD const Vec3f &t10,
+    SM_THREAD const Vec3f &t11, SM_THREAD const Vec3f &t12, float offset,
+    float ghat, float max_t, float ccd_eps,
+    SM_THREAD OverlapInfo *overlap) {
+    const Vec3f a0[1] = {p0}, a1[1] = {p1};
+    const Vec3f b0[3] = {t00, t01, t02}, b1[3] = {t10, t11, t12};
+    const float reach =
+        offset + 0.5f * SM_MAX(2.0f * ccd_eps, park_floor(ghat));
+    if (far_pair<1, 3>(a0, a1, b0, b1, reach, max_t)) {
+        return max_t;
+    }
+    return point_triangle_ccd_advance(p0, p1, t00, t01, t02, t10, t11, t12, offset, ghat, max_t,
+                                    ccd_eps, overlap);
+}
+
+__device__ inline float point_edge_ccd(
+    SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
+    SM_THREAD const Vec3f &e00, SM_THREAD const Vec3f &e01,
+    SM_THREAD const Vec3f &e10, SM_THREAD const Vec3f &e11, float offset,
+    float ghat, float max_t, float ccd_eps,
+    SM_THREAD OverlapInfo *overlap) {
+    const Vec3f a0[1] = {p0}, a1[1] = {p1};
+    const Vec3f b0[2] = {e00, e01}, b1[2] = {e10, e11};
+    const float reach =
+        offset + 0.5f * SM_MAX(2.0f * ccd_eps, park_floor(ghat));
+    if (far_pair<1, 2>(a0, a1, b0, b1, reach, max_t)) {
+        return max_t;
+    }
+    return point_edge_ccd_advance(p0, p1, e00, e01, e10, e11, offset, ghat, max_t, ccd_eps,
+                                overlap);
+}
+
+__device__ inline float point_point_ccd(
+    SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
+    SM_THREAD const Vec3f &q0, SM_THREAD const Vec3f &q1, float offset,
+    float ghat, float max_t, float ccd_eps,
+    SM_THREAD OverlapInfo *overlap) {
+    const Vec3f a0[1] = {p0}, a1[1] = {p1};
+    const Vec3f b0[1] = {q0}, b1[1] = {q1};
+    const float reach =
+        offset + 0.5f * SM_MAX(2.0f * ccd_eps, park_floor(ghat));
+    if (far_pair<1, 1>(a0, a1, b0, b1, reach, max_t)) {
+        return max_t;
+    }
+    return point_point_ccd_advance(p0, p1, q0, q1, offset, ghat, max_t, ccd_eps, overlap);
+}
+
+__device__ inline float edge_edge_ccd(
+    SM_THREAD const Vec3f &ea00, SM_THREAD const Vec3f &ea01,
+    SM_THREAD const Vec3f &eb00, SM_THREAD const Vec3f &eb01,
+    SM_THREAD const Vec3f &ea10, SM_THREAD const Vec3f &ea11,
+    SM_THREAD const Vec3f &eb10, SM_THREAD const Vec3f &eb11, float offset,
+    float ghat, float max_t, float ccd_eps,
+    SM_THREAD OverlapInfo *overlap) {
+    const Vec3f a0[2] = {ea00, ea01}, a1[2] = {ea10, ea11};
+    const Vec3f b0[2] = {eb00, eb01}, b1[2] = {eb10, eb11};
+    const float reach =
+        offset + 0.5f * SM_MAX(2.0f * ccd_eps, park_floor(ghat));
+    if (far_pair<2, 2>(a0, a1, b0, b1, reach, max_t)) {
+        return max_t;
+    }
+    return edge_edge_ccd_advance(ea00, ea01, eb00, eb01, ea10, ea11, eb10, eb11, offset,
+                               ghat, max_t, ccd_eps, overlap);
 }
 
 } // namespace accd

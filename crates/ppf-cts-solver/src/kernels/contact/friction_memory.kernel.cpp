@@ -183,16 +183,25 @@ enum : unsigned { FRICTION_MEMORY_SLIP = 4u };
 // counted and not written, and the driver refuses a commit whose record counted
 // more. An iteration after a step's first opens the record with capacity zero,
 // so the record stays as that first iteration wrote it.
+//
+// AN EDGE-EDGE PAIR ALSO NAMES ITS SIDES' COSSERAT FRAMES. Each entry holds
+// FRICTION_RECORD_WORDS words, the FRICTION_MEMORY_VERTICES vertices and then
+// one frame slot per side (FRICTION_MEMORY_UNUSED for a side whose edge carries
+// no material frame), and floats 14 and 15 are the two sides' contact offsets,
+// the radii their surfaces sit at from their centerlines ("A SIDE WITH A FRAME
+// SLIPS BY ITS SURFACE" below).
 enum : unsigned {
     FRICTION_MEMORY_VERTICES = 4u,
-    FRICTION_MEMORY_FLOATS = 14u,
+    FRICTION_RECORD_WORDS = 6u,
+    FRICTION_MEMORY_FLOATS = 16u,
     FRICTION_MEMORY_UNUSED = 0xffffffffu,
 };
 
-[[seam::device_fn]] inline void friction_memory_record(
+[[seam::device_fn]] inline void friction_memory_record_framed(
     const Vec2u &key, const Vec3f &offset, const Vec3f &normal,
     float normal_force, float friction, float multiplicity,
     const unsigned *index, const float *weight, unsigned n, bool held,
+    unsigned frame_a, unsigned frame_b, float radius_a, float radius_b,
     unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex,
     float *record_float, compute::atomic_uint_t *record_count,
     unsigned capacity) {
@@ -204,9 +213,11 @@ enum : unsigned {
         record_word0[slot] = key[0];
         record_word1[slot] = key[1];
         for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-            record_vertex[FRICTION_MEMORY_VERTICES * slot + k] =
+            record_vertex[FRICTION_RECORD_WORDS * slot + k] =
                 k < n ? index[k] : FRICTION_MEMORY_UNUSED;
         }
+        record_vertex[FRICTION_RECORD_WORDS * slot + 4u] = frame_a;
+        record_vertex[FRICTION_RECORD_WORDS * slot + 5u] = frame_b;
         float *out = record_float + FRICTION_MEMORY_FLOATS * slot;
         for (unsigned i = 0; i < 3u; ++i) {
             out[i] = offset[i];
@@ -219,7 +230,26 @@ enum : unsigned {
         out[11] = friction;
         out[12] = multiplicity;
         out[13] = held ? 1.0f : 0.0f;
+        out[14] = radius_a;
+        out[15] = radius_b;
     }
+}
+
+// A pair whose sides carry no material frame: `friction_memory_record_framed`
+// with both frames unused.
+[[seam::device_fn]] inline void friction_memory_record(
+    const Vec2u &key, const Vec3f &offset, const Vec3f &normal,
+    float normal_force, float friction, float multiplicity,
+    const unsigned *index, const float *weight, unsigned n, bool held,
+    unsigned *record_word0, unsigned *record_word1, unsigned *record_vertex,
+    float *record_float, compute::atomic_uint_t *record_count,
+    unsigned capacity) {
+    friction_memory_record_framed(key, offset, normal, normal_force, friction,
+                                  multiplicity, index, weight, n, held,
+                                  FRICTION_MEMORY_UNUSED, FRICTION_MEMORY_UNUSED,
+                                  0.0f, 0.0f, record_word0, record_word1,
+                                  record_vertex, record_float, record_count,
+                                  capacity);
 }
 
 // A PAIR THAT TURNS AS ONE BODY DOES NOT SLIP. The relative displacement
@@ -458,6 +488,144 @@ enum : unsigned {
     return n;
 }
 
+// A SIDE WITH A FRAME SLIPS BY ITS SURFACE. A yarn's centerline sits its
+// contact offset r behind the surface that touches, so where the yarn turns by
+// theta in a step its touching surface moves by theta x (-r n) beside its
+// centerline, n the pair's normal from side b toward side a. Side a's surface
+// sits at -r_a n from its centerline and side b's at +r_b n, so the surfaces'
+// relative step is the centerlines' less r_a theta_a x n and r_b theta_b x n:
+//     slip = sum_k w_k dx_k + r_a n x theta_a + r_b n x theta_b.
+// A centerline cannot say how a yarn ROLLS about its own axis, and the slip of
+// two crossing yarns depends on it: a yarn sliding round a fixed post slips by
+// its whole travel less r_a / R of it (R the bend's radius), while two yarns of
+// a cloth that bends turn and roll together and do not slip. A Cosserat edge's
+// material frame carries the roll, so for a side whose edge has one, theta is
+// the frame's turn over the step; a side without one can only turn as its
+// centerline does, so for an edge side theta is the edge's own turn,
+// t x (dx_1 - dx_0) / l at the step's start, which holds it from rolling. The
+// pair rule above ("A PAIR THAT TURNS AS ONE BODY DOES NOT SLIP") stays for a
+// pair neither of whose sides has a frame. Measured on yarn wrapped half a turn
+// over a drum of fixed yarns (the capstan): the pair rule removes the yarn's
+// whole turn times the separation, about twice its surface's, and lets it slip
+// at a tension ratio of exp(mu pi (1 - 2 r / R)) where a thick yarn's surface
+// holds to exp(mu pi (1 - r / R)).
+//
+// The slip carried into the step is at most the stick range, so the turn it
+// takes with a framed pair is of second order and is left out there.
+//
+// A rigid motion of the pair with both frames turning with it does not slip,
+// nor does side a rolling on a still side b; a turn about the normal through
+// the contact point reads no slip either, so a point contact carries no pivot
+// friction.
+
+// The turn of the frame at `slot` from the step's start, in the left
+// perturbation the frames are solved in (R = exp(skew(theta)) R_start): the
+// rotation part of q (x) conj(q_start), on the hemisphere of positive scalar
+// part. Quaternions are (x, y, z, w), the Cosserat frames' storage.
+[[seam::device_fn]] inline Vec3f friction_slot_turn(const float *quat,
+                                                    const float *quat_start,
+                                                    unsigned slot) {
+    const Vec3f qv(quat[4u * slot], quat[4u * slot + 1u], quat[4u * slot + 2u]);
+    const float qw = quat[4u * slot + 3u];
+    const Vec3f pv(quat_start[4u * slot], quat_start[4u * slot + 1u],
+                   quat_start[4u * slot + 2u]);
+    const float pw = quat_start[4u * slot + 3u];
+    float w = qw * pw + qv.dot(pv);
+    Vec3f v = pw * qv - qw * pv - qv.cross(pv);
+    if (w < 0.0f) {
+        w = -w;
+        v = -1.0f * v;
+    }
+    const float sine = fmath::sqrt(v.squaredNorm());
+    if (!(sine > 0.0f)) {
+        return Vec3f::Zero();
+    }
+    return fmath::div(2.0f * fmath::atan2(sine, w), sine) * v;
+}
+
+// The slip Jacobian of a framed pair: two edges, side a vertices 0 and 1 and
+// side b vertices 2 and 3 (`contact_edge_edge_at`), or a vertex against an
+// edge, side a vertex 0 and side b vertices 1 and 2 (`contact_point_edge_at`),
+// told apart by the record's vertex count. `jacobian[k]` is vertex k's weight,
+// plus the edge's own turn for an edge side without a frame; a vertex side has
+// no turn. `frame_jacobian[s]` is `r_s [n]x` for a side with a frame and zero
+// otherwise ("A SIDE WITH A FRAME SLIPS BY ITS SURFACE"). Constant over the
+// step: it reads the start pose x0 and the record only.
+[[seam::device_fn]] inline void friction_framed_jacobian(
+    const Vec3f *x0, const unsigned *v, const float *w, const unsigned *slot,
+    const float *radius, const Vec3f &normal, Mat3x3f *jacobian,
+    Mat3x3f *frame_jacobian) {
+    const Mat3x3f nx = friction_cross_matrix(normal);
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        jacobian[k] = w[k] * Mat3x3f::Identity();
+    }
+    const bool point_edge = friction_record_arity(v) == 3u;
+    for (unsigned s = 0; s < 2u; ++s) {
+        frame_jacobian[s] = Mat3x3f::Zero();
+        // The side's edge as its first vertex; a point-edge pair's side a is
+        // a vertex and has none.
+        const unsigned first = point_edge ? (s == 0u ? FRICTION_MEMORY_VERTICES : 1u)
+                                          : 2u * s;
+        if (slot[s] != FRICTION_MEMORY_UNUSED) {
+            frame_jacobian[s] = radius[s] * nx;
+        } else if (first < FRICTION_MEMORY_VERTICES) {
+            const Vec3f e = friction_frame_edge(x0, v[first], v[first + 1u]);
+            const Mat3x3f turn = fmath::div(radius[s], e.squaredNorm()) *
+                                 (nx * friction_cross_matrix(e));
+            jacobian[first + 1u] += turn;
+            jacobian[first] += -1.0f * turn;
+        }
+    }
+}
+
+// The step's slip of a recorded pair, `moved`, at the pose x and frames quat,
+// with its Jacobian: `jacobian[k]` on vertex k's step and, per side s with a
+// frame (`slot[s]` not FRICTION_MEMORY_UNUSED), `frame_jacobian[s]` on that
+// frame's turn. A pair without a frame on either side is the pair rule's
+// (`friction_frame_step`, `friction_frame_jacobian`), with zero frame columns.
+// `quat` and `quat_start` are read only for a framed pair.
+[[seam::device_fn]] inline Vec3f friction_entry_step(
+    unsigned frame, const Vec3f *x0, const Vec3f *x, const unsigned *v,
+    const float *w, const unsigned *slot, const float *radius,
+    const Vec3f &normal, const Vec3f &carried, const float *quat,
+    const float *quat_start, Mat3x3f *jacobian, Mat3x3f *frame_jacobian) {
+    frame_jacobian[0] = Mat3x3f::Zero();
+    frame_jacobian[1] = Mat3x3f::Zero();
+    const bool framed =
+        slot[0] != FRICTION_MEMORY_UNUSED || slot[1] != FRICTION_MEMORY_UNUSED;
+    if (!framed) {
+        Mat3x3f rotation[FRICTION_MEMORY_VERTICES];
+        for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+            rotation[k] = Mat3x3f::Zero();
+        }
+        if (frame != FRICTION_FRAME_NONE) {
+            friction_frame_jacobian(frame, x0, v,
+                                    friction_frame_separation(x0, v, w) - carried,
+                                    rotation);
+        }
+        for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+            jacobian[k] = w[k] * Mat3x3f::Identity() + rotation[k];
+        }
+        return friction_frame_step(frame, x0, x, v, w, carried);
+    }
+    friction_framed_jacobian(x0, v, w, slot, radius, normal, jacobian,
+                             frame_jacobian);
+    Vec3f moved = Vec3f::Zero();
+    for (unsigned s = 0; s < 2u; ++s) {
+        if (slot[s] != FRICTION_MEMORY_UNUSED) {
+            moved += frame_jacobian[s] * friction_slot_turn(quat, quat_start, slot[s]);
+        }
+    }
+    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
+        if (v[k] != FRICTION_MEMORY_UNUSED) {
+            const Vec3f xv = x[v[k]];
+            const Vec3f x0v = x0[v[k]];
+            moved += jacobian[k] * (xv - x0v);
+        }
+    }
+    return moved;
+}
+
 // THE SORT'S SECOND PASS, one thread per entry: the first word of each entry,
 // in the order the sort by the second word left them, for the stable sort by
 // the first word that makes the order lexicographic.
@@ -480,6 +648,7 @@ enum : unsigned {
     const unsigned *record_word0, const unsigned *record_word1,
     const unsigned *record_vertex, const float *record_float,
     const unsigned *first, const unsigned *second, float friction_eps,
+    const float *quat, const float *quat_start,
     unsigned *sorted_word0, unsigned *sorted_word1, float *sorted_slip,
     float *sorted_force, unsigned entry) {
     const unsigned source = first[second[entry]];
@@ -490,13 +659,20 @@ enum : unsigned {
     unsigned v[FRICTION_MEMORY_VERTICES];
     float w[FRICTION_MEMORY_VERTICES];
     for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        v[k] = record_vertex[FRICTION_MEMORY_VERTICES * source + k];
+        v[k] = record_vertex[FRICTION_RECORD_WORDS * source + k];
         w[k] = in[6u + k];
     }
+    const unsigned slot[2] = {record_vertex[FRICTION_RECORD_WORDS * source + 4u],
+                              record_vertex[FRICTION_RECORD_WORDS * source + 5u]};
+    const float radius[2] = {in[14], in[15]};
     const unsigned frame = friction_frame_of(
         record_word0[source] >> FRICTION_KIND_SHIFT, friction_record_arity(v));
     const Vec3f offset(in[0], in[1], in[2]);
-    const Vec3f moved = friction_frame_step(frame, x0, x, v, w, offset);
+    Mat3x3f jacobian[FRICTION_MEMORY_VERTICES];
+    Mat3x3f frame_jacobian[2];
+    const Vec3f moved =
+        friction_entry_step(frame, x0, x, v, w, slot, radius, normal, offset,
+                            quat, quat_start, jacobian, frame_jacobian);
     const Vec3f slip = offset + moved;
     const Vec3f held = friction_memory_return(
         friction_memory_tangential(slip, normal), friction_eps);
@@ -672,6 +848,7 @@ enum : unsigned {
 [[seam::device_fn]] inline void friction_cone_gather(
     const Vec3f *x0, const Vec3f *x, const unsigned *record_word0,
     const unsigned *record_vertex, const float *record_float, float friction_eps,
+    const float *quat, const float *quat_start,
     compute::atomic_float_t *cone, unsigned entry) {
     const float *in = record_float + FRICTION_MEMORY_FLOATS * entry;
     const float multiplicity = in[12];
@@ -683,31 +860,30 @@ enum : unsigned {
     unsigned v[FRICTION_MEMORY_VERTICES];
     float w[FRICTION_MEMORY_VERTICES];
     for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        v[k] = record_vertex[FRICTION_MEMORY_VERTICES * entry + k];
+        v[k] = record_vertex[FRICTION_RECORD_WORDS * entry + k];
         w[k] = in[6u + k];
     }
+    const unsigned slot[2] = {record_vertex[FRICTION_RECORD_WORDS * entry + 4u],
+                              record_vertex[FRICTION_RECORD_WORDS * entry + 5u]};
+    const float radius[2] = {in[14], in[15]};
     const unsigned frame = friction_frame_of(
         record_word0[entry] >> FRICTION_KIND_SHIFT, friction_record_arity(v));
     const Vec3f offset(in[0], in[1], in[2]);
-    const Vec3f moved = friction_frame_step(frame, x0, x, v, w, offset);
+    Mat3x3f jacobian[FRICTION_MEMORY_VERTICES];
+    Mat3x3f frame_jacobian[2];
+    const Vec3f moved =
+        friction_entry_step(frame, x0, x, v, w, slot, radius, normal, offset,
+                            quat, quat_start, jacobian, frame_jacobian);
     const Vec3f tangent =
         friction_memory_tangential(offset + moved, normal);
     const Vec3f force =
         fmath::div(pair_cone,
                    fmath::max(friction_eps, fmath::sqrt(tangent.squaredNorm()))) *
         tangent;
-    // The force reaches each vertex through the slip's Jacobian, `J_k^T f`
-    // with `J_k = w_k I + [d0]x W_k`, as the pass deposited it. A vertex the
-    // weights skip can still carry the turn's part (an edge's far end).
-    Mat3x3f rotation[FRICTION_MEMORY_VERTICES];
-    for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
-        rotation[k] = Mat3x3f::Zero();
-    }
-    if (frame != FRICTION_FRAME_NONE) {
-        friction_frame_jacobian(frame, x0, v,
-                                friction_frame_separation(x0, v, w) - offset,
-                                rotation);
-    }
+    // The force reaches each vertex through the slip's Jacobian, `J_k^T f`,
+    // as the frozen pass deposits it. A vertex the weights skip can still carry
+    // a turn's part (an edge's far end). A frame's share is a torque, not a
+    // vertex load, and is not summed here.
     for (unsigned k = 0; k < FRICTION_MEMORY_VERTICES; ++k) {
         if (v[k] == FRICTION_MEMORY_UNUSED) {
             continue;
@@ -717,7 +893,7 @@ enum : unsigned {
             compute::atomic_add(cone + at, fmath::abs(w[k]) * multiplicity * pair_cone);
             compute::atomic_add(cone + at + 1u, 1.0f);
         }
-        const Vec3f deposit = w[k] * force + rotation[k].transpose() * force;
+        const Vec3f deposit = jacobian[k].transpose() * force;
         for (unsigned d = 0; d < 3u; ++d) {
             if (deposit[d] != 0.0f) {
                 compute::atomic_add(cone + at + 2u + d, multiplicity * deposit[d]);

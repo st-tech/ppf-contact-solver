@@ -65,7 +65,10 @@ use super::scene::{Fatal, FatalResult};
 /// Vertices and floats a record entry holds, as the kernel's
 /// `FRICTION_MEMORY_VERTICES` and `FRICTION_MEMORY_FLOATS`.
 const RECORD_VERTICES: usize = 4;
-const RECORD_FLOATS: usize = 14;
+/// Words a record entry holds, as the kernel's `FRICTION_RECORD_WORDS`: its
+/// vertices, then one Cosserat frame slot per side.
+const RECORD_WORDS: usize = RECORD_VERTICES + 2;
+const RECORD_FLOATS: usize = 16;
 
 /// Floats a vertex's sums take, as the kernel's `FRICTION_CONE_FLOATS`: the
 /// cone sum, the number of pairs in it, and the non-friction contact load.
@@ -134,6 +137,51 @@ impl FrictionMemoryState {
     }
 }
 
+/// The Cosserat frames' handles the friction passes read
+/// (`super::cosserat::State::frames_for_friction`): per mesh edge the frame slot
+/// riding on it, the iterate's and the step's start frames, and the frames'
+/// gradient and own blocks, which a framed pair's torque and stiffness join.
+#[derive(Clone, Copy)]
+pub struct FrictionFrames {
+    pub edge_slot: Handle,
+    pub quat: Handle,
+    pub quat_start: Handle,
+    pub gradient: Handle,
+    pub self_block: Handle,
+}
+
+/// No frames at all, which only a memory not yet allocated holds:
+/// `FrictionMemory::allocate` replaces it with its placeholders before any pass
+/// can read it.
+impl Default for FrictionFrames {
+    fn default() -> Self {
+        Self {
+            edge_slot: Handle::NONE,
+            quat: Handle::NONE,
+            quat_start: Handle::NONE,
+            gradient: Handle::NONE,
+            self_block: Handle::NONE,
+        }
+    }
+}
+
+/// What the augmented solve's operator needs to apply a framed pair's
+/// frozen friction across its frames matrix free (`friction_frame_apply`):
+/// the step's start pose the Jacobian is read at, the frozen record and its
+/// capacity, and each entry's tangential stiffness.
+#[derive(Clone, Copy)]
+pub struct FrameCoupling {
+    pub x0: Handle,
+    /// Per vertex, one where the Dirichlet pass removed its row
+    /// (`vertex_dof_removal_mask`): the coupling stays off it.
+    pub dof_mask: Handle,
+    pub record_vertex: Handle,
+    pub record_float: Handle,
+    pub record_count: Handle,
+    pub capacity: u32,
+    pub frozen_stiffness: Handle,
+}
+
 /// The handles every contact pass takes, rebuilt each iteration because a
 /// grown record moves its arrays.
 #[derive(Clone, Copy)]
@@ -157,10 +205,25 @@ pub struct FrictionMemoryRefs {
     /// snapshot `open` was handed plus the vertex's lagged non-friction contact
     /// load (`friction_load_prepare`).
     pub friction_load: Handle,
+    /// The scene's Cosserat frames (`FrictionMemory::set_frames`).
+    pub frames: FrictionFrames,
+    /// Per record entry, the frozen pass's tangential stiffness of a framed
+    /// pair, which the matrix-free frame coupling reads.
+    pub frozen_stiffness: Handle,
 }
 
 #[derive(Default)]
 pub struct FrictionMemory {
+    /// The scene's Cosserat frames, set once their buffers exist; until then
+    /// (and on a memory no scene's frames are handed to) the placeholders below.
+    frames: FrictionFrames,
+    /// A one-word edge-to-frame map naming no frame and nine zero floats: the
+    /// frames a memory reads before `set_frames`, which no entry can name.
+    edge_none: Buffer<u32>,
+    frame_none: Buffer<f32>,
+    /// Per record entry, a framed pair's tangential stiffness, written by the
+    /// frozen pass.
+    frozen_stiffness: Buffer<f32>,
     memory_word0: Buffer<u32>,
     memory_word1: Buffer<u32>,
     memory_slip: Buffer<f32>,
@@ -232,10 +295,47 @@ impl FrictionMemory {
         device.fill_zero(memory.committed_cone.handle(), CONE_FLOATS * vertices.max(1) * std::mem::size_of::<f32>())?;
         memory.load.size(device, 3 * vertices.max(1), AllocLabel("friction_memory.load"))?;
         device.fill_zero(memory.load.handle(), 3 * vertices.max(1) * std::mem::size_of::<f32>())?;
+        memory.edge_none.size(device, 1, AllocLabel("friction_memory.edge_none"))?;
+        memory.edge_none.write(device, 0, &[u32::MAX])?;
+        memory.frame_none.size(device, 9, AllocLabel("friction_memory.frame_none"))?;
+        device.fill_zero(memory.frame_none.handle(), 9 * std::mem::size_of::<f32>())?;
+        let none = memory.frame_none.handle();
+        memory.frames = FrictionFrames {
+            edge_slot: memory.edge_none.handle(),
+            quat: none,
+            quat_start: none,
+            gradient: none,
+            self_block: none,
+        };
         memory.size_record(device, floor)?;
         memory.wanted = floor;
         memory.size_memory(device, 0)?;
         Ok(memory)
+    }
+
+    /// The frame coupling of this step's frozen record against the start pose
+    /// `x0`, for a scene whose friction can name a frame; None where it cannot
+    /// (no frames, or no record), and the augmented solve adds nothing.
+    pub fn frame_coupling(&self, x0: Handle, dof_mask: Handle, framed: bool) -> Option<FrameCoupling> {
+        if !framed || self.capacity == 0 {
+            return None;
+        }
+        Some(FrameCoupling {
+            x0,
+            dof_mask,
+            record_vertex: self.record_vertex.handle(),
+            record_float: self.record_float.handle(),
+            record_count: self.record_count.handle(),
+            capacity: self.capacity as u32,
+            frozen_stiffness: self.frozen_stiffness.handle(),
+        })
+    }
+
+    /// Hand over the scene's Cosserat frames, once their buffers exist and
+    /// whenever they are reallocated: every pass that reads a framed pair's
+    /// slip takes them from here.
+    pub fn set_frames(&mut self, frames: FrictionFrames) {
+        self.frames = frames;
     }
 
     fn size_record(&mut self, device: &mut impl Device, capacity: usize) -> FatalResult<()> {
@@ -244,9 +344,10 @@ impl FrictionMemory {
         self.record_word1.size(device, length, AllocLabel("friction_memory.record_word1"))?;
         self.record_vertex.size(
             device,
-            RECORD_VERTICES * length,
+            RECORD_WORDS * length,
             AllocLabel("friction_memory.record_vertex"),
         )?;
+        self.frozen_stiffness.size(device, length, AllocLabel("friction_memory.frozen_stiffness"))?;
         self.record_float.size(
             device,
             RECORD_FLOATS * length,
@@ -370,6 +471,8 @@ impl FrictionMemory {
             frozen_capacity: self.capacity as u32,
             friction_cone: self.cone.handle(),
             friction_load: self.load.handle(),
+            frames: self.frames,
+            frozen_stiffness: self.frozen_stiffness.handle(),
         })
     }
 
@@ -413,6 +516,8 @@ impl FrictionMemory {
                 record_vertex: self.record_vertex.handle(),
                 record_float: self.record_float.handle(),
                 friction_eps,
+                quat: self.frames.quat,
+                quat_start: self.frames.quat_start,
                 cone: self.cone.handle(),
                 count: written as u32,
                 seam_arena_count: 0,
@@ -565,6 +670,8 @@ impl FrictionMemory {
             first: by_second,
             second: by_first,
             friction_eps,
+            quat: self.frames.quat,
+            quat_start: self.frames.quat_start,
             sorted_word0: self.sorted_word0.handle(),
             sorted_word1: self.sorted_word1.handle(),
             sorted_slip: self.sorted_slip.handle(),
@@ -666,6 +773,11 @@ pub unsafe fn launch_frozen(
         dyn_column: staging.column,
         dyn_block: staging.block,
         dyn_capacity: staging.capacity,
+        quat: refs.frames.quat,
+        quat_start: refs.frames.quat_start,
+        frame_gradient: refs.frames.gradient,
+        frame_self_block: refs.frames.self_block,
+        frozen_stiffness: refs.frozen_stiffness,
         count: entries,
         seam_arena_count: 0,
     };
@@ -678,6 +790,21 @@ pub unsafe fn launch_frozen(
 mod tests {
     use super::*;
     use crate::driver::launch::host_device;
+
+    /// A test's record words in the vertices-only layout, each entry's four
+    /// vertices followed by two unused frame slots.
+    fn pad_words(vertex: &[u32]) -> Vec<u32> {
+        vertex
+            .chunks(RECORD_VERTICES)
+            .flat_map(|entry| entry.iter().copied().chain([u32::MAX; RECORD_WORDS - RECORD_VERTICES]))
+            .collect()
+    }
+
+    /// A test's record floats in the frameless layout, each entry's fourteen
+    /// floats followed by two zero side radii.
+    fn pad_floats(float: &[f32]) -> Vec<f32> {
+        float.chunks(RECORD_FLOATS - 2).flat_map(|entry| entry.iter().copied().chain([0.0; 2])).collect()
+    }
 
     /// Open an iteration against a zero residual snapshot.
     fn open(memory: &mut FrictionMemory, device: &mut impl Device) -> FatalResult<FrictionMemoryRefs> {
@@ -724,8 +851,8 @@ mod tests {
         let float = [pair, pair].concat();
         memory.record_word0.write(&mut device, 0, &word0).unwrap();
         memory.record_word1.write(&mut device, 0, &word1).unwrap();
-        memory.record_vertex.write(&mut device, 0, &vertex).unwrap();
-        memory.record_float.write(&mut device, 0, &float).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&vertex)).unwrap();
+        memory.record_float.write(&mut device, 0, &pad_floats(&float)).unwrap();
         memory.record_count.write(&mut device, 0, &[2]).unwrap();
         close(&mut memory, &mut device);
         let gap = 0.01f64;
@@ -798,8 +925,8 @@ mod tests {
         let pair = [carried, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, -0.5, -0.5, 1.0, 0.5, 1.0, 1.0];
         memory.record_word0.write(&mut device, 0, &[4u32 << 28]).unwrap(); // FRICTION_KIND_EDGE_EDGE
         memory.record_word1.write(&mut device, 0, &[0u32]).unwrap();
-        memory.record_vertex.write(&mut device, 0, &[0u32, 1, 2, 3]).unwrap();
-        memory.record_float.write(&mut device, 0, &pair).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&[0u32, 1, 2, 3])).unwrap();
+        memory.record_float.write(&mut device, 0, &pad_floats(&pair)).unwrap();
         memory.record_count.write(&mut device, 0, &[1]).unwrap();
         close(&mut memory, &mut device);
         let gap = 0.01f64;
@@ -831,6 +958,240 @@ mod tests {
         }
     }
 
+    /// A side with a Cosserat frame slips by its surface: two crossing edges
+    /// held still while side a's frame rolls by `angle` about its own axis,
+    /// with side b's edge, which has no frame, unmoved. The committed slip is
+    /// side a's surface's step, `r_a n x theta_a`, where the pair rule would
+    /// read no motion at all.
+    #[test]
+    fn a_framed_side_slips_by_its_surface() {
+        let mut device = host_device();
+        let mut memory = FrictionMemory::allocate(&mut device, 8, 4).unwrap();
+        let (radius_a, radius_b, angle) = (1e-2f32, 2e-2f32, 1e-3f32);
+        // The step's start frame is the identity; the iterate's has rolled by
+        // `angle` about x, edge a's direction.
+        let mut quat_start = Buffer::<f32>::none();
+        let mut quat = Buffer::<f32>::none();
+        let mut scratch = Buffer::<f32>::none();
+        quat_start.size(&mut device, 4, AllocLabel("test.quat_start")).unwrap();
+        quat.size(&mut device, 4, AllocLabel("test.quat")).unwrap();
+        scratch.size(&mut device, 9, AllocLabel("test.scratch")).unwrap();
+        quat_start.write(&mut device, 0, &[0.0, 0.0, 0.0, 1.0]).unwrap();
+        quat.write(&mut device, 0, &[(0.5 * angle).sin(), 0.0, 0.0, (0.5 * angle).cos()]).unwrap();
+        let none = memory.frames.edge_slot;
+        memory.set_frames(FrictionFrames {
+            edge_slot: none,
+            quat: quat.handle(),
+            quat_start: quat_start.handle(),
+            gradient: scratch.handle(),
+            self_block: scratch.handle(),
+        });
+        let _ = open(&mut memory, &mut device).unwrap();
+        // Edge a along x over edge b along y, the normal +z from b toward a.
+        let pair = [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, -0.5, -0.5, 1.0, 0.5, 1.0, 1.0, radius_a, radius_b];
+        memory.record_word0.write(&mut device, 0, &[4u32 << 28]).unwrap(); // FRICTION_KIND_EDGE_EDGE
+        memory.record_word1.write(&mut device, 0, &[0u32]).unwrap();
+        memory.record_vertex.write(&mut device, 0, &[0u32, 1, 2, 3, 0, u32::MAX]).unwrap();
+        memory.record_float.write(&mut device, 0, &pair).unwrap();
+        memory.record_count.write(&mut device, 0, &[1]).unwrap();
+        close(&mut memory, &mut device);
+        let gap = 0.03f64;
+        let cross = [[-1.0, 0.0, gap], [1.0, 0.0, gap], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+        let pos = |p: [f64; 3]| p.map(|x| x as f32);
+        let still: Vec<f32> = cross.iter().flat_map(|p| pos(*p)).collect();
+        let mut x = Buffer::<f32>::none();
+        x.size(&mut device, 12, AllocLabel("test.x")).unwrap();
+        x.write(&mut device, 0, &still).unwrap();
+        // Safety: the pose buffer holds the four vertices the record names.
+        unsafe { memory.commit(&mut device, x.handle(), x.handle(), 1.0) }.unwrap();
+        let mut slip = [0f32; 4];
+        memory.memory_slip.read(&mut device, 0, &mut slip).unwrap();
+        // n x theta_a = z x (angle x) = angle y.
+        let want = [0.0, radius_a * angle, 0.0];
+        for d in 0..3 {
+            assert!((slip[d] - want[d]).abs() < 1e-9, "axis {d}: {:?} against {want:?}", &slip[..3]);
+        }
+    }
+
+    /// A framed pair turned rigidly does not slip: both sides carry frames, and
+    /// the four vertices and both frames turn together by one small rotation.
+    /// The centerlines' relative step, `phi u x (c_a - c_b)`, and the frames'
+    /// surface steps, `(r_a + r_b) n x phi u`, cancel to first order, so the
+    /// committed slip is of second order in `phi`, whatever the axis.
+    #[test]
+    fn a_framed_pair_turned_rigidly_does_not_slip() {
+        let (radius_a, radius_b, angle) = (1e-2f64, 2e-2f64, 1e-3f64);
+        let gap = radius_a + radius_b;
+        let s3 = 1.0 / 3.0f64.sqrt();
+        for axis in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [s3, s3, s3]] {
+            let mut device = host_device();
+            let mut memory = FrictionMemory::allocate(&mut device, 8, 4).unwrap();
+            let half = 0.5 * angle;
+            let turned = [axis[0] * half.sin(), axis[1] * half.sin(), axis[2] * half.sin(), half.cos()].map(|x| x as f32);
+            let mut quat_start = Buffer::<f32>::none();
+            let mut quat = Buffer::<f32>::none();
+            let mut scratch = Buffer::<f32>::none();
+            quat_start.size(&mut device, 8, AllocLabel("test.quat_start")).unwrap();
+            quat.size(&mut device, 8, AllocLabel("test.quat")).unwrap();
+            scratch.size(&mut device, 18, AllocLabel("test.scratch")).unwrap();
+            quat_start.write(&mut device, 0, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+            quat.write(&mut device, 0, &[turned, turned].concat()).unwrap();
+            let none = memory.frames.edge_slot;
+            memory.set_frames(FrictionFrames {
+                edge_slot: none,
+                quat: quat.handle(),
+                quat_start: quat_start.handle(),
+                gradient: scratch.handle(),
+                self_block: scratch.handle(),
+            });
+            let _ = open(&mut memory, &mut device).unwrap();
+            // Edge a along x over edge b along y, the normal +z from b toward a.
+            let pair = [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, -0.5, -0.5, 1.0, 0.5, 1.0, 1.0, radius_a as f32, radius_b as f32];
+            memory.record_word0.write(&mut device, 0, &[4u32 << 28]).unwrap(); // FRICTION_KIND_EDGE_EDGE
+            memory.record_word1.write(&mut device, 0, &[0u32]).unwrap();
+            memory.record_vertex.write(&mut device, 0, &[0u32, 1, 2, 3, 0, 1]).unwrap();
+            memory.record_float.write(&mut device, 0, &pair).unwrap();
+            memory.record_count.write(&mut device, 0, &[1]).unwrap();
+            close(&mut memory, &mut device);
+            let cross = [[-1.0, 0.0, gap], [1.0, 0.0, gap], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+            // Rodrigues: R p = p cos + (u x p) sin + u (u . p)(1 - cos)
+            let rotate = |p: [f64; 3]| {
+                let (c, s) = (angle.cos(), angle.sin());
+                let d = axis[0] * p[0] + axis[1] * p[1] + axis[2] * p[2];
+                let x = [axis[1] * p[2] - axis[2] * p[1], axis[2] * p[0] - axis[0] * p[2], axis[0] * p[1] - axis[1] * p[0]];
+                [0, 1, 2].map(|i| p[i] * c + x[i] * s + axis[i] * d * (1.0 - c))
+            };
+            let pos = |p: [f64; 3]| p.map(|x| x as f32);
+            let start: Vec<f32> = cross.iter().flat_map(|p| pos(*p)).collect();
+            let moved: Vec<f32> = cross.iter().flat_map(|p| pos(rotate(*p))).collect();
+            let mut x0 = Buffer::<f32>::none();
+            let mut x = Buffer::<f32>::none();
+            x0.size(&mut device, 12, AllocLabel("test.x0")).unwrap();
+            x.size(&mut device, 12, AllocLabel("test.x")).unwrap();
+            x0.write(&mut device, 0, &start).unwrap();
+            x.write(&mut device, 0, &moved).unwrap();
+            // Safety: both pose buffers hold the four vertices the record names.
+            unsafe { memory.commit(&mut device, x0.handle(), x.handle(), 1.0) }.unwrap();
+            let mut slip = [0f32; 4];
+            memory.memory_slip.read(&mut device, 0, &mut slip).unwrap();
+            let size = ((slip[0] as f64).powi(2) + (slip[1] as f64).powi(2) + (slip[2] as f64).powi(2)).sqrt();
+            let first_order = gap * angle;
+            assert!(size < 1e-2 * first_order, "axis {axis:?}: slip {:?}, against a first-order frame step of {first_order:e}", &slip[..3]);
+        }
+    }
+
+    /// A framed side that rolls on the other without slipping records no slip:
+    /// edge a's centerline moves `step` along edge b while a's frame turns by
+    /// `-step / r_a` about a's own axis, so a's contact point stays where it
+    /// was on b. The centerlines' relative step and a's surface step cancel.
+    #[test]
+    fn a_framed_side_rolling_without_slipping_does_not_slip() {
+        let (radius_a, radius_b, step) = (1e-2f64, 2e-2f64, 1e-5f64);
+        let gap = radius_a + radius_b;
+        let mut device = host_device();
+        let mut memory = FrictionMemory::allocate(&mut device, 8, 4).unwrap();
+        let half = 0.5 * (-step / radius_a);
+        let mut quat_start = Buffer::<f32>::none();
+        let mut quat = Buffer::<f32>::none();
+        let mut scratch = Buffer::<f32>::none();
+        quat_start.size(&mut device, 8, AllocLabel("test.quat_start")).unwrap();
+        quat.size(&mut device, 8, AllocLabel("test.quat")).unwrap();
+        scratch.size(&mut device, 18, AllocLabel("test.scratch")).unwrap();
+        quat_start.write(&mut device, 0, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+        quat.write(&mut device, 0, &[half.sin() as f32, 0.0, 0.0, half.cos() as f32, 0.0, 0.0, 0.0, 1.0]).unwrap();
+        let none = memory.frames.edge_slot;
+        memory.set_frames(FrictionFrames {
+            edge_slot: none,
+            quat: quat.handle(),
+            quat_start: quat_start.handle(),
+            gradient: scratch.handle(),
+            self_block: scratch.handle(),
+        });
+        let _ = open(&mut memory, &mut device).unwrap();
+        // Edge a along x over edge b along y, the normal +z from b toward a.
+        let pair = [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 0.5, -0.5, -0.5, 1.0, 0.5, 1.0, 1.0, radius_a as f32, radius_b as f32];
+        memory.record_word0.write(&mut device, 0, &[4u32 << 28]).unwrap(); // FRICTION_KIND_EDGE_EDGE
+        memory.record_word1.write(&mut device, 0, &[0u32]).unwrap();
+        memory.record_vertex.write(&mut device, 0, &[0u32, 1, 2, 3, 0, 1]).unwrap();
+        memory.record_float.write(&mut device, 0, &pair).unwrap();
+        memory.record_count.write(&mut device, 0, &[1]).unwrap();
+        close(&mut memory, &mut device);
+        let cross = [[-1.0, 0.0, gap], [1.0, 0.0, gap], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+        let rolled = [[-1.0, step, gap], [1.0, step, gap], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]];
+        let pos = |p: [f64; 3]| p.map(|x| x as f32);
+        let start: Vec<f32> = cross.iter().flat_map(|p| pos(*p)).collect();
+        let moved: Vec<f32> = rolled.iter().flat_map(|p| pos(*p)).collect();
+        let mut x0 = Buffer::<f32>::none();
+        let mut x = Buffer::<f32>::none();
+        x0.size(&mut device, 12, AllocLabel("test.x0")).unwrap();
+        x.size(&mut device, 12, AllocLabel("test.x")).unwrap();
+        x0.write(&mut device, 0, &start).unwrap();
+        x.write(&mut device, 0, &moved).unwrap();
+        // Safety: both pose buffers hold the four vertices the record names.
+        unsafe { memory.commit(&mut device, x0.handle(), x.handle(), 1.0) }.unwrap();
+        let mut slip = [0f32; 4];
+        memory.memory_slip.read(&mut device, 0, &mut slip).unwrap();
+        let size = ((slip[0] as f64).powi(2) + (slip[1] as f64).powi(2) + (slip[2] as f64).powi(2)).sqrt();
+        assert!(size < 1e-2 * step, "slip {:?} against a roll of {step:e}", &slip[..3]);
+    }
+
+    /// A vertex over a framed edge that rolls under it records no slip: the
+    /// edge's centerline moves `step` across while its frame turns by
+    /// `step / r_b` about the edge's own axis, so its touching surface stays
+    /// under the vertex. Read through the edge's own turn instead, the roll is
+    /// a slip of `step`.
+    #[test]
+    fn a_framed_edge_rolling_under_a_vertex_does_not_slip() {
+        let (radius_a, radius_b, step) = (1e-2f64, 2e-2f64, 1e-5f64);
+        let gap = radius_a + radius_b;
+        let mut device = host_device();
+        let mut memory = FrictionMemory::allocate(&mut device, 8, 4).unwrap();
+        let half = 0.5 * (step / radius_b);
+        let mut quat_start = Buffer::<f32>::none();
+        let mut quat = Buffer::<f32>::none();
+        let mut scratch = Buffer::<f32>::none();
+        quat_start.size(&mut device, 4, AllocLabel("test.quat_start")).unwrap();
+        quat.size(&mut device, 4, AllocLabel("test.quat")).unwrap();
+        scratch.size(&mut device, 9, AllocLabel("test.scratch")).unwrap();
+        quat_start.write(&mut device, 0, &[0.0, 0.0, 0.0, 1.0]).unwrap();
+        quat.write(&mut device, 0, &[half.sin() as f32, 0.0, 0.0, half.cos() as f32]).unwrap();
+        let none = memory.frames.edge_slot;
+        memory.set_frames(FrictionFrames {
+            edge_slot: none,
+            quat: quat.handle(),
+            quat_start: quat_start.handle(),
+            gradient: scratch.handle(),
+            self_block: scratch.handle(),
+        });
+        let _ = open(&mut memory, &mut device).unwrap();
+        // Vertex 0 (side a) over the middle of edge 1-2 along x (side b), the
+        // normal +z from b toward a; only side b has a frame, slot 0.
+        let pair = [0.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -0.5, -0.5, 0.0, 1.0, 0.5, 1.0, 1.0, radius_a as f32, radius_b as f32];
+        memory.record_word0.write(&mut device, 0, &[1u32 << 28]).unwrap(); // FRICTION_KIND_POINT_SURFACE
+        memory.record_word1.write(&mut device, 0, &[0u32]).unwrap();
+        memory.record_vertex.write(&mut device, 0, &[0u32, 1, 2, u32::MAX, u32::MAX, 0]).unwrap();
+        memory.record_float.write(&mut device, 0, &pair).unwrap();
+        memory.record_count.write(&mut device, 0, &[1]).unwrap();
+        close(&mut memory, &mut device);
+        let start = [[0.0, 0.0, gap], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let rolled = [[0.0, 0.0, gap], [-1.0, step, 0.0], [1.0, step, 0.0]];
+        let pos = |p: [f64; 3]| p.map(|x| x as f32);
+        let start: Vec<f32> = start.iter().flat_map(|p| pos(*p)).collect();
+        let moved: Vec<f32> = rolled.iter().flat_map(|p| pos(*p)).collect();
+        let mut x0 = Buffer::<f32>::none();
+        let mut x = Buffer::<f32>::none();
+        x0.size(&mut device, 9, AllocLabel("test.x0")).unwrap();
+        x.size(&mut device, 9, AllocLabel("test.x")).unwrap();
+        x0.write(&mut device, 0, &start).unwrap();
+        x.write(&mut device, 0, &moved).unwrap();
+        // Safety: both pose buffers hold the three vertices the record names.
+        unsafe { memory.commit(&mut device, x0.handle(), x.handle(), 1.0) }.unwrap();
+        let mut slip = [0f32; 4];
+        memory.memory_slip.read(&mut device, 0, &mut slip).unwrap();
+        let size = ((slip[0] as f64).powi(2) + (slip[1] as f64).powi(2) + (slip[2] as f64).powi(2)).sqrt();
+        assert!(size < 1e-2 * step, "slip {:?} against a roll of {step:e}", &slip[..3]);
+    }
+
     /// The commit's two halves: the memory comes out in the lexicographic key
     /// order the lookup bisects, and each slip is the record's rule evaluated
     /// at the committed pose, in its tangent plane, and return mapped.
@@ -855,8 +1216,8 @@ mod tests {
         .concat();
         memory.record_word0.write(&mut device, 0, &word0).unwrap();
         memory.record_word1.write(&mut device, 0, &word1).unwrap();
-        memory.record_vertex.write(&mut device, 0, &vertex).unwrap();
-        memory.record_float.write(&mut device, 0, &float).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&vertex)).unwrap();
+        memory.record_float.write(&mut device, 0, &pad_floats(&float)).unwrap();
         memory.record_count.write(&mut device, 0, &[3]).unwrap();
         close(&mut memory, &mut device);
         // Vertex 0 moves 3e-8 along x and 1 along z; vertex 1 moves 1e-8 along x.
@@ -902,7 +1263,7 @@ mod tests {
         let _ = open(&mut memory, &mut device).unwrap();
         memory.record_word0.write(&mut device, 0, &[1]).unwrap();
         memory.record_word1.write(&mut device, 0, &[1]).unwrap();
-        memory.record_vertex.write(&mut device, 0, &[0, unused, unused, unused]).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&[0, unused, unused, unused])).unwrap();
         memory
             .record_float
             .write(&mut device, 0, &[0.0, 0.0, 0.0, up[0], up[1], up[2], 1.0, 0.0, 0.0, 0.0, 1.0, 0.5, 1.0])
@@ -949,8 +1310,8 @@ mod tests {
             }
             memory.record_word0.write(&mut device, 0, &word0).unwrap();
             memory.record_word1.write(&mut device, 0, &word1).unwrap();
-            memory.record_vertex.write(&mut device, 0, &vertex).unwrap();
-            memory.record_float.write(&mut device, 0, &float).unwrap();
+            memory.record_vertex.write(&mut device, 0, &pad_words(&vertex)).unwrap();
+            memory.record_float.write(&mut device, 0, &pad_floats(&float)).unwrap();
             memory.record_count.write(&mut device, 0, &[3]).unwrap();
             close(&mut memory, &mut device);
             // Nothing moves, so each slip is its carried offset.
@@ -994,8 +1355,8 @@ mod tests {
         .concat();
         memory.record_word0.write(&mut device, 0, &word0).unwrap();
         memory.record_word1.write(&mut device, 0, &word1).unwrap();
-        memory.record_vertex.write(&mut device, 0, &vertex).unwrap();
-        memory.record_float.write(&mut device, 0, &float).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&vertex)).unwrap();
+        memory.record_float.write(&mut device, 0, &pad_floats(&float)).unwrap();
         memory.record_count.write(&mut device, 0, &[3]).unwrap();
         // The passes started from residual (1, 0, 0) on vertex 0 and deposited
         // up to force (1, 5, 0). The pair's friction is mu N u / eps =
@@ -1039,8 +1400,8 @@ mod tests {
         // The open above restarted the record, so it is written again.
         memory.record_word0.write(&mut device, 0, &word0).unwrap();
         memory.record_word1.write(&mut device, 0, &word1).unwrap();
-        memory.record_vertex.write(&mut device, 0, &vertex).unwrap();
-        memory.record_float.write(&mut device, 0, &float).unwrap();
+        memory.record_vertex.write(&mut device, 0, &pad_words(&vertex)).unwrap();
+        memory.record_float.write(&mut device, 0, &pad_floats(&float)).unwrap();
         memory.record_count.write(&mut device, 0, &[3]).unwrap();
         // Safety: every array holds the two vertices.
         unsafe {

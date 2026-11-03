@@ -463,3 +463,7 @@
 #include "utility/rod_damping.entry.cpp"
 #include "utility/hinge_damping.entry.cpp"
 #include "utility/rod_bend_damping.entry.cpp"
+
+// The friction's coupling across Cosserat frames in the augmented solve's
+// operator (`contact/friction_frame`).
+#include "contact/friction_frame.entry.cpp"

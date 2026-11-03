@@ -149,6 +149,32 @@ cosserat_frame(const float *quat, unsigned slot) {
     }
 }
 
+// The rotation vector of R_a R_b^T, the turn from frame b to frame a at `slot`
+// in the left perturbation (R_a = exp([v]x) R_b): angle times axis, on the
+// hemisphere of positive scalar part, read off q_a (x) conj(q_b). The angle
+// comes from atan2 of the vector and scalar parts, so it keeps its precision
+// at every size, where the axial vector of R_a R_b^T - R_b R_a^T gives the
+// sine. Quaternions are (x, y, z, w).
+[[seam::host_device_fn]] inline Vec3f cosserat_relative_turn(const float *quat_a,
+                                                            const float *quat_b,
+                                                            unsigned slot) {
+    const Vec3f qv(quat_a[4u * slot], quat_a[4u * slot + 1u], quat_a[4u * slot + 2u]);
+    const float qw = quat_a[4u * slot + 3u];
+    const Vec3f pv(quat_b[4u * slot], quat_b[4u * slot + 1u], quat_b[4u * slot + 2u]);
+    const float pw = quat_b[4u * slot + 3u];
+    float w = qw * pw + qv.dot(pv);
+    Vec3f v = pw * qv - qw * pv - qv.cross(pv);
+    if (w < 0.0f) {
+        w = -w;
+        v = -1.0f * v;
+    }
+    const float sine = fmath::sqrt(v.squaredNorm());
+    if (!(sine > 0.0f)) {
+        return Vec3f::Zero();
+    }
+    return fmath::div(2.0f * fmath::atan2(sine, w), sine) * v;
+}
+
 // The rotation carrying the unit direction `from` onto the unit direction `to`
 // with no turn about either, I + [v]x + [v]x^2 / (1 + c), v = from x to,
 // c = from . to: exact, with no trigonometry. `1 + c` is the caller's to check,
@@ -268,6 +294,20 @@ cosserat_shear_grad_hess(const Vec3f &d, const Vec3f &p, float c, float length,
 // frame (the previous one's is its negative) and the exact Hessian, and returns
 // false when the relative turn is too close to a half turn to define w.
 //
+// The nearest PSD matrix to the symmetric part of `m`, in place.
+template <int N>
+[[seam::host_device_fn]] inline void
+cosserat_project(linalg::SMat<float, N, N> &m) {
+    for (int i = 0; i < N; ++i) {
+        for (int j = i + 1; j < N; ++j) {
+            const float s = 0.5f * (m(i, j) + m(j, i));
+            m(i, j) = s;
+            m(j, i) = s;
+        }
+    }
+    linalg::psd_project_symmetric<N>(m, 0.0f);
+}
+
 // THE DERIVATIVES. In v = R_prev^T theta_next, G = exp(skew(v)) G0, and to
 // second order
 //   u(v) = u0 + J v + 1/2 [ (G0^T v) x v - |v|^2 u0 ],  J = tr(G0) I - G0,
@@ -392,27 +432,39 @@ cosserat_bend_grad_hess(const Mat3x3f &frame_prev, const Mat3x3f &frame_next,
             h_v(a, b) = length * (gauss_newton + curvature);
         }
     }
-    // H in theta: R_prev H_v R_prev^T.
+    // H in theta: R_prev H_v R_prev^T, symmetrized and projected PSD.
+    //
+    // THE SITE BLOCK IS [[S, -S], [-S, S]], EXACTLY. The bend and twist energy
+    // depends on the two frames' relative turn only, so a turn of both by one
+    // rotation costs nothing, and in this form the site's two rows cancel over
+    // such a turn by construction rather than in arithmetic: the frames' row sum
+    // then holds only the terms that do not cancel (inertia, the shear term's
+    // frame part, friction), which is what makes a rolling yarn's rotation
+    // resolvable in single precision (`cosserat_apply_slot_row`). The exact
+    // second derivative adds -/+ 1/2 skew(g) to the two coupling blocks, the
+    // torque's Lie bracket; it is dropped here, as a term that is not PSD and
+    // that a whole-6x6 projection could only fold back into S unevenly. The
+    // gradient keeps it in full, so the solve converges to the same state.
     const Mat3x3f h = cosserat_mul_nt(cosserat_mul(frame_prev, h_v), frame_prev);
-    const Mat3x3f skew_g = pdrd_skew(grad_next);
+    linalg::SMat<float, 3, 3> s;
     for (unsigned i = 0; i < 3u; ++i) {
         for (unsigned j = 0; j < 3u; ++j) {
-            const float sym = 0.5f * (h(i, j) + h(j, i));
-            hessian(i, j) = sym;
-            hessian(3u + i, 3u + j) = sym;
-            // (next, prev) = -H - 1/2 skew(g); (prev, next) is its transpose.
-            hessian(i, 3u + j) = -0.5f * (h(i, j) + h(j, i)) - 0.5f * skew_g(i, j);
+            s(i, j) = 0.5f * (h(i, j) + h(j, i));
         }
     }
+    cosserat_project<3>(s);
     for (unsigned i = 0; i < 3u; ++i) {
         for (unsigned j = 0; j < 3u; ++j) {
-            hessian(3u + i, j) = hessian(j, 3u + i);
+            hessian(i, j) = s(i, j);
+            hessian(3u + i, 3u + j) = s(i, j);
+            hessian(i, 3u + j) = -s(i, j);
+            hessian(3u + i, j) = -s(i, j);
         }
     }
     return true;
 }
 
-// ROTATIONAL INERTIA: E = -tr(M0), M0 = (j / dt^2) R R_pred^T, the frame against
+// ROTATIONAL INERTIA: E = -tr(M0), M0 = (j / (2 dt^2)) R R_pred^T, the frame against
 // its inertial prediction. Writes the exact gradient axial(M0 - M0^T) and Hessian
 // tr(M0) I - sym(M0).
 [[seam::host_device_fn]] inline void
@@ -424,20 +476,6 @@ cosserat_inertia_grad_hess(const Mat3x3f &m0, Vec3f &gradient, Mat3x3f &hessian)
             hessian(i, j) = (i == j ? trace : 0.0f) - 0.5f * (m0(i, j) + m0(j, i));
         }
     }
-}
-
-// The nearest PSD matrix to the symmetric part of `m`, in place.
-template <int N>
-[[seam::host_device_fn]] inline void
-cosserat_project(linalg::SMat<float, N, N> &m) {
-    for (int i = 0; i < N; ++i) {
-        for (int j = i + 1; j < N; ++j) {
-            const float s = 0.5f * (m(i, j) + m(j, i));
-            m(i, j) = s;
-            m(j, i) = s;
-        }
-    }
-    linalg::psd_project_symmetric<N>(m, 0.0f);
 }
 
 // ----------------------------------------------------------------- assembly
@@ -568,13 +606,20 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
 // THE ROTATIONAL INERTIA PASS, one thread per slot, after the shear pass and
 // before the bend pass.
 //
-// THE PREDICTION CARRIES ANGULAR MOMENTUM. With dR = R_prev R_prev2^T the last
-// step's incremental rotation, the frame is predicted at
-// (I + tr skew(w)) R_prev, w = axial(dR - dR^T) / 2, tr = dt / prev_dt: the
-// rotational twin of the position predictor x + (x - x_prev) dt / prev_dt, and
-// to first order the paper's (2 I - dR^T) R_prev at tr = 1. dR is a RELATIVE
-// rotation, never a difference of two absolute frames. At rest dR = I and the
-// prediction is R_prev.
+// THE PREDICTION CARRIES ANGULAR MOMENTUM, EXACTLY. With dR = R_prev R_prev2^T
+// the last step's incremental rotation, a turn by phi about a, the frame is
+// predicted at exp(tr phi [a]x) R_prev, tr = dt / prev_dt: the rotational twin
+// of the position predictor x + (x - x_prev) dt / prev_dt, which repeats the
+// last step's turn whatever its size. A first-order form loses a frame's spin
+// at every step: (I + tr sin(phi) [a]x) R_prev, the axial vector of dR's
+// antisymmetric part, predicts a turn of atan(sin phi), short of phi for every
+// phi > 0 by about phi^3 / 2, and the paper's (2 I - dR^T) R_prev is shorter
+// still. A Cosserat yarn rolling across two supports under the frame law
+// turns its frames 0.2 to 1 rad a step at 50 to 100 mm/s, and that loss braked
+// it to a terminal speed set by the step size (55, 80 and 107 mm/s at dt 0.01,
+// 0.0025 and 0.001, where it rolls on at 1.7 m/s^2). dR is a RELATIVE rotation,
+// read off the two quaternions' product, never a difference of two absolute
+// frames. At rest dR = I and the prediction is R_prev.
 //
 // ISOTROPIC INERTIA j = m l^2 / 12 per edge. It is what keeps the twist about
 // the tangent, an exact null mode of shear plus bend and twist, from leaving the
@@ -600,16 +645,12 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     }
     const Mat3x3f current = cosserat_frame(quat, slot);
     const Mat3x3f previous = cosserat_frame(quat_prev, slot);
-    const Mat3x3f before = cosserat_frame(quat_prev2, slot);
-    const Vec3f axial = cosserat_axial_diff(cosserat_mul_nt(previous, before));
-    const Vec3f w = (0.5f * tr) * axial;
-    Mat3x3f step = pdrd_skew(w);
-    for (unsigned i = 0; i < 3u; ++i) {
-        step(i, i) += 1.0f;
-    }
-    const Mat3x3f predicted = cosserat_mul(step, previous);
+    const Vec3f turn = cosserat_relative_turn(quat_prev, quat_prev2, slot);
+    const Mat3x3f predicted = cosserat_mul(pdrd_exp_so3(tr * turn), previous);
     Mat3x3f m0 = cosserat_mul_nt(current, predicted);
-    const float scale = fmath::div(inertia, dt * dt);
+    // A turn by theta off the prediction costs (j / (2 dt^2)) (2 - 2 cos theta),
+    // so the frame's inertia is j; the scale j / dt^2 would give it 2 j.
+    const float scale = fmath::div(inertia, 2.0f * dt * dt);
     for (unsigned e = 0; e < 9u; ++e) {
         m0.data()[e] *= scale;
     }
@@ -648,7 +689,6 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     const Vec3f *rest_darboux,
     const float *quat,
     compute::atomic_float_t *gradient,
-    compute::atomic_float_t *self_block,
     float *site_block,
     DiagHandle diag,
     unsigned site) {
@@ -686,12 +726,9 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     if (!defined) {
         return;
     }
-    cosserat_project<6>(hessian);
-    Mat3x3f next, prev, coupling;
+    Mat3x3f coupling;
     for (unsigned i = 0; i < 3u; ++i) {
         for (unsigned j = 0; j < 3u; ++j) {
-            next(i, j) = hessian(i, j);
-            prev(i, j) = hessian(3u + i, 3u + j);
             coupling(i, j) = hessian(i, 3u + j);
         }
     }
@@ -699,8 +736,10 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
         compute::atomic_add(gradient + 3u * slot_next + i, grad_next[i]);
         compute::atomic_add(gradient + 3u * slot_prev + i, -grad_next[i]);
     }
-    cosserat_atomic_add_block(self_block, slot_next, next);
-    cosserat_atomic_add_block(self_block, slot_prev, prev);
+    // The site's own blocks, S on both frames, are NOT added to `self_block`:
+    // they cancel against the coupling over a turn of both frames, so the
+    // difference form never needs them, and the preconditioner gathers them
+    // from `site_block` (`cosserat_site_self_row`).
     for (unsigned e = 0; e < 9u; ++e) {
         site_block[9u * site + e] = coupling.data()[e];
     }
@@ -812,9 +851,11 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
 
 // The frame rows of y = A u and the frames' share of its position rows, one
 // thread per slot, after the per-vertex operator has written y's position rows:
-// y_theta = H_self u_theta + H_from^T u_from + H_to^T u_to, stored, and
-// y_from += H_from u_theta, y_to += H_to u_theta, added. `output` and
-// `output_atomic` are the same allocation.
+// y_theta = S u_theta + H_from^T u_from + H_to^T u_to, stored, and
+// y_from += H_from u_theta, y_to += H_to u_theta, added, with `self_block` the
+// frame's own block S (inertia, the shear term's frame part, friction); the
+// site pass adds the sites' differences. `output` and `output_atomic` are the
+// same allocation.
 [[seam::entry(slot)]]
 [[seam::device_fn]] inline void cosserat_apply_slot_row(
     const Vec2u *edge_nodes,
@@ -854,9 +895,10 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
 }
 
 // The bend coupling's share of y's frame rows, one thread per site, after the
-// slot pass, as differences: y_next += H_site (u_prev - u_next) and
-// y_prev += H_site^T (u_next - u_prev). With the slot pass's row sum S this is
-// H_self u + H_site u_prev on the next frame's row, the plain product exactly.
+// slot pass, as differences: y_next += C (u_prev - u_next) and
+// y_prev += C^T (u_next - u_prev), C = -S the site's coupling. That is the
+// site's block [[S, -S], [-S, S]] applied exactly, so the slot pass's
+// `self_block` holds no share of it.
 [[seam::entry(site)]]
 [[seam::device_fn]] inline void cosserat_apply_site_row(
     const Vec2u *bend_slots,
@@ -882,23 +924,21 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     }
 }
 
-// The frame rows' sums the difference form reads, one thread per site, after
-// `row_sum` has been given each frame's own block: the site's coupling H joins
-// the next frame's row and its transpose the previous frame's, so that row's
-// blocks summed are S = H_self + the couplings of its sites.
+// Each frame's share of its sites' own blocks, one thread per site, for the
+// preconditioner's frame block (`cosserat_schwarz_factor_row`): a site's block
+// is [[S, -S], [-S, S]] with the coupling `site_block` = -S, so each of its
+// two frames gains S. A sum of PSD blocks, with nothing to cancel.
 [[seam::entry(site)]]
-[[seam::device_fn]] inline void cosserat_row_sum_site_row(
+[[seam::device_fn]] inline void cosserat_site_self_row(
     const Vec2u *bend_slots,
     const float *site_block,
-    compute::atomic_float_t *row_sum,
+    compute::atomic_float_t *site_self,
     unsigned site) {
     const Vec2u slots = bend_slots[site];
-    for (unsigned c = 0; c < 3u; ++c) {
-        for (unsigned r = 0; r < 3u; ++r) {
-            // column major: (r, c) is r + 3 c, and the transpose's (r, c) is H's (c, r)
-            compute::atomic_add(row_sum + 9u * slots[1] + r + 3u * c, site_block[9u * site + r + 3u * c]);
-            compute::atomic_add(row_sum + 9u * slots[0] + r + 3u * c, site_block[9u * site + c + 3u * r]);
-        }
+    for (unsigned e = 0; e < 9u; ++e) {
+        const float own = -site_block[9u * site + e];
+        compute::atomic_add(site_self + 9u * slots[0] + e, own);
+        compute::atomic_add(site_self + 9u * slots[1] + e, own);
     }
 }
 
@@ -940,6 +980,7 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     const float *fixed_value,
     unsigned row_count,
     const float *self_block,
+    const float *site_self,
     const float *coupling_from,
     const float *coupling_to,
     float *factor,
@@ -972,7 +1013,8 @@ cosserat_project(linalg::SMat<float, N, N> &m) {
     } else {
         for (unsigned i = 0; i < 3u; ++i) {
             for (unsigned j = 0; j < 3u; ++j) {
-                const float own = self_block[9u * slot + i + 3u * j];
+                const float own = self_block[9u * slot + i + 3u * j] +
+                                  site_self[9u * slot + i + 3u * j];
                 const float from = coupling_from[9u * slot + i + 3u * j];
                 const float to = coupling_to[9u * slot + i + 3u * j];
                 k[9u * (6u + i) + 6u + j] = own;

@@ -2616,6 +2616,8 @@ impl SolverState {
         // grown on demand from there; nothing is ever recorded otherwise.
         let floor = if super::step::scene_has_friction(data) { 4 * vertices } else { 0 };
         self.friction_memory = super::friction_memory::FrictionMemory::allocate(device, floor, vertices)?;
+        // A FRAMED PAIR'S SLIP READS THE COSSERAT FRAMES, staged above.
+        self.friction_memory.set_frames(self.cosserat.frames_for_friction());
         self.precond_inverse
             .size(device, 9 * vertices, AllocLabel("step.precond_inverse"))?;
         self.dof_mask

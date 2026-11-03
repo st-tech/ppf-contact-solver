@@ -318,8 +318,11 @@ pcg_dot_terms(const float *a,
     float *preconditioned,
     float *scratch,
     float *product_total,
-    float *residual_total, unsigned rows, unsigned lane,
-    unsigned threads, unsigned block) {
+    float *residual_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     const unsigned row = block * threads + lane;
     float dot = 0.0f;
     float norm = 0.0f;
@@ -369,6 +372,7 @@ pcg_dot_terms(const float *a,
     [[seam::scratch(64)]] float *scratch,
     float *product_total,
     float *residual_total,
+    const float *latch,
     unsigned rows,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
@@ -632,12 +636,23 @@ pcg_dot_terms(const float *a,
     int *cause_out, int *break_cause,
     float *break_value,
     int *break_iteration,
-    float *break_fired, unsigned lane, unsigned threads,
+    float *break_fired, float *latch, unsigned lane, unsigned threads,
     unsigned block) {
     // ONE GROUP, ALWAYS. The caller dispatches a single group whose window is
     // the whole partial array, so the folded values ARE the scalars and the
     // group index carries no information the body needs.
     (void)block;
+    // A FROZEN SOLVE DOES NOTHING HERE but pass the freeze on to the
+    // direction combine, which runs after the freezing iteration's beta fold
+    // and so must see it one iteration later than everything else (see
+    // `latch` in pcg.rs). Every lane reads the same flag, so the group
+    // returns whole.
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        if (compute::is_block_writer(lane, threads)) {
+            latch[PCG_LATCH_COMBINE] = 1.0f;
+        }
+        return;
+    }
     unsigned first = 0u;
     unsigned last = 0u;
     pcg_fold_run(length, threads, lane, first, last);
@@ -683,6 +698,7 @@ pcg_dot_terms(const float *a,
     float *break_value,
     int *break_iteration,
     float *break_fired,
+    float *latch,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
     unsigned block,
@@ -772,12 +788,15 @@ pcg_dot_terms(const float *a,
     int *cause_out, int *break_cause,
     float *break_value,
     int *break_iteration,
-    float *break_fired, unsigned lane, unsigned threads,
-    unsigned block) {
+    float *break_fired, float *latch, float conv_bound, float near_bound,
+    unsigned lane, unsigned threads, unsigned block) {
     // ONE GROUP, ALWAYS. The caller dispatches a single group whose window is
     // the whole partial array, so the folded values ARE the scalars and the
     // group index carries no information the body needs.
     (void)block;
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     unsigned first = 0u;
     unsigned last = 0u;
     pcg_fold_run(length, threads, lane, first, last);
@@ -806,6 +825,24 @@ pcg_dot_terms(const float *a,
         value_out[0] = value;
         noise_out[0] = noise;
         cause_out[0] = cause;
+        // THE FREEZE. At an iterate the host's schedule checks (every fourth
+        // while far, every one once near), freeze when the host's test could
+        // act: converged, near (far only) or a breakdown latched. The two
+        // bounds are the host's `err / err0 < tol` and `< 8 tol` made
+        // division-free and loose, so they never miss what the host would
+        // see; a spurious freeze only costs the host one look.
+        const int k = iteration_counter[0];
+        const bool near_mode = latch[PCG_LATCH_MODE] != 0.0f;
+        const bool scheduled = near_mode || (k % 4 == 1);
+        const bool look = residual_folded < conv_bound ||
+                          (!near_mode && residual_folded < near_bound) ||
+                          break_fired[0] != 0.0f;
+        // NaN bounds disarm the latch (pcg.rs runs the plain schedule).
+        const bool armed = conv_bound == conv_bound;
+        if (armed && scheduled && look) {
+            latch[PCG_LATCH_FROZEN] = 1.0f;
+            latch[PCG_LATCH_AT] = static_cast<float>(k);
+        }
     }
 }
 
@@ -825,6 +862,9 @@ pcg_dot_terms(const float *a,
     float *break_value,
     int *break_iteration,
     float *break_fired,
+    float *latch,
+    float conv_bound,
+    float near_bound,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
     unsigned block,

@@ -25,7 +25,7 @@ use ppf_cts_compute::{AllocLabel, Buffer, Device, Handle, StagedBuffer};
 
 use super::kernels::{
     CosseratBendRowArgs, CosseratDirichletRowArgs, CosseratDriveRowArgs,
-    CosseratInertiaRowArgs, CosseratPrescribeRowArgs, CosseratRowSumSiteRowArgs,
+    CosseratInertiaRowArgs, CosseratPrescribeRowArgs, CosseratSiteSelfRowArgs,
     CosseratShearRowArgs, CosseratStepRowArgs, DxMagnitudeArgs,
 };
 use super::scene::{Fatal, FatalResult};
@@ -71,6 +71,14 @@ pub struct State {
     // records, which is how the mesh's own edge array is staged.
     /// Per slot, the rod edge it rides on.
     slot_edge: StagedBuffer<u32>,
+    /// Per mesh edge, the slot riding on it, or `u32::MAX` (the friction
+    /// record's FRICTION_MEMORY_UNUSED): the contact passes look up a pair's
+    /// sides' frames by it. Staged on every scene, Cosserat or not, at least one
+    /// word long.
+    edge_slot: StagedBuffer<u32>,
+    /// Nine zeros, the frame handles the friction passes are given on a scene
+    /// without frames, where no entry names a frame and nothing reads them.
+    frame_none: Buffer<f32>,
     /// Per slot, the edge's two vertices in the rod's chain order.
     edge_nodes: StagedBuffer<u32>,
     /// Per slot, whether the frame is held by `cosserat-fix-ends`.
@@ -120,11 +128,11 @@ pub struct State {
     /// Nine floats per site: the next frame's rows against the previous frame's
     /// columns.
     site_block: Buffer<f32>,
-    /// Nine floats per slot: the frame row's blocks summed, its own block and
-    /// its sites' couplings, which the augmented operator's difference form
-    /// reads (`cosserat_apply_slot_row`). Filled by [`State::sum_frame_rows`]
-    /// once the iteration's blocks are final.
-    row_sum: Buffer<f32>,
+    /// Nine floats per slot: the frame's share of its bend sites' own blocks,
+    /// which only the preconditioner reads (`cosserat_schwarz_factor_row`); the
+    /// operator's difference form needs `self_block` alone. Filled by
+    /// [`State::gather_site_self`] once the iteration's blocks are final.
+    site_self: Buffer<f32>,
 
     /// Per slot, this step's held mask: `fixed`, or both of the edge's
     /// vertices prescribed (a clamp). Written by [`State::prescribe`].
@@ -184,6 +192,23 @@ impl State {
         let sites = data.cosserat_bend_slots.size as usize;
         self.slots = slots;
         self.sites = sites;
+        // THE EDGE-TO-FRAME MAP the friction reads, on every scene: the inverse
+        // of `cosserat_edge`, which names each slot's global (mesh) edge.
+        let mesh_edges = data.mesh.mesh.edge.size as usize;
+        let mut edge_slot = vec![u32::MAX; mesh_edges.max(1)];
+        for (slot, &edge) in super::scene::slice(&data.cosserat_edge).iter().enumerate() {
+            let at = edge as usize;
+            if at >= mesh_edges || edge_slot[at] != u32::MAX {
+                return Err(Fatal::invariant(format!(
+                    "solver driver: Cosserat frame {slot} rides on edge {edge}, which is past the \
+                     {mesh_edges} mesh edges or already carries a frame"
+                )));
+            }
+            edge_slot[at] = slot as u32;
+        }
+        stage(device, &mut self.edge_slot, edge_slot.as_ptr(), edge_slot.len(), "cosserat.edge_slot")?;
+        self.frame_none.size(device, 9, AllocLabel("cosserat.frame_none"))?;
+        device.fill_zero(self.frame_none.handle(), 9 * size_of::<f32>())?;
         if slots == 0 {
             if sites != 0 {
                 return Err(Fatal::invariant(format!(
@@ -348,7 +373,7 @@ impl State {
         self.coupling_from.size(device, 9 * slots, AllocLabel("cosserat.coupling_from"))?;
         self.coupling_to.size(device, 9 * slots, AllocLabel("cosserat.coupling_to"))?;
         self.site_block.size(device, 9 * sites.max(1), AllocLabel("cosserat.site_block"))?;
-        self.row_sum.size(device, 9 * slots, AllocLabel("cosserat.row_sum"))?;
+        self.site_self.size(device, 9 * slots, AllocLabel("cosserat.site_self"))?;
         self.held.size(device, slots, AllocLabel("cosserat.held"))?;
         self.prescribed.size(device, 3 * slots, AllocLabel("cosserat.prescribed"))?;
         self.step.size(device, 3 * slots, AllocLabel("cosserat.step"))?;
@@ -360,6 +385,23 @@ impl State {
             3 * slots
         );
         Ok(())
+    }
+
+    /// The frames' handles the friction passes read (`friction_memory.rs`,
+    /// [`super::friction_memory::FrictionFrames`]): the edge-to-frame map, the
+    /// iterate's and the step's start frames, and the gradient and own blocks
+    /// a framed pair's torque and stiffness are added to. On a scene without
+    /// frames all but the map are a placeholder nothing reads.
+    pub fn frames_for_friction(&self) -> super::friction_memory::FrictionFrames {
+        let none = self.frame_none.handle();
+        let framed = self.slots > 0;
+        super::friction_memory::FrictionFrames {
+            edge_slot: self.edge_slot.handle(),
+            quat: if framed { self.quat.handle() } else { none },
+            quat_start: if framed { self.quat_prev.handle() } else { none },
+            gradient: if framed { self.gradient.handle() } else { none },
+            self_block: if framed { self.self_block.handle() } else { none },
+        }
     }
 
     /// The frames' handles the augmented solve reads, taken together so a
@@ -388,30 +430,30 @@ impl State {
             coupling_from: self.coupling_from.handle(),
             coupling_to: self.coupling_to.handle(),
             site_block: self.site_block.span(0, 9 * self.sites),
-            row_sum: self.row_sum.handle(),
+            site_self: self.site_self.handle(),
             step: self.step.handle(),
         }
     }
 
-    /// Each frame row's blocks summed, for the augmented operator's difference
-    /// form: the frame's own block, then every bend site's coupling added into
-    /// both of its frames' rows. Run once per solve, after the Dirichlet pass,
-    /// which is the last writer of the blocks.
-    pub fn sum_frame_rows<D: Device>(&self, device: &mut D) -> FatalResult<()> {
+    /// Each frame's share of its bend sites' own blocks, for the
+    /// preconditioner's frame block: every site adds minus its coupling into
+    /// both of its frames. Run once per solve, after the Dirichlet pass, which
+    /// is the last writer of the blocks.
+    pub fn gather_site_self<D: Device>(&self, device: &mut D) -> FatalResult<()> {
         if self.slots == 0 {
             return Ok(());
         }
-        device.copy(self.row_sum.handle(), 0, self.self_block.handle(), 0, 9 * self.slots * size_of::<f32>())?;
+        device.fill_zero(self.site_self.handle(), 9 * self.slots * size_of::<f32>())?;
         if self.sites > 0 {
-            let args = CosseratRowSumSiteRowArgs {
+            let args = CosseratSiteSelfRowArgs {
                 bend_slots: self.bend_slots.handle(),
                 site_block: self.site_block.handle(),
-                row_sum: self.row_sum.handle(),
+                site_self: self.site_self.handle(),
                 count: self.sites as u32,
                 seam_arena_count: 0,
             };
             // Safety: every buffer is the state's, sized for its slots and sites.
-            unsafe { device.launch("cosserat.row_sum_site", &args, self.sites as u32) }?;
+            unsafe { device.launch("cosserat.site_self", &args, self.sites as u32) }?;
         }
         Ok(())
     }
@@ -518,7 +560,6 @@ impl State {
                 rest_darboux: c.rest_darboux.handle(),
                 quat: c.quat.handle(),
                 gradient: c.gradient.handle(),
-                self_block: c.self_block.handle(),
                 site_block: c.site_block.handle(),
                 count: sites as u32,
                 seam_arena_count: 0,
@@ -768,8 +809,8 @@ pub struct Blocks {
     pub coupling_from: Handle,
     pub coupling_to: Handle,
     pub site_block: Handle,
-    /// Each frame row's blocks summed ([`State::sum_frame_rows`]).
-    pub row_sum: Handle,
+    /// Each frame's share of its sites' own blocks ([`State::gather_site_self`]).
+    pub site_self: Handle,
     pub step: Handle,
 }
 
@@ -1087,6 +1128,11 @@ mod tests {
                         let value = f64::from(site[9 * k + i + 3 * j]);
                         h[next_t + i][prev_t + j] += value;
                         h[prev_t + j][next_t + i] += value;
+                        // The site's own blocks are minus its coupling on both
+                        // frames (`cosserat_bend_grad_hess`), and `self_block`
+                        // holds no share of them.
+                        h[next_t + i][next_t + j] -= value;
+                        h[prev_t + i][prev_t + j] -= value;
                     }
                 }
             }
@@ -1125,14 +1171,11 @@ mod tests {
                 if dt > 0.0 {
                     let length = f64::from(props[s].length);
                     let j = mass * length * length / 12.0;
-                    let w = axial_diff(&mul(&prev[s], &transpose(&prev2[s]))).map(|v| 0.5 * tr * v);
-                    let mut step = skew(w);
-                    for i in 0..3 {
-                        step[i][i] += 1.0;
-                    }
-                    let predicted = mul(&step, &prev[s]);
+                    // The last step's turn repeated exactly: exp(tr log(dR)).
+                    let turn = log(&mul(&prev[s], &transpose(&prev2[s]))).map(|v| tr * v);
+                    let predicted = mul(&exp(turn), &prev[s]);
                     let m0 = mul(&r[s], &transpose(&predicted));
-                    e -= j / (dt * dt) * (m0[0][0] + m0[1][1] + m0[2][2]);
+                    e -= j / (2.0 * dt * dt) * (m0[0][0] + m0[1][1] + m0[2][2]);
                 }
             }
             for (pair, rest, inv_len) in &self.chain.sites {
@@ -1170,6 +1213,41 @@ mod tests {
 
         /// The differenced gradient and the projected differenced Hessian.
         fn oracle(&self, frames: &[M3], prev: &[M3], prev2: &[M3], dt: f64, tr: f64) -> Assembled {
+            let raw = self.differenced(frames, prev, prev2, dt, tr);
+            Assembled { gradient: raw.gradient, hessian: psd_project(&raw.hessian) }
+        }
+
+        /// The oracle for a fixture holding one bend site and no other energy:
+        /// the differenced gradient, and the site's block in its exact form
+        /// [[S, -S], [-S, S]] with S the projected differenced block of the next
+        /// frame. The exact Hessian's coupling carries a further -/+ 1/2
+        /// skew(g), the torque's Lie bracket, which the kernel drops
+        /// (`cosserat_bend_grad_hess`); the gradient keeps it.
+        fn site_oracle(&self, frames: &[M3]) -> Assembled {
+            assert!(self.chain.shear == 0.0 && self.chain.sites.len() == 1, "one bend site only");
+            let raw = self.differenced(frames, frames, frames, 0.0, 1.0);
+            let nx = 3 * self.vertices;
+            let pair = self.chain.sites[0].0;
+            let (prev_t, next_t) = (nx + 3 * pair[0] as usize, nx + 3 * pair[1] as usize);
+            let block: Vec<Vec<f64>> = (0..3)
+                .map(|i| (0..3).map(|j| 0.5 * (raw.hessian[next_t + i][next_t + j] + raw.hessian[next_t + j][next_t + i])).collect())
+                .collect();
+            let s = psd_project(&block);
+            let n = raw.hessian.len();
+            let mut hessian = vec![vec![0.0; n]; n];
+            for i in 0..3 {
+                for j in 0..3 {
+                    hessian[next_t + i][next_t + j] = s[i][j];
+                    hessian[prev_t + i][prev_t + j] = s[i][j];
+                    hessian[next_t + i][prev_t + j] = -s[i][j];
+                    hessian[prev_t + i][next_t + j] = -s[i][j];
+                }
+            }
+            Assembled { gradient: raw.gradient, hessian }
+        }
+
+        /// The differenced gradient and the differenced Hessian, unprojected.
+        fn differenced(&self, frames: &[M3], prev: &[M3], prev2: &[M3], dt: f64, tr: f64) -> Assembled {
             let x0 = self.positions();
             let n = 3 * (self.vertices + self.slots);
             let f = |u: &[f64]| self.energy(u, &x0, frames, prev, prev2, dt, tr);
@@ -1191,7 +1269,7 @@ mod tests {
                         / (4.0 * hh * hh);
                 }
             }
-            Assembled { gradient, hessian: psd_project(&hessian) }
+            Assembled { gradient, hessian }
         }
     }
 
@@ -1259,7 +1337,7 @@ mod tests {
         let first = exp([0.1, 0.2, 0.3]);
         let frames = [first, mul(&exp([-0.2, 0.4, 0.1]), &first)];
         let got = fixture.assemble(&frames, &frames, &frames, 0.0, 1.0);
-        let want = fixture.oracle(&frames, &frames, &frames, 0.0, 1.0);
+        let want = fixture.site_oracle(&frames);
         check(&got, &want, "bend and twist");
     }
 
@@ -1276,6 +1354,28 @@ mod tests {
         let got = fixture.assemble(&frames, &prev, &prev2, 0.01, 0.8);
         let want = fixture.oracle(&frames, &prev, &prev2, 0.01, 0.8);
         check(&got, &want, "rotational inertia");
+    }
+
+    #[test]
+    fn a_frame_spinning_steadily_is_predicted_exactly() {
+        // A frame turning 1 rad a step about a fixed axis, as a rolling yarn's
+        // do at dt 0.01: at the turn the history predicts, the inertia exerts
+        // no torque. A first-order predictor puts the prediction at a turn of
+        // atan(sin 1) = 0.70 rad and pulls the frame back by 0.30 rad a step.
+        let mut fixture = Fixture::new(
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.25]],
+            Chain { shear: 0.0, bend: 0.0, twist: 0.0, sites: vec![] },
+        );
+        let axis = [0.6, 0.0, 0.8];
+        let spin = exp(axis);
+        let prev2 = [exp([0.2, -0.1, 0.4])];
+        let prev = [mul(&spin, &prev2[0])];
+        let frames = [mul(&spin, &prev[0])];
+        let got = fixture.assemble(&frames, &prev, &prev2, 0.01, 1.0);
+        let torque = got.gradient[6..9].iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let length = 0.25f64;
+        let scale = f64::from(EDGE_MASS) * length * length / 12.0 / (0.01 * 0.01);
+        assert!(torque < 1e-5 * scale, "a steady spin meets a torque {torque:e} (scale {scale:e})");
     }
 
     #[test]
@@ -1298,7 +1398,7 @@ mod tests {
         // gradient's x component on the next frame is positive. The rows are the
         // three vertices' nine, then slot 0 (the previous frame), then slot 1.
         assert!(got.gradient[12] > 1.0, "no restoring torque at pi - phi0: {:?}", &got.gradient[9..]);
-        let want = fixture.oracle(&mirror, &mirror, &mirror, 0.0, 1.0);
+        let want = fixture.site_oracle(&mirror);
         check(&got, &want, "bend and twist past a right angle");
     }
 

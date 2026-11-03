@@ -5,6 +5,17 @@
 
 #pragma once
 
+// THE PCG LATCH SLOTS, in the float array pcg.rs passes as `latch`: the freeze,
+// the direction combine's one-iteration-late copy of it, the mode (0 far,
+// 1 near) and the iterate the freeze fell on. Defined here because this file
+// is the first one pcg.kernel.cpp includes and the products read the freeze.
+enum : unsigned {
+    PCG_LATCH_FROZEN = 0u,
+    PCG_LATCH_COMBINE = 1u,
+    PCG_LATCH_MODE = 2u,
+    PCG_LATCH_AT = 3u
+};
+
 // A NEUTRAL KERNEL SOURCE. This file is plain C++ and belongs to no backend: no
 // preprocessor conditional, no macro of its own, and no spelling that only nvcc
 // or only the Metal shader compiler accepts. ppf-cts-compute/seam/kernelgen.py renders it
@@ -429,8 +440,13 @@ mat3_transpose_mul(const float *matrix,
     const float *x, float *result,
     float *scratch,
     float *curvature_total,
-    float *absolute_total, unsigned rows, unsigned lane,
-    unsigned threads, unsigned block) {
+    float *absolute_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    // A FROZEN PCG ITERATION (pcg.rs, `latch`) skips the product. Every lane
+    // reads the same flag, so the group returns whole.
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     const unsigned row = block * threads + lane;
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
@@ -466,6 +482,7 @@ mat3_transpose_mul(const float *matrix,
     [[seam::scratch(64)]] float *scratch,
     float *curvature_total,
     float *absolute_total,
+    const float *latch,
     unsigned rows,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
@@ -509,8 +526,13 @@ enum : unsigned { SPMV_ROW_LANES = 8 };
     const float *x, float *result,
     float *scratch,
     float *curvature_total,
-    float *absolute_total, unsigned rows, unsigned lane,
-    unsigned threads, unsigned block) {
+    float *absolute_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    // A FROZEN PCG ITERATION (pcg.rs, `latch`) skips the product. Every lane
+    // reads the same flag, so the group returns whole.
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     const unsigned row = (block * threads + lane) / SPMV_ROW_LANES;
     const unsigned row_lane = lane % SPMV_ROW_LANES;
     float magnitude = 0.0f;
@@ -601,6 +623,7 @@ operator_apply_dynamic_folded(
     [[seam::scratch(96)]] float *scratch,
     float *curvature_total,
     float *absolute_total,
+    const float *latch,
     unsigned rows,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
@@ -638,8 +661,13 @@ operator_apply_symmetric_folded(
     compute::atomic_float_t *result,
     float *scratch,
     float *curvature_total,
-    float *absolute_total, unsigned rows, unsigned lane,
-    unsigned threads, unsigned block) {
+    float *absolute_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    // A FROZEN PCG ITERATION (pcg.rs, `latch`) skips the product. Every lane
+    // reads the same flag, so the group returns whole.
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     const unsigned row = (block * threads + lane) / SPMV_ROW_LANES;
     const unsigned row_lane = lane % SPMV_ROW_LANES;
     float magnitude = 0.0f;
@@ -747,6 +775,7 @@ operator_apply_symmetric_folded(
     [[seam::scratch(96)]] float *scratch,
     float *curvature_total,
     float *absolute_total,
+    const float *latch,
     unsigned rows,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,
@@ -983,8 +1012,13 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
     const float *x, float *result,
     float *scratch,
     float *curvature_total,
-    float *absolute_total, unsigned rows, unsigned lane,
-    unsigned threads, unsigned block) {
+    float *absolute_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    // A FROZEN PCG ITERATION (pcg.rs, `latch`) skips the product. Every lane
+    // reads the same flag, so the group returns whole.
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
     const unsigned row = block * threads + lane;
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
@@ -1028,6 +1062,7 @@ operator_apply_difference_folded(
     [[seam::scratch(64)]] float *scratch,
     float *curvature_total,
     float *absolute_total,
+    const float *latch,
     unsigned rows,
     [[seam::lane]] unsigned lane,
     [[seam::width]] unsigned threads,

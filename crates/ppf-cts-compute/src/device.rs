@@ -534,6 +534,29 @@ impl<T: Pod> Buffer<T> {
         count: usize,
         label: AllocLabel,
     ) -> Result<Sizing, Fault> {
+        self.size_policy(device, count, label, false)
+    }
+
+    /// [`Buffer::size`] with the quarter of headroom on the first allocation
+    /// too, for a fresh buffer that replaces one that grew. Without it a
+    /// buffer rebuilt per growth would be exact and grow again at once.
+    pub fn size_with_headroom(
+        &mut self,
+        device: &mut impl Device,
+        count: usize,
+        label: AllocLabel,
+    ) -> Result<(), Fault> {
+        self.size_policy(device, count, label, true)?;
+        Ok(())
+    }
+
+    fn size_policy(
+        &mut self,
+        device: &mut impl Device,
+        count: usize,
+        label: AllocLabel,
+        headroom_first: bool,
+    ) -> Result<Sizing, Fault> {
         let width = std::mem::size_of::<T>();
         // FLOORED AT [`MIN_ALIGN`], which is a request the seam sanctions rather
         // than a rounding: a one-byte element needs at most its own alignment,
@@ -577,9 +600,16 @@ impl<T: Pod> Buffer<T> {
         // `large-*` scenes can afford where a doubling might not, and still
         // turns a buffer that grows by ones into a growth every quarter of its
         // length rather than every step.
+        //
+        // THE FIRST ALLOCATION IS EXACT, and only a growth takes the quarter.
+        // Most buffers are sized once from the mesh and never grow, so headroom
+        // on them was a fifth of their bytes held for nothing. A buffer that
+        // does grow pays at most one more growth over the whole run, and never
+        // fewer.
         let want = count + count / 4;
         if self.handle.is_none() {
-            self.handle = device.alloc(want, width, align, label)?;
+            let first = if headroom_first { want } else { count };
+            self.handle = device.alloc(first, width, align, label)?;
         } else if count > self.handle.allocated as usize {
             // AGAINST THE CAPACITY, NOT THE LENGTH. A `grow` refuses to shrink,
             // so a buffer sized down and then part way back up would be asking
@@ -2825,9 +2855,15 @@ pub(crate) fn assert_a_prefix_upload_names_only_what_it_carried(device: &mut imp
 #[cfg(test)]
 pub(crate) fn assert_a_readback_answers_only_after_a_download(device: &mut impl Device) {
     let mut readback: ReadbackBuffer<u32> = ReadbackBuffer::default();
+    // FIVE FIRST, THEN FOUR, so the capacity is five and the growth to five at
+    // the end of this test is inside it. A first sizing is exact.
+    readback
+        .size(device, 5, AllocLabel("test.readback"))
+        .expect("five words");
     readback
         .size(device, 4, AllocLabel("test.readback"))
         .expect("four words");
+    readback.download(device).expect("the reused sizing is made current");
 
     // SIZED AND NOT YET DISPATCHED, so the mirror is current: both halves were
     // zeroed by `size`, and a caller reading here gets the zero every other
@@ -2912,10 +2948,10 @@ pub(crate) fn assert_a_readback_answers_only_after_a_download(device: &mut impl 
     // put the two targets on different bytes after this very download, which is
     // the fork this rule exists to prevent, so the assertion is that both
     // answer the same thing rather than that they answer any particular thing.
-    // FIVE, NOT SIX, AND THE FIGURE IS THE POINT. `size(4)` asks the allocator
-    // for `4 + 4 / 4`, so the capacity is five: a growth to five is inside it
-    // and reuses the block, while a growth to six exceeds it and is a fresh
-    // allocation the sizing zeroes. Only the first is the case this asserts.
+    // FIVE, NOT SIX, AND THE FIGURE IS THE POINT. The first sizing asked for
+    // five, so the capacity is five: a growth to five is inside it and reuses
+    // the block, while a growth to six exceeds it and is a fresh allocation
+    // the sizing zeroes. Only the first is the case this asserts.
     readback
         .size(device, 5, AllocLabel("test.readback"))
         .expect("a growth inside the capacity");

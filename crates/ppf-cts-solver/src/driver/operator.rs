@@ -384,6 +384,7 @@ impl Operator {
         result: ppf_cts_compute::Handle,
         curvature_total: ppf_cts_compute::Handle,
         absolute_total: ppf_cts_compute::Handle,
+        latch: ppf_cts_compute::Handle,
     ) -> Result<u32, Fault> {
         let rows = self.fixed.rows;
         assert_eq!(self.fixed.offset.size as usize, rows as usize + 1);
@@ -426,6 +427,7 @@ impl Operator {
                 result,
                 curvature_total,
                 absolute_total,
+                latch,
                 rows,
                 count: groups,
                 seam_arena_count: 0,
@@ -486,6 +488,7 @@ impl Operator {
                     result,
                     curvature_total,
                     absolute_total,
+                    latch,
                     rows,
                     count: dynamic_groups,
                     seam_arena_count: 0,
@@ -513,6 +516,7 @@ impl Operator {
                     result,
                     curvature_total,
                     absolute_total,
+                    latch,
                     rows,
                     count: dynamic_groups,
                     seam_arena_count: 0,
@@ -532,6 +536,7 @@ impl Operator {
                     result,
                     curvature_total,
                     absolute_total,
+                    latch,
                     rows,
                     count: groups,
                     seam_arena_count: 0,

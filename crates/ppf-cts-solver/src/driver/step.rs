@@ -1683,7 +1683,7 @@ pub unsafe fn advance<D: Device>(
             // the vertex rows and the frame rows are one system. PDRD bodies, a
             // lock and the Schwarz preconditioner are refused alongside it at
             // `initialize()`, so none of the branches below has to compose with it.
-            state.cosserat.sum_frame_rows(device)?;
+            state.cosserat.gather_site_self(device)?;
             let frames = state.cosserat.blocks(removed > 0);
             pcg::solve_cosserat(
                 device,
@@ -1698,6 +1698,7 @@ pub unsafe fn advance<D: Device>(
                 &mut state.pcg_cosserat,
                 prm.cg_tol,
                 prm.cg_max_iter,
+                state.friction_memory.frame_coupling(state.positions.handle(), state.dof_mask.handle(), frictional),
             )?
         } else if pdrd_bodies > 0 {
             // THE REDUCED SOLVE, taken whenever

@@ -82,7 +82,7 @@ use super::kernels::{
     VecBlockSumAbsCooperativeArgs, VecBlockSumCooperativeArgs,
     VecBlockSumDualCooperativeArgs, VecBlockSumPairCooperativeArgs,
     VecCombineArgs,
-    VecCombineIndirectArgs,
+    VecCombineIndirectArgs, VecFillArgs,
 };
 // Named only by the test that drives the resident alpha step on its own.
 #[cfg(test)]
@@ -280,7 +280,16 @@ mod slot {
     /// reused by every such fold because each is read before the next is
     /// encoded.
     pub const FOLD_SCRATCH: usize = 11;
-    pub const COUNT: usize = 12;
+    /// THE LATCH, four floats the device's iteration kernels read and the beta
+    /// fold writes (see `solve`): the freeze, the direction combine's copy of
+    /// it one iteration late, the mode (0 far, 1 near) and the iterate the
+    /// freeze fell on. Their order is `PCG_LATCH_*` in spmv.kernel.cpp.
+    pub const LATCH: usize = 12;
+    pub const LATCH_FROZEN: usize = 12;
+    pub const LATCH_COMBINE: usize = 13;
+    pub const LATCH_MODE: usize = 14;
+    pub const LATCH_AT: usize = 15;
+    pub const COUNT: usize = 16;
 }
 
 /// Where each verdict's cause lives, which is a SECOND buffer because a cause
@@ -721,6 +730,7 @@ unsafe fn encode_combine_indirect(
     destination: ppf_cts_compute::Handle,
     a: f32,
     coefficient_b: ppf_cts_compute::Handle,
+    skip: ppf_cts_compute::Handle,
     n: usize,
 ) -> Result<(), Fault> {
     if n == 0 {
@@ -732,6 +742,7 @@ unsafe fn encode_combine_indirect(
         destination,
         a,
         coefficient_b,
+        skip,
         count: n as u32,
         seam_arena_count: 0,
     };
@@ -1065,6 +1076,110 @@ pub fn solve<D: Device>(
     b: ppf_cts_compute::Handle,
     x: ppf_cts_compute::Handle,
     work: &mut Workspace,
+    sweep: Option<Sweep<'_>>,
+    tolerance: f32,
+    max_iterations: u32,
+) -> Result<Report, Fault> {
+    if sweep.is_none() && latch_check_requested() {
+        return solve_checked(device, op, inverse_diagonal, b, x, work, tolerance, max_iterations);
+    }
+    solve_scheduled(device, op, inverse_diagonal, b, x, work, sweep, tolerance, max_iterations, true)
+}
+
+/// `PPF_PCG_LATCH_CHECK`: solve every fused system twice, latched and plain,
+/// from the same start, and compare the two answers bit for bit. A diagnostic
+/// of the latch, not a mode: the plain answer is the one returned.
+///
+/// `PPF_PCG_LATCH_CHECK=control` makes the first solve plain too. Above
+/// `operator::SYM_MIN_ROWS` the product scatters with float atomics, so two
+/// solves of one system are two draws and can differ with no latch involved;
+/// the control measures that floor.
+fn latch_check_requested() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PPF_PCG_LATCH_CHECK").is_some())
+}
+
+fn latch_check_is_control() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PPF_PCG_LATCH_CHECK").is_ok_and(|v| v == "control"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_checked<D: Device>(
+    device: &mut D,
+    op: &Operator,
+    inverse_diagonal: ppf_cts_compute::Handle,
+    b: ppf_cts_compute::Handle,
+    x: ppf_cts_compute::Handle,
+    work: &mut Workspace,
+    tolerance: f32,
+    max_iterations: u32,
+) -> Result<Report, Fault> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SOLVES: AtomicU64 = AtomicU64::new(0);
+    static DIFFER: AtomicU64 = AtomicU64::new(0);
+    static LATCHED_NS: AtomicU64 = AtomicU64::new(0);
+    static PLAIN_NS: AtomicU64 = AtomicU64::new(0);
+    let n = 3 * op.rows() as usize;
+    let mut start = ReadbackBuffer::<f32>::default();
+    let mut latched_x = ReadbackBuffer::<f32>::default();
+    start.size(device, n.max(1), AllocLabel("pcg.check.start"))?;
+    latched_x.size(device, n.max(1), AllocLabel("pcg.check.latched"))?;
+    // `1 x + 0 x` copies every finite value and either zero bit for bit.
+    let copy = |device: &mut D, from: ppf_cts_compute::Handle, to: ppf_cts_compute::Handle| {
+        device.run("pcg.check.copy", |encoder| unsafe {
+            encode_combine_raw(encoder, from, from, to, 1.0, 0.0, n)
+        })
+    };
+    let start_h = start.handle();
+    copy(device, x, start_h)?;
+    let clock = std::time::Instant::now();
+    let latched = solve_scheduled(
+        device, op, inverse_diagonal, b, x, work, None, tolerance, max_iterations,
+        !latch_check_is_control())?;
+    LATCHED_NS.fetch_add(clock.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    let latched_h = latched_x.handle();
+    copy(device, x, latched_h)?;
+    copy(device, start_h, x)?;
+    let clock = std::time::Instant::now();
+    let plain = solve_scheduled(
+        device, op, inverse_diagonal, b, x, work, None, tolerance, max_iterations, false)?;
+    PLAIN_NS.fetch_add(clock.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    copy(device, x, start_h)?;
+    start.download(device)?;
+    latched_x.download(device)?;
+    let same_x = start.host().iter().zip(latched_x.host()).all(|(p, q)| p.to_bits() == q.to_bits());
+    let same_report = plain.iterations == latched.iterations
+        && plain.relative_residual.to_bits() == latched.relative_residual.to_bits()
+        && plain.outcome == latched.outcome;
+    let solves = SOLVES.fetch_add(1, Ordering::Relaxed) + 1;
+    if !(same_x && same_report) {
+        let differ = DIFFER.fetch_add(1, Ordering::Relaxed) + 1;
+        eprintln!(
+            "PCG_LATCH_CHECK MISMATCH solve {solves}: x same {same_x}, iterations {} vs {} \
+             (latched vs plain), residual {:e} vs {:e}, outcome {:?} vs {:?}; {differ} of {solves} differ",
+            latched.iterations, plain.iterations, latched.relative_residual,
+            plain.relative_residual, latched.outcome, plain.outcome
+        );
+    } else if solves.is_power_of_two() || solves % 100 == 0 {
+        eprintln!(
+            "PCG_LATCH_CHECK ok: {solves} solves, {} differ; latched {:.1} ms, plain {:.1} ms",
+            DIFFER.load(Ordering::Relaxed),
+            LATCHED_NS.load(Ordering::Relaxed) as f64 / 1e6,
+            PLAIN_NS.load(Ordering::Relaxed) as f64 / 1e6
+        );
+    }
+    Ok(plain)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn solve_scheduled<D: Device>(
+    device: &mut D,
+    op: &Operator,
+    inverse_diagonal: ppf_cts_compute::Handle,
+    b: ppf_cts_compute::Handle,
+    x: ppf_cts_compute::Handle,
+    work: &mut Workspace,
     // THE PRECONDITIONER, when it is not the block-diagonal one.
     //
     // `None` is block-Jacobi, the default, and stays the fast path: one
@@ -1075,6 +1190,7 @@ pub fn solve<D: Device>(
     mut sweep: Option<Sweep<'_>>,
     tolerance: f32,
     max_iterations: u32,
+    latch: bool,
 ) -> Result<Report, Fault> {
     let rows = op.rows();
     let n = 3 * rows as usize;
@@ -1256,11 +1372,73 @@ pub fn solve<D: Device>(
     let mut finished: Option<Report> = None;
     let mut next_check = 1u32;
     let mut iteration = 0u32;
+    // THE LATCH: the device decides when the host has to look.
+    //
+    // The host still checks on the schedule above (every
+    // `RESID_CHECK_STRIDE` iterates while far, every iterate once near) and
+    // still decides everything there, with the same tests. What changes is
+    // that a scheduled check where nothing can happen costs no round trip:
+    // the beta fold freezes the solve at a scheduled iterate only when the
+    // host's test COULD act there (converged, near, or a breakdown latched),
+    // every kernel of the iteration skips while frozen, and the host replays
+    // many iterations per submit, reading the iterate the freeze fell on.
+    // A frozen iteration changes nothing, so the host resumes from exactly
+    // the state it would have reached, and a spurious freeze costs one look.
+    //
+    // THE DEVICE TESTS ARE THE HOST'S MADE LOOSE AND DIVISION-FREE:
+    // `err < fl(fl(tol err0) (1 + 2^-20))` holds whenever the host's
+    // `fl(err / err0) < tol` does, so the device never lets a check pass
+    // that the host would have acted on.
+    //
+    // The two loops therefore stop at the same iterate with the same outcome,
+    // whatever extra looks the batch ends add. Only the fused update has the
+    // latch; a sweep preconditioner keeps the plain schedule, and its beta step
+    // never freezes.
+    //
+    // THE BOUNDS ARE NaN WHEN THE LATCH IS OFF, which the beta fold reads as
+    // disarmed, so the plain schedule never meets a freeze it does not clear.
+    // It is off for a sweep preconditioner, and for a tolerance or initial
+    // residual outside the finite, positive range the argument above assumes.
+    //
+    // AND IT IS ON ONLY WHERE A REPLAY IS NOT RE-ENCODED. The latch trades a
+    // round trip per check for a few frozen iterations after the last one; a
+    // backend that replays a captured graph runs those for almost nothing,
+    // while one that re-encodes every replay pays for each, and measured on
+    // Metal that cost more (drape +4 %, woven +3 % PCG time) than the round
+    // trips it saved. The answer is the same bits either way.
+    let latched = latch
+        && device.info().supports_deferred_regions
+        && sweep.is_none()
+        && err0.is_finite()
+        && tolerance.is_finite()
+        && tolerance > 0.0;
+    let widen = 1.0f32 + 1.0f32 / 1_048_576.0;
+    let (conv_bound, near_bound) = if latched {
+        ((tolerance * err0) * widen, ((NEAR_TOL_FACTOR * tolerance) * err0) * widen)
+    } else {
+        (f32::NAN, f32::NAN)
+    };
+    // Scheduled checks per submit; grows while nothing happens, so a long
+    // solve pays few round trips and a short one overshoots little.
+    const LATCH_FAR_FIRST: u32 = 2;
+    const LATCH_FAR_MOST: u32 = 8;
+    const LATCH_NEAR_FIRST: u32 = 4;
+    const LATCH_NEAR_MOST: u32 = 16;
+    let mut near_mode = false;
+    let mut checks = LATCH_FAR_FIRST;
     while iteration < max_iterations {
-        let target = next_check.min(max_iterations);
+        let target = if !latched {
+            next_check.min(max_iterations)
+        } else if near_mode {
+            (iteration + checks).min(max_iterations)
+        } else {
+            (next_check + RESID_CHECK_STRIDE * (checks - 1)).min(max_iterations)
+        };
         let batch = target - iteration;
         let _first = iteration + 1;
         iteration = target;
+        let latch_slot = scalar.span(slot::LATCH, 4);
+        let combine_skip_slot = scalar.span(slot::LATCH_COMBINE, 1);
         let ap_h = ap.handle();
         let r_h = r.handle();
         let z_h = z.handle();
@@ -1307,7 +1485,7 @@ pub fn solve<D: Device>(
                 // 320, then 2, then 1, three dispatches for each of two chains
                 // every iteration.
                 let groups =
-                    op.encode_apply_folded(encoder, p_h, ap_h, curvature_h, absolute_h)?;
+                    op.encode_apply_folded(encoder, p_h, ap_h, curvature_h, absolute_h, latch_slot)?;
                 // p^T A p, and the scale its round-off bound is taken from.
                 //
                 // THE SCALE COMES OUT OF THE APPLY ITSELF: the operator sums
@@ -1342,6 +1520,7 @@ pub fn solve<D: Device>(
                     break_value: break_value_slot,
                     break_iteration: break_iter_slot,
                     break_fired: break_fired_slot,
+                    latch: latch_slot,
                     count: 1,
                     seam_arena_count: 0,
                 };
@@ -1383,6 +1562,7 @@ pub fn solve<D: Device>(
                             preconditioned: z_h,
                             product_total: terms.product_handle(),
                             residual_total: terms.magnitude_handle(),
+                            latch: latch_slot,
                             rows,
                             count: update_groups,
                             seam_arena_count: 0,
@@ -1474,13 +1654,16 @@ pub fn solve<D: Device>(
                             break_value: break_value_slot,
                             break_iteration: break_iter_slot,
                             break_fired: break_fired_slot,
+                            latch: latch_slot,
+                            conv_bound,
+                            near_bound,
                             count: 1,
                             seam_arena_count: 0,
                         };
                         encoder.groups(&beta_fold_args, 1, FOLD_LANES)?;
                     }
                 }
-                encode_combine_indirect(encoder, z_h, p_h, p_h, 1.0, beta_slot, n)?;
+                encode_combine_indirect(encoder, z_h, p_h, p_h, 1.0, beta_slot, combine_skip_slot, n)?;
             }
             Ok(())
             })?);
@@ -1498,6 +1681,12 @@ pub fn solve<D: Device>(
         // iteration pays and this readback rides it rather than adding a
         // second.
         scalar.download(device)?;
+        // A FREEZE MOVES THE CHECK BACK to the iterate it fell on, which is a
+        // scheduled one; everything after it in the batch did nothing.
+        let frozen = scalar.host()[slot::LATCH_FROZEN] != 0.0;
+        if frozen {
+            iteration = scalar.host()[slot::LATCH_AT] as u32;
+        }
         residual = scalar.host()[slot::ERR] / err0;
         // THE INT LATCH IS READ ONLY WHEN IT HOLDS SOMETHING. Both guards
         // announce a breakdown by writing `BREAK_FIRED` into the scalar buffer
@@ -1589,6 +1778,39 @@ pub fn solve<D: Device>(
             stride = 1;
         }
         next_check = iteration + stride;
+        if latched {
+            let was_near = near_mode;
+            near_mode = stride == 1;
+            if frozen || near_mode != was_near {
+                // Unfreeze and tell the device the mode, in one submit; this
+                // happens a few times a solve.
+                let mode = if near_mode { 1.0 } else { 0.0 };
+                let clear = VecFillArgs {
+                    array: scalar.span(slot::LATCH_FROZEN, 2),
+                    value: 0.0,
+                    count: 2,
+                    seam_arena_count: 0,
+                };
+                let set_mode = VecFillArgs {
+                    array: scalar.span(slot::LATCH_MODE, 1),
+                    value: mode,
+                    count: 1,
+                    seam_arena_count: 0,
+                };
+                device.run("pcg.latch", |encoder| {
+                    // Safety: both spans are slots of the scalar buffer, which
+                    // outlives this submit.
+                    unsafe {
+                        encoder.elements(&clear, 2)?;
+                        encoder.elements(&set_mode, 1)
+                    }
+                })?;
+                checks = if near_mode { LATCH_NEAR_FIRST } else { LATCH_FAR_FIRST };
+            } else {
+                let most = if near_mode { LATCH_NEAR_MOST } else { LATCH_FAR_MOST };
+                checks = (checks * 2).min(most);
+            }
+        }
     }
 
     if let Some(region) = region {
@@ -1849,6 +2071,41 @@ impl DotTerms<'_> {
         Ok((dot, scale))
     }
 
+    /// The Cauchy-Schwarz surrogate taken GROUP BY GROUP and summed:
+    /// `|a_v|_2 |b_v|_2 + |a_f|_2 |b_f|_2` over the first `split` rows of three
+    /// and the rest. It is the least Cauchy-Schwarz bound over every rescaling
+    /// of one group's units against the other's, which is why the augmented
+    /// Cosserat solve, whose vector holds vertex rows in meters and frame rows
+    /// in radians, takes it and never the single `|p|_2 |Ap|_2`: with a long
+    /// step a direction's frame rows are large where `A p` is small and its
+    /// vertex rows the reverse, so the single product measures the two groups
+    /// against each other rather than any round-off. See `solve_cosserat`.
+    fn grouped_norm_product<D: Device>(
+        &mut self,
+        device: &mut D,
+        a: ppf_cts_compute::Handle,
+        b: ppf_cts_compute::Handle,
+        split: usize,
+        fold: &Buffer<f32>,
+        scalars: &mut ReadbackBuffer<f32>,
+    ) -> Result<f32, Fault> {
+        let rows = self.product.len();
+        assert!(split <= rows, "a group split past the vector: {split} of {rows} rows");
+        let mut squares = [[0.0f64; 2]; 2];
+        for (k, v) in [a, b].into_iter().enumerate() {
+            self.fill(device, v, v, 3 * rows)?;
+            for (g, (start, count)) in [(0, split), (split, rows - split)].into_iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let source = self.product.span(start, count);
+                squares[k][g] = f64::from(fold_scalar(device, source, count, fold, scalars)?);
+            }
+        }
+        let bound = (squares[0][0].sqrt() * squares[1][0].sqrt()) + (squares[0][1].sqrt() * squares[1][1].sqrt());
+        Ok(bound as f32)
+    }
+
     /// `|a|_2 |b|_2`, the scale `pcg_curvature_noise` is given on a path whose
     /// operator apply produces no `sum|contribution|` beside its dot.
     ///
@@ -1880,6 +2137,25 @@ impl DotTerms<'_> {
         let bb = self.dot(device, b, b, n, fold, scalars)?;
         Ok(((aa as f64).sqrt() * (bb as f64).sqrt()) as f32)
     }
+}
+
+/// The sum of `count` floats at `source`, read back. Sequential on purpose:
+/// the fold is read back before anything else is encoded, so every caller can
+/// use the one scratch slot.
+fn fold_scalar<D: Device>(
+    device: &mut D,
+    source: ppf_cts_compute::Handle,
+    count: usize,
+    fold: &Buffer<f32>,
+    scalars: &mut ReadbackBuffer<f32>,
+) -> Result<f32, Fault> {
+    let out = scalars.span(slot::FOLD_SCRATCH, 1);
+    device.run("pcg.dot", |encoder| {
+        // Safety: the source and the scratch outlive the call.
+        unsafe { encode_fold(encoder, source, count, fold, out, false) }
+    })?;
+    scalars.download(device)?;
+    Ok(scalars.host()[slot::FOLD_SCRATCH])
 }
 
 #[cfg(test)]
@@ -4309,7 +4585,9 @@ pub unsafe fn solve_cosserat<D: Device>(
     aug: &mut CosseratWorkspace,
     tolerance: f32,
     max_iterations: u32,
+    friction: Option<super::friction_memory::FrameCoupling>,
 ) -> super::scene::FatalResult<Report> {
+    use super::kernels::FrictionFrameApplyArgs;
     use super::kernels::{
         CosseratApplySiteRowArgs, CosseratApplySlotRowArgs, CosseratChainAddRowArgs,
         CosseratChainDotRowArgs, CosseratProjectFixedRowArgs, CosseratRollRowArgs,
@@ -4345,10 +4623,9 @@ pub unsafe fn solve_cosserat<D: Device>(
     let Workspace { row_absolute, row_curvature, verdict, verdict_cause, scalar: scalars, .. } =
         work;
     let mut terms = DotTerms { product, magnitude };
-    // The apply's per-row magnitude and curvature sums are written and not
-    // read: this path takes its round-off scale from the Cauchy-Schwarz
-    // surrogate, as the locked and reduced solves do.
-    let discard_absolute = row_absolute.handle();
+    // The apply's per-row magnitude sum is read after each apply of a search
+    // direction (the curvature bound below); its per-row curvature sum is not.
+    let apply_absolute = row_absolute.handle();
     let discard_curvature = row_curvature.handle();
 
     let project = |device: &mut D, vector: ppf_cts_compute::Handle| -> Result<(), Fault> {
@@ -4376,14 +4653,14 @@ pub unsafe fn solve_cosserat<D: Device>(
             device,
             input.span(0, nx),
             output.span(0, nx),
-            discard_absolute,
+            apply_absolute,
             discard_curvature,
         )?;
         let slot_args = CosseratApplySlotRowArgs {
             edge_nodes: frames.edge_nodes,
-            // The row sum, which the site pass's differences complete
-            // (`cosserat_apply_slot_row`).
-            self_block: frames.row_sum,
+            // The frame's own block without its sites' share, which the site
+            // pass's differences complete (`cosserat_apply_slot_row`).
+            self_block: frames.self_block,
             coupling_from: frames.coupling_from,
             coupling_to: frames.coupling_to,
             input: input.handle(),
@@ -4405,6 +4682,27 @@ pub unsafe fn solve_cosserat<D: Device>(
                 seam_arena_count: 0,
             };
             device.launch("cosserat.cg.apply_site", &site_args, frames.sites)?;
+        }
+        // A FRAMED PAIR'S FRICTION across its frames, matrix free
+        // (`friction_frame_apply`): the rest of its `J^T K J` beyond the vertex
+        // block the matrix holds and the frames' own blocks.
+        if let Some(f) = friction {
+            let friction_args = FrictionFrameApplyArgs {
+                x0: f.x0,
+                record_vertex: f.record_vertex,
+                record_float: f.record_float,
+                record_count: f.record_count,
+                record_capacity: f.capacity,
+                frozen_stiffness: f.frozen_stiffness,
+                dof_mask: f.dof_mask,
+                input: input.handle(),
+                output: output.handle(),
+                absolute: apply_absolute,
+                theta_base,
+                count: f.capacity,
+                seam_arena_count: 0,
+            };
+            device.launch("friction_frame.apply", &friction_args, f.capacity)?;
         }
         project(device, output.handle())
     };
@@ -4525,9 +4823,9 @@ pub unsafe fn solve_cosserat<D: Device>(
     {
         let slot_args = CosseratApplySlotRowArgs {
             edge_nodes: frames.edge_nodes,
-            // The row sum, which the site pass's differences complete
-            // (`cosserat_apply_slot_row`).
-            self_block: frames.row_sum,
+            // The frame's own block without its sites' share, which the site
+            // pass's differences complete (`cosserat_apply_slot_row`).
+            self_block: frames.self_block,
             coupling_from: frames.coupling_from,
             coupling_to: frames.coupling_to,
             input: coarse_in.handle(),
@@ -4563,6 +4861,7 @@ pub unsafe fn solve_cosserat<D: Device>(
         fixed_value: op.fixed.value,
         row_count: op.fixed.rows,
         self_block: frames.self_block,
+        site_self: frames.site_self,
         coupling_from: frames.coupling_from,
         coupling_to: frames.coupling_to,
         factor: frames.factor,
@@ -4617,7 +4916,21 @@ pub unsafe fn solve_cosserat<D: Device>(
     for iteration in 1..=max_iterations {
         apply(device, p, ap)?;
         let pap = terms.dot(device, p.handle(), ap.handle(), dim, fold, scalars)?;
-        let absolute_dot = terms.norm_product(device, p.handle(), ap.handle(), dim, fold, scalars)?;
+        // THE ROUND-OFF SCALE IS THE VERTEX OPERATOR'S OWN `sum|contribution|`
+        // PLUS THE GROUPED CAUCHY-SCHWARZ BOUND, and neither half may go.
+        //
+        // The vertex operator forms `sum|contribution|` beside its product, so
+        // the round-off INSIDE its rows is measured, not bounded: stiff
+        // stuck-friction rows cancel there, and no Cauchy-Schwarz product of `p`
+        // and `A p` sees that. The frame rows' terms form no such sum and take
+        // the grouped bound (vertex rows, then frame rows). A single
+        // `|p|_2 |Ap|_2` over the whole vector would measure the meter rows
+        // against the radian rows instead: a frictionless Cosserat yarn over a
+        // drum then truncates at the first iteration of nearly every solve and
+        // hangs there instead of sliding off.
+        let vertex_absolute = fold_scalar(device, row_absolute.handle(), rows as usize, fold, scalars)?;
+        let frame_bound = terms.grouped_norm_product(device, p.handle(), ap.handle(), rows as usize, fold, scalars)?;
+        let absolute_dot = vertex_absolute + frame_bound;
         let scalar = pcg_alpha(device, verdict, verdict_cause, rz, pap, absolute_dot)?;
         if scalar.cause != PCG_BREAK_NONE {
             if scalar.cause == PCG_BREAK_PAP {

@@ -147,8 +147,27 @@ fn grow_keeping<T: ppf_cts_compute::Pod, D: Device>(
     if buffer.len() >= count {
         return Ok(());
     }
+    // IN PLACE WHEN THE ALLOCATION ALREADY HOLDS `count`. The length check
+    // above is against the last request, not the capacity, so a slab creeping
+    // up by a few blocks used to be allocated, zeroed and copied again on
+    // every Newton iteration. Same contents as the copy below: the first
+    // `keep` kept, the rest of `count` zero, and never more allocations.
+    let capacity = buffer.handle().allocated as usize;
+    if !buffer.handle().is_none() && count <= capacity {
+        assert!(keep <= buffer.len(), "grow_keeping: keep {keep} past length {}", buffer.len());
+        let width = std::mem::size_of::<T>();
+        buffer.size(device, count, label)?;
+        let handle = buffer.handle();
+        // Safety: the span [keep, count) lies inside the live allocation, and
+        // the run waits before returning.
+        device.run("csr.grow_keeping", |encoder| unsafe {
+            encoder.fill_raw(handle, keep * width, (count - keep) * width, 0)
+        })?;
+        return Ok(());
+    }
     let mut next: Buffer<T> = Buffer::default();
-    next.size(device, count, label)?;
+    // A growth, so it takes the headroom.
+    next.size_with_headroom(device, count, label)?;
     if keep > 0 {
         device.copy(
             next.handle(),
