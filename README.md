@@ -944,6 +944,7 @@ Below, we describe how to deploy our solver on major cloud services. These instr
 - [*New Simulation Method To Achieve Accuracy In Collision Physics*](https://80.lv/articles/new-simulation-method-to-achieve-accuracy-in-collision-physics) by Amber Rutherford on [80 Level](https://80.lv/).
 - [*New Research Might Have Finally Solved the Clipping Bug*](https://www.live-laugh-love.world/blog/game-collision-bugs-solution/) by LLL Inc.
 - [*New Open-Source Physics Engine For Blender Released*](https://80.lv/articles/new-open-source-physics-engine-for-blender-released) on [80 Level](https://80.lv/).
+- [*Dancing Skeleton with Realistic Fabric Simulation in Blender*](https://80.lv/articles/dancing-skeleton-with-realistic-fabric-simulation-in-blender) on [80 Level](https://80.lv/).
 - [*The Official Blender Add-on for ZOZO's Contact Solver - An Open-Source Physics Solver*](https://www.pixelsham.com/2026/05/20/the-official-blender-add-on-for-zozos-contact-solver-an-open-source-physics-solver/) on [PixelSham](https://www.pixelsham.com/).
 - [*ZOZO's Contact Solver Blender Add-on 2026*](https://3dnchu.com/archives/zozos-contact-solver-b3d/) (Japanese article) on [3D人-3dnchu-](https://3dnchu.com/).
 - [*ZOZO Releases Open-Source High-Precision Physics Simulation "ppf-contact-solver", Enabling Large-Scale Cloth Simulation from Blender*](https://modelinghappy.com/archives/68744) (Japanese article) on [MODELING HAPPY](https://modelinghappy.com/).
