@@ -218,17 +218,6 @@
     float *stiffness, float *damping,
     unsigned element, unsigned count);
 
-[[seam::entry(count)]] void shell_bend_stiffness(
-    const float *bend,
-    const float *warp,
-    const float *weft,
-    const float *sin2,
-    const float *length,
-    const float *area,
-    const float *areal_density,
-    float *stiffness,
-    unsigned count);
-
 // The areal density with the hinge's four vertices already gathered.
 //
 // A COMPOSITION AND NOTHING ELSE. It rebuilds the two four-element arrays the
@@ -277,28 +266,3 @@
     float *areal_density,
     unsigned count);
 
-// The entry point, declared once and rendered for four targets: the
-// `__global__` nvcc compiles, the `kernel void` the Metal shader compiler
-// compiles, the `shell_bend_areal_density_gathered_entry` shim a host C++
-// compiler compiles, and the Rust `#[repr(C)]` twin the driver fills.
-//
-// AN INDIRECT GATHER, AND THE BOUND IS WHAT THE ENTRY FORM ADDS. The two
-// per-vertex arrays are read at the hinge's own four slots, so a slot is DATA
-// rather than the thread index and the `[[seam::count]]` guard says nothing
-// about it. Metal returns 0.0 for an out-of-bounds read rather than faulting,
-// which would turn a corrupt hinge index into a plausible stiffness instead of
-// a stopped run, so `vertex_count` is declared and the entry checks every slot
-// against it. A caller that subscripted the two arrays itself would carry no
-// such check.
-//
-// BOTH ARRAYS ARE READ AT THE SAME SLOTS, which is what lets one index list
-// serve the mass and the area. The hinge is read in MESH order here, not in the
-// (2, 1, 0, 3) order the dihedral math wants, for the fp32 summation reason the
-// body above states; the permutation happens after this pass and not before.
-[[seam::entry(count)]] void shell_bend_areal_density_gathered(
-    [[seam::through]] const float *vertex_mass,
-    [[seam::through]] const float *vertex_area,
-    [[seam::indices(4)]] const unsigned *hinge,
-    [[seam::bound]] unsigned vertex_count,
-    float *areal_density,
-    unsigned count);

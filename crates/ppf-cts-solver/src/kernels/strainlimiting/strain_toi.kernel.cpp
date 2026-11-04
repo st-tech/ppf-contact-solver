@@ -227,17 +227,6 @@ rod_strain_value(const Vec3f &difference,
     float *toi,
     unsigned count);
 
-[[seam::entry(count)]] void shell_strain_toi_gated(
-    [[seam::through]] const Vec3f *start,
-    [[seam::through]] const Vec3f *finish,
-    [[seam::indices(3)]] const unsigned *face,
-    [[seam::bound]] unsigned vertex_count,
-    const Mat2x2f *inverse_rest,
-    const float *effective_limit,
-    float max_t,
-    float *toi,
-    unsigned count);
-
 [[seam::entry(count)]] void rod_strain_toi_gated(
     [[seam::through]] const Vec3f *start,
     [[seam::through]] const Vec3f *finish,

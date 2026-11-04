@@ -93,7 +93,6 @@
 // traversal body expands it.
 #include "contact/aabb.kernel.cpp"
 #include "contact/aabb_traversal.kernel.cpp"
-#include "contact/pair_cache.kernel.cpp"
 #include "lbvh/lbvh.kernel.cpp"
 
 // ---------------------------------------------------------------------------
@@ -499,7 +498,7 @@ float point_triangle_ccd_abi(const Vec3f *x0, const Vec3f *x1,
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi = accd::point_triangle_ccd(
         x0[point], x1[point], x0[t0], x0[t1], x0[t2], x1[t0], x1[t1], x1[t2],
-        offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+        offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -512,7 +511,7 @@ float point_edge_ccd_abi(const Vec3f *x0, const Vec3f *x1, uint32_t point,
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi =
         accd::point_edge_ccd(x0[point], x1[point], x0[e0], x0[e1], x1[e0],
-                             x1[e1], offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+                             x1[e1], offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -532,7 +531,7 @@ float point_point_ccd_abi(const Vec3f *x0, const Vec3f *x1, uint32_t a,
                               const ParamSet *param, Overlap *overlap) {
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi = accd::point_point_ccd(x0[a], x1[a], x0[b], x1[b], offset,
-                                            ghat, param->line_search_max_t, param->ccd_eps, &info);
+                                            ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -546,7 +545,7 @@ float edge_edge_ccd_abi(const Vec3f *x0, const Vec3f *x1, uint32_t a0,
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi =
         accd::edge_edge_ccd(x0[a0], x0[a1], x0[b0], x0[b1], x1[a0], x1[a1],
-                            x1[b0], x1[b1], offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+                            x1[b0], x1[b1], offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -571,7 +570,7 @@ float collision_point_triangle_ccd_abi(const Vec3f *x0, const Vec3f *x1,
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi = accd::point_triangle_ccd(
         x0[point], x1[point], statics[t0], statics[t1], statics[t2],
-        statics[t0], statics[t1], statics[t2], offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+        statics[t0], statics[t1], statics[t2], offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -586,7 +585,7 @@ float collision_point_triangle_ccd_static_point_abi(
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi = accd::point_triangle_ccd(
         statics[point], statics[point], x0[t0], x0[t1], x0[t2], x1[t0], x1[t1],
-        x1[t2], offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+        x1[t2], offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;
@@ -603,7 +602,7 @@ float collision_edge_edge_ccd_abi(const Vec3f *x0, const Vec3f *x1,
     accd::OverlapInfo info{0.0f, 0.0f, 0u};
     const float toi = accd::edge_edge_ccd(
         x0[a0], x0[a1], statics[b0], statics[b1], x1[a0], x1[a1], statics[b0],
-        statics[b1], offset, ghat, param->line_search_max_t, param->ccd_eps, &info);
+        statics[b1], offset, ghat, param->line_search_max_t, param->line_search_max_t, param->ccd_eps, &info);
     overlap->d2 = info.d2;
     overlap->offset = info.offset;
     overlap->flagged = info.flagged;

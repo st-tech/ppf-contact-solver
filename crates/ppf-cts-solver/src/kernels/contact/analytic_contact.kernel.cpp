@@ -211,21 +211,3 @@ analytic_grain_schur(const Mat3x3f &friction_hessian,
                        skew.col(2).dot(friction_gradient));
 }
 
-// The friction-combining entry point, declared once and rendered for four
-// targets. Two per-pair floats in, one out, with the rule selector in the
-// record because one dispatch combines under one rule.
-//
-// IT NAMES THE BODY IT WRAPS, so the entry point is
-// `combine_friction_values_entry`. An entry point that did not carry its
-// body's name would be a second name for the same code, and a name covering
-// two calling conventions is what a hand-written entry point costs.
-//
-// `mode` is `FrictionMode` as its underlying integer, 0 minimum, 1 maximum, 2
-// mean, which is how the body already takes it: an enumeration is not one of
-// the three scalars a record may carry, and widening it at the seam would be a
-// second spelling of the same table.
-[[seam::entry(count)]] void combine_friction_values(
-    const float *a,
-    const float *b, unsigned mode,
-    float *out,
-    unsigned count);

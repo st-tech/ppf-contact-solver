@@ -60,13 +60,36 @@ use std::collections::BTreeMap;
 /// One record type across every channel is what keeps a traversal's stack check
 /// and a narrow phase's bounds check from drifting apart.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct DiagRecord {
     fail_count: u32,
     claimed: u32,
     line: u32,
     payload: [f32; 4],
     file: *const std::ffi::c_char,
+    /// Speculation transport (`HostDevice::execute_speculative`): room for one
+    /// element index per element of the chunk, the count appended, whether the
+    /// call speculates, and the element whose check claimed this record.
+    spec_deferred: *mut u32,
+    spec_active: u32,
+    spec_count: u32,
+    spec_claim: u32,
+}
+
+impl Default for DiagRecord {
+    fn default() -> Self {
+        Self {
+            fail_count: 0,
+            claimed: 0,
+            line: 0,
+            payload: [0.0; 4],
+            file: std::ptr::null(),
+            spec_deferred: std::ptr::null_mut(),
+            spec_active: 0,
+            spec_count: 0,
+            spec_claim: u32::MAX,
+        }
+    }
 }
 
 // The record is written only by the chunk that owns it and read only after that
@@ -800,6 +823,22 @@ impl HostDevice {
     /// `args` addresses the record `decl` declares and every buffer it names is
     /// live for the duration of the call.
     unsafe fn execute(&mut self, decl: &'static KernelDecl, extent: Extent, args: *const u8) -> Diag {
+        if !kstats::enabled() {
+            return unsafe { self.execute_inner(decl, extent, args) };
+        }
+        let at = std::time::Instant::now();
+        let diag = unsafe { self.execute_inner(decl, extent, args) };
+        let items = match extent {
+            Extent::Elements { count } => count as u64,
+            Extent::Groups { groups, .. } => groups as u64,
+        };
+        kstats::charge(decl.name, items, at.elapsed().as_nanos() as u64,
+            !matches!(decl.scatter, Scatter::Disjoint));
+        diag
+    }
+
+    /// The dispatch itself, timed by [`Self::execute`] when the tally is on.
+    unsafe fn execute_inner(&mut self, decl: &'static KernelDecl, extent: Extent, args: *const u8) -> Diag {
         self.counters.dispatches += 1;
         // THE GROUP SHAPE RUNS ITS LANES ONE AFTER ANOTHER, one whole group
         // per step, which is what `device.rs` states and what makes it exact
@@ -842,10 +881,17 @@ impl HostDevice {
             args
         };
 
+        let small = sched::should_run_serially(decl.nanos_per_item, total);
+        if decl.speculate && decl.diag && !small && group_width == 0 {
+            if kstats::speculate_check() {
+                return unsafe { self.execute_speculative_checked(decl, launch, args, count) };
+            }
+            return unsafe { self.execute_speculative(decl, launch, args, count) };
+        }
+
         // A serial pass, either because the scatter forbids a cut or because the
         // job is smaller than the region that would carry it.
-        let serial = !matches!(decl.scatter, Scatter::Disjoint)
-            || sched::should_run_serially(decl.nanos_per_item, total);
+        let serial = !matches!(decl.scatter, Scatter::Disjoint) || small;
         if serial {
             let mut raw = DiagRecord::default();
             let slot = if decl.diag {
@@ -879,6 +925,174 @@ impl HostDevice {
                 unsafe { launch(address as *const u8, begin, end, group_width, slot) };
             });
         merge(&raws, decl.diag)
+    }
+
+    /// A `Scatter::Atomic` or `Scatter::Claim` row run on every core, reaching
+    /// the state the one serial ascending pass reaches.
+    ///
+    /// PHASE ONE cuts the range into the fixed chunks a `Disjoint` row gets and
+    /// runs them at once, each with its own record marked to speculate. The
+    /// generated entry then runs each element with the host seam's flag
+    /// raised, so the first slot operation an element reaches (a float or
+    /// unsigned add, a load, a store, a maximum) throws before it touches the
+    /// slot, and the element is set aside with its record restored. PHASE TWO
+    /// runs the set-aside elements one at a time in ascending order, flag
+    /// clear, each with its own record.
+    ///
+    /// # Why the result is the serial pass's
+    ///
+    /// Only phase two reaches a slot, and it reaches the slots in the serial
+    /// order, so every slot receives the same operations in the same order:
+    /// the same float sums, the same claimed indices. An element finished in
+    /// phase one reached no slot, so the serial pass would have run it to the
+    /// same end. Both hold when the declaration's opt-in is true of its body:
+    ///
+    /// 1. every slot an element shares with another of the dispatch is reached
+    ///    only through the seam's slot operations, and every other write goes
+    ///    to memory that element alone touches (its own output word, or a slot
+    ///    it claimed);
+    /// 2. no element reads, by a plain load, memory another element of the
+    ///    dispatch writes;
+    /// 3. an element's writes before its first slot operation are to memory
+    ///    only it touches, and running it again from the start over them gives
+    ///    what one run would.
+    ///
+    /// (1) and (2) are what a body racing on a device grid already owes; (3)
+    /// is the one a declaration states on top.
+    ///
+    /// # The diagnostic channel
+    ///
+    /// The serial pass's record claims the first failing check of the lowest
+    /// element that fails one. Phase one names in each chunk record the element
+    /// that claimed it, and phase two runs one element per record, so the merge
+    /// takes the claim with the lowest element and sums every count, which is
+    /// that pass's report exactly.
+    ///
+    /// # Safety
+    /// As [`Self::execute`]: `args` is the bound record and every buffer it
+    /// names is live.
+    unsafe fn execute_speculative(
+        &mut self,
+        decl: &'static KernelDecl,
+        launch: Launch,
+        args: *const u8,
+        count: u32,
+    ) -> Diag {
+        let total = count as usize;
+        let chunk = sched::chunk_for(decl.nanos_per_item, total) as u32;
+        let starts: Vec<u32> = (0..count).step_by(chunk as usize).collect();
+        // One element index per element: a chunk can set aside at most all of
+        // its own.
+        let mut deferred = vec![0u32; total];
+        let mut raws = vec![DiagRecord::default(); starts.len()];
+        for (raw, room) in raws.iter_mut().zip(deferred.chunks_mut(chunk as usize)) {
+            raw.spec_active = 1;
+            raw.spec_deferred = room.as_mut_ptr();
+        }
+        let address = args as usize;
+        starts
+            .par_iter()
+            .zip(raws.par_iter_mut())
+            .for_each(|(&begin, raw)| {
+                let end = (begin + chunk).min(count);
+                // Safety: phase one reaches no slot (a slot operation throws
+                // before touching one), every other write is the element's own
+                // by the declaration's opt-in, and each chunk owns its record
+                // and its run of `deferred`.
+                unsafe { launch(address as *const u8, begin, end, 0, raw as *mut DiagRecord) };
+            });
+
+        // Phase two: ascending chunk order, ascending within a chunk, which is
+        // ascending overall because the chunks are consecutive.
+        let mut claim: Option<(u32, DiagRecord)> = None;
+        let mut failures: u64 = 0;
+        let mut set_aside: u64 = 0;
+        for (raw, room) in raws.iter().zip(deferred.chunks(chunk as usize)) {
+            failures += raw.fail_count as u64;
+            if raw.claimed != 0 && claim.map_or(true, |(at, _)| raw.spec_claim < at) {
+                claim = Some((raw.spec_claim, *raw));
+            }
+            for &element in &room[..raw.spec_count as usize] {
+                set_aside += 1;
+                let mut own = DiagRecord::default();
+                // Safety: as `execute`'s serial pass, over one element.
+                unsafe { launch(args, element, element + 1, 0, &mut own as *mut DiagRecord) };
+                failures += own.fail_count as u64;
+                if own.claimed != 0 && claim.map_or(true, |(at, _)| element < at) {
+                    claim = Some((element, own));
+                }
+            }
+        }
+        if kstats::enabled() {
+            kstats::charge_deferred(decl.name, set_aside);
+        }
+        // A count with no claimant reports clean, as `merge_records` does.
+        let Some((_, record)) = claim else {
+            return Diag::default();
+        };
+        let mut diag = merge_records(std::slice::from_ref(&record));
+        diag.failures = failures;
+        diag
+    }
+
+    /// `PPF_SPECULATE_CHECK`: run the dispatch BOTH ways from one state and
+    /// compare every byte of every arena and the diagnostic report.
+    ///
+    /// The serial pass runs first over a copy of the arenas taken before it;
+    /// its result is copied aside, the arenas are put back, and the speculative
+    /// schedule runs. A difference is counted and named on stderr. What this
+    /// cannot see is a write through a host address rather than a handle,
+    /// because the arenas are all it copies.
+    ///
+    /// # Safety
+    /// As [`Self::execute_speculative`].
+    unsafe fn execute_speculative_checked(
+        &mut self,
+        decl: &'static KernelDecl,
+        launch: Launch,
+        args: *const u8,
+        count: u32,
+    ) -> Diag {
+        let spans: Vec<(usize, usize)> = self
+            .arenas
+            .iter()
+            .map(|a| (a.base, a.bump as usize))
+            .collect();
+        let copy = |spans: &[(usize, usize)]| -> Vec<Vec<u8>> {
+            spans
+                .iter()
+                // Safety: `[base, base + bump)` is the arena's handed-out prefix.
+                .map(|&(base, len)| unsafe { std::slice::from_raw_parts(base as *const u8, len) }.to_vec())
+                .collect()
+        };
+        let before = copy(&spans);
+        let mut raw = DiagRecord::default();
+        // Safety: as `execute`'s serial pass.
+        unsafe { launch(args, 0, count, 0, &mut raw as *mut DiagRecord) };
+        let serial_diag = merge_records(std::slice::from_ref(&raw));
+        let serial = copy(&spans);
+        for (&(base, len), bytes) in spans.iter().zip(&before) {
+            // Safety: as above, and nothing else runs meanwhile.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), base as *mut u8, len) };
+        }
+        let diag = unsafe { self.execute_speculative(decl, launch, args, count) };
+        let after = copy(&spans);
+        let mut differing = 0usize;
+        for (a, b) in serial.iter().zip(&after) {
+            differing += a.iter().zip(b).filter(|(x, y)| x != y).count();
+        }
+        let same_diag = serial_diag.failures == diag.failures
+            && serial_diag.first.as_ref().map(|f| (f.line, f.payload.map(f32::to_bits)))
+                == diag.first.as_ref().map(|f| (f.line, f.payload.map(f32::to_bits)));
+        kstats::charge_check(decl.name, differing != 0 || !same_diag);
+        if differing != 0 || !same_diag {
+            eprintln!(
+                "PPF_SPECULATE_CHECK: {} differs from its serial pass: {differing} arena bytes, \
+                 diag serial {} speculative {}",
+                decl.name, serial_diag.failures, diag.failures
+            );
+        }
+        diag
     }
 
     /// Where a handle's bytes live.
@@ -1045,6 +1259,102 @@ impl HostDevice {
 
 /// One key per live span. The arena id is never reused, so a pair is unique for
 /// the allocator's whole life.
+/// Wall time per KERNEL on the host target, off unless `PPF_KERNEL_STATS` is
+/// set. A profiling instrument: the dispatch, not the host work around it.
+pub mod kstats {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Whether the tally is on, read once.
+    pub fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("PPF_KERNEL_STATS").is_some())
+    }
+
+    type Row = (u64, u64, u64, bool);
+    static TALLY: OnceLock<Mutex<BTreeMap<&'static str, Row>>> = OnceLock::new();
+    static DEFERRED: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
+
+    /// Whether `PPF_SPECULATE_CHECK` asks every speculative dispatch to be
+    /// compared against its serial pass.
+    pub fn speculate_check() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("PPF_SPECULATE_CHECK").is_some())
+    }
+
+    static CHECKED: OnceLock<Mutex<BTreeMap<&'static str, (u64, u64)>>> = OnceLock::new();
+
+    /// Count one compared dispatch, and whether it differed.
+    pub fn charge_check(name: &'static str, differed: bool) {
+        let map = CHECKED.get_or_init(|| Mutex::new(BTreeMap::new()));
+        if let Ok(mut guard) = map.lock() {
+            let row = guard.entry(name).or_insert((0, 0));
+            row.0 += 1;
+            row.1 += differed as u64;
+        }
+    }
+
+    /// Print the comparison tally, whether or not the timing tally is on.
+    pub fn dump_check() {
+        let Some(map) = CHECKED.get() else { return };
+        let Ok(guard) = map.lock() else { return };
+        for (name, (checked, differed)) in guard.iter() {
+            eprintln!("PPF_SPECULATE_CHECK {name}: {checked} dispatches compared, {differed} differ");
+        }
+    }
+
+    /// Count the elements a speculative dispatch set aside for its serial phase.
+    pub fn charge_deferred(name: &'static str, elements: u64) {
+        let map = DEFERRED.get_or_init(|| Mutex::new(BTreeMap::new()));
+        if let Ok(mut guard) = map.lock() {
+            *guard.entry(name).or_insert(0) += elements;
+        }
+    }
+
+    /// Charge one dispatch.
+    pub fn charge(name: &'static str, items: u64, nanos: u64, serial: bool) {
+        let map = TALLY.get_or_init(|| Mutex::new(BTreeMap::new()));
+        if let Ok(mut guard) = map.lock() {
+            let row = guard.entry(name).or_insert((0, 0, 0, serial));
+            row.0 += 1;
+            row.1 += items;
+            row.2 += nanos;
+        }
+    }
+
+    /// Print the tally, longest first.
+    pub fn dump() {
+        if !enabled() {
+            return;
+        }
+        let Some(map) = TALLY.get() else { return };
+        let Ok(guard) = map.lock() else { return };
+        let mut rows: Vec<_> = guard.iter().map(|(k, v)| (*k, *v)).collect();
+        rows.sort_by(|a, b| b.1 .2.cmp(&a.1 .2));
+        let total: u64 = rows.iter().map(|r| r.1 .2).sum();
+        eprintln!("\n=== PPF_KERNEL_STATS: host kernel wall time ===");
+        eprintln!("{:<44} {:>9} {:>12} {:>10} {:>7} {:>8} {}", "kernel", "calls", "items", "seconds", "share", "ns/item", "serial");
+        for (name, (calls, items, nanos, serial)) in &rows {
+            eprintln!(
+                "{:<44} {:>9} {:>12} {:>10.3} {:>6.1}% {:>8.1} {}",
+                name, calls, items, *nanos as f64 / 1e9,
+                if total > 0 { 100.0 * *nanos as f64 / total as f64 } else { 0.0 },
+                if *items > 0 { *nanos as f64 / *items as f64 } else { 0.0 },
+                if *serial { "S" } else { "" }
+            );
+        }
+        eprintln!("{:<44} {:>9} {:>12} {:>10.3}", "TOTAL", "", "", total as f64 / 1e9);
+        if let Some(map) = DEFERRED.get() {
+            if let Ok(guard) = map.lock() {
+                for (name, deferred) in guard.iter() {
+                    let items = rows.iter().find(|r| r.0 == *name).map_or(0, |r| r.1 .1);
+                    eprintln!("speculative {name}: {deferred} of {items} elements set aside");
+                }
+            }
+        }
+    }
+}
+
 fn span_key(arena: u32, off: u64) -> u64 {
     ((arena as u64) << 32) | off
 }
@@ -1492,6 +1802,7 @@ mod tests {
             // A null file is what a body that recorded no location leaves, and
             // the merge must name it rather than dereference it.
             file: std::ptr::null(),
+            ..DiagRecord::default()
         }
     }
 
@@ -2136,6 +2447,7 @@ mod tests {
             host_refs: &[],
             diag: false,
             generated: false,
+            speculate: false,
         };
         static DECL: [KernelDecl; 3] = [
             PARALLEL,
@@ -2190,6 +2502,7 @@ mod tests {
             host_refs: &[16],
             diag: false,
             generated: true,
+            speculate: false,
         }];
         let mut device = allocating_device();
         let handle = device.alloc(4, 4, 4, AllocLabel("test.migrated")).expect("alloc");
@@ -2253,6 +2566,7 @@ mod tests {
             host_refs: &[0, 16],
             diag: false,
             generated: true,
+            speculate: false,
         }];
         let first = [1.0f32, 2.0];
         let mut second = [0.0f32; 3];

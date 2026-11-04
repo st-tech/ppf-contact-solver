@@ -48,11 +48,10 @@
 // symbol at the link.
 //
 // NO ELASTIC MATERIAL IS REACHED FROM HERE EITHER. Every one of the four this solver carries
-// is reached through a GENERATED entry point instead, from a declaration beside
-// its neutral body: the three diff-table models through
-// `energy/model/material_diff_table.kernel.cpp` and BaraffWitkin, which forms
-// no SVD and so has a pass of its own, through
-// `energy/model/baraffwitkin.kernel.cpp`.
+// is reached through a GENERATED entry point instead: the three diff-table
+// models through `energy/model/material_diff_table.kernel.cpp`, and
+// BaraffWitkin, which forms no SVD, inside the fused face pass
+// (`energy/face_force.kernel.cpp`, through `energy/model/baraffwitkin.hpp`).
 
 #include <cstddef>
 #include <cstdint>

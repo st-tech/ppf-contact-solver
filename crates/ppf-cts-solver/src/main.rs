@@ -13,13 +13,8 @@ mod cosserat;
 // `backend.rs`, `main.rs` and `status_writer.rs` bind to, so not one call site
 // moves when it is the thing running.
 //
-// The gate names no backend, which is what rule (1d) asks of every name in this
-// crate. What it names is the fact that decides the question: whether this
-// build links an implementation of the seam for the driver to drive. `build.rs`
-// answers that in `Backend::links_neutral_driver`, in the one file that is
-// allowed to know a target's name at all, and the reason a C++ backend answers
-// no is written there rather than here.
-#[cfg(neutral_driver)]
+// UNGATED: every backend `build.rs` can select links an implementation of the
+// seam for the driver to drive, since the C++ orchestrators are deleted.
 mod driver;
 mod cvec;
 mod cvecvec;
@@ -97,8 +92,6 @@ fn probe() -> i32 {
         println!("unusable: {error}");
         return PROBE_UNUSABLE;
     }
-    #[cfg(not(neutral_driver))]
-    compile_error!("--probe opens the device through the neutral driver, which this build does not link");
     match driver::probe_device() {
         Ok(name) => {
             println!("device: {name}");

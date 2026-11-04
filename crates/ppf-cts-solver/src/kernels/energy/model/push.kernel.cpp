@@ -22,15 +22,6 @@
 // the energy, its gradient and its curvature are all finite at the surface and
 // all identically zero outside it.
 
-[[seam::device_fn]] inline float push_energy(float signed_distance,
-                                                float ghat) {
-    if (signed_distance < 0.0f) {
-        return -(signed_distance * signed_distance * signed_distance) /
-               (3.0f * ghat);
-    }
-    return 0.0f;
-}
-
 [[seam::device_fn]] inline Vec3f
 push_gradient(float signed_distance, const Vec3f &normal,
                   float ghat) {
@@ -55,42 +46,3 @@ push_hessian(float signed_distance, const Vec3f &normal,
            normal.transpose();
 }
 
-// The four entry points, each declared once and rendered for four targets: the
-// `__global__` nvcc compiles, the `kernel void` the Metal shader compiler
-// compiles, the `push_*_entry` shim a host C++ compiler compiles, and
-// the Rust `#[repr(C)]` twin the driver fills.
-//
-// EVERY ONE IS ELEMENT GATHERS INTO ONE ELEMENT SCATTER, which is what the
-// launchers they replace already spelled: the signed distance and the normal
-// are per contact, `ghat` is one value for the whole dispatch and so arrives in
-// the record, and the result is written at the thread index. Nothing here
-// changes an answer, because the generated statement is the launcher's
-// argument for argument and store for store.
-//
-// The two shapes carry their own pod sizes, `Vec3f` at 12 bytes and `Mat3x3f`
-// at 36, and every C++ rendering asserts them: a type one of the three
-// compilers lays out differently fails to compile there rather than reading the
-// wrong bytes on a backend that never faults.
-[[seam::entry(count)]] void push_energy(
-    const float *signed_distance, float ghat,
-    float *energy,
-    unsigned count);
-
-[[seam::entry(count)]] void push_curvature(
-    const float *signed_distance, float ghat,
-    float *curvature,
-    unsigned count);
-
-[[seam::entry(count)]] void push_gradient(
-    const float *signed_distance,
-    const Vec3f *normal,
-    float ghat,
-    Vec3f *gradient,
-    unsigned count);
-
-[[seam::entry(count)]] void push_hessian(
-    const float *signed_distance,
-    const Vec3f *normal,
-    float ghat,
-    Mat3x3f *hessian,
-    unsigned count);

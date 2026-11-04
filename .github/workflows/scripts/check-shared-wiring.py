@@ -423,7 +423,6 @@ CUDA_ONLY.update({
         "contact/collision_narrow.kernel.cpp",
         "contact/contact_narrow.kernel.cpp",
         "contact/vertex_constraint.kernel.cpp",
-        "energy/model/baraffwitkin.kernel.cpp",
         "energy/model/material_diff_table.kernel.cpp",
         "main/momentum.kernel.cpp",
         "utility/vertex_scatter.kernel.cpp",
@@ -2912,7 +2911,7 @@ def driver_movable_fields(root):
       (`pcg.rs::encode_add_scaled`, `encode_preconditioner`, and
       `step.rs::copy_floats`); `cx`, `cy`, `cz` and `codes` belong to
       `bvh.rs::morton_codes`; `rows`, `columns`, `blocks` and `stored` to
-      `fixedcsr.rs::push_blocks`; `pairs` to `pair_cache.rs::record`; and
+      `fixedcsr.rs::push_blocks`; and
       `force` is the parameter both element scatters take, which every caller
       fills with `state.force`.
     - THE HOST'S OWN `DataSet` ARRAYS UNDER A LOCAL'S NAME. `tet_index` and

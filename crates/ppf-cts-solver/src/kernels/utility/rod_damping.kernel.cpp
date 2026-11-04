@@ -50,18 +50,3 @@
                                   hessian);
 }
 
-// TWO POSITIONS AND TWO START-OF-STEP POSES READ THROUGH THE EDGE'S OWN INDEX
-// LIST, with the bound each slot is checked against carried in the record. The
-// gradient and the Hessian are non-const gathers and not scatters, and both are
-// read before they are written; `utility/face_damping.kernel.cpp` states why for
-// the whole family.
-[[seam::entry(count)]] void rod_damping(
-    [[seam::through]] const Vec3f *x,
-    [[seam::through]] const Vec3f *current,
-    [[seam::indices(2)]] const unsigned *edge,
-    [[seam::bound]] unsigned vertex_count,
-    const float *beta,
-    float dt,
-    Mat3x2f *gradient,
-    Mat6x6f *hessian,
-    unsigned count);

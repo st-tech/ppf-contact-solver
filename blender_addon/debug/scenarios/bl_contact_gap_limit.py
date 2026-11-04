@@ -13,20 +13,25 @@
 # between those neighbors is therefore active at rest: the mesh swells and
 # stiffens against bending, which Gomez-Nogales et al., "Unlocking Thickness
 # Modeling for Codimensional Contact Simulation" (arXiv:2510.10256), name
-# contact locking. "Local Gap Limit" on a SOLID, SHELL or ROD group is
-# the percentage of that room the gap may take. The frontend applies it at
+# contact locking. "Local Gap Limit" on a group is the percentage of that
+# room the gap may take. Every type with a mesh carries it: on a STATIC
+# collider and a PDRD body, which form no pairs among their own faces, it
+# keeps a gap taken from a large bounding box at the scale of the mesh. The frontend applies it at
 # build, on the mesh the solver ingests (`frontend/_contact_gap_limit_.py`).
 #
 # The scene is a SHELL group holding a triangulated sheet whose cells grow by
 # half from one corner to the other and a two-triangle plane, a ROD group
-# holding a chain with one short segment, a STATIC plane and a PDRD cube.
+# holding a chain with one short segment, a STATIC plane and a PDRD cube. The
+# STATIC and PDRD groups take their gap from each object's bounding-box
+# diagonal, wide enough that the limit lowers every face.
 #
 # Subtests:
 #   A. default_is_a_quarter
 #         a new group's limit is 25 percent, and a SOLID, a SHELL and a ROD
 #         group each encode `contact-gap-limit` as 0.25.
-#   B. colliders_and_rigid_bodies_send_none
-#         a STATIC and a PDRD group encode no `contact-gap-limit`.
+#   B. colliders_and_rigid_bodies_send_it
+#         a STATIC and a PDRD group start at 25 percent and encode
+#         `contact-gap-limit` as 0.25 too.
 #   C. the_setting_reaches_the_wire
 #         10 percent encodes as 0.1 and moves the param hash.
 #   D. the_range_is_one_to_fifty
@@ -37,8 +42,8 @@
 #   F. profile_round_trip
 #         a material profile carries it out and back in.
 #   G. panel_row_follows_the_group_type
-#         the contact box draws the limit for SOLID, SHELL and ROD and not
-#         for STATIC and PDRD, and a ROD draws the absolute pair.
+#         the contact box draws the limit for SOLID, SHELL, ROD, STATIC and
+#         PDRD, and a ROD draws the absolute pair.
 #   H. session_gaps_are_lowered_per_triangle
 #         after a real build, the session's per-triangle `contact-gap` is the
 #         smaller of the authored gap and a quarter of each triangle's room,
@@ -47,9 +52,9 @@
 #   I. session_rod_gaps_are_lowered_per_segment
 #         the same for the chain: the short segment and the two it touches
 #         are lowered, the rest keep the authored gap.
-#   J. colliders_keep_the_authored_gap
-#         the STATIC plane's and the PDRD cube's faces hold their authored
-#         gaps, whatever their meshes would allow.
+#   J. colliders_are_lowered_per_face
+#         the STATIC plane's and the PDRD cube's faces are solved at a quarter
+#         of each face's room, below the gap their bounding-box ratio gives.
 
 from __future__ import annotations
 
@@ -90,6 +95,11 @@ ROD_GAP = 0.001
 ROD_OFFSET = 0.005
 # One segment barely longer than two offsets among ordinary ones.
 ROD_SEGMENTS = (0.1, 0.012, 0.1, 0.1, 0.1)
+# The STATIC and PDRD gap as a share of each object's bounding-box diagonal:
+# about 1.13 on the 4 m floor and 0.17 on the 0.5 m cube, above a quarter of
+# their rooms (0.71 and 0.088).
+COLLIDER_GAP_RAT = 0.2
+CUBE_SIZE = 0.5
 
 
 class MockLayout:
@@ -220,7 +230,7 @@ try:
     coarse = two_triangle_plane("Coarse", 1.0, (3.0, 0.0, 0.0))
     strand = chain("Strand", (0.0, 3.0, 0.0))
     floor = two_triangle_plane("Floor", 4.0, (0.0, 0.0, -2.0))
-    bpy.ops.mesh.primitive_cube_add(size=0.5, location=(6.0, 0.0, 0.0))
+    bpy.ops.mesh.primitive_cube_add(size=CUBE_SIZE, location=(6.0, 0.0, 0.0))
     body = bpy.context.active_object
     body.name = "Body"
     bpy.ops.mesh.primitive_cube_add(size=0.5, location=(9.0, 0.0, 0.0))
@@ -247,9 +257,9 @@ try:
     rod.contact_gap = ROD_GAP
     rod.contact_offset = ROD_OFFSET
     for pg in (walls, rigid):
-        pg.use_group_bounding_box_diagonal = False
-        pg.contact_gap = SHELL_GAP
-        pg.contact_offset = 0.0
+        pg.use_group_bounding_box_diagonal = True
+        pg.contact_gap_rat = COLLIDER_GAP_RAT
+        pg.contact_offset_rat = 0.0
 
     CLOTH, ROD, WALLS, RIGID, SOLID = (
         ("Coarse", "Fine"), ("Strand",), ("Floor",), ("Body",), ("Block",))
@@ -267,12 +277,16 @@ try:
         and all(v is not None and close(v, 0.25) for v in sent.values()),
         {"property": defaults, "encoded": sent},
     )
-    unsent = {name: limit_of(groups[key])
-              for name, key in (("STATIC", WALLS), ("PDRD", RIGID))}
+    collider_defaults = {kind: float(pg.contact_gap_limit_percent)
+                         for kind, pg in (("STATIC", walls), ("PDRD", rigid))}
+    collider_sent = {name: limit_of(groups[key])
+                     for name, key in (("STATIC", WALLS), ("PDRD", RIGID))}
     dh.record(
-        "B_colliders_and_rigid_bodies_send_none",
-        all(v is None for v in unsent.values()),
-        {"encoded": unsent},
+        "B_colliders_and_rigid_bodies_send_it",
+        all(v == 25.0 for v in collider_defaults.values())
+        and all(v is not None and close(v, 0.25)
+                for v in collider_sent.values()),
+        {"property": collider_defaults, "encoded": collider_sent},
     )
 
     # ---- C: the setting reaches the wire --------------------------------
@@ -350,8 +364,9 @@ try:
     dh.record(
         "G_panel_row_follows_the_group_type",
         all("contact_gap_limit_percent" in drawn[k]
-            for k in ("SHELL", "ROD", "SOLID"))
-        and all("contact_gap_limit_percent" not in drawn[k]
+            for k in ("SHELL", "ROD", "SOLID", "STATIC", "PDRD"))
+        and all("use_group_bounding_box_diagonal" in drawn[k]
+                and "contact_gap_rat" in drawn[k]
                 for k in ("STATIC", "PDRD"))
         and "contact_gap" in drawn["ROD"]
         and "use_group_bounding_box_diagonal" not in drawn["ROD"]
@@ -379,8 +394,16 @@ try:
         min(ROD_GAP * scale, 0.25 * room * scale)
         for room in room_per_element(strand, ROD_OFFSET)
     ]
+    # Every triangle of the cube is a right triangle with legs CUBE_SIZE, so
+    # its room is the altitude onto the hypotenuse whichever diagonal splits
+    # a face, and the cube's own ratio gap is above a quarter of it.
     body_faces = sum(len(p.vertices) - 2 for p in body.data.polygons)
-    expected_tri += [SHELL_GAP * scale] * body_faces
+    body_authored = COLLIDER_GAP_RAT * math.sqrt(3.0) * CUBE_SIZE * scale
+    body_bound = 0.25 * CUBE_SIZE / math.sqrt(2.0) * scale
+    expected_tri += [min(body_authored, body_bound)] * body_faces
+    floor_authored = COLLIDER_GAP_RAT * math.sqrt(2.0) * 4.0 * scale
+    expected_static = [min(floor_authored, 0.25 * room * scale)
+                       for room in room_per_element(floor, 0.0)]
 
     data_bytes, param_bytes = dh.encode_payload()
     dh.connect(local_path=LOCAL_PATH, server_port=SERVER_PORT,
@@ -428,12 +451,14 @@ try:
         {"rod_contact_gap": rod_gap, "expected": expected_rod},
     )
     dh.record(
-        "J_colliders_keep_the_authored_gap",
-        len(static_gap) == 2
-        and all(close(g, SHELL_GAP * scale) for g in static_gap)
-        and sum(close(g, SHELL_GAP * scale) for g in tri_gap)
-        >= body_faces + 2,
-        {"static_contact_gap": static_gap, "body_faces": body_faces},
+        "J_colliders_are_lowered_per_face",
+        same_values(static_gap, expected_static)
+        and all(g < floor_authored for g in expected_static)
+        and body_bound < body_authored
+        and sum(close(g, body_bound) for g in tri_gap) == body_faces,
+        {"static_contact_gap": static_gap, "expected": expected_static,
+         "floor_authored": floor_authored, "body_bound": body_bound,
+         "body_authored": body_authored, "body_faces": body_faces},
     )
 
 except Exception as exc:

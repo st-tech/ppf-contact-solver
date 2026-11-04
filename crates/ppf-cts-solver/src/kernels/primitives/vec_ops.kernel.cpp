@@ -85,7 +85,18 @@ vec_combine(const T *source_a,
 [[seam::host_device_fn]] inline void vec_combine_indirect(
     const float *source_a,
     const float *source_b, float *destination,
-    float a, const float *coefficient_b, const float *skip, unsigned index) {
+    float a, const float *coefficient_b, const float *skip,
+    float *clear, unsigned clear_on, unsigned index) {
+    // THE NEXT PRODUCT'S ZERO, when the PCG apply accumulates (pcg.rs,
+    // `accumulates`): the scattering apply adds every row into `A p`, so it
+    // has to open at zero, and the iteration's last reader of `A p` is the
+    // update before this pass. Clearing it here, in a pass that already walks
+    // every element, is the same zero the separate fill wrote, one dispatch
+    // earlier. It is unconditional on `skip`: a frozen iteration's apply does
+    // not run, so the product it would have opened is never read.
+    if (clear_on != 0u) {
+        clear[index] = 0.0f;
+    }
     // `skip` is the PCG latch's combine flag (pcg.rs, `latch`): a frozen
     // iteration leaves the direction as the freezing iteration left it.
     if (*skip != 0.0f) {
@@ -382,52 +393,6 @@ vec_block_sum_abs_cooperative(
     [[seam::width]] unsigned threads,
     unsigned block, unsigned count);
 
-// TWO SOURCES OF ONE LENGTH, cooperatively. The element form was 26.2 percent of
-// GPU time, the largest single kernel in the run.
-//
-// THE TWO FOLDS TAKE SEPARATE SCRATCH HALVES rather than reusing one, and that
-// is not tidiness. `compute::block_sum` stores into the scratch and then reads
-// it back; a second call over the same slots could store before every lane of
-// the first has read, and the neutral body has no barrier to put between them
-// because a barrier is the one thing the host arm cannot express. Two halves
-// makes the question not arise.
-[[seam::device_fn]] inline void vec_block_sum_pair_cooperative(
-    const float *first_source,
-    const float *second_source, unsigned length,
-    unsigned width, float *scratch,
-    float *first_total,
-    float *second_total, unsigned lane, unsigned threads,
-    unsigned block) {
-    unsigned mine_first = 0u;
-    unsigned mine_last = 0u;
-    vec_lane_run(length, width, lane, threads, block, mine_first, mine_last);
-    float first_mine = 0.0f;
-    float second_mine = 0.0f;
-    for (unsigned k = mine_first; k < mine_last; ++k) {
-        first_mine += first_source[k];
-        second_mine += second_source[k];
-    }
-    const float first_folded =
-        compute::block_sum(first_mine, scratch, lane, threads);
-    const float second_folded =
-        compute::block_sum(second_mine, scratch + 32, lane, threads);
-    if (compute::is_block_writer(lane, threads)) {
-        first_total[block] = first_folded;
-        second_total[block] = second_folded;
-    }
-}
-
-[[seam::entry(count, block)]] [[seam::group]] void
-vec_block_sum_pair_cooperative(
-    const float *first_source,
-    const float *second_source, unsigned length,
-    unsigned width,
-    [[seam::scratch(64)]] float *scratch,
-    float *first_total,
-    float *second_total, [[seam::lane]] unsigned lane,
-    [[seam::width]] unsigned threads,
-    unsigned block, unsigned count);
-
 // TWO SOURCES OF DIFFERENT LENGTHS, cooperatively. The element form was 15.2
 // percent of GPU time. Each chain has its own block count, so a block past one
 // chain's end folds only the other.
@@ -482,101 +447,3 @@ vec_block_sum_dual_cooperative(
     [[seam::width]] unsigned threads,
     unsigned block, unsigned count);
 
-// THE SAME LEVEL OVER MAGNITUDES, which is a second body rather than a flag on
-// the first. A flag would be a branch on a record field taken by every element
-// of every level, and the two are not interchangeable at the call site either:
-// only the FIRST level of an L1 norm takes absolute values, because every level
-// above it folds totals that are already non-negative. The pair is
-// `src/driver/reduce.rs`'s `sum` and `sum_abs`, which are kept beside each
-// other for the same reason: the curvature guard needs a signed sum and a
-// bound reduced in the SAME shape, and that is a property of the pair.
-[[seam::entry(block, total)]]
-[[seam::device_fn]] inline float
-vec_block_sum_abs(const float *source, unsigned length,
-                      unsigned width, unsigned block) {
-    const unsigned first = width * block;
-    unsigned last = first + width;
-    if (last > length) {
-        last = length;
-    }
-    float total = 0.0f;
-    for (unsigned k = first; k < last; ++k) {
-        total += fmath::abs(source[k]);
-    }
-    return total;
-}
-
-// TWO INDEPENDENT FOLDS SHARING ONE DISPATCH, which is a launch-count change and
-// NOT a shape change. Each output is the block sum of its OWN array, over the
-// same width and in the same ascending order the single-array body uses, so
-// every scalar is bit-identical to the pair of dispatches it replaces and the
-// curvature bound stated against that shape still holds.
-//
-// THE OUTPUTS ARE BASE POINTERS, NOT `[[seam::scatter]]`, and that distinction
-// is the whole reason this is expressible. A `[[seam::scatter]]` buffer is
-// where a body's RETURN VALUE lands, so there can only be one of them and the
-// generator refuses a second by name. A body that writes its outputs ITSELF
-// takes them as plain `[[seam::device]]` pointers and indexes them, which is
-// what `contact_narrow.kernel.cpp` does for its five.
-//
-// WHY THE PCG WANTS IT. The operator writes the curvature terms and their
-// magnitudes as two arrays of the same length, and folding each separately is
-// two dispatches per level where one will do.
-//
-// BOTH SOURCES MUST HAVE THE SAME LENGTH. They share `length`, `width` and the
-// block index, which is what makes one dispatch legitimate; a caller with two
-// lengths has two folds and dispatches two.
-[[seam::entry(block)]]
-[[seam::device_fn]] inline void vec_block_sum_pair(
-    const float *first_source,
-    const float *second_source, unsigned length,
-    unsigned width, float *first_total,
-    float *second_total, unsigned block) {
-    first_total[block] = vec_block_sum(first_source, length, width, block);
-    second_total[block] = vec_block_sum(second_source, length, width, block);
-}
-
-// TWO FOLDS OF DIFFERENT LENGTHS SHARING ONE DISPATCH, which the pair above
-// cannot express. The pair shares one `length` and one block count, and its
-// comment says why that is the honest restriction for it: two arrays folded in
-// lockstep are one fold shape. THE CHAINS THIS SERVES ARE NOT IN LOCKSTEP. The
-// PCG folds `||r||_1` over `3 * rows` floats and `r . z` over `rows` of them,
-// one after the other and with nothing between, so they are independent in
-// every way except that each level of one happens to sit beside a level of the
-// other.
-//
-// EACH SOURCE CARRIES ITS OWN LENGTH AND ITS OWN BLOCK COUNT, and the dispatch
-// covers the LARGER count. A thread past a source's own count writes nothing
-// for that source, which is what makes the two chains independent rather than
-// padded: the shorter chain reaches one element first, its final value is
-// already in its output, and the levels above it pass a count of zero and leave
-// that output alone.
-//
-// THE ARITHMETIC IS UNCHANGED, and that is the whole claim. Each source is
-// summed over the same `width` in the same ascending order, at the same level,
-// as the single-array chain it replaces, so both scalars are bit-identical to
-// the two chains this merges and every bound stated against that shape still
-// holds. It is a launch-count change and nothing else, the same argument the
-// pair makes.
-//
-// THE FIRST LEVEL OF AN L1 NORM IS NOT THIS BODY. `||r||_1` takes magnitudes at
-// its first level and no level above it does, so that one level dispatches
-// `vec_block_sum_abs` alone and the merge begins at the level after it. A flag
-// here would be a branch on a record field taken by every element of every
-// level, which is the same reason `vec_block_sum_abs` is its own body.
-[[seam::entry(block)]]
-[[seam::device_fn]] inline void vec_block_sum_dual(
-    const float *first_source, unsigned first_length,
-    const float *second_source, unsigned second_length,
-    unsigned width, float *first_total,
-    float *second_total, unsigned first_count,
-    unsigned second_count, unsigned block) {
-    if (block < first_count) {
-        first_total[block] =
-            vec_block_sum(first_source, first_length, width, block);
-    }
-    if (block < second_count) {
-        second_total[block] =
-            vec_block_sum(second_source, second_length, width, block);
-    }
-}

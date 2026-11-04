@@ -50,6 +50,64 @@ pub fn maybe_dump<D: Device>(
     if solve != target {
         return Ok(());
     }
+    write_system(device, operator, force, eval_x, vertices, &solve.to_string())?;
+    std::process::exit(0);
+}
+
+/// `PPF_DUMP_LINSYS_ON_BREAKDOWN=1`: when a solve breaks down on a non-SPD
+/// matrix, write the system it was solving (the same files as above, tagged
+/// `breakdown`), the direction `p` the curvature went negative along, and one
+/// line per vertex of its properties, then let the run end as it would. The
+/// solve that breaks is not known in advance, which is why `PPF_DUMP_LINSYS`,
+/// keyed on a solve index, cannot catch it. Diagnostic only.
+pub fn dump_on_breakdown<D: Device>(
+    device: &mut D,
+    operator: &Operator,
+    force: Handle,
+    eval_x: Handle,
+    vertices: usize,
+    direction: Handle,
+    props: &[crate::data::VertexProp],
+) -> FatalResult<()> {
+    if std::env::var_os("PPF_DUMP_LINSYS_ON_BREAKDOWN").is_none() {
+        return Ok(());
+    }
+    write_system(device, operator, force, eval_x, vertices, "breakdown")?;
+    let n = vertices;
+    let mut p = ReadbackBuffer::<f32>::default();
+    p.size(device, 3 * n, AllocLabel("dump_linsys.direction"))?;
+    device.copy(p.handle(), 0, direction, 0, 12 * n)?;
+    p.download(device)?;
+    let dir = std::env::var("PPF_DUMP_DIR").unwrap_or_else(|_| ".".to_string());
+    let mut pw = std::io::BufWriter::new(
+        std::fs::File::create(format!("{dir}/direction_breakdown.bin")).expect("create direction"),
+    );
+    for v in &p.host()[..3 * n] {
+        pw.write_all(&v.to_le_bytes()).expect("write");
+    }
+    pw.flush().expect("flush");
+    let mut vw = std::io::BufWriter::new(
+        std::fs::File::create(format!("{dir}/vertex_breakdown.csv")).expect("create vertex"),
+    );
+    writeln!(vw, "vertex,object,fix,pull,collider").expect("write");
+    for (i, q) in props.iter().enumerate().take(n) {
+        writeln!(vw, "{i},{},{},{},{}", q.object_index, q.fix_index, q.pull_index, u8::from(q.collider))
+            .expect("write");
+    }
+    vw.flush().expect("flush");
+    eprintln!("[dump_linsys] wrote the breakdown system, direction and vertex table to {dir}");
+    Ok(())
+}
+
+/// Write the assembled system to `$PPF_DUMP_DIR/{linsys,evalx,split}_<tag>.bin`.
+fn write_system<D: Device>(
+    device: &mut D,
+    operator: &Operator,
+    force: Handle,
+    eval_x: Handle,
+    vertices: usize,
+    solve: &str,
+) -> FatalResult<()> {
     let n = vertices;
     let fixed_nnz = operator.fixed.value.size as usize / 9;
     let dyn_nnz = operator
@@ -203,5 +261,5 @@ pub fn maybe_dump<D: Device>(
     put_f32s(&mut sw, &contact_diagonal);
     sw.flush().expect("flush");
     eprintln!("[dump_linsys] wrote {path}: nrow={n} n_offdiag={n_off} (solve #{solve})");
-    std::process::exit(0);
+    Ok(())
 }

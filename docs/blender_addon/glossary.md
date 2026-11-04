@@ -314,8 +314,8 @@ explains the term in full.
 : The distance at which the solver starts pushing two surfaces apart. It is
   set per group or per invisible collider, as an absolute length in
   Blender units or, on the group types that offer the choice, as a ratio of
-  each object's own bounding-box diagonal. On **Solid**, **Shell** and **Rod**
-  groups the **Local Gap Limit** can lower it where the mesh is fine. See
+  each object's own bounding-box diagonal. On every group type but **Sand**,
+  the **Local Gap Limit** can lower it where the mesh is fine. See
   [Contact Gap and Contact Offset](workflow/params/material.md#contact-gap-and-contact-offset).
 
 **Contact Offset**
@@ -377,10 +377,10 @@ explains the term in full.
   [JupyterLab](workflow/sim/jupyterlab.md).
 
 **Local Gap Limit**
-: A percentage on **Solid**, **Shell** and **Rod** groups that caps the
-  contact gap of each triangle or strand segment at that share of the room
-  its own mesh neighbors leave, so a mesh finer than its gap does not push
-  itself apart. `25` by default. It follows Gomez-Nogales et al.,
+: A percentage on every group type but **Sand** that caps the contact gap
+  of each triangle or strand segment at that share of the room its own mesh
+  neighbors leave, so a mesh finer than its gap does not push itself apart,
+  and a collider's gap stays at the scale of its mesh. `25` by default. It follows Gomez-Nogales et al.,
   "Unlocking Thickness Modeling for Codimensional Contact Simulation"
   ([arXiv:2510.10256](https://arxiv.org/abs/2510.10256), 2025), which
   names the effect *contact locking*. See

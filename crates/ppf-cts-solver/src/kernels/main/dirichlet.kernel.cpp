@@ -192,27 +192,6 @@ dirichlet_prescribe(Mat3x3f &diagonal,
     const Vec3f *target,
     unsigned count);
 
-// Whether one vertex's degree of freedom is the one this pass removes.
-//
-// TWO FACTS, AND THE SECOND IS THE EXCEPTION THAT MAKES THE FIRST SAFE. A fix
-// pin is an exact Dirichlet boundary condition, so its row is eliminated. A
-// vertex INSIDE A RIGID BODY owns no per-vertex degree of freedom at all: the
-// solve is reduced through the rigid Jacobian and the body is refitted
-// afterwards, so a per-vertex Dirichlet row is not representable and the pin
-// keeps its barrier instead. That anchor barrier is the only penalty pin left
-// in the solver, and this predicate is what decides which pins get it.
-//
-// It is one function because the same test is asked in three places that must
-// agree: the mask this pass runs over, the contact assembly deciding whether to
-// put the pin barrier back, and the position update deciding whether a vertex
-// is placed exactly rather than stepped. Two of the three failing to agree is
-// silent: a pin would have neither a Dirichlet row nor a penalty, and would be
-// held by nothing at all.
-[[seam::device_fn]] inline bool
-dirichlet_dof_removed(unsigned fix_index, unsigned pdrd_body_index) {
-    return fix_index > 0 && pdrd_body_index == 0;
-}
-
 // B16, PASS ONE, AS A NEUTRAL BODY: walk one row of the FIXED matrix's stored
 // upper triangle, lift a free row by every prescribed coupling it carries, and
 // clear every coupling with a prescribed side.

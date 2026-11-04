@@ -175,6 +175,14 @@ pub struct KernelDecl {
     /// only the first can have its buffer references bound. Counting the rows
     /// that carry it measures how far a caller's conversion has got.
     pub generated: bool,
+    /// Whether the host target may run this `Atomic` or `Claim` row
+    /// SPECULATIVELY: every core first, the elements that reach a slot
+    /// operation set aside and run serially after, in ascending order. The
+    /// declaration states that the body meets the three conditions
+    /// `HostDevice::execute_speculative` lists, which is what makes the two
+    /// schedules reach one state. Read by the host target only, and only for an
+    /// element-shaped entry with a diagnostic lane; a device target ignores it.
+    pub speculate: bool,
 }
 
 /// A buffer the DRIVER owns, reaching a kernel by address.

@@ -357,7 +357,7 @@ template <typename F, typename T, unsigned R, unsigned C, unsigned SPLIT>
 __device__ float ccd_helper(SM_THREAD const SMat<T, R, C> &x0,
                             SM_THREAD const SMat<T, R, C> &dx, float u_max,
                             F square_dist_func, float offset, float eps,
-                            float floor_gap, float max_t,
+                            float floor_gap, float max_t, float cap,
                             SM_THREAD OverlapInfo *overlap) {
     SMat<T, R, C> x = x0;
     SVec<float, R> w;
@@ -469,6 +469,24 @@ __device__ float ccd_helper(SM_THREAD const SMat<T, R, C> &x0,
     while (true) {
         if (!(d2 > park_squared)) {
             break;
+        }
+        // THE CALLER'S RUNNING MINIMUM IS REACHED. `cap` is the smallest time
+        // the caller has already folded (its own earlier hits, or the
+        // vertex-space fold that seeds an edge sweep), and the caller keeps
+        // `min(cap, result)`. Every state the loop has certified is a lower
+        // bound on what it would go on to return: the advance only moves
+        // forward, a capped probe count returns the last certified time, the
+        // bisection returns a time at or above it, and its overlap verdict
+        // needs a certified time of zero. So once a certified time is positive
+        // and at the cap, the rest of the sweep cannot lower the caller's
+        // minimum, and returning the cap gives it the same minimum without the
+        // probes. The frame, the parking levels and the round-off allowance
+        // still use `max_t`, so every probe before this point is the same
+        // arithmetic it was. A caller with nothing folded passes `max_t`, and
+        // then this returns exactly what the loop's own exits would.
+        //
+        if (toi > 0.0f && toi >= cap) {
+            return cap;
         }
         lower_t = toi;
         float dist = SM_SQRT(d2);
@@ -713,7 +731,7 @@ __device__ inline float point_triangle_ccd_advance(
     SM_THREAD const Vec3f &t00, SM_THREAD const Vec3f &t01,
     SM_THREAD const Vec3f &t02, SM_THREAD const Vec3f &t10,
     SM_THREAD const Vec3f &t11, SM_THREAD const Vec3f &t12, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     Vec3f dp = p1 - p0;
     Vec3f dt0 = t10 - t00;
@@ -738,7 +756,7 @@ __device__ inline float point_triangle_ccd_advance(
         return ccd_helper<PointTriangleSquaredDist<float, float>, float, 3,
                           4, 1>(x0, dx, u_max,
                                 dist_func, scale * offset, scale * ccd_eps,
-                                scale * park_floor(ghat), max_t, overlap);
+                                scale * park_floor(ghat), max_t, cap, overlap);
     } else {
         return max_t;
     }
@@ -748,7 +766,7 @@ __device__ inline float point_edge_ccd_advance(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &e00, SM_THREAD const Vec3f &e01,
     SM_THREAD const Vec3f &e10, SM_THREAD const Vec3f &e11, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     Vec3f dp = p1 - p0;
     Vec3f dt0 = e10 - e00;
@@ -772,7 +790,7 @@ __device__ inline float point_edge_ccd_advance(
         return ccd_helper<PointEdgeSquaredDist<float, float>, float, 3, 3,
                           1>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
-                             scale * park_floor(ghat), max_t, overlap);
+                             scale * park_floor(ghat), max_t, cap, overlap);
     } else {
         return max_t;
     }
@@ -781,7 +799,7 @@ __device__ inline float point_edge_ccd_advance(
 __device__ inline float point_point_ccd_advance(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &q0, SM_THREAD const Vec3f &q1, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     Vec3f dp = p1 - p0;
     Vec3f dq = q1 - q0;
@@ -804,7 +822,7 @@ __device__ inline float point_point_ccd_advance(
         return ccd_helper<PointPointSquaredDist<float, float>, float, 3, 2,
                           1>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
-                             scale * park_floor(ghat), max_t, overlap);
+                             scale * park_floor(ghat), max_t, cap, overlap);
     } else {
         return max_t;
     }
@@ -815,7 +833,7 @@ __device__ inline float edge_edge_ccd_advance(
     SM_THREAD const Vec3f &eb00, SM_THREAD const Vec3f &eb01,
     SM_THREAD const Vec3f &ea10, SM_THREAD const Vec3f &ea11,
     SM_THREAD const Vec3f &eb10, SM_THREAD const Vec3f &eb11, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     Vec3f dea0 = ea10 - ea00;
     Vec3f dea1 = ea11 - ea01;
@@ -840,7 +858,7 @@ __device__ inline float edge_edge_ccd_advance(
         return ccd_helper<EdgeEdgeSquaredDist<float, float>, float, 3, 4,
                           2>(x0, dx, u_max,
                              dist_func, scale * offset, scale * ccd_eps,
-                             scale * park_floor(ghat), max_t, overlap);
+                             scale * park_floor(ghat), max_t, cap, overlap);
     } else {
         return max_t;
     }
@@ -853,7 +871,7 @@ __device__ inline float point_triangle_ccd(
     SM_THREAD const Vec3f &t00, SM_THREAD const Vec3f &t01,
     SM_THREAD const Vec3f &t02, SM_THREAD const Vec3f &t10,
     SM_THREAD const Vec3f &t11, SM_THREAD const Vec3f &t12, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     const Vec3f a0[1] = {p0}, a1[1] = {p1};
     const Vec3f b0[3] = {t00, t01, t02}, b1[3] = {t10, t11, t12};
@@ -863,14 +881,14 @@ __device__ inline float point_triangle_ccd(
         return max_t;
     }
     return point_triangle_ccd_advance(p0, p1, t00, t01, t02, t10, t11, t12, offset, ghat, max_t,
-                                    ccd_eps, overlap);
+                                    cap, ccd_eps, overlap);
 }
 
 __device__ inline float point_edge_ccd(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &e00, SM_THREAD const Vec3f &e01,
     SM_THREAD const Vec3f &e10, SM_THREAD const Vec3f &e11, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     const Vec3f a0[1] = {p0}, a1[1] = {p1};
     const Vec3f b0[2] = {e00, e01}, b1[2] = {e10, e11};
@@ -879,14 +897,14 @@ __device__ inline float point_edge_ccd(
     if (far_pair<1, 2>(a0, a1, b0, b1, reach, max_t)) {
         return max_t;
     }
-    return point_edge_ccd_advance(p0, p1, e00, e01, e10, e11, offset, ghat, max_t, ccd_eps,
+    return point_edge_ccd_advance(p0, p1, e00, e01, e10, e11, offset, ghat, max_t, cap, ccd_eps,
                                 overlap);
 }
 
 __device__ inline float point_point_ccd(
     SM_THREAD const Vec3f &p0, SM_THREAD const Vec3f &p1,
     SM_THREAD const Vec3f &q0, SM_THREAD const Vec3f &q1, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     const Vec3f a0[1] = {p0}, a1[1] = {p1};
     const Vec3f b0[1] = {q0}, b1[1] = {q1};
@@ -895,7 +913,7 @@ __device__ inline float point_point_ccd(
     if (far_pair<1, 1>(a0, a1, b0, b1, reach, max_t)) {
         return max_t;
     }
-    return point_point_ccd_advance(p0, p1, q0, q1, offset, ghat, max_t, ccd_eps, overlap);
+    return point_point_ccd_advance(p0, p1, q0, q1, offset, ghat, max_t, cap, ccd_eps, overlap);
 }
 
 __device__ inline float edge_edge_ccd(
@@ -903,7 +921,7 @@ __device__ inline float edge_edge_ccd(
     SM_THREAD const Vec3f &eb00, SM_THREAD const Vec3f &eb01,
     SM_THREAD const Vec3f &ea10, SM_THREAD const Vec3f &ea11,
     SM_THREAD const Vec3f &eb10, SM_THREAD const Vec3f &eb11, float offset,
-    float ghat, float max_t, float ccd_eps,
+    float ghat, float max_t, float cap, float ccd_eps,
     SM_THREAD OverlapInfo *overlap) {
     const Vec3f a0[2] = {ea00, ea01}, a1[2] = {ea10, ea11};
     const Vec3f b0[2] = {eb00, eb01}, b1[2] = {eb10, eb11};
@@ -913,7 +931,7 @@ __device__ inline float edge_edge_ccd(
         return max_t;
     }
     return edge_edge_ccd_advance(ea00, ea01, eb00, eb01, ea10, ea11, eb10, eb11, offset,
-                               ghat, max_t, ccd_eps, overlap);
+                               ghat, max_t, cap, ccd_eps, overlap);
 }
 
 } // namespace accd

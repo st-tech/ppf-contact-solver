@@ -442,7 +442,7 @@ static void run_sound(float *geom, float *toi_out, float *ang_out) {
             accd::OverlapInfo overlap{-1.0f, -1.0f};
             toi_out[c] = accd::edge_edge_ccd(
                 a0, a1, b0, b1, a0e, a1e, b0, b1, 0.0f, 1e-3f,
-                param.line_search_max_t, param.ccd_eps, &overlap);
+                param.line_search_max_t, param.line_search_max_t, param.ccd_eps, &overlap);
             ang_out[c] = ang;
         }
     }
@@ -502,7 +502,7 @@ static void run_sound_tangential(float *geom, float *toi_out, float *ang_out) {
             accd::OverlapInfo overlap{-1.0f, -1.0f};
             toi_out[c] = accd::edge_edge_ccd(
                 a0, a1, b0, b1, a0e, a1e, b0, b1, 0.0f, 1e-3f,
-                param.line_search_max_t, param.ccd_eps, &overlap);
+                param.line_search_max_t, param.line_search_max_t, param.ccd_eps, &overlap);
             ang_out[c] = ang;
         }
     }

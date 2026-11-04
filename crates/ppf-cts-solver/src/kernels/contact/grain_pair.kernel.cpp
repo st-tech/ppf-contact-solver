@@ -64,27 +64,6 @@
 // whole module is bit-exact comparable across backends and its parity gate
 // admits no tolerance.
 
-// The lagged surface velocity of the pair's contact point, as a displacement
-// rate. `normal` is the a-side outward contact normal. A non-grain endpoint
-// contributes nothing, which is what makes a grain against an ordinary surface
-// vertex the same code path as a grain against a grain: the other side simply
-// has no angular velocity to fold in.
-[[seam::device_fn]] inline Vec3f
-grain_pair_spin(bool first_is_grain, float first_radius,
-                    const Vec3f &first_omega,
-                    bool second_is_grain, float second_radius,
-                    const Vec3f &second_omega,
-                    const Vec3f &normal) {
-    Vec3f spin = Vec3f::Zero();
-    if (first_is_grain) {
-        spin += first_radius * first_omega.cross(normal);
-    }
-    if (second_is_grain) {
-        spin += second_radius * second_omega.cross(normal);
-    }
-    return spin;
-}
-
 // The bound the spin displacement must satisfy, as one point of control.
 //
 // The spin-induced contact displacement must never exceed the realized
@@ -103,16 +82,6 @@ grain_pair_clamp_spin(const Vec3f &spin_displacement,
     (void)relative_step;
     (void)normal;
     return spin_displacement;
-}
-
-// The contact-point slip the friction term is built from, in place of the plain
-// relative center step an ordinary contact uses.
-[[seam::device_fn]] inline Vec3f
-grain_pair_slip(const Vec3f &relative_step,
-                    const Vec3f &spin,
-                    const Vec3f &normal, float dt) {
-    return relative_step -
-           grain_pair_clamp_spin(dt * spin, relative_step, normal);
 }
 
 // One endpoint's share of a converged point-point friction force.

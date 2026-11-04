@@ -3,14 +3,18 @@
 // Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 // License: Apache v2.0
 //
-//! Which colliders hold a stalled step.
+//! Which pins and colliders hold a failed step.
 //!
-//! A Newton stall in a scene with fix-pinned geometry is, in the common case,
-//! cloth caught where a prescribed collider closes on other geometry (public
-//! issue #160: a shape-keyed body folding onto itself with a dress inside the
-//! fold). The stall report used to name only the cloth vertex the line search
+//! A Newton stall or a CCD failure in a scene with prescribed geometry is, in
+//! the common case, cloth caught where a prescribed surface closes on other
+//! geometry that cannot yield (public issue #160: a shape-keyed body folding
+//! onto itself with a dress inside the fold), or a pinned part of the cloth
+//! itself driven into such geometry (the same issue with Soft Constraint on the
+//! body: a dress pinned to follow the arm, carried into a torso that keeps its
+//! exact pin). The report used to name only the cloth vertex the line search
 //! clamps on, which tells an artist nothing they can act on. What they can act
-//! on is the COLLIDER: its Soft Constraint, or its animation.
+//! on is the OBJECT that cannot yield: a collider's Soft Constraint, a pin's
+//! Pull mode, or the animation.
 //!
 //! WHY THIS RUNS AT THE STALL AND NOT BEFORE THE STEP.
 //!
@@ -25,12 +29,31 @@
 //!   made there.
 //! - Once the collider is held by a spring it is a degree of freedom again and
 //!   an admissible state exists for every target, which is why the report
-//!   recommends Soft Constraint.
+//!   recommends Soft Constraint. A pinned cloth vertex is the same case one
+//!   level down: as a Pull pin it is a spring too, so the report recommends
+//!   that for a pin, and Soft Constraint for whatever exact collider it is
+//!   driven into. Soft Constraint on the OTHER body does not help: it lets that
+//!   body yield, and neither the pin nor the exact collider moves.
 //!
 //! The search is host-side and brute force over the non-yielding triangles,
 //! paid once, by a run that has already failed.
 
 use crate::data::{DataSet, VertexProp, NO_OBJECT_INDEX};
+
+/// What makes a surface non-yielding, which decides what the artist changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    /// A collider in the solved namespace whose every vertex is fix-pinned: a
+    /// moving STATIC without Soft Constraint. Remedy: its Soft Constraint.
+    Collider,
+    /// Fix-pinned vertices of a cloth (or any non-collider) object: a pin that
+    /// follows its path exactly. Remedy: make it a Pull pin.
+    Pin,
+    /// The static collision mesh: a STATIC that never moves and has no Soft
+    /// Constraint. Remedy: its Soft Constraint, which promotes it to a body
+    /// held by springs.
+    Static,
+}
 
 /// One non-yielding surface near the stuck vertex.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,19 +61,20 @@ pub struct Presser {
     /// The object the surface belongs to, or `None` when the session carries
     /// no object map.
     pub object: Option<u32>,
-    /// A fix-pinned dynamic object (a moving collider, or any exactly pinned
-    /// mesh), as opposed to the static collision mesh.
-    pub pinned: bool,
+    pub hold: Hold,
     /// Distance from the stuck vertex to the surface, in solver units.
     pub distance: f32,
 }
 
-/// The stalled step's pinch: the stuck vertex and the two nearest
+/// The failed step's pinch: the stuck vertex and the two nearest
 /// non-yielding surfaces of distinct objects, nearest first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pinch {
     pub vertex: u32,
     pub stuck_object: Option<u32>,
+    /// The stuck vertex is itself fix-pinned: a pin driven into the pressers,
+    /// rather than free cloth caught between them.
+    pub stuck_pinned: bool,
     pub pressers: Vec<Presser>,
 }
 
@@ -119,23 +143,26 @@ pub fn point_triangle_distance(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3
 /// The nearest non-yielding surfaces around dynamic vertex `vertex`.
 ///
 /// `positions` holds `3 * vertices` dynamic components at the step start and
-/// `props` the dynamic vertex properties. A dynamic triangle is non-yielding
-/// when all three of its vertices are fix-pinned (`fix_index != 0`; a
-/// Soft Constraint holds a collider with pull pins instead, which yield); every
-/// collision-mesh triangle is non-yielding. Triangles of the stuck vertex's own
-/// object are skipped, because a body is not its own collider here. One
-/// presser is kept per object (its nearest triangle), and the two nearest
-/// objects are returned.
+/// `props` the dynamic vertex properties. Non-yielding are: a dynamic triangle
+/// whose three vertices are all fix-pinned (`fix_index != 0`; a Soft Constraint
+/// or a Pull pin holds with pull pins instead, which yield), a fix-pinned
+/// vertex of a non-collider object (a pin row need not span a whole triangle),
+/// and every collision-mesh triangle. Geometry of the stuck vertex's own object
+/// is skipped, because a body is not its own collider here. One presser is
+/// kept per object and kind (its nearest element), and the two nearest are
+/// returned.
 ///
-/// `None` when the vertex is itself pinned or a collider, or no non-yielding
-/// surface of another object exists: the stall then has some other cause and
-/// the existing report stands alone.
+/// `None` when the vertex is a collider, when nothing non-yielding of another
+/// object exists, or when the vertex is free and nothing PRESCRIBED is among
+/// what is near (free cloth on a static floor alone is not a pinch): the
+/// failure then has some other cause and the existing report stands alone.
 pub fn find(data: &DataSet, positions: &[f32], props: &[VertexProp], vertex: u32) -> Option<Pinch> {
     let v = vertex as usize;
     let prop = props.get(v)?;
-    if prop.fix_index != 0 || prop.collider {
+    if prop.collider {
         return None;
     }
+    let stuck_pinned = prop.fix_index != 0;
     let stuck_object = object_of(prop);
     let point = |i: usize| -> [f64; 3] {
         [
@@ -149,16 +176,16 @@ pub fn find(data: &DataSet, positions: &[f32], props: &[VertexProp], vertex: u32
     }
     let p = point(v);
 
-    // (object, pinned) -> nearest distance.
+    // (object, hold) -> nearest distance.
     let mut best: Vec<Presser> = Vec::new();
-    let mut offer = |object: Option<u32>, pinned: bool, distance: f64| {
+    let mut offer = |object: Option<u32>, hold: Hold, distance: f64| {
         if object.is_some() && object == stuck_object {
             return;
         }
         let distance = distance as f32;
-        match best.iter_mut().find(|b| b.object == object && b.pinned == pinned) {
+        match best.iter_mut().find(|b| b.object == object && b.hold == hold) {
             Some(b) => b.distance = b.distance.min(distance),
-            None => best.push(Presser { object, pinned, distance }),
+            None => best.push(Presser { object, hold, distance }),
         }
     };
 
@@ -175,7 +202,18 @@ pub fn find(data: &DataSet, positions: &[f32], props: &[VertexProp], vertex: u32
             continue;
         }
         let d = point_triangle_distance(p, point(a), point(b), point(c));
-        offer(object_of(&props[a]), true, d);
+        let hold = if props[a].collider { Hold::Collider } else { Hold::Pin };
+        offer(object_of(&props[a]), hold, d);
+    }
+
+    // Fix-pinned vertices of cloth (non-collider) objects.
+    for (i, q) in props.iter().enumerate().take(n) {
+        if i == v || q.fix_index == 0 || q.collider {
+            continue;
+        }
+        let r = point(i);
+        let d = ((p[0] - r[0]).powi(2) + (p[1] - r[1]).powi(2) + (p[2] - r[2]).powi(2)).sqrt();
+        offer(object_of(q), Hold::Pin, d);
     }
 
     // The static collision mesh.
@@ -191,16 +229,16 @@ pub fn find(data: &DataSet, positions: &[f32], props: &[VertexProp], vertex: u32
             continue;
         }
         let d = point_triangle_distance(p, cpoint(a), cpoint(b), cpoint(c));
-        offer(cprops.get(a).and_then(object_of), false, d);
+        offer(cprops.get(a).and_then(object_of), Hold::Static, d);
     }
 
-    if !best.iter().any(|b| b.pinned) {
-        // Nothing prescribed is near: the stall is not a collider pinch.
-        return None;
-    }
     best.sort_by(|x, y| x.distance.total_cmp(&y.distance));
     best.truncate(2);
-    Some(Pinch { vertex, stuck_object, pressers: best })
+    if best.is_empty() || (!stuck_pinned && best.iter().all(|b| b.hold == Hold::Static)) {
+        // Nothing prescribed takes part: the failure is not a pinch.
+        return None;
+    }
+    Some(Pinch { vertex, stuck_object, stuck_pinned, pressers: best })
 }
 
 /// The last stall's pinch, for the host to put in the crash detail.
@@ -223,10 +261,11 @@ pub fn describe(pinch: &Pinch, name: &dyn Fn(Option<u32>) -> String) -> String {
     // The static collision mesh carries no object map in every session, so an
     // unnamed static surface is spelled as the kind alone.
     let surface = |p: &Presser| {
-        let what = match (p.pinned, p.object) {
-            (true, object) => format!("pinned collider {}", name(object)),
-            (false, Some(object)) => format!("static collider {}", name(Some(object))),
-            (false, None) => "a static collider".to_string(),
+        let what = match (p.hold, p.object) {
+            (Hold::Collider, object) => format!("pinned collider {}", name(object)),
+            (Hold::Pin, object) => format!("the pinned vertices of {}", name(object)),
+            (Hold::Static, Some(object)) => format!("static collider {}", name(Some(object))),
+            (Hold::Static, None) => "a static collider".to_string(),
         };
         format!("{what} ({:.3e} away)", p.distance)
     };
@@ -235,33 +274,52 @@ pub fn describe(pinch: &Pinch, name: &dyn Fn(Option<u32>) -> String) -> String {
         [one, two] => format!("{} and {}", surface(one), surface(two)),
         _ => String::new(),
     };
-    let pinned: Vec<String> = pinch
-        .pressers
-        .iter()
-        .filter(|p| p.pinned)
-        .map(|p| name(p.object))
-        .collect();
+    // One remedy per object that cannot yield, in the order named.
+    let mut remedies: Vec<String> = Vec::new();
+    let mut push = |remedy: String| {
+        if !remedies.contains(&remedy) {
+            remedies.push(remedy);
+        }
+    };
+    if pinch.stuck_pinned {
+        push(format!("make the pin on {} a Pull pin", name(pinch.stuck_object)));
+    }
+    for p in &pinch.pressers {
+        match (p.hold, p.object) {
+            (Hold::Pin, object) => push(format!("make the pin on {} a Pull pin", name(object))),
+            (Hold::Collider, object) | (Hold::Static, object @ Some(_)) => {
+                push(format!("enable Soft Constraint on the group of {}", name(object)))
+            }
+            (Hold::Static, None) => {
+                push("enable Soft Constraint on the static collider's group".to_string())
+            }
+        }
+    }
+    let lead = if pinch.stuck_pinned {
+        format!("A pinned vertex of {} is driven into {pressed}", name(pinch.stuck_object))
+    } else {
+        format!("{} is caught by {pressed}", name(pinch.stuck_object))
+    };
     format!(
-        "{} is caught by {pressed}. A pinned collider cannot yield to cloth it closes on; \
-         enable Soft Constraint on the group of {}, or re-author its animation so it leaves \
-         the cloth room",
-        name(pinch.stuck_object),
-        pinned.join(" and ")
+        "{lead}. A pin, and a collider without Soft Constraint, follow their path exactly \
+         and cannot yield; {}, or re-author the animation so the cloth has room",
+        remedies.join(", or ")
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, point_triangle_distance, Pinch, Presser};
+    use super::{describe, point_triangle_distance, Hold, Pinch, Presser};
 
     #[test]
     fn the_report_names_the_pinned_collider_and_the_remedy() {
         let pinch = Pinch {
             vertex: 7,
             stuck_object: Some(0),
+            stuck_pinned: false,
             pressers: vec![
-                Presser { object: None, pinned: false, distance: 2.0e-5 },
-                Presser { object: Some(1), pinned: true, distance: 4.0e-5 },
+                Presser { object: None, hold: Hold::Static, distance: 2.0e-5 },
+                Presser { object: Some(1), hold: Hold::Collider, distance: 4.0e-5 },
             ],
         };
         let name = |object: Option<u32>| match object {
@@ -273,6 +331,29 @@ mod tests {
         assert!(text.starts_with("'Dress' is caught by a static collider (2.000e-5 away) and \
                                   pinned collider 'Body' (4.000e-5 away)."), "{text}");
         assert!(text.contains("enable Soft Constraint on the group of 'Body'"), "{text}");
+    }
+
+    #[test]
+    fn a_pin_driven_into_an_exact_collider_names_the_pin_and_that_collider() {
+        // The issue's case with Soft Constraint on the arm: the sleeve's pinned
+        // edge follows the arm into a torso that keeps its exact pin. The arm
+        // yields, so it is not named; the pin and the torso are.
+        let pinch = Pinch {
+            vertex: 3,
+            stuck_object: Some(2),
+            stuck_pinned: true,
+            pressers: vec![Presser { object: Some(3), hold: Hold::Static, distance: 1.0e-4 }],
+        };
+        let name = |object: Option<u32>| match object {
+            Some(2) => "'Sleeve'".to_string(),
+            Some(3) => "'Torso'".to_string(),
+            _ => "an unnamed object".to_string(),
+        };
+        let text = describe(&pinch, &name);
+        assert!(text.starts_with("A pinned vertex of 'Sleeve' is driven into static collider \
+                                  'Torso' (1.000e-4 away)."), "{text}");
+        assert!(text.contains("make the pin on 'Sleeve' a Pull pin, or enable Soft Constraint \
+                               on the group of 'Torso'"), "{text}");
     }
 
     #[test]

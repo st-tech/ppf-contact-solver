@@ -69,27 +69,3 @@
                                    beta, dt, gradient, hessian);
 }
 
-// THREE POSITIONS AND THREE START-OF-STEP POSES READ THROUGH THE FACE'S OWN
-// INDEX LIST. Both buffers are reached at the SAME slots, which is what lets one
-// index list serve them; exchanging the two makes the damping the reverse
-// difference and returns a plausible number, so the parameter order is
-// load-bearing. The `[[seam::bound]]` is what the range shim this replaces had
-// no way to check: a slot is data rather than the thread index, and Metal
-// answers an out-of-bounds read with 0.0 rather than faulting.
-//
-// THE GRADIENT AND THE HESSIAN ARE NON-CONST GATHERS AND NOT SCATTERS. A gather
-// hands the body `buffer[index]`, which is an lvalue, so a non-const one IS the
-// write, and there is no scatter because the body returns nothing. Both are READ
-// before they are written: this pass adds its force into the gradient and scales
-// the Hessian in place, so each carries the elastic assembly's value in as well
-// as the damped value out.
-[[seam::entry(count)]] void face_damping(
-    [[seam::through]] const Vec3f *x,
-    [[seam::through]] const Vec3f *current,
-    [[seam::indices(3)]] const unsigned *face,
-    [[seam::bound]] unsigned vertex_count,
-    const float *beta,
-    float dt,
-    Mat3x3f *gradient,
-    Mat9x9f *hessian,
-    unsigned count);

@@ -1846,6 +1846,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "contact_offset",
         "contact_gap_rat",
         "contact_offset_rat",
+        "contact_gap_limit_percent",
         "use_group_bounding_box_diagonal",
     },
     "PDRD": {
@@ -1864,6 +1865,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "contact_offset",
         "contact_gap_rat",
         "contact_offset_rat",
+        "contact_gap_limit_percent",
         "use_group_bounding_box_diagonal",
     },
     "SAND": {
@@ -2075,7 +2077,7 @@ def get_group_material_properties(group_uuid: str):
     use_group_bounding_box_diagonal currently selects. The relative pair is a
     fraction of each assigned object's OWN bounding-box diagonal, so in that
     mode the objects of one group are solved at different distances.
-    contact_gap_limit_percent (SHELL, SOLID and ROD) then caps the gap the
+    contact_gap_limit_percent (every type but SAND) then caps the gap the
     selected pair gives: an element is solved at the smaller of that gap and
     this percentage of the room between its mesh neighbors, so the gap an
     element is solved at can be below the authored one.
@@ -2206,7 +2208,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
       the flag's name says: how far apart the objects of a group were placed
       does not enter.
 
-    contact_gap_limit_percent (SHELL, SOLID and ROD; 1 to 50, default 25)
+    contact_gap_limit_percent (every type but SAND; 1 to 50, default 25)
     belongs to neither mode and combines with both. It caps each element's
     contact gap at that percentage of the room its own mesh leaves between
     neighbors: the smallest altitude among a triangle and the triangles
@@ -2215,7 +2217,9 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     wider than that room starts the solve with mesh neighbors pressing on
     each other, which swells the mesh and stiffens it against bending, so the
     cap is what lets one gap serve a fine mesh and a coarse one. A STATIC
-    collider, a PDRD body and a SAND group take no cap.
+    collider and a PDRD body press no neighbors of their own, and there the
+    cap keeps a gap taken from a large bounding box at the scale of the mesh.
+    A SAND group has no mesh and takes no cap.
 
     Returns:
         Dict with success message and properties set

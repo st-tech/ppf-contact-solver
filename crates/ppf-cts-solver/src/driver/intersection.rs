@@ -73,7 +73,7 @@
 //!
 //! Not one predicate is stated here.
 
-use ppf_cts_compute::{AllocLabel, Buffer, Device, Handle, ReadbackBuffer};
+use ppf_cts_compute::{AllocLabel, Device, Handle, ReadbackBuffer};
 use super::lbvh::Tree;
 use crate::data::IntersectionRecord;
 use super::kernels::{
@@ -246,22 +246,6 @@ pub struct Report {
     /// aborted on intersections wants the true count, and a report that stops
     /// counting where it stops storing understates the problem.
     pub found: u32,
-    /// Whether NO edge intersects anything, folded on the device over the flag
-    /// `check_intersection` accumulates across its three edge walks.
-    ///
-    /// The verdict is `edge_clear && vert_clear` over two device folds, with no
-    /// flag array copied to the host. The per-element flags are still there and
-    /// `Scan::flags` downloads them, which only a test asks for.
-    ///
-    /// No reader, in production or in a test: the field is the sink for the
-    /// two-level device fold in `ScanState::fold_flags`, so it carries a result
-    /// the scan computes rather than a spare slot.
-    #[allow(dead_code)]
-    pub edge_clear: bool,
-    /// The same for the grain-grain pass over surface vertices, and the sink
-    /// for the same fold: no reader in production or in a test.
-    #[allow(dead_code)]
-    pub vert_clear: bool,
     /// The per-element flags, IN A TEST BUILD ONLY.
     ///
     /// Production reads the verdict off the device fold above and never copies
@@ -338,15 +322,6 @@ pub struct ScanState {
     vert_flag: ReadbackBuffer<u32>,
     records: ReadbackBuffer<u32>,
     counter: ReadbackBuffer<u32>,
-    /// Where the two flag arrays are FOLDED, on the device.
-    ///
-    /// Each flag array is reduced on the device and only the one-word total
-    /// comes back; no flag array is copied to the host. Folding rather than
-    /// downloading is what keeps the verdict a device computation: the arrays
-    /// are one entry per edge and per surface vertex, so a host walk is a
-    /// whole-array transfer per check on the hottest guarantee path there is.
-    flag_fold: Buffer<u32>,
-    flag_total: ReadbackBuffer<u32>,
     edges: usize,
     surface_vertices: usize,
 }
@@ -429,18 +404,6 @@ impl ScanState {
         )?;
         self.counter
             .size(device, 1, AllocLabel("intersection.counter"))?;
-        // THE FOLD SCRATCH, sized for the longer of the two arrays. A fold over
-        // N elements needs one slot per block at every level, and the geometric
-        // series over a width of `DOF_FOLD_WIDTH` is under N/(width-1) slots,
-        // so one block's worth beyond the first level is ample; the loop asserts
-        // it by construction, never writing past `blocks` at a level.
-        let longest = edges.max(surface_vertices).max(1);
-        let width = crate::driver::state::DOF_FOLD_WIDTH;
-        let slots = longest.div_ceil(width).max(1) * 2;
-        self.flag_fold
-            .size(device, slots, AllocLabel("intersection.flag_fold"))?;
-        self.flag_total
-            .size(device, 1, AllocLabel("intersection.flag_total"))?;
         let edge_words = self.edge_flag.len();
         let vert_words = self.vert_flag.len();
         clear(device, self.edge_flag.handle(), edge_words)?;
@@ -707,62 +670,6 @@ impl ScanState {
         Ok(())
     }
 
-    /// The three readbacks, and nothing else.
-    ///
-    /// A counter, at most `capacity` records, and the two flag arrays. The
-    /// record copy is CLAMPED to `capacity`: the counter counts DEMAND, so it
-    /// may exceed the array, and reading it as a length would read past the end.
-    /// Fold one flag array to a single count, on the device.
-    ///
-    /// The question is whether ANY flag is set, and a SUM over an array of
-    /// zeroes and ones answers it, using the fold this driver already has for
-    /// `u32`. What matters is that the array is never walked on the host.
-    fn fold_flags<D: Device>(
-        &mut self,
-        device: &mut D,
-        which: &'static str,
-        count: usize,
-    ) -> FatalResult<u32> {
-        if count == 0 {
-            return Ok(0);
-        }
-        let width = crate::driver::state::DOF_FOLD_WIDTH;
-        let source = if which == "edge" {
-            self.edge_flag.handle()
-        } else {
-            self.vert_flag.handle()
-        };
-        let mut input = source;
-        let mut remaining = count;
-        let mut cursor = 0usize;
-        loop {
-            let blocks = remaining.div_ceil(width);
-            let destination = if blocks == 1 {
-                self.flag_total.handle()
-            } else {
-                self.flag_fold.span(cursor, blocks)
-            };
-            let args = crate::driver::kernels::VecBlockSumU32Args {
-                source: input,
-                length: remaining as u32,
-                width: width as u32,
-                total: destination,
-                count: blocks as u32,
-                seam_arena_count: 0,
-            };
-            // Safety: every handle names a live allocation for this call.
-            unsafe { device.launch("intersection.flag_fold", &args, blocks as u32) }?;
-            if blocks == 1 {
-                break;
-            }
-            input = self.flag_fold.span(cursor, blocks);
-            cursor += blocks;
-            remaining = blocks;
-        }
-        self.flag_total.download(device)?;
-        Ok(self.flag_total.host()[0])
-    }
-
     /// The per-element flags, downloaded on demand.
     ///
     /// PRODUCTION DOES NOT CALL THIS. The verdict is a device fold; these
@@ -798,6 +705,9 @@ impl ScanState {
         Ok((edge, vert))
     }
 
+    /// The readbacks: a counter and at most `capacity` records. The record
+    /// copy is CLAMPED to `capacity`: the counter counts DEMAND, so it may
+    /// exceed the array, and reading it as a length would read past the end.
     pub fn finish<D: Device>(&mut self, device: &mut D) -> FatalResult<Report> {
         self.counter.download(device)?;
         let found = self.counter.host()[0];
@@ -810,20 +720,11 @@ impl ScanState {
                 records.push(decode_record(&words[slot * RECORD_WORDS..][..RECORD_WORDS]));
             }
         }
-        // THE VERDICT IS A DEVICE FOLD. Downloading the two arrays to walk
-        // them here would be a whole-array transfer per check, twice, on the
-        // path that decides whether a pose may be committed.
-        let edges = self.edges;
-        let surface = self.surface_vertices;
-        let edge_clear = self.fold_flags(device, "edge", edges)? == 0;
-        let vert_clear = self.fold_flags(device, "vert", surface)? == 0;
         #[cfg(test)]
         let (edge_flag, vert_flag) = self.flags(device)?;
         Ok(Report {
             records,
             found,
-            edge_clear,
-            vert_clear,
             #[cfg(test)]
             edge_flag,
             #[cfg(test)]
@@ -1141,13 +1042,6 @@ mod tests {
             self.scan
                 .finish(&mut self.device)
                 .expect("the scan reads its three results back")
-        }
-
-        /// The per-element flags, which production never downloads.
-        fn flags(&mut self) -> (Vec<bool>, Vec<bool>) {
-            self.scan
-                .flags(&mut self.device)
-                .expect("the scan reads its flag arrays back")
         }
     }
 

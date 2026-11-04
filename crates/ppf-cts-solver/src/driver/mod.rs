@@ -159,11 +159,6 @@ mod step;
 mod test_scene;
 pub mod bvh;
 pub mod csr;
-// The backend surface is `ppf-cts-compute`, and a driver module names that
-// crate directly rather than reaching a local alias for it. Nothing about a
-// device is declared here any more; what stayed behind is the one item on that
-// seam which decides a value rather than a mechanism.
-pub mod cadence;
 // The launch table: one compiled entry point per kernel id. The device that
 // consumes it is the compute crate's.
 mod launch;
@@ -174,7 +169,6 @@ pub mod ccd;
 pub mod dyncsr;
 pub mod intersection;
 pub mod lbvh;
-pub mod pair_cache;
 pub mod operator;
 pub mod pcg;
 pub mod reduce;

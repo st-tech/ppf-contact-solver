@@ -315,13 +315,15 @@ def sand_radius_conflict(group):
 # The SHELL model identifier the Model picker no longer offers. Its item keeps
 # slot 0 of ``ObjectGroup.shell_model`` with an empty name, so a .blend or a
 # material profile saved with it still loads it as this identifier.
-# The group types that carry a local gap limit: the ones whose objects can be
-# in contact with themselves. A STATIC collider and a PDRD body form no pair
-# among their own elements, so nothing bounds their gap, and a SAND grain has
-# no mesh to measure. The limit keeps a mesh's own neighbors out of contact at
-# rest, the contact locking of Gomez-Nogales et al., "Unlocking Thickness
-# Modeling for Codimensional Contact Simulation" (arXiv:2510.10256).
-CONTACT_GAP_LIMIT_TYPES = ("SOLID", "SHELL", "ROD")
+# The group types that carry a local gap limit: every type with a mesh to
+# measure. A SAND grain has none. On a SOLID, SHELL or ROD the limit keeps a
+# mesh's own neighbors out of contact at rest, the contact locking of
+# Gomez-Nogales et al., "Unlocking Thickness Modeling for Codimensional Contact
+# Simulation" (arXiv:2510.10256). A STATIC collider and a PDRD body form no
+# pair among their own elements, and there it keeps the gap at the scale of
+# the mesh, so a gap taken from a large object's bounding box diagonal does
+# not reach far past its elements.
+CONTACT_GAP_LIMIT_TYPES = ("SOLID", "SHELL", "ROD", "STATIC", "PDRD")
 
 
 def contact_gap_limit_fraction(group) -> float:

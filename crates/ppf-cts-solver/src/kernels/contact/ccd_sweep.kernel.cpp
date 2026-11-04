@@ -248,8 +248,12 @@ struct CcdPointFaceVisitor {
             const Vec3f t10 = x1[f[0]];
             const Vec3f t11 = x1[f[1]];
             const Vec3f t12 = x1[f[2]];
+            // `toi` IS THIS QUERY'S RUNNING MINIMUM, handed to the advance as
+            // the time past which nothing it returns can change that minimum
+            // (`ccd_helper`, "THE CALLER'S RUNNING MINIMUM"). Every visitor
+            // below passes its own the same way.
             result = accd::point_triangle_ccd(p0, p1, t00, t01, t02, t10, t11,
-                                              t12, offset, ghat, max_t,
+                                              t12, offset, ghat, max_t, toi,
                                               ccd_eps, &info);
         } else {
             const float offset = 2.0f * vparam.offset;
@@ -263,7 +267,7 @@ struct CcdPointFaceVisitor {
             const Vec3f q01 = x0[f[k]];
             const Vec3f q11 = x1[f[k]];
             result = accd::point_edge_ccd(p0, p1, q00, q01, q10, q11, offset,
-                                          ghat, max_t, ccd_eps, &info);
+                                          ghat, max_t, toi, ccd_eps, &info);
             kind = CCD_SWEEP_POINT_EDGE;
         }
         ccd_record_overlap(overlap, kind, vertex_index, f[0], info);
@@ -333,7 +337,7 @@ struct CcdPointPointVisitor {
         const Vec3f b0 = x0[index];
         const Vec3f b1 = x1[index];
         const float result = accd::point_point_ccd(a0, a1, b0, b1, offset, ghat,
-                                                   max_t, ccd_eps, &info);
+                                                   max_t, toi, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_POINT, vertex_index, index,
                            info);
         if (!(result >= max_t)) {
@@ -395,12 +399,9 @@ struct CcdPointEdgeVisitor {
             return false;
         }
         const Vec2u e = edge[index];
-        // The queries own no edge, so this never fires on a well-formed list;
-        // it is kept so the visitor states its own precondition rather than
-        // borrowing the caller's.
-        if (e[0] == vertex_index || e[1] == vertex_index) {
-            return false;
-        }
+        // NO SELF-PAIR TEST. The query list is built from this same edge array
+        // as exactly the vertices that no edge names, so neither end of any
+        // edge visited here can be the query vertex.
         const VertexProp vprop = vertex_prop[vertex_index];
         const VertexProp eanchor = vertex_prop[e[0]];
         const EdgeProp eprop = edge_prop[index];
@@ -427,7 +428,7 @@ struct CcdPointEdgeVisitor {
         const Vec3f q10 = x1[e[0]];
         const Vec3f q11 = x1[e[1]];
         const float result = accd::point_edge_ccd(p0, p1, q00, q01, q10, q11,
-                                                  offset, ghat, max_t,
+                                                  offset, ghat, max_t, toi,
                                                   ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_EDGE, vertex_index, e[0],
                            info);
@@ -505,7 +506,7 @@ struct CcdEdgeEdgeVisitor {
             const Vec3f q10 = x1[e1[0]];
             const Vec3f q11 = x1[e1[1]];
             result = accd::edge_edge_ccd(p00, p01, q00, q01, p10, p11, q10, q11,
-                                         offset, ghat, max_t, ccd_eps, &info);
+                                         offset, ghat, max_t, toi, ccd_eps, &info);
         } else {
             // TWO EDGES SHARING A VERTEX still have two free endpoints, and
             // either can be driven onto the other's segment, so both
@@ -527,10 +528,10 @@ struct CcdEdgeEdgeVisitor {
                 const Vec3f q02 = x0[idx2];
                 const Vec3f q12 = x1[idx2];
                 const float toi_0 = accd::point_edge_ccd(
-                    q01, q11, q00, q02, q10, q12, offset, ghat, max_t, ccd_eps,
+                    q01, q11, q00, q02, q10, q12, offset, ghat, max_t, toi, ccd_eps,
                     &info);
                 const float toi_1 = accd::point_edge_ccd(
-                    q02, q12, q00, q01, q10, q11, offset, ghat, max_t, ccd_eps,
+                    q02, q12, q00, q01, q10, q11, offset, ghat, max_t, toi, ccd_eps,
                     &info);
                 result = ccd_toi_min(toi_0, toi_1);
                 break;
@@ -613,7 +614,7 @@ struct CcdCollisionPointFaceM2cVisitor {
         info.flagged = 0u;
         const float result =
             accd::point_triangle_ccd(p0, p1, t0, t1, t2, t0, t1, t2, offset,
-                                     ghat, max_t, ccd_eps, &info);
+                                     ghat, max_t, toi, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_TRIANGLE, vertex_index,
                            f[0], info);
         if (!(result >= max_t)) {
@@ -695,7 +696,7 @@ struct CcdCollisionPointFaceC2mVisitor {
         info.flagged = 0u;
         const float result =
             accd::point_triangle_ccd(p, p, t00, t01, t02, t10, t11, t12, offset,
-                                     ghat, max_t, ccd_eps, &info);
+                                     ghat, max_t, toi, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_POINT_TRIANGLE, f[0],
                            vertex_index, info);
         if (!(result >= max_t)) {
@@ -775,7 +776,7 @@ struct CcdCollisionEdgeEdgeVisitor {
         info.flagged = 0u;
         const float result =
             accd::edge_edge_ccd(p00, p01, q0, q1, p10, p11, q0, q1, offset,
-                                ghat, max_t, ccd_eps, &info);
+                                ghat, max_t, toi, ccd_eps, &info);
         ccd_record_overlap(overlap, CCD_SWEEP_EDGE_EDGE, e0[0], e1[0], info);
         if (!(result >= max_t)) {
             toi = ccd_toi_min(toi, result);

@@ -52,20 +52,6 @@ shell_strain_diff_table(const Vec2f &shifted_sigma,
     return table;
 }
 
-[[seam::device_fn]] inline float
-shell_strain_energy(const Vec2f &shifted_sigma, float limit,
-                        Barrier barrier) {
-    float result = 0.0f;
-    for (unsigned i = 0; i < 2; ++i) {
-        const float strain = shifted_sigma[i];
-        if (strain > 0.0f) {
-            result += barrier_energy(
-                limit - strain, limit, 0.0f, barrier);
-        }
-    }
-    return result;
-}
-
 // The elasticity-inclusive dynamic stiffness the strain-limit barrier above is
 // scaled by. Two terms: the face's own assembled Hessian contracted along the
 // centered shape of the face, which carries the surrounding elasticity into the
@@ -147,72 +133,6 @@ shell_strain_energy(const Vec2f &shifted_sigma, float limit,
     d2ed2a = table.d2ed2a;
 }
 
-// The entry point, declared once and rendered for four targets: the
-// `__global__` nvcc compiles, the `kernel void` the Metal shader compiler
-// compiles, the `shell_strain_diff_table_gated_entry` shim a host C++
-// compiler compiles, and the Rust `#[repr(C)]` twin `src/driver/kernels.rs`
-// fills.
-//
-// FOUR ELEMENT GATHERS AND NO SCATTER. Two are read and two are written, and
-// the two written ones are non-const for exactly that reason. The pod sizes pin
-// the element widths in every C++ rendering, so a compiler laying `Vec2f` or
-// `Mat2x2f` out differently fails to compile rather than reading the wrong
-// bytes.
-// The same table with the authored limit read from the face's own records.
-//
-// THE GATE IS THE LIMITER'S OWN AND IT IS NOT THE MEMBRANE'S. There is NO
-// `collider` test here: a spring-held collider's vertices are free, and the
-// limit it was authored with is what stops its own mesh from stretching past
-// it. The two exclusions that do apply are `fixed`, whose DOF is eliminated,
-// and `rest_excluded`.
-//
-// WHAT IT REPLACES is a host loop that read the scene's material table, wrote
-// `material.strainlimit` into a staged array for every face and zeroed the rest,
-// and uploaded the array every pass. The limit is a material constant reached
-// through the face's own `param_index`, so the device can read it out of two
-// records it already holds.
-[[seam::device_fn]] inline void shell_strain_diff_table_from_records(
-    const Vec2f &shifted_sigma,
-    const FaceProp &prop,
-    const FaceParam *face_param, unsigned barrier,
-    float largest_shifted, Vec2f &deda,
-    Mat2x2f &d2ed2a, float &live) {
-    float authored_limit = 0.0f;
-    if (!prop.fixed && !prop.rest_excluded) {
-        authored_limit = face_param[prop.param_index].strainlimit;
-    }
-    // WHICH FACES THE LATER PASSES ACT ON, written here because this is the
-    // first pass that holds BOTH halves of the gate.
-    //
-    // The two halves are `!prop.fixed && !prop.rest_excluded &&
-    // fparam.strainlimit > 0.0f`, and then, once the SVD has run,
-    // `largest_shifted > 0.0f`. The first is the face's own records and the
-    // second is the SVD's, so no pass before this one can answer it and no pass
-    // after it needs to ask twice.
-    live = (authored_limit > 0.0f && largest_shifted > 0.0f) ? 1.0f : 0.0f;
-    shell_strain_diff_table_gated(shifted_sigma, authored_limit, barrier, deda,
-                                  d2ed2a);
-}
-
-[[seam::entry(count)]] void shell_strain_diff_table_from_records(
-    const Vec2f *shifted_sigma,
-    const FaceProp *prop,
-    const FaceParam *face_param,
-    unsigned barrier,
-    const float *largest_shifted,
-    Vec2f *deda,
-    Mat2x2f *d2ed2a,
-    float *live,
-    unsigned count);
-
-[[seam::entry(count)]] void shell_strain_diff_table_gated(
-    const Vec2f *shifted_sigma,
-    const float *authored_limit,
-    unsigned barrier,
-    Vec2f *deda,
-    Mat2x2f *d2ed2a,
-    unsigned count);
-
 // THE GATHER HAPPENS HERE RATHER THAN IN THE CALLER, plus its gate: the 3x3
 // twin of `strainlimiting/rod_strain.kernel.cpp`'s, at 3x3 blocks over a 9x9
 // instead of 2x2 over a 6x6. That file states why the face array is named TWICE
@@ -250,78 +170,6 @@ shell_strain_energy(const Vec2f &shifted_sigma, float limit,
     return shell_strain_stiffness(x0, x1, x2, local_hessian, mass,
                                       shifted_sigma, limit);
 }
-
-// The same stiffness with the MASS and the SHRINK-CORRECTED limit read from the
-// face's own records.
-//
-// TWO STAGED ARRAYS COLLAPSE INTO TWO RECORDS. The mass is a `FaceProp` field
-// and the effective limit is `shell_effective_strain_limit` of three
-// `FaceParam` fields, so the host loop that wrote both into staged arrays every
-// pass was recomputing on the CPU what the device can read and evaluate from
-// records it already holds. The gate is the limiter's own, which has NO
-// `collider` test.
-[[seam::device_fn]] inline float shell_strain_stiffness_from_records(
-    const Vec3f &x0, const Vec3f &x1,
-    const Vec3f &x2,
-    const unsigned *face_slots, unsigned element,
-    const unsigned *index,
-    const unsigned *offset,
-    const float *value, unsigned row_count,
-    const FaceProp &prop,
-    const FaceParam *face_param,
-    const Vec2f &shifted_sigma) {
-    if (prop.fixed || prop.rest_excluded) {
-        return 0.0f;
-    }
-    const FaceParam param = face_param[prop.param_index];
-    if (!(param.strainlimit > 0.0f)) {
-        return 0.0f;
-    }
-    const float limit = shell_effective_strain_limit(
-        param.strainlimit, param.shrink_x, param.shrink_y);
-    return shell_strain_stiffness_gated(x0, x1, x2, face_slots, element, index,
-                                        offset, value, row_count, prop.mass,
-                                        shifted_sigma, limit);
-}
-
-[[seam::entry(count, element)]] void shell_strain_stiffness_from_records(
-    [[seam::through]] const Vec3f *x,
-    [[seam::indices(3)]] const unsigned *face,
-    [[seam::bound]] unsigned vertex_count,
-    const unsigned *face_slots,
-    unsigned element,
-    const unsigned *index,
-    const unsigned *offset,
-    const float *value,
-    unsigned row_count,
-    const FaceProp *prop,
-    const FaceParam *face_param,
-    const Vec2f *shifted_sigma,
-    float *stiffness,
-    unsigned count);
-
-// Three positions through the face's own index triple with the bound beside
-// them, the same array again as a base pointer for the CSR lookup, the pattern
-// and the value array as base pointers because the row's own slot range is the
-// lookup's business, three element gathers and one element scatter.
-//
-// `x` IS THE START-OF-STEP POSE, not the Newton iterate: the row of the matrix
-// being contracted belongs to that pose, and the caller decides it.
-[[seam::entry(count, element)]] void shell_strain_stiffness_gated(
-    [[seam::through]] const Vec3f *x,
-    [[seam::indices(3)]] const unsigned *face,
-    [[seam::bound]] unsigned vertex_count,
-    const unsigned *face_slots,
-    unsigned element,
-    const unsigned *index,
-    const unsigned *offset,
-    const float *value,
-    unsigned row_count,
-    const float *mass,
-    const Vec2f *shifted_sigma,
-    const float *effective_limit,
-    float *stiffness,
-    unsigned count);
 
 // THE WHOLE LIMITER IN ONE KERNEL, which is what
 // `embed_strainlimiting_force_hessian` is: one `DISPATCH_START(shell_face_count)`

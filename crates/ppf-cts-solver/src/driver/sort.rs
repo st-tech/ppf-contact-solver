@@ -32,8 +32,10 @@
 //! that fails when it is violated, is what turns that into something a reviewer
 //! can see.
 
-// `par_stable_sort_by_key` is called from `bvh.rs` and `schwarz.rs`. The
-// allow covers `stable_sort_by_key`, which only this module's own tests reach.
+// `par_stable_sort_by_key` is called from `bvh.rs`'s test oracle
+// `primitive_order`, and `stable_sort_by_key` is the serial reference this
+// module's own tests hold it to; no production path calls either, which is what
+// the allow covers.
 #![allow(dead_code)]
 
 use rayon::prelude::*;

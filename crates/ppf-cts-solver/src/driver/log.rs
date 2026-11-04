@@ -74,12 +74,6 @@
 //! guard, and only then touches a file or stdout. Reviewing a change here: no
 //! `STATE.lock()` result may be alive across a `println!` or a file write.
 
-// `mark` is called from `step.rs` and `set_path` from `mod.rs`. The allow covers
-// `path` and `time`, the two accessors this module exports that no caller reads,
-// and it is scoped to this module so a genuinely unused item elsewhere still
-// surfaces.
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -253,11 +247,6 @@ pub fn set_path(path: &Path) -> bool {
     true
 }
 
-/// The directory the streams go in, or `None` when no path was set.
-pub fn path() -> Option<PathBuf> {
-    STATE.lock().ok().and_then(|state| state.directory.clone())
-}
-
 /// Stamp the simulation time every subsequent line carries, and announce it.
 ///
 /// The line is `* time = %g`, C's shortest-of-two-forms conversion, which is
@@ -267,10 +256,6 @@ pub fn set_time(time: f64) {
         state.time = time;
     }
     message!("* time = {}", c_general(time));
-}
-
-pub fn time() -> f64 {
-    STATE.lock().map(|state| state.time).unwrap_or(0.0)
 }
 
 /// Record one value under `<scope>.<channel>` and, unless it is `Quiet`, print

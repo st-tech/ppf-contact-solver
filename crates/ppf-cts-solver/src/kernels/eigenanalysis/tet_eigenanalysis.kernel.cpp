@@ -39,7 +39,6 @@ tet_spectral_force(const Vec3f &gradient_sigma,
     return u * gradient_sigma.asDiagonal() * vt;
 }
 
-[[seam::entry(hessian)]]
 [[seam::device_fn]] inline Mat9x9f
 tet_spectral_hessian(const Vec3f &gradient_sigma,
                          const Mat3x3f &hessian_sigma,

@@ -27,8 +27,9 @@
 #     exactly as authored, and no limit is the default;
 #   * a rod is lowered segment by segment, and a solid on its surface;
 #   * the room is measured against the largest offset the object takes;
-#   * a static collider, a PDRD body and an object that allows its own
-#     intersections are left as authored;
+#   * a static collider and a PDRD body are lowered face by face, though
+#     neither forms pairs among its own faces, and an object that allows its
+#     own intersections is left as authored;
 #   * every frame of an animated gap is held, the frames of an object that
 #     animates nothing included, and so is a mapped gap;
 #   * a limit that is animated, mapped or out of range is refused;
@@ -427,18 +428,31 @@ def test_segments_with_no_room_keep_the_authored_gap(scene):
     assert gaps[3:] == pytest.approx(FRACTION * (0.2 - 0.06), rel=1e-6)
 
 
-def test_a_static_collider_is_left_as_authored(scene):
+def test_a_static_collider_is_lowered_face_by_face(scene):
     floor = limited(scene.add("sheet", "floor"))
     floor.pin()
     fixed = scene.build(quiet=True)
     assert floor.static
+    expected = bounds_of(floor)
+    assert (expected < WIDE).all()
+    gaps = np.array(fixed._static_param["contact-gap"], dtype=np.float64)
+    assert gaps == pytest.approx(expected, rel=1e-6)
+
+
+def test_a_static_collider_with_no_limit_keeps_the_authored_gap(scene):
+    floor = scene.add("sheet", "floor")
+    floor.param.set("contact-gap", WIDE)
+    floor.pin()
+    fixed = scene.build(quiet=True)
     assert (np.array(fixed._static_param["contact-gap"]) == WIDE).all()
 
 
-def test_a_rigid_body_is_left_as_authored(scene):
-    limited(scene.add("cube").as_pdrd())
+def test_a_rigid_body_is_lowered_face_by_face(scene):
+    body = limited(scene.add("cube").as_pdrd())
     fixed = scene.build(quiet=True)
-    assert (tri_gaps(fixed) == WIDE).all()
+    expected = bounds_of(body)
+    assert (expected < WIDE).all()
+    assert tri_gaps(fixed) == pytest.approx(expected, rel=1e-6)
 
 
 def test_an_object_that_allows_its_own_intersections_is_left_as_authored(scene):

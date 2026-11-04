@@ -43,41 +43,6 @@
                                   dt, gradient, hessian);
 }
 
-// THE STRETCH TERM ALONE, without the damping half the composition above adds.
-//
-// IT IS NOT TOTAL, AND THAT IS THE CALLER'S PROBLEM. It divides by the
-// segment's CURRENT length and by its rest length and guards neither, so a
-// segment whose endpoints coincide, or whose rest length is zero, writes a
-// non-finite gradient and Hessian. `weight` cannot recover that: zero times a
-// non-finite value is not zero. The caller must therefore evaluate only the
-// segments it will scatter, which is what walking the active list does.
-//
-// It carries the declaration's name because the generated entry calls that
-// name, and it is a body of its own rather than an arity change on
-// `rod_hook_force_hessian`: that composition already has callers, and the
-// damping it folds in is a separate dispatch here.
-[[seam::device_fn]] inline void rod_stretch_diff_table(
-    const Vec3f &x0, const Vec3f &x1,
-    float rest_length, float weight, Mat3x2f &gradient,
-    Mat6x6f &hessian) {
-    hook::make_diff_table(x0, x1, rest_length, weight, gradient, hessian);
-}
-
-// TWO POSITIONS READ THROUGH THE EDGE'S OWN INDEX LIST, with the bound each
-// slot is checked against carried in the record. The rest length and the
-// weight are per-element gathers, and the gradient and the Hessian are
-// non-const gathers, which is the write: this body ASSIGNS both rather than
-// accumulating into them.
-[[seam::entry(count)]] void rod_stretch_diff_table(
-    [[seam::through]] const Vec3f *x,
-    [[seam::indices(2)]] const unsigned *edge,
-    [[seam::bound]] unsigned vertex_count,
-    const float *rest_length,
-    const float *weight,
-    Mat3x2f *gradient,
-    Mat6x6f *hessian,
-    unsigned count);
-
 // THE WHOLE ROD STRETCH TERM IN ONE THREAD. One dispatch over the rod prefix
 // reads the edge, its prop and its material, gates on the stiffness, builds the
 // diff table, adds the damping and scatters both the force and the Hessian,

@@ -2964,10 +2964,12 @@ class Scene:
 
         Keyed by the scene's object key and holding only the objects the limit
         applies to: one that sets it, has triangles or rod segments to measure,
-        and can be in contact with itself. An object that forms no pair with
-        itself has no mesh neighbor to press on, so nothing bounds its gap.
-        Every object's value is checked all the same, so a fraction that is
-        out of range is refused whether or not it would have applied.
+        and does not allow its own intersections. A static collider and a PDRD
+        body form no pair among their own elements, but the limit holds them
+        all the same: it keeps the gap at the scale of the mesh, so a gap
+        sized from a large object's bounding box does not reach far past its
+        elements. Every object's value is checked all the same, so a fraction
+        that is out of range is refused whether or not it would have applied.
 
         The room is measured against the LARGEST contact offset the object
         takes, animated values and a map's target included, so the bound holds
@@ -2988,7 +2990,7 @@ class Scene:
                     "instead; the limit holds every value it takes."
                 )
             fraction = validated_fraction(obj.param.get(key), label)
-            if fraction == 0.0 or not self._forms_own_pairs(obj):
+            if fraction == 0.0 or self._flag(obj, "allow-self-intersection"):
                 continue
             elements = obj.get("E") if obj.obj_type == "rod" else obj.get("F")
             if elements is None or not len(elements):
@@ -3698,7 +3700,8 @@ class Scene:
             scalar with one value per element: "F" for triangles, "T" for
             tetrahedra, "E" for rod segments. `limited` is the object's scene
             key in the passes whose elements carry its contact gap limit,
-            which are the surface triangles and the rod segments. `fill` maps
+            which are the surface triangles, the rod segments and a static
+            collider's faces. `fill` maps
             keys the object does not carry to the value each of its elements
             takes for them; the table's key set is then the object's keys and
             these together.
@@ -4588,7 +4591,10 @@ class Scene:
             entry = static_per_object.get(name)
             if entry is None:
                 continue
-            _extend_param(obj.param, concat_static_param, int(entry["n_face"]))
+            _extend_param(
+                obj.param, concat_static_param, int(entry["n_face"]),
+                limited=name,
+            )
         concat_static_transform_anims: list[tuple[int, TransformAnimation]] = [
             (int(static_per_object[name]["offset"]), obj._transform_animation)
             for name, obj in self._object.items()

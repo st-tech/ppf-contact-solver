@@ -18,20 +18,6 @@
 // report the same number for the same pose. A per-backend spelling would make
 // the channel incomparable, which is worse than not having it.
 
-// One shell face's stretch, as the larger principal stretch scaled by the
-// tighter of the two authored shrink factors.
-//
-// The shrink factors are the material's rest-shape scaling, so a face authored
-// to sit at 0.9 of its drawn size reads 1.0 when it is at rest rather than 1.11.
-// The TIGHTER of the two is used because the ratio is compared against one
-// scalar limit and the tighter factor is the one that binds first.
-[[seam::device_fn]] inline float shell_stretch_ratio(float sigma0,
-                                                        float sigma1,
-                                                        float shrink_x,
-                                                        float shrink_y) {
-    return fmath::max(sigma0, sigma1) * fmath::min(shrink_x, shrink_y);
-}
-
 // One rod segment's stretch: its current length over the length it was built
 // with.
 //

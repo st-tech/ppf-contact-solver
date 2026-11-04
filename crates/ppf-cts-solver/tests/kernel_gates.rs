@@ -54,6 +54,12 @@ fn have_compiler() -> bool {
 /// unoptimized build turns a second into a minute. It changes no verdict: none
 /// of them is a timing test, and `-ffast-math` is NOT passed, which would.
 fn run_gate(name: &str) -> String {
+    run_gate_with(name, &[])
+}
+
+/// `run_gate` with extra compiler arguments, for a gate whose property holds
+/// only under a stated flag (a bit-identity claim stated with contraction off).
+fn run_gate_with(name: &str, extra: &[&str]) -> String {
     let out_dir = std::env::temp_dir().join(format!("ppf-kernel-gate-{name}"));
     let mut compile = Command::new(compiler());
     compile
@@ -70,6 +76,7 @@ fn run_gate(name: &str) -> String {
         // forever on a collapsed frame, and a hang is a test that never reports
         // rather than one that fails. Reaching that deadline takes a thread.
         .arg("-pthread")
+        .args(extra)
         .arg(format!("-I{}", kernels_root().display()))
         .arg("-o")
         .arg(&out_dir)
@@ -357,4 +364,20 @@ fn a_nan_block_reaches_the_eigensolver_with_finite_eigenvalues() {
         out.contains("a max-side finiteness test cannot see a NaN input"),
         "{out}"
     );
+}
+
+/// The host twin of the folded dynamic apply forms each 3x3 block product and
+/// its entry magnitude in four float lanes (`compute::lane4_*` in
+/// `seam_host.h`). The claim that makes that a free change is that lane `a` is
+/// the scalar form's component `a` BIT FOR BIT, which holds with contraction
+/// off (with it on, either form may fuse a different product, a freedom the
+/// scalar form already had), so that is how this gate is compiled.
+#[test]
+fn the_lane_block_product_is_the_scalar_one_bit_for_bit() {
+    if !have_compiler() {
+        eprintln!("SKIPPED: no C++ compiler on this host");
+        return;
+    }
+    let out = run_gate_with("lane4_block", &["-ffp-contract=off"]);
+    assert!(out.contains("PASS"), "{out}");
 }

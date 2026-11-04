@@ -3123,6 +3123,25 @@ def _diag_cu_arg(entry):
     return ", diagnostics::global()"
 
 
+def _speculate_cpp(entry):
+    """The host element shim's speculative branch, or nothing.
+
+    AN ENTRY WITH A DIAGNOSTIC LANE CARRIES THE HOST'S REQUEST IN IT. The host
+    target marks a chunk's record to speculate when the row's declaration
+    allows it (`KernelDecl::speculate`), and `seam_speculate_range` in
+    `seam_host.h` then runs the chunk's elements with slot operations deferred.
+    A record not so marked, which is every record on every other row, takes
+    the plain loop below, so the branch is one load per call.
+    """
+    if entry.diag_name is None:
+        return ""
+    d = entry.diag_name
+    return (f"    if (seam_speculation_requested({d})) {{\n"
+            f"        seam_speculate_range({d}, begin, seam_last, seam_call);\n"
+            f"        return;\n"
+            f"    }}\n")
+
+
 def _diag_cpp_param(entry):
     """The host entry's diagnostic parameter, or nothing.
 
@@ -3207,6 +3226,7 @@ def render_entry_cpp(source_path, entries):
                    f"    const unsigned seam_last =\n"
                    f"        end < args->{entry.count_field.name} ? end : "
                    f"args->{entry.count_field.name};\n"
+                   f"{_speculate_cpp(entry)}"
                    f"    for (unsigned {entry.index_name} = begin;\n"
                    f"         {entry.index_name} < seam_last; "
                    f"++{entry.index_name}) {{\n"

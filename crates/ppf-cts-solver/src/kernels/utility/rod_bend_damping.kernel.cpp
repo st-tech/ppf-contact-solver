@@ -88,18 +88,3 @@
                                               hessian, lagged);
 }
 
-// THREE POSITIONS AND THREE START-OF-STEP POSES READ THROUGH THE BENDING SITE'S
-// OWN NODE LIST, with the bound each slot is checked against carried in the
-// record. The two non-const gathers and the read-before-write rule are the
-// family's, and `utility/face_damping.kernel.cpp` states them once.
-[[seam::entry(count)]] void rod_bend_damping(
-    [[seam::through]] const Vec3f *x,
-    [[seam::through]] const Vec3f *current,
-    [[seam::indices(3)]] const unsigned *node_index,
-    [[seam::bound]] unsigned vertex_count,
-    const float *beta,
-    float dt,
-    Mat3x3f *gradient,
-    Mat9x9f *hessian,
-    const Mat9x9f *lagged,
-    unsigned count);

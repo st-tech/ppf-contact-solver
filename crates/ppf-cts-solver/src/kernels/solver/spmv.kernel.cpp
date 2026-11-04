@@ -16,6 +16,29 @@ enum : unsigned {
     PCG_LATCH_AT = 3u
 };
 
+// WHERE A GROUP'S PARTIAL LIVES, for the PCG's two single-group folds
+// (`pcg_fold_alpha`, `pcg_fold_beta` in pcg.kernel.cpp). Defined here, beside
+// the latch slots, because the folded applies below write these partials and
+// this file is the first one pcg.kernel.cpp includes.
+//
+// A fold of `groups` partials gives each of its PCG_FOLD_LANES lanes one
+// contiguous run of `per = ceil(groups / lanes)` of them and adds the run in
+// order. Stored in group order, the lanes' k-th reads sit `per` floats apart,
+// so every warp load of the fold touches as many cache lines as it has lanes:
+// measured on twist, 5.3 us for a fold of 7,800 pairs of floats on one group.
+// Stored LANE-MAJOR, group `g` (lane `g / per`, step `g % per`) at
+// `(g % per) * lanes + g / per`, the same reads are consecutive. Each lane
+// still adds the same partials in the same order, so the sums are the same
+// bits; only the addresses move.
+//
+enum : unsigned { PCG_FOLD_LANES = 64u };
+
+[[seam::device_fn]] inline unsigned pcg_fold_slot(unsigned group,
+                                                  unsigned groups) {
+    const unsigned per = (groups + PCG_FOLD_LANES - 1u) / PCG_FOLD_LANES;
+    return (group % per) * PCG_FOLD_LANES + group / per;
+}
+
 // A NEUTRAL KERNEL SOURCE. This file is plain C++ and belongs to no backend: no
 // preprocessor conditional, no macro of its own, and no spelling that only nvcc
 // or only the Metal shader compiler accepts. ppf-cts-compute/seam/kernelgen.py renders it
@@ -60,33 +83,96 @@ mat3_transpose_mul(const float *matrix,
     return result;
 }
 
-// THE MAGNITUDE OF ONE BLOCK'S CONTRIBUTION, ACCUMULATED COMPONENTWISE.
+// THE MAGNITUDE OF ONE BLOCK'S CONTRIBUTION, TAKEN OVER ITS ENTRY TERMS.
 //
-// `p^T A p` is a sum of roughly `2 * nnz` SIGNED terms, so when the true
-// curvature is small beside the individual terms the fp32 result is dominated
-// by round-off. A bound on that error is what lets a caller tell a canceled
-// zero from a genuinely negative curvature.
+// `p^T A p` is a sum of signed fp32 terms, so when the true curvature is small
+// beside the individual terms the fp32 result is dominated by round-off. A
+// bound on that error is what lets a caller tell a canceled zero from a
+// genuinely negative curvature.
 //
-// THE BOUND IS THE REFERENCE'S, COMPONENT BY COMPONENT, and this is the shape
-// rather than a scalar for a reason worth stating, because the scalar form is
-// the one that looks right. `solver.cu:826-890` carries a `Vec3f abssum`,
-// accumulates `abssum[c] += |v[c]|` as each block is multiplied, and forms
-// `absdot = sum_k |p_k| * abssum_k` ONCE, at the end, beside
-// `dot = sum_k p_k * sum_k`. The cancellation between blocks is still captured,
-// because the magnitudes are still taken per block; what is deferred is only
-// the contraction against the row vector.
+// THE TERMS ARE THE ENTRY PRODUCTS `|M_ab| |x_b|`, NOT THE FINISHED BLOCK
+// PRODUCT `|(M x)_a|`. The 3x3 product is itself an fp32 sum, and so is every
+// stored entry, so both round at the scale of the entry terms. Taking the
+// magnitude after the product spends the product's own cancellation first,
+// and that cancellation is largest exactly where it matters: a vertex pressed
+// between two surfaces carries a contact stiffness far above its other terms
+// along a normal on no coordinate axis, so its block's entries are all of that
+// stiffness and a direction across the normal makes them cancel. Measured on
+// public issue #160's pinch, one such row's products cancel from 5.3e14 to
+// 7.1e9; a scale built from the finished products gave a threshold of 2.3e5
+// against a computed curvature of -3.55e6, and the run aborted as "not SPD" on
+// a matrix whose only negative eigenvalue, -2.0e6, is rounding of entries of
+// 3e13. The entry scale bounds what the stored entries' rounding can do to the
+// curvature, and is never smaller than the finished-product scale, so no
+// curvature that truncated before is fatal now. A genuine defect, a Rayleigh
+// quotient of order one, still clears it by orders.
 //
-// Accumulating `|p_i . v|` per block instead gives a STRICTLY TIGHTER number,
-// since `|sum_k p_k v_k| <= sum_k |p_k| |v_k|`, and a tighter bound is not a
-// better one here: it is a DIFFERENT bound, so the `pAp <= 0` guard classifies
-// against a different threshold than the reference does and the two solvers
-// disagree about which curvatures are resolvable. That is the second design
-// rule (1a) exists to prevent, so the reference's form is what this computes.
-[[seam::device_fn]] inline void spmv_accumulate_magnitude(
-    Vec3f &abssum, const Vec3f &block) {
-    for (unsigned k = 0; k < 3; ++k) {
-        abssum[k] += fmath::abs(block[k]);
+// THE CANCELLATION BETWEEN BLOCKS IS STILL CAPTURED, as in the reference
+// (`solver.cu:826-890`): magnitudes accumulate componentwise in `abssum` and
+// are contracted against `|x_row|` once, at the end.
+//
+
+// `matrix` as `mat3_mul` reads it, column-major: `(M x)_a = sum_b m[3b+a] x_b`.
+[[seam::device_fn]] inline void spmv_accumulate_entry_magnitude(
+    Vec3f &abssum, const float *matrix, const float *vector) {
+    for (unsigned a = 0; a < 3; ++a) {
+        abssum[a] += fmath::abs(matrix[a]) * fmath::abs(vector[0]) +
+                     fmath::abs(matrix[3 + a]) * fmath::abs(vector[1]) +
+                     fmath::abs(matrix[6 + a]) * fmath::abs(vector[2]);
     }
+}
+
+// `matrix` as `mat3_transpose_mul` reads it: `(M^T x)_a = sum_b m[3a+b] x_b`.
+[[seam::device_fn]] inline void spmv_accumulate_entry_magnitude_transpose(
+    Vec3f &abssum, const float *matrix, const float *vector) {
+    for (unsigned a = 0; a < 3; ++a) {
+        abssum[a] += fmath::abs(matrix[3 * a]) * fmath::abs(vector[0]) +
+                     fmath::abs(matrix[3 * a + 1]) * fmath::abs(vector[1]) +
+                     fmath::abs(matrix[3 * a + 2]) * fmath::abs(vector[2]);
+    }
+}
+
+// The same two for a vector held by value (the difference form).
+[[seam::device_fn]] inline void spmv_accumulate_entry_magnitude_vector(
+    Vec3f &abssum, const float *matrix, const Vec3f &vector) {
+    for (unsigned a = 0; a < 3; ++a) {
+        abssum[a] += fmath::abs(matrix[a]) * fmath::abs(vector[0]) +
+                     fmath::abs(matrix[3 + a]) * fmath::abs(vector[1]) +
+                     fmath::abs(matrix[6 + a]) * fmath::abs(vector[2]);
+    }
+}
+
+[[seam::device_fn]] inline void spmv_accumulate_entry_magnitude_transpose_vector(
+    Vec3f &abssum, const float *matrix, const Vec3f &vector) {
+    for (unsigned a = 0; a < 3; ++a) {
+        abssum[a] += fmath::abs(matrix[3 * a]) * fmath::abs(vector[0]) +
+                     fmath::abs(matrix[3 * a + 1]) * fmath::abs(vector[1]) +
+                     fmath::abs(matrix[3 * a + 2]) * fmath::abs(vector[2]);
+    }
+}
+
+// The scalar shift `D x_i` rides in the diagonal term; its terms are `|D| |x_k|`.
+[[seam::device_fn]] inline void spmv_accumulate_shift_magnitude(
+    Vec3f &abssum, float shift, const float *vector) {
+    for (unsigned k = 0; k < 3; ++k) {
+        abssum[k] += fmath::abs(shift) * fmath::abs(vector[k]);
+    }
+}
+
+// THE SAME ENTRY SCALE FOR A BLOCK CONTRACTED ON BOTH SIDES, as the symmetric
+// apply forms it: `sum_a |left_a| sum_b |M_ab| |right_b|`, `matrix` read as
+// `mat3_mul` reads it. That apply takes one scalar `left . (M right)` per block,
+// and its magnitude, like the finished product's, has already spent the
+// cancellation inside the block.
+[[seam::device_fn]] inline float spmv_entry_quadratic_magnitude(
+    const float *matrix, const float *left, const float *right) {
+    Vec3f abssum = Vec3f::Zero();
+    spmv_accumulate_entry_magnitude(abssum, matrix, right);
+    float magnitude = 0.0f;
+    for (unsigned a = 0; a < 3; ++a) {
+        magnitude += fmath::abs(left[a]) * abssum[a];
+    }
+    return magnitude;
 }
 
 // THE ROW'S CURVATURE TERM AND ITS ROUND-OFF BOUND, formed once from the
@@ -126,7 +212,7 @@ mat3_transpose_mul(const float *matrix,
     for (unsigned slot = offset[row]; slot < offset[row + 1]; ++slot) {
         const Vec3f block = mat3_mul(value + 9 * slot, x + 3 * index[slot]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude(abssum, value + 9 * slot, x + 3 * index[slot]);
     }
     for (unsigned entry = transpose_offset[row];
          entry < transpose_offset[row + 1]; ++entry) {
@@ -135,7 +221,8 @@ mat3_transpose_mul(const float *matrix,
         const Vec3f block = mat3_transpose_mul(value + 9 * slot,
                                                    x + 3 * source_row);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose(abssum, value + 9 * slot,
+                                                   x + 3 * source_row);
     }
     return result;
 }
@@ -152,14 +239,16 @@ mat3_transpose_mul(const float *matrix,
         const Vec3f block = mat3_mul(direct_value + 9 * entry,
                                          x + 3 * direct_index[entry]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude(abssum, direct_value + 9 * entry,
+                                         x + 3 * direct_index[entry]);
     }
     for (unsigned entry = 0; entry < reference_count; ++entry) {
         const Vec3f block =
             mat3_transpose_mul(global_value + 9 * reference_value[entry],
                                    x + 3 * reference_index[entry]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose(abssum, global_value + 9 * reference_value[entry],
+                                   x + 3 * reference_index[entry]);
     }
     return result;
 }
@@ -241,14 +330,16 @@ mat3_transpose_mul(const float *matrix,
         const Vec3f block = mat3_mul(direct_value + 9 * entry,
                                          x + 3 * direct_index[entry]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude(abssum, direct_value + 9 * entry,
+                                         x + 3 * direct_index[entry]);
     }
     for (unsigned entry = start; entry < reference_count; entry += stride) {
         const Vec3f block =
             mat3_transpose_mul(global_value + 9 * reference_value[entry],
                                    x + 3 * reference_index[entry]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose(abssum, global_value + 9 * reference_value[entry],
+                                   x + 3 * reference_index[entry]);
     }
     return result;
 }
@@ -266,7 +357,7 @@ mat3_transpose_mul(const float *matrix,
          slot += stride) {
         const Vec3f block = mat3_mul(value + 9 * slot, x + 3 * index[slot]);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude(abssum, value + 9 * slot, x + 3 * index[slot]);
     }
     for (unsigned entry = transpose_offset[row] + start;
          entry < transpose_offset[row + 1]; entry += stride) {
@@ -275,7 +366,8 @@ mat3_transpose_mul(const float *matrix,
         const Vec3f block = mat3_transpose_mul(value + 9 * slot,
                                                    x + 3 * source_row);
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose(abssum, value + 9 * slot,
+                                                   x + 3 * source_row);
     }
     return result;
 }
@@ -305,7 +397,8 @@ mat3_transpose_mul(const float *matrix,
         }
     }
     sum += diagonal;
-    spmv_accumulate_magnitude(abssum, diagonal);
+    spmv_accumulate_entry_magnitude(abssum, diagonal_block, x + 3 * row);
+    spmv_accumulate_shift_magnitude(abssum, diagonal_shift, x + 3 * row);
     return sum;
 }
 
@@ -448,6 +541,11 @@ mat3_transpose_mul(const float *matrix,
         return;
     }
     const unsigned row = block * threads + lane;
+    // THE FOLD'S LANE-MAJOR SLOT (`pcg_fold_slot`) for this group's partials,
+    // formed here, where its two divisions overlap the loads, rather than
+    // in the writer lane after the reduction, where every group would wait
+    // on them.
+    const unsigned fold_slot = pcg_fold_slot(block, (rows + threads - 1u) / threads);
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
     if (row < rows) {
@@ -464,8 +562,8 @@ mat3_transpose_mul(const float *matrix,
     const float absolute_folded =
         compute::block_sum(magnitude, scratch + 32, lane, threads);
     if (compute::is_block_writer(lane, threads)) {
-        curvature_total[block] = curvature_folded;
-        absolute_total[block] = absolute_folded;
+        curvature_total[fold_slot] = curvature_folded;
+        absolute_total[fold_slot] = absolute_folded;
     }
 }
 
@@ -505,11 +603,9 @@ mat3_transpose_mul(const float *matrix,
 // otherwise, which no other backend's compiler would have told us.
 enum : unsigned { SPMV_ROW_LANES = 8 };
 
-// THE COOPERATIVE HALF, under rule (1-LANE). It is a twin rather than the only
-// body because `compute::shuffle_down` has no single-thread meaning and
-// `seam_host.h` deliberately leaves it undefined, so a serial target cannot
-// compile this one and gets the walk below instead.
-[[seam::device_fn]] inline void operator_apply_dynamic_folded(
+// THE COOPERATIVE HALF, under rule (1-LANE). The device arms run it; the host
+// arm runs the serial twin below, which computes the same bits.
+[[seam::device_fn]] [[seam::cooperative]] inline void operator_apply_dynamic_folded(
     const unsigned *dyn_index,
     const float *dyn_value,
     const unsigned *dyn_offset,
@@ -534,6 +630,11 @@ enum : unsigned { SPMV_ROW_LANES = 8 };
         return;
     }
     const unsigned row = (block * threads + lane) / SPMV_ROW_LANES;
+    // THE FOLD'S LANE-MAJOR SLOT (`pcg_fold_slot`) for this group's partials,
+    // formed here, where its two divisions overlap the loads, rather than
+    // in the writer lane after the reduction, where every group would wait
+    // on them.
+    const unsigned fold_slot = pcg_fold_slot(block, (rows * SPMV_ROW_LANES + threads - 1u) / threads);
     const unsigned row_lane = lane % SPMV_ROW_LANES;
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
@@ -563,7 +664,10 @@ enum : unsigned { SPMV_ROW_LANES = 8 };
                 }
             }
             row_sum += diagonal_term;
-            spmv_accumulate_magnitude(abssum, diagonal_term);
+            spmv_accumulate_entry_magnitude(abssum, diagonal + 9 * row,
+                                            x + 3 * row);
+            spmv_accumulate_shift_magnitude(abssum, diagonal_shift,
+                                            x + 3 * row);
         }
     }
     // THE ROW'S LANES FOLD INTO THEIR FIRST ONE. The offsets stay inside the
@@ -597,8 +701,198 @@ enum : unsigned { SPMV_ROW_LANES = 8 };
     const float absolute_folded =
         compute::block_sum(magnitude, scratch + 32, lane, threads);
     if (compute::is_block_writer(lane, threads)) {
-        curvature_total[block] = curvature_folded;
-        absolute_total[block] = absolute_folded;
+        curvature_total[fold_slot] = curvature_folded;
+        absolute_total[fold_slot] = absolute_folded;
+    }
+}
+
+// THE SERIAL TWIN, which the host arm runs. It evaluates the same sums as the
+// cooperative body above does on the host arm, in the same association, with
+// the eight lanes of a row walked by one call instead of eight.
+//
+// WHY IT EXISTS. The host shim runs a group's lanes one after another, so the
+// body above costs eight calls per row, each setting up four strided walks
+// that visit about one entry apiece and then folding six values through the
+// group scratch. Measured on `bench_drape` (Apple M1, 8 threads) that made this
+// kernel 45 percent of all host kernel time, at 2.5 times the cost per row of
+// the element form `operator_apply_dynamic`, which walks the same entries.
+//
+// WHY NO SUM IS REASSOCIATED. On the host arm, lane `l` of a row sums the
+// entries whose position in each run is `l` modulo `SPMV_ROW_LANES`, in
+// ascending order, into its own accumulator, and `lane_reduce_add` then folds
+// the lanes in ascending order. This walk keeps one accumulator per lane and
+// visits every entry once, ascending, adding it into accumulator `position %
+// SPMV_ROW_LANES`. Each accumulator therefore receives the same terms in the
+// same order as that lane did, from the same starting zero, through the same
+// helpers, and the lanes are then folded in the same ascending order. The
+// group fold below is the cooperative body's call for call: every lane still
+// hands `block_sum` its value, zero on the lanes that write no row.
+//
+// WHAT CAN STILL MOVE IS THE LAST BIT, AND ONLY THROUGH THE COMPILER'S FUSED
+// MULTIPLY-ADD. The host build contracts (`-ffp-contract=fast`, matching the
+// device compilers), and which product of a 3x3 row gets fused is decided per
+// inlining context. Measured with both bodies on random rows: bit-identical
+// with contraction off, last-bit differences with it on. Every such choice
+// evaluates the same tree of rounded sums, so both are held to the one
+// round-off bound the curvature guard takes its scale from.
+//
+[[seam::device_fn]] [[seam::serial]] inline void operator_apply_dynamic_folded(
+    const unsigned *dyn_index,
+    const float *dyn_value,
+    const unsigned *dyn_offset,
+    const unsigned *dyn_reference_index,
+    const unsigned *dyn_reference_value,
+    const unsigned *dyn_reference_offset,
+    const float *dyn_global_value,
+    const unsigned *index,
+    const unsigned *offset,
+    const float *value,
+    const unsigned *transpose_pair,
+    const unsigned *transpose_offset,
+    const float *diagonal, float diagonal_shift,
+    const float *x, float *result,
+    float *scratch,
+    float *curvature_total,
+    float *absolute_total, const float *latch, unsigned rows,
+    unsigned lane, unsigned threads, unsigned block) {
+    if (latch[PCG_LATCH_FROZEN] != 0.0f) {
+        return;
+    }
+    const unsigned row = (block * threads + lane) / SPMV_ROW_LANES;
+    const unsigned row_lane = lane % SPMV_ROW_LANES;
+    float magnitude = 0.0f;
+    float signed_sum = 0.0f;
+    // THE ROW IS FORMED BY ITS WRITER LANE, the one the cooperative body writes
+    // from on this arm. The other lanes contribute zero to the group fold, as
+    // they do there.
+    //
+    // EACH 3-VECTOR IS HELD IN FOUR FLOAT LANES (`compute::lane4`), component
+    // `a` in lane `a`: a block's product and its entry magnitude are three
+    // lanewise multiply-adds rather than nine scalar ones, and every lane
+    // performs the scalar form's operations on the same operands in the same
+    // order, so the values are the scalar twin's bit for bit. Measured on a
+    // drape-shaped matrix (81,920 rows, 8 threads) against the scalar twin:
+    // 3.32 -> 2.66 ms on an EPYC 7R13 and 2.18 -> 1.91 ms on an Apple M2.
+    //
+    if (row < rows && compute::is_lane_writer(row_lane, SPMV_ROW_LANES)) {
+        // The dynamic and fixed partials of each lane, kept apart because the
+        // cooperative body adds the fixed one to the dynamic one only after
+        // both walks, and the magnitude accumulated in place across both.
+        compute::lane4 dynamic_part[SPMV_ROW_LANES];
+        compute::lane4 fixed_part[SPMV_ROW_LANES];
+        compute::lane4 lane_abssum[SPMV_ROW_LANES];
+        for (unsigned l = 0; l < SPMV_ROW_LANES; ++l) {
+            dynamic_part[l] = compute::lane4_splat(0.0f);
+            fixed_part[l] = compute::lane4_splat(0.0f);
+            lane_abssum[l] = compute::lane4_splat(0.0f);
+        }
+        compute::lane4 c0, c1, c2;
+        const unsigned direct_begin = dyn_offset[row];
+        const unsigned direct_count = dyn_offset[row + 1] - direct_begin;
+        const unsigned reference_begin = dyn_reference_offset[row];
+        const unsigned reference_count =
+            dyn_reference_offset[row + 1] - reference_begin;
+        for (unsigned entry = 0; entry < direct_count; ++entry) {
+            const unsigned l = entry % SPMV_ROW_LANES;
+            const unsigned at = direct_begin + entry;
+            const float *right = x + 3 * dyn_index[at];
+            compute::lane4_block_columns(dyn_value + 9 * at, c0, c1, c2);
+            dynamic_part[l] = dynamic_part[l] +
+                              compute::lane4_block_product(c0, c1, c2, right);
+            lane_abssum[l] = lane_abssum[l] +
+                             compute::lane4_block_magnitude(c0, c1, c2, right);
+        }
+        for (unsigned entry = 0; entry < reference_count; ++entry) {
+            const unsigned l = entry % SPMV_ROW_LANES;
+            const unsigned at = reference_begin + entry;
+            const float *right = x + 3 * dyn_reference_index[at];
+            compute::lane4_block_columns_transposed(
+                dyn_global_value + 9 * dyn_reference_value[at], c0, c1, c2);
+            dynamic_part[l] = dynamic_part[l] +
+                              compute::lane4_block_product(c0, c1, c2, right);
+            lane_abssum[l] = lane_abssum[l] +
+                             compute::lane4_block_magnitude(c0, c1, c2, right);
+        }
+        const unsigned fixed_begin = offset[row];
+        const unsigned fixed_count = offset[row + 1] - fixed_begin;
+        for (unsigned entry = 0; entry < fixed_count; ++entry) {
+            const unsigned l = entry % SPMV_ROW_LANES;
+            const unsigned slot = fixed_begin + entry;
+            const float *right = x + 3 * index[slot];
+            compute::lane4_block_columns(value + 9 * slot, c0, c1, c2);
+            fixed_part[l] = fixed_part[l] +
+                            compute::lane4_block_product(c0, c1, c2, right);
+            lane_abssum[l] = lane_abssum[l] +
+                             compute::lane4_block_magnitude(c0, c1, c2, right);
+        }
+        const unsigned transpose_begin = transpose_offset[row];
+        const unsigned transpose_count =
+            transpose_offset[row + 1] - transpose_begin;
+        for (unsigned entry = 0; entry < transpose_count; ++entry) {
+            const unsigned l = entry % SPMV_ROW_LANES;
+            const unsigned at = transpose_begin + entry;
+            const float *right = x + 3 * transpose_pair[2 * at];
+            const unsigned slot = transpose_pair[2 * at + 1];
+            compute::lane4_block_columns_transposed(value + 9 * slot, c0, c1,
+                                                    c2);
+            fixed_part[l] = fixed_part[l] +
+                            compute::lane4_block_product(c0, c1, c2, right);
+            lane_abssum[l] = lane_abssum[l] +
+                             compute::lane4_block_magnitude(c0, c1, c2, right);
+        }
+        // Each lane's partial, finished as the cooperative body finishes it:
+        // the fixed walk added to the dynamic one, and the diagonal on lane 0.
+        compute::lane4 row_sum = compute::lane4_splat(0.0f);
+        compute::lane4 abssum = compute::lane4_splat(0.0f);
+        for (unsigned l = 0; l < SPMV_ROW_LANES; ++l) {
+            compute::lane4 lane_sum = dynamic_part[l] + fixed_part[l];
+            if (l == 0) {
+                const float *own = x + 3 * row;
+                compute::lane4_block_columns(diagonal + 9 * row, c0, c1, c2);
+                compute::lane4 diagonal_term =
+                    compute::lane4_block_product(c0, c1, c2, own);
+                if (diagonal_shift) {
+                    diagonal_term = diagonal_term +
+                                    compute::lane4_splat(diagonal_shift) *
+                                        compute::lane4_load3(own);
+                }
+                lane_sum = lane_sum + diagonal_term;
+                lane_abssum[0] =
+                    lane_abssum[0] +
+                    compute::lane4_block_magnitude(c0, c1, c2, own);
+                // `spmv_accumulate_shift_magnitude`: `|D| |x_k|` per lane.
+                lane_abssum[0] =
+                    lane_abssum[0] +
+                    compute::lane4_abs(compute::lane4_splat(diagonal_shift)) *
+                        compute::lane4_abs(compute::lane4_load3(own));
+            }
+            // THE LANE FOLD, as `lane_reduce_add` spells it on this arm: the
+            // first lane stores and every later one adds, ascending.
+            row_sum = l == 0 ? lane_sum : row_sum + lane_sum;
+            abssum = l == 0 ? lane_abssum[l] : abssum + lane_abssum[l];
+        }
+        Vec3f row_total;
+        for (unsigned k = 0; k < 3; ++k) {
+            row_total[k] = row_sum[k];
+        }
+        map<Vec3f>(result + 3 * row) = row_total;
+        // THE ROW'S CURVATURE TERMS, `spmv_row_bound`'s sums in its order, in
+        // the form that keeps the shipped host build's bits (see
+        // `compute::lane4_row_bound`).
+        compute::lane4_row_bound(x + 3 * row, row_sum, abssum, signed_sum,
+                                 magnitude);
+    }
+    const float curvature_folded =
+        compute::block_sum(signed_sum, scratch, lane, threads);
+    const float absolute_folded =
+        compute::block_sum(magnitude, scratch + 32, lane, threads);
+    // The cooperative body's lane-major slot (`pcg_fold_slot`), so the fold
+    // that reads these partials finds them where it looks on every arm.
+    if (compute::is_block_writer(lane, threads)) {
+        const unsigned fold_slot = pcg_fold_slot(
+            block, (rows * SPMV_ROW_LANES + threads - 1u) / threads);
+        curvature_total[fold_slot] = curvature_folded;
+        absolute_total[fold_slot] = absolute_folded;
     }
 }
 
@@ -669,6 +963,11 @@ operator_apply_symmetric_folded(
         return;
     }
     const unsigned row = (block * threads + lane) / SPMV_ROW_LANES;
+    // THE FOLD'S LANE-MAJOR SLOT (`pcg_fold_slot`) for this group's partials,
+    // formed here, where its two divisions overlap the loads, rather than
+    // in the writer lane after the reduction, where every group would wait
+    // on them.
+    const unsigned fold_slot = pcg_fold_slot(block, (rows * SPMV_ROW_LANES + threads - 1u) / threads);
     const unsigned row_lane = lane % SPMV_ROW_LANES;
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
@@ -700,7 +999,9 @@ operator_apply_symmetric_folded(
                 term += term;
             }
             signed_sum += term;
-            magnitude += fmath::abs(term);
+            magnitude += (column != row ? 2.0f : 1.0f) *
+                         spmv_entry_quadratic_magnitude(dyn_value + 9 * entry,
+                                                        own, x + 3 * column);
         }
         // THE FIXED MATRIX'S STORED LIST ONLY, for the same reason: its
         // transpose table is what the two-triangle walk reads and this scatters
@@ -722,7 +1023,9 @@ operator_apply_symmetric_folded(
                 term += term;
             }
             signed_sum += term;
-            magnitude += fmath::abs(term);
+            magnitude += (column != row ? 2.0f : 1.0f) *
+                         spmv_entry_quadratic_magnitude(value + 9 * slot, own,
+                                                        x + 3 * column);
         }
     }
     // The same bounded fold the walk uses; see the note there.
@@ -743,7 +1046,12 @@ operator_apply_symmetric_folded(
             term += x[3 * row + k] * diagonal_term[k];
         }
         signed_sum += term;
-        magnitude += fmath::abs(term);
+        magnitude += spmv_entry_quadratic_magnitude(diagonal + 9 * row,
+                                                    x + 3 * row, x + 3 * row);
+        for (unsigned k = 0; k < 3; ++k) {
+            magnitude += fmath::abs(diagonal_shift) * x[3 * row + k] *
+                         x[3 * row + k];
+        }
         // THE ROW'S OWN ACCUMULATION IS ATOMIC TOO, because the transpose
         // scatters above target these same slots from other rows.
         for (unsigned k = 0; k < 3; ++k) {
@@ -755,8 +1063,8 @@ operator_apply_symmetric_folded(
     const float absolute_folded =
         compute::block_sum(magnitude, scratch + 32, lane, threads);
     if (compute::is_block_writer(lane, threads)) {
-        curvature_total[block] = curvature_folded;
-        absolute_total[block] = absolute_folded;
+        curvature_total[fold_slot] = curvature_folded;
+        absolute_total[fold_slot] = absolute_folded;
     }
 }
 
@@ -876,7 +1184,8 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
         const Vec3f block = mat3_mul_vector(
             dyn_value + 9 * slot, spmv_difference(x, dyn_index[slot], own));
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_vector(abssum, 
+            dyn_value + 9 * slot, spmv_difference(x, dyn_index[slot], own));
     }
     for (unsigned slot = dyn_reference_offset[row];
          slot < dyn_reference_offset[row + 1]; ++slot) {
@@ -884,13 +1193,16 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
             dyn_global_value + 9 * dyn_reference_value[slot],
             spmv_difference(x, dyn_reference_index[slot], own));
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose_vector(abssum, 
+            dyn_global_value + 9 * dyn_reference_value[slot],
+            spmv_difference(x, dyn_reference_index[slot], own));
     }
     for (unsigned slot = offset[row]; slot < offset[row + 1]; ++slot) {
         const Vec3f block = mat3_mul_vector(
             value + 9 * slot, spmv_difference(x, index[slot], own));
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_vector(abssum, 
+            value + 9 * slot, spmv_difference(x, index[slot], own));
     }
     for (unsigned entry = transpose_offset[row];
          entry < transpose_offset[row + 1]; ++entry) {
@@ -898,11 +1210,13 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
             value + 9 * transpose_pair[2 * entry + 1],
             spmv_difference(x, transpose_pair[2 * entry], own));
         result += block;
-        spmv_accumulate_magnitude(abssum, block);
+        spmv_accumulate_entry_magnitude_transpose_vector(abssum, 
+            value + 9 * transpose_pair[2 * entry + 1],
+            spmv_difference(x, transpose_pair[2 * entry], own));
     }
     const Vec3f diagonal = mat3_mul_vector(row_sum + 9 * row, own);
     result += diagonal;
-    spmv_accumulate_magnitude(abssum, diagonal);
+    spmv_accumulate_entry_magnitude_vector(abssum, row_sum + 9 * row, own);
     return result;
 }
 
@@ -1020,6 +1334,11 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
         return;
     }
     const unsigned row = block * threads + lane;
+    // THE FOLD'S LANE-MAJOR SLOT (`pcg_fold_slot`) for this group's partials,
+    // formed here, where its two divisions overlap the loads, rather than
+    // in the writer lane after the reduction, where every group would wait
+    // on them.
+    const unsigned fold_slot = pcg_fold_slot(block, (rows + threads - 1u) / threads);
     float magnitude = 0.0f;
     float signed_sum = 0.0f;
     if (row < rows) {
@@ -1037,8 +1356,8 @@ spmv_difference(const float *x, unsigned other, const Vec3f &own) {
     const float absolute_folded =
         compute::block_sum(magnitude, scratch + 32, lane, threads);
     if (compute::is_block_writer(lane, threads)) {
-        curvature_total[block] = curvature_folded;
-        absolute_total[block] = absolute_folded;
+        curvature_total[fold_slot] = curvature_folded;
+        absolute_total[fold_slot] = absolute_folded;
     }
 }
 

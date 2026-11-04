@@ -61,34 +61,24 @@ use super::kernels::FixedCsrAtomicPushArgs;
 use super::scene::{Fatal, FatalResult};
 use super::spmv::FixedCsrView;
 
-// THE TWO ENTRY POINTS THIS MODULE STILL NAMES DIRECTLY, AND WHY EACH STAYS.
+// THE ONE ENTRY POINT THIS MODULE STILL NAMES DIRECTLY, AND WHY IT STAYS.
 // The push, which is the one pass here that has a thread index, went behind the
-// seam; what is left is two SINGLE-PAIR QUERIES, and neither is a dispatch.
+// seam; what is left is a SINGLE-PAIR QUERY, and it is not a dispatch.
 //
-// Both answer a question about one `(i, j)`: which slot holds it, and what that
-// slot holds. There is no extent, no thread index and nothing indexed by one,
-// which is the same shape as `block_jacobi_invert_abi` in `super::pcg` and
+// It answers a question about one `(i, j)`: what the slot holding it holds.
+// There is no extent, no thread index and nothing indexed by one, which is the
+// same shape as `block_jacobi_invert_abi` in `super::pcg` and
 // `position_domain_abi` in `super::step`, both kept as direct calls for the
-// same reason. `find` also RETURNS a value, and the seam's dispatch returns
-// none, so putting it behind one would need an output buffer, which is a change
-// to the C++ side rather than to this driver.
+// same reason.
 //
 // A second reason applies to `read` and is worth stating separately, because it
 // would survive a query surface on `Device`: it is the ORACLE this module's own
 // tests check `push_blocks` with. A dispatch verified against a reader that
 // went through the same dispatch machinery would be checking that machinery
-// against itself. If `Device` ever grows a query, these two move with the two
-// precedents named above and not one at a time, and the oracle question is
-// settled then rather than assumed now.
+// against itself. If `Device` ever grows a query, this moves with the two
+// precedents named above, and the oracle question is settled then rather than
+// assumed now.
 extern "C" {
-    fn fixed_csr_find_abi(
-        index: *const u32,
-        offset: *const u32,
-        row_count: u32,
-        i: u32,
-        j: u32,
-        transpose_out: *mut i32,
-    ) -> u32;
     fn fixed_csr_read_abi(
         index: *const u32,
         offset: *const u32,
@@ -471,31 +461,6 @@ impl<'a> FixedCsr<'a> {
             )
         };
         out
-    }
-
-    /// The slot holding `(i, j)`, and whether the stored block is its transpose.
-    ///
-    /// `None` when the pattern has no slot. Exposed because the assembly's
-    /// slot-replay tables are validated against it and because a lost stencil is
-    /// the defect this pattern exists to make findable.
-    pub fn find(&self, i: u32, j: u32) -> Option<(u32, bool)> {
-        let mut transposed = 0i32;
-        // Safety: as `read`.
-        let slot = unsafe {
-            fixed_csr_find_abi(
-                self.pattern.index.as_ptr(),
-                self.pattern.offset.as_ptr(),
-                self.pattern.rows,
-                i,
-                j,
-                &mut transposed,
-            )
-        };
-        if slot == u32::MAX {
-            None
-        } else {
-            Some((slot, transposed != 0))
-        }
     }
 
     /// Fold `blocks[k]` into `(row[k], column[k])`, in ascending `k`.

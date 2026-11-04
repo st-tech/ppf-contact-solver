@@ -64,7 +64,7 @@ box* is the unlabeled box that holds the contact gap and offset rows, with
 | **Poisson's Ratio**                                              | Solid, Shell                          | The slider stops at 0.4999. The solver needs a value above 0 and below 0.5, and at `0` it stops with *Poisson's ratio must be positive*.                                                                                                                    |
 | **Friction**                                                     | Solid, Shell, Rod, PDRD, Static, Sand | A Sand group has its own **Friction** row. See [Shared Parameters](#shared-parameters).                                                                                                        |
 | **Contact Gap** and **Contact Offset**, or their ratios          | All types                             | Solid, Shell, PDRD and Static have a **Use Object Bounding Box Diagonal** checkbox. Rod uses the absolute pair only. Sand draws **Contact Gap** alone, because its grain radius is the contact offset. See [Contact Gap and Contact Offset](#contact-gap-and-contact-offset). |
-| **Local Gap Limit**                                              | Solid, Shell, Rod                     | Drawn in the contact box. See [Local Gap Limit](#local-gap-limit).                                                                                                                             |
+| **Local Gap Limit**                                              | Solid, Shell, Rod, PDRD, Static       | Drawn in the contact box. See [Local Gap Limit](#local-gap-limit).                                                                                                                             |
 | **Collision Active Duration Windows**                            | Solid, Shell, Rod, PDRD               | Off by default. See [Active collision windows](../scene/object_groups.md#active-collision-windows).                                                                                            |
 | **Bend Stiffness**                                               | Shell, Rod                            | A Shell also draws **Bending Stiffness (Warp)** and **Bending Stiffness (Weft)** right below it. A Rod draws its field in a **Bend** box below the contact rows; see [Bend Stiffness on a Rod](#bend-stiffness-on-a-rod). |
 | **Shrink**                                                       | Solid, Shell, Rod                     | Solid: one **Shrink** field. Shell: **Shrink X** and **Shrink Y**. Rod: **Shrink** just under **Friction**.                                                                                   |
@@ -294,7 +294,7 @@ types that show each row.
 | **Use Object Bounding Box Diagonal** | `use_group_bounding_box_diagonal` | `True`  | Solid, Shell, PDRD, Static                 | When on, the contact distances are ratios of each object's own bounding-box diagonal.                                                               |
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Solid, Shell, PDRD, Static                 | Contact gap as a fraction of each object's own bounding-box diagonal (0.00001 – 1). Drawn while the checkbox above is on.                           |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Solid, Shell, PDRD, Static                 | Contact offset as a fraction of each object's own bounding-box diagonal (0 – 1). Drawn while the checkbox above is on.                              |
-| **Local Gap Limit**                  | `contact_gap_limit_percent`       | 25      | Solid, Shell, Rod                          | Largest share of the room between mesh neighbors the contact gap may take, in percent (1 – 50). It has no keyframe and no padlock.                  |
+| **Local Gap Limit**                  | `contact_gap_limit_percent`       | 25      | Solid, Shell, Rod, PDRD, Static            | Largest share of the room between mesh neighbors the contact gap may take, in percent (1 – 50). It has no keyframe and no padlock.                  |
 | **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | All types                                  | Let an object pass through itself, with no contact between its parts.                                                                               |
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | All types                                  | Let an object pass through every other object, with no contact.                                                                                     |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | All types                                  | Let an object pass through objects of other groups, with no contact.                                                                                |
@@ -1637,10 +1637,12 @@ What the setting does:
   the shortest strand segment next to it, less twice the object's **Contact
   Offset** (its largest value, if you keyframe it), because the offsets of two
   neighbors take up the same distance.
-- **Solid, Shell and Rod groups have it.** A **Static** or **PDRD** group
-  draws no such row: a collider or a rigid body forms no contact pairs among
-  its own faces, so nothing bounds its gap and it is used as set. A **Sand**
-  group has no mesh to measure.
+- **Every group type with a mesh has it**: Solid, Shell, Rod, PDRD and
+  Static. A collider or a rigid body forms no contact pairs among its own
+  faces, so there the cap does not prevent locking. It keeps the gap at the
+  scale of the mesh instead, so a large collider whose gap comes from **Use
+  Object Bounding Box Diagonal** is not solved at a gap far wider than its
+  triangles. A **Sand** group has no mesh to measure.
 - **An object that Allow Self-Intersections reaches keeps the gap you set.**
   None of its parts is in contact with another part of itself, so the limit
   has nothing to bound. The row is still drawn for the group. See
@@ -1656,8 +1658,7 @@ What the setting does:
   `contact_gap_limit_percent`.
 
 :::{note}
-A **Solid**, **Shell** or **Rod** group starts with **Local Gap Limit** at
-`25`. Any part of a fine mesh whose gap exceeds a quarter of its room is
+Every group but **Sand** starts with **Local Gap Limit** at `25`. Any part of a fine mesh whose gap exceeds a quarter of its room is
 therefore solved at that smaller gap, unless you raise the value.
 :::
 

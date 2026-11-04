@@ -224,7 +224,7 @@ pub struct Contact {
     /// state the scan carries now that its four walks run on the device.
     scan: intersection::ScanState,
     /// Per-primitive time of impact, one slot per query, min-folded by the six
-    /// CCD sweeps and reduced once by `reduce::min`.
+    /// CCD sweeps and reduced once by `reduce::DeviceFold::min`.
     ///
     /// `toi_vertex` IS AS WIDE AS THE WIDER OF TWO INDEX SPACES: the
     /// collider-to-mesh pass writes at the COLLIDER vertex index into the same
@@ -1517,7 +1517,7 @@ impl Contact {
     /// record arrays the host reads only when a fold came out at exactly zero.
     /// The two float arrays should be reduced on the device; no
     /// `[[seam::group]]` entry exists in this tree yet, so the reduce is a
-    /// download plus `reduce::min`, which is what the analytic sweep beside
+    /// download plus a host minimum, which is what the analytic sweep beside
     /// this already does. That is a difference in transport rather than in the
     /// arithmetic.
     ///

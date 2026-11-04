@@ -79,7 +79,7 @@ All addon data lives under `scene.zozo_contact_solver`, accessed via `get_addon_
 Up to 32 groups (`object_group_0` through `object_group_31`, constant `N_MAX_GROUPS = 32`). Each group has:
 - Object type and material model selection
 - Material parameters: density, Young's modulus, Poisson ratio, friction, bend stiffness, anisotropic shrink (X/Y) for shells, uniform shrink for solids, strain limit, inflate pressure, stitch stiffness, initial velocity
-- Contact parameters: contact_gap, contact_offset (absolute, or a ratio of each assigned object's own bounding box diagonal), and for Solid, Shell and Rod a local gap limit that caps the gap at a percentage of the room between mesh neighbors
+- Contact parameters: contact_gap, contact_offset (absolute, or a ratio of each assigned object's own bounding box diagonal), and for every type but Sand a local gap limit that caps the gap at a percentage of the room between mesh neighbors
 - Assigned Blender mesh objects (with per-object inclusion toggle)
 - Pin vertex groups, each with a list of operations (MOVE_BY, SPIN, SCALE, TORQUE, EMBEDDED_MOVE)
 - Overlay visualization: color, wireframe, pin spheres, operation previews
@@ -419,7 +419,7 @@ Collections: `fetched_frame` (FetchedFrameItem), `saved_pin_keyframes` (SavedPin
 | `use_group_bounding_box_diagonal` | BoolProperty | True | Use ratio-based contact, sized per object |
 | `contact_gap_rat` | FloatProperty | 0.001 | Ratio of each object's own bbox diagonal |
 | `contact_offset_rat` | FloatProperty | 0.0 | Ratio of each object's own bbox diagonal |
-| `contact_gap_limit_percent` | FloatProperty | 25.0 | Cap on the gap, percent (1-50) of the room between mesh neighbors (Solid, Shell, Rod) |
+| `contact_gap_limit_percent` | FloatProperty | 25.0 | Cap on the gap, percent (1-50) of the room between mesh neighbors (all types but Sand) |
 | `enable_strain_limit` | BoolProperty | False | Shell strain limit |
 | `strain_limit_percent` | FloatProperty | 5.0 | Shell strain limit, percent of stretch (5.0 = 5%) |
 | `enable_inflate` | BoolProperty | False | Shell inflation pressure |

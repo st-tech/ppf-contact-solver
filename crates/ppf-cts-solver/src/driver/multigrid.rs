@@ -575,7 +575,7 @@ pub unsafe fn encode_cycle(
         seam_arena_count: 0,
     };
     encoder.elements(&first, vertices)?;
-    operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch)?;
+    operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch, false)?;
     if let Some(level) = state.levels.first().filter(|l| l.nodes > 0) {
         let restrict = MultigridFineRestrictRowArgs {
             gather_offset: level.gather_offset.handle(),
@@ -602,7 +602,7 @@ pub unsafe fn encode_cycle(
             seam_arena_count: 0,
         };
         encoder.elements(&prolong, vertices)?;
-        operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch)?;
+        operator.encode_apply_folded(encoder, x, product, fold_a, fold_b, idle_latch, false)?;
     }
     let last = MultigridFineSweepRowArgs {
         inverse,

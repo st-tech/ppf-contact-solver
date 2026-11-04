@@ -485,7 +485,6 @@ shell_bend_angle(const Vec3f &v0,
     return true;
 }
 
-
 // The hinge's node permutation, (2, 1, 0, 3).
 //
 // The solver stores a hinge as (flap, edge, edge, flap) in mesh order; the
@@ -558,33 +557,6 @@ shell_bend_remap(const Vec4u &hinge) {
     force *= scale;
     hessian *= scale;
 }
-
-// FOUR POSITIONS READ THROUGH THE HINGE'S OWN INDEX LIST, which is what
-// `[[seam::indices(4)]]` over a `[[seam::through]]` buffer expresses, and the
-// `[[seam::bound]]` beside it is not bookkeeping: a slot is DATA rather than
-// the thread index, so the thread-count guard says nothing about it, and Metal
-// answers an out-of-bounds read with 0.0 rather than a fault, which would put a
-// plausible bending force on a corrupt hinge table.
-//
-// THE FORCE AND THE HESSIAN ARE NON-CONST GATHERS AND NOT SCATTERS. A gather
-// hands the body `buffer[index]`, which is an lvalue, so a non-const one IS the
-// write. Both are fully assigned by the body before it reads anything of its
-// own, so neither carries what the previous element left.
-//
-// THERE IS NO SCATTER SINK. The verdict is raised through the diagnostic lane
-// rather than deposited as a word per hinge, so nothing here is written for the
-// host to read back.
-[[seam::entry(count, element)]] void shell_bend_force_hessian_checked(
-    [[seam::through]] const Vec3f *x,
-    [[seam::indices(4)]] const unsigned *hinge,
-    [[seam::bound]] unsigned vertex_count,
-    const HingeProp *prop,
-    const float *live,
-    const float *scale,
-    Mat3x4f *force,
-    Mat12x12f *hessian,
-    DiagHandle diag, unsigned element,
-    unsigned count);
 
 // THE HINGE IS COMPUTED AND EMBEDDED IN ONE KERNEL: form the force and the
 // Hessian at the iterate, scale by the stiffness, damp against the lagged pose

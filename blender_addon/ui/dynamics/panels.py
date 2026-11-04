@@ -652,8 +652,8 @@ def _draw_contact_distances(param_box, group):
 
     A ROD authors absolute distances only, since the box around a strand says
     nothing about how thick it is. The local gap limit is drawn for the types
-    in CONTACT_GAP_LIMIT_TYPES, whose objects can be in contact with
-    themselves. SAND draws its own box, a gap beside its grain radius.
+    in CONTACT_GAP_LIMIT_TYPES, every one with a mesh to measure. SAND draws
+    its own box, a gap beside its grain radius.
     """
     contact_box = param_box.box()
     relative = False

@@ -32,7 +32,6 @@
 // `eps` sits where the body takes it, after `vt`, because a generated call
 // forwards the declaration's order and the compiler reads the body's real
 // signature: a parameter out of place does not compile.
-[[seam::entry(force)]]
 [[seam::device_fn]] inline Mat3x2f
 face_spectral_force(const Vec2f &gradient_sigma,
                         const Mat3x2f &u,
@@ -40,7 +39,6 @@ face_spectral_force(const Vec2f &gradient_sigma,
     return u * gradient_sigma.asDiagonal() * vt;
 }
 
-[[seam::entry(hessian)]]
 [[seam::device_fn]] inline Mat6x6f
 face_spectral_hessian(const Vec2f &gradient_sigma,
                           const Mat2x2f &hessian_sigma,

@@ -2425,6 +2425,7 @@ mod tests {
             host_refs: &[],
             diag: true,
             generated: true,
+            speculate: false,
         },
         KernelDecl {
             id: KernelId(1),
@@ -2435,6 +2436,7 @@ mod tests {
             host_refs: &[],
             diag: true,
             generated: true,
+            speculate: false,
         },
     ];
 

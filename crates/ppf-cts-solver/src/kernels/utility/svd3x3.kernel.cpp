@@ -136,9 +136,3 @@ svd3x3_rv(const Mat3x3f &input, Mat3x3f &u,
     }
 }
 
-[[seam::entry(count)]] void svd3x3(
-    const Mat3x3f *input,
-    Mat3x3f *u,
-    Vec3f *sigma,
-    Mat3x3f *vt,
-    unsigned count);

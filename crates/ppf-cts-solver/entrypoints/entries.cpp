@@ -173,15 +173,13 @@
 #include "utility/svd3x2.entry.cpp"
 #include "utility/svd3x3.entry.cpp"
 
-// The spectral force and Hessian, one pair per element arity.
-#include "eigenanalysis/face_eigenanalysis.entry.cpp"
+// The tet spectral Hessian.
 #include "eigenanalysis/tet_eigenanalysis.entry.cpp"
 
-// The material-frame converters, which take a quantity in the element's own
-// frame and its inverse rest shape to the world frame. `tet_convert` carries
-// the tet deformation gradient beside them: that one reads its four positions
-// THROUGH the element's index list, and the face twin below is the same shape.
-#include "utility/face_convert.entry.cpp"
+// The tet material-frame converter, which takes a quantity in the element's
+// own frame and its inverse rest shape to the world frame, and beside it the
+// tet deformation gradient, which reads its four positions THROUGH the
+// element's index list.
 #include "utility/tet_convert.entry.cpp"
 
 // The shell face's deformation gradient, an indirect gather over the face's
@@ -206,13 +204,6 @@
 // compile error, so the failure appears only once a second includer exists, and
 // a generated entry point is what makes a second includer.
 #include "energy/model/material_diff_table.entry.cpp"
-
-// The BaraffWitkin membrane's staged pass: four element gathers into this
-// face's own slot in two destinations. It runs AFTER the spectral stages and
-// overwrites what they left, which is correct because a BaraffWitkin face's
-// diff table is zero; a face naming any other model is left alone by the body's
-// own early return.
-#include "energy/model/baraffwitkin.entry.cpp"
 
 // The two bending stiffnesses, one per element arity: per-element floats in,
 // one float out. The shell form folds the directional warp and weft weights in
@@ -284,7 +275,6 @@
 // `alignas(32)` and crosses as a `[[seam::pod(32)]]` pointee.
 #include "contact/aabb.entry.cpp"
 #include "contact/aabb_traversal.entry.cpp"
-#include "energy/model/face_pressure.entry.cpp"
 
 // The cross-stitch's force and 18x18 Hessian, over its six barycentric slots.
 // Six positions, six contact gaps and six offsets read THROUGH one six-slot
@@ -297,29 +287,6 @@
 // The plastic creep rate, `1 - exp(-plasticity * dt)`. `dt` is the same for
 // every element, so it arrives in the record rather than through a buffer.
 #include "plasticity/plasticity.entry.cpp"
-
-// The one-sided push barrier's energy, curvature, gradient and Hessian. Each
-// is per-contact gathers plus the one `ghat` the whole dispatch shares, into
-// one element scatter.
-#include "energy/model/push.entry.cpp"
-
-// The friction model, ten per-contact buffers wide: the body returns void and
-// writes its six outputs through references, so every one of them is an
-// element gather.
-#include "energy/model/friction.entry.cpp"
-
-// The friction combiner, which resolves the two materials' coefficients at a
-// contact under one rule per dispatch.
-#include "contact/analytic_contact.entry.cpp"
-
-// The area-weighted vertex normal's finalize stage. The per-face term beside
-// it stays hand-written in `kernel_shim.cpp`: it reads its three positions
-// through the face's own index triple, which is an indirect gather.
-#include "utility/vertex_normal.entry.cpp"
-
-// The contact assembly's slot lookup, which resolves one (row, column) pair to
-// its slot in the FIXED pattern.
-#include "contact/contact_assembly.entry.cpp"
 
 // The friction's memory: the sort's gather and the commit that turns a step's
 // record into the next step's memory.
@@ -373,27 +340,15 @@
 // post-solve integrate.
 #include "energy/model/sand_rigid.entry.cpp"
 
-// One step of the bitonic sorting network, the comparator that fixes the total
-// order the Morton sort produces.
-#include "lbvh/bitonic.entry.cpp"
-
-// The three Hessian scatters, one per element arity: a run of slot ids, one
-// element Hessian and the CSR value array. SERIAL BY CONTRACT, exactly as the
-// arity-1 force scatter above, and for the same reason.
-//
-// The hinge and rod artifacts carry a second entry point each, the arity-4 and
-// arity-2 force scatters, because a rendering covers a whole source file and
-// those declarations sit beside these. The face and stitch force scatters are
-// the two lines below, their own files having no Hessian entry: the face's is
-// in `face_hessian_scatter.kernel.cpp`, and the stitch's 18x18 now has the name
-// `Mat18x18f` in the shared type vocabulary, which is what a generated entry
-// point's parameter type needs: the transcompiler splits a parameter list on
-// its top-level commas and refuses a template spelling saying so.
-#include "utility/face_hessian_scatter.entry.cpp"
+// The element force scatters that remain entries, and the collision window.
+// SERIAL BY CONTRACT, exactly as the arity-1 force scatter above, and for the
+// same reason. The stitch's 18x18 has the name `Mat18x18f` in the shared type
+// vocabulary, which is what a generated entry point's parameter type needs: the
+// transcompiler splits a parameter list on its top-level commas and refuses a
+// template spelling saying so.
 #include "utility/hinge_scatter.entry.cpp"
 #include "utility/collision_window.entry.cpp"
 #include "utility/rod_scatter.entry.cpp"
-#include "utility/face_scatter.entry.cpp"
 #include "utility/stitch_scatter.entry.cpp"
 
 // The two per-element strain readings, the largest shell singular value and the
@@ -422,10 +377,6 @@
 // `strainlimit` takes is inside the body rather than in this backend.
 #include "strainlimiting/shell_strain.entry.cpp"
 
-// The detect-once pair cache's recorder. Its counter is a CLAIM atomic, so no
-// range partition makes it safe and the caller runs it as one ascending pass.
-#include "contact/pair_cache.entry.cpp"
-
 // The DYNAMIC matrix's two whole-matrix passes: the prefix sum that turns
 // per-row counts into row offsets, and the transpose index the symmetric matvec
 // reads to reach the lower triangle. Each is dispatched over ONE element and
@@ -447,11 +398,11 @@
 // carries the same serial-or-disjoint rule as the scatters above.
 #include "csrmat/fixed_csr.entry.cpp"
 
-// Rayleigh stiffness damping, one entry per element arity. Each reads two
-// position buffers THROUGH the element's own slots, the per-element damping
-// coefficient as a gather, and the gradient and Hessian as NON-CONST gathers,
-// which is the write. The two bending members take a third gather, the LAGGED
-// start-of-step Hessian, which is what makes their dissipation unconditional.
+// Rayleigh stiffness damping for the tet, the one arity that is still its own
+// entry (the face, rod, hinge and rod-bend members are called inside the fused
+// element passes). It reads two position buffers THROUGH the element's own
+// slots, the per-element damping coefficient as a gather, and the gradient and
+// Hessian as NON-CONST gathers, which is the write.
 //
 // READ-MODIFY-WRITE, NOT A FILL. This pass adds its force into the gradient the
 // elastic assembly left and scales that Hessian in place, so the two gathered
@@ -459,10 +410,6 @@
 // same: an element entry covers one ELEMENT per thread and each element owns
 // its own slot in both destinations, so no two threads name the same one.
 #include "utility/tet_damping.entry.cpp"
-#include "utility/face_damping.entry.cpp"
-#include "utility/rod_damping.entry.cpp"
-#include "utility/hinge_damping.entry.cpp"
-#include "utility/rod_bend_damping.entry.cpp"
 
 // The friction's coupling across Cosserat frames in the augmented solve's
 // operator (`contact/friction_frame`).

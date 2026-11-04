@@ -316,6 +316,33 @@ namespace compute {
 class AtomicFloatSlot;
 class AtomicUintSlot;
 
+// SPECULATIVE EXECUTION, the host backend's way to run a `Scatter::Atomic` or
+// `Scatter::Claim` row on every core and still reach the serial pass's state.
+//
+// A row whose declaration opts in (`KernelDecl::speculate`) runs in two
+// phases. Phase one runs every chunk at once with this flag set on the running
+// thread, so the FIRST operation below that an element reaches throws
+// `SeamDefer` instead of touching the slot: that element is set aside, with
+// its diagnostic record put back as it was, and the chunk goes on with the next
+// one. Phase two runs the set-aside elements one at a time, ascending, with the
+// flag clear. An element that reaches no slot operation, which is most of a
+// contact traversal and nearly all of an intersection scan, is finished in
+// phase one; the slots then receive every operation in the order the serial
+// pass gives them, because only phase two reaches a slot and it runs in that
+// order. `ppf-cts-compute/cpu/host.rs` states what a body must satisfy for the
+// two schedules to agree.
+//
+// A THREAD-LOCAL AND NOT A GLOBAL, because two devices may run in one process
+// (the test harness runs tests on threads that share one pool), and a flag one
+// of them raised must not reach the other's serial pass.
+struct SeamDefer {};
+inline thread_local bool seam_speculating = false;
+inline void seam_defer_if_speculating() {
+    if (seam_speculating) {
+        throw SeamDefer{};
+    }
+}
+
 // Declared ahead of the classes so that each friend declaration inside them
 // names a function this namespace already has rather than introducing one.
 inline float atomic_add(AtomicFloatSlot *pointer, float value);
@@ -383,6 +410,7 @@ static_assert(sizeof(atomic_uint_t) == 4 && alignof(atomic_uint_t) == 4,
 // take: these operations publish no other memory, so a stronger order changes
 // only cost, never correctness.
 inline unsigned atomic_load(atomic_uint_t *pointer) {
+    seam_defer_if_speculating();
 #ifdef _MSC_VER
     return static_cast<unsigned>(
         _InterlockedOr(reinterpret_cast<volatile long *>(&pointer->storage), 0));
@@ -391,6 +419,7 @@ inline unsigned atomic_load(atomic_uint_t *pointer) {
 #endif
 }
 inline void atomic_store(atomic_uint_t *pointer, unsigned value) {
+    seam_defer_if_speculating();
 #ifdef _MSC_VER
     _InterlockedExchange(reinterpret_cast<volatile long *>(&pointer->storage),
                          static_cast<long>(value));
@@ -399,6 +428,7 @@ inline void atomic_store(atomic_uint_t *pointer, unsigned value) {
 #endif
 }
 inline unsigned atomic_add(atomic_uint_t *pointer, unsigned value) {
+    seam_defer_if_speculating();
 #ifdef _MSC_VER
     return static_cast<unsigned>(_InterlockedExchangeAdd(
         reinterpret_cast<volatile long *>(&pointer->storage),
@@ -416,6 +446,7 @@ inline unsigned atomic_add(atomic_uint_t *pointer, unsigned value) {
 // ONE serial ascending pass, and that pass is what makes both the order and
 // the access safe. The gate above refuses the combination that would break it.
 inline float atomic_add(atomic_float_t *pointer, float value) {
+    seam_defer_if_speculating();
     const float previous = pointer->storage;
     pointer->storage += value;
     return previous;
@@ -437,6 +468,7 @@ inline float atomic_add(atomic_float_t *pointer, float value) {
 // this serves accumulates on the device and converts the bits back to float on
 // the HOST, after the readback, where a bitcast is ordinary code.
 inline void atomic_max(atomic_uint_t *pointer, float value) {
+    seam_defer_if_speculating();
     unsigned bits;
     std::memcpy(&bits, &value, sizeof(bits));
     // A compare-and-swap loop, because there is no atomic maximum builtin and
@@ -546,6 +578,173 @@ inline bool is_lane_writer(unsigned lane, unsigned lanes) {
     return (lane % lanes) + 1u == lanes;
 }
 
+// ---------------------------------------------------------------------------
+// FOUR FLOAT LANES FOR A SERIAL TWIN, holding one 3-vector per register.
+//
+// A host twin that walks 3x3 blocks evaluates each block product component by
+// component. These let it evaluate the three components at once, component
+// `a` in lane `a`, the fourth lane carried and ignored. Every operation is
+// LANEWISE, so lane `a` performs exactly the scalar operation the scalar code
+// performs on component `a`, on the same operands in the same order: no sum
+// is reassociated and the result is the scalar result bit for bit. The
+// compiler's freedom to fuse a product into a following add
+// (`-ffp-contract=fast`) is the same freedom the scalar form has, on the same
+// expression tree.
+//
+// HOST ONLY, and a twin is the only place that may spell it: the device arms
+// already run a component per thread. GCC and Clang get their vector
+// extension; any other compiler gets a struct of four floats with the same
+// lanewise operators, which computes the same values.
+#if defined(__GNUC__) || defined(__clang__)
+typedef float lane4 __attribute__((vector_size(16)));
+typedef unsigned lane4_bits __attribute__((vector_size(16)));
+inline lane4 lane4_splat(float s) {
+    lane4 v = {s, s, s, s};
+    return v;
+}
+// `fabsf` is the sign-bit clear, so clearing it in every lane is `fabsf`
+// lanewise, NaN payloads included.
+inline lane4 lane4_abs(lane4 v) {
+    return (lane4)((lane4_bits)v & 0x7fffffffu);
+}
+inline lane4 lane4_load(const float *p) {
+    lane4 v;
+    std::memcpy(&v, p, sizeof v);
+    return v;
+}
+#define SEAM_LANE4_SHUFFLE(a, b, i0, i1, i2, i3) \
+    __builtin_shufflevector((a), (b), i0, i1, i2, i3)
+#else
+struct lane4 {
+    float v[4];
+    float &operator[](unsigned i) { return v[i]; }
+    float operator[](unsigned i) const { return v[i]; }
+};
+inline lane4 operator+(const lane4 &a, const lane4 &b) {
+    lane4 r;
+    for (unsigned i = 0; i < 4; ++i) r.v[i] = a.v[i] + b.v[i];
+    return r;
+}
+inline lane4 operator*(const lane4 &a, const lane4 &b) {
+    lane4 r;
+    for (unsigned i = 0; i < 4; ++i) r.v[i] = a.v[i] * b.v[i];
+    return r;
+}
+inline lane4 lane4_splat(float s) {
+    lane4 v = {{s, s, s, s}};
+    return v;
+}
+inline lane4 lane4_abs(lane4 v) {
+    for (unsigned i = 0; i < 4; ++i) v.v[i] = fabsf(v.v[i]);
+    return v;
+}
+inline lane4 lane4_load(const float *p) {
+    lane4 v;
+    std::memcpy(v.v, p, sizeof v.v);
+    return v;
+}
+inline lane4 seam_lane4_shuffle(const lane4 &a, const lane4 &b, unsigned i0,
+                                unsigned i1, unsigned i2, unsigned i3) {
+    const unsigned idx[4] = {i0, i1, i2, i3};
+    lane4 r;
+    for (unsigned i = 0; i < 4; ++i) {
+        r.v[i] = idx[i] < 4 ? a.v[idx[i]] : b.v[idx[i] - 4];
+    }
+    return r;
+}
+#define SEAM_LANE4_SHUFFLE(a, b, i0, i1, i2, i3) \
+    seam_lane4_shuffle((a), (b), i0, i1, i2, i3)
+#endif
+
+// A 3-vector into lanes 0..2, reading exactly three floats.
+inline lane4 lane4_load3(const float *p) {
+    lane4 v = lane4_splat(0.0f);
+    v[0] = p[0];
+    v[1] = p[1];
+    v[2] = p[2];
+    return v;
+}
+
+// THE COLUMNS OF A COLUMN-MAJOR 3x3 BLOCK, `(M x)_a = sum_b m[3b + a] x_b`:
+// lane `a` of `c0`, `c1`, `c2` is `m[a]`, `m[3 + a]`, `m[6 + a]`. The loads sit at
+// offsets 0, 3 and 5, so each reads four floats INSIDE the block's nine and the
+// last block of an array is never read past its end; the third is shuffled
+// down a lane.
+//
+inline void lane4_block_columns(const float *m, lane4 &c0, lane4 &c1,
+                                lane4 &c2) {
+    c0 = lane4_load(m);
+    c1 = lane4_load(m + 3);
+    const lane4 t = lane4_load(m + 5);
+    c2 = SEAM_LANE4_SHUFFLE(t, t, 1, 2, 3, 3);
+}
+
+// THE COLUMNS OF ITS TRANSPOSE, `(M^T x)_a = sum_b m[3a + b] x_b`: lane `a` is
+// `m[3a]`, `m[3a + 1]`, `m[3a + 2]`, gathered by shuffles from loads at 0, 4
+// and 5, again inside the nine floats.
+//
+inline void lane4_block_columns_transposed(const float *m, lane4 &c0,
+                                           lane4 &c1, lane4 &c2) {
+    const lane4 a = lane4_load(m);
+    const lane4 b = lane4_load(m + 4);
+    const lane4 c = lane4_load(m + 5);
+    c0 = SEAM_LANE4_SHUFFLE(a, b, 0, 3, 6, 6);
+    c1 = SEAM_LANE4_SHUFFLE(a, b, 1, 4, 7, 7);
+    c2 = SEAM_LANE4_SHUFFLE(a, c, 2, 4, 7, 7);
+}
+
+// `c0 x0 + c1 x1 + c2 x2`, the block product in the scalar form's order.
+//
+inline lane4 lane4_block_product(const lane4 &c0, const lane4 &c1,
+                                 const lane4 &c2, const float *x) {
+    return c0 * lane4_splat(x[0]) + c1 * lane4_splat(x[1]) +
+           c2 * lane4_splat(x[2]);
+}
+
+// A ROW'S CURVATURE TERMS from its finished sum and entry magnitude:
+// `signed_sum += x_k sum_k` and `magnitude += |x_k| abssum_k`, k ascending,
+// the sums `spmv_row_bound` forms in its order.
+//
+// TWO SPELLINGS OF THE SAME SUMS, chosen so the host build's output stays the
+// bits it had with the scalar twin, contraction on. The expression tree is
+// the same in both; what differs is only which product each compiler fuses.
+// GCC fused the scalar twin's products into the adds and fuses this loop the
+// same way. Clang kept them as separate products (it vectorized them first)
+// and fuses this loop when its operands come from lanes, so under Clang the
+// products are one lane multiply, which has no add to fuse into, and the adds
+// follow in order. Measured with both forms on random and drape-shaped rows:
+// bit-identical to the scalar twin under each compiler.
+//
+inline void lane4_row_bound(const float *x, const lane4 &sum,
+                            const lane4 &abssum, float &signed_sum,
+                            float &magnitude) {
+#if defined(__clang__)
+    const lane4 own = lane4_load3(x);
+    const lane4 signed_terms = own * sum;
+    const lane4 magnitude_terms = lane4_abs(own) * abssum;
+    // Two separate chains, written out: interleaved in one loop, Clang pairs
+    // the two sums into one two-lane operation and fuses the products back in.
+    signed_sum = ((signed_sum + signed_terms[0]) + signed_terms[1]) +
+                 signed_terms[2];
+    magnitude = ((magnitude + magnitude_terms[0]) + magnitude_terms[1]) +
+                magnitude_terms[2];
+#else
+    for (unsigned k = 0; k < 3; ++k) {
+        signed_sum += x[k] * sum[k];
+        magnitude += fabsf(x[k]) * abssum[k];
+    }
+#endif
+}
+
+// `|c0| |x0| + |c1| |x1| + |c2| |x2|`, the block's entry magnitude term.
+//
+inline lane4 lane4_block_magnitude(const lane4 &c0, const lane4 &c1,
+                                   const lane4 &c2, const float *x) {
+    return lane4_abs(c0) * lane4_abs(lane4_splat(x[0])) +
+           lane4_abs(c1) * lane4_abs(lane4_splat(x[1])) +
+           lane4_abs(c2) * lane4_abs(lane4_splat(x[2]));
+}
+
 }  // namespace compute
 
 // ---------------------------------------------------------------------------
@@ -594,11 +793,65 @@ struct ChunkDiag {
     // The failing check's source file, borrowed from the string literal
     // `__FILE__` expands to, which has static storage duration.
     const char *file;
+    // SPECULATION, read only by `seam_speculate_range` below and only when
+    // `spec_active` is set (`compute::SeamDefer` states the scheme). The host
+    // hands each chunk room for one entry per element in `spec_deferred`; the
+    // range appends the elements it set aside, ascending, and names in
+    // `spec_claim` the element whose check claimed this record, so the host can
+    // merge the two phases in the serial pass's order.
+    unsigned *spec_deferred;
+    unsigned spec_active;
+    unsigned spec_count;
+    unsigned spec_claim;
 };
 
 }  // extern "C"
 
 using DiagHandle = ChunkDiag *;
+
+// Whether the host asked this call to speculate (`compute::SeamDefer`).
+inline bool seam_speculation_requested(const ChunkDiag *diag) {
+    return diag != nullptr && diag->spec_active != 0u;
+}
+
+// PHASE ONE OF A SPECULATIVE DISPATCH, over one chunk's elements in ascending
+// order. Each element runs with the thread's flag raised; one that reaches a
+// slot operation throws before touching the slot, and is set aside with the
+// record restored to what it held before the element began, so its partial
+// run leaves no count and no claim behind. Everything it did before the throw
+// was a plain write to memory only that element touches, which the
+// declaration's opt-in promises; phase two runs it again from the start.
+template <class Call>
+inline void seam_speculate_range(ChunkDiag *diag, unsigned begin, unsigned end,
+                                 const Call &call) {
+    for (unsigned element = begin; element < end; ++element) {
+        const unsigned fail_count = diag->fail_count;
+        const unsigned claimed = diag->claimed;
+        const unsigned line = diag->line;
+        const float p0 = diag->payload[0], p1 = diag->payload[1];
+        const float p2 = diag->payload[2], p3 = diag->payload[3];
+        const char *file = diag->file;
+        compute::seam_speculating = true;
+        try {
+            call(element);
+            compute::seam_speculating = false;
+            if (claimed == 0u && diag->claimed != 0u) {
+                diag->spec_claim = element;
+            }
+        } catch (const compute::SeamDefer &) {
+            compute::seam_speculating = false;
+            diag->fail_count = fail_count;
+            diag->claimed = claimed;
+            diag->line = line;
+            diag->payload[0] = p0;
+            diag->payload[1] = p1;
+            diag->payload[2] = p2;
+            diag->payload[3] = p3;
+            diag->file = file;
+            diag->spec_deferred[diag->spec_count++] = element;
+        }
+    }
+}
 
 #define DIAG_ASSERT4(diag, cond, p0, p1, p2, p3)                                \
     do {                                                                       \

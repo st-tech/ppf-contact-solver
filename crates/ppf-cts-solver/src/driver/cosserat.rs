@@ -707,14 +707,6 @@ impl State {
         Ok(())
     }
 
-    /// The current frames, read back, four floats per slot.
-    #[allow(dead_code)]
-    pub fn frames<D: Device>(&self, device: &mut D) -> FatalResult<Vec<f32>> {
-        let mut out = vec![0.0f32; 4 * self.slots];
-        self.quat.read(device, 0, &mut out)?;
-        Ok(out)
-    }
-
     /// The committed frames and the frames one step before them, read back for
     /// a checkpoint (`driver/run_state.rs`), four floats per slot each.
     pub fn history<D: Device>(&self, device: &mut D) -> FatalResult<(Vec<f32>, Vec<f32>)> {

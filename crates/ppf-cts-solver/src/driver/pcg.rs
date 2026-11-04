@@ -43,7 +43,10 @@
 //!
 //! - a FUSED apply, which accumulates `sum|contribution|` over the very same
 //!   signed terms that form `p^T A p`, passes that sum. The device-resident
-//!   loop below takes this one, through [`slot::ABSDOT`].
+//!   loop below takes this one, through [`slot::ABSDOT`]. Its terms are the
+//!   ENTRY products `|p_a| |M_ab| |p_b|`, not the finished 3x3 products: both
+//!   the stored entries and the product round at that scale, and a stiff
+//!   contact normal makes the product cancel (`spmv.kernel.cpp`).
 //! - an apply that produces no such sum passes the Cauchy-Schwarz surrogate
 //!   `|p|_2 |Ap|_2 >= sum_i |p_i . (Ap)_i|`, formed from three plain inner
 //!   products. The locked and PDRD-reduced solves take this one, through
@@ -68,19 +71,20 @@
 //! producing both numbers; nothing here judges a curvature by it.
 
 // The solves are called from `step.rs`. The allow is for what no dispatch path
-// reaches, including `build_block_jacobi` and `block_jacobi_failure`, which
-// only this module's own tests call, and `pcg_beta`, `encode_combine_in_place`
-// and `DotTerms::dot_with_bound`, which nothing calls.
+// reaches: `build_block_jacobi` and `block_jacobi_failure`, the host oracle the
+// tests here and in `multigrid.rs` check the device preconditioner against, and
+// `PCG_BREAK_NOISE`, the Rust name of a cause code the kernel latches and the
+// verdict reads through its catch-all arm.
 #![allow(dead_code)]
 
 use ppf_cts_compute::{AllocLabel, Buffer, Device, Encoder, EncoderExt, Fault, ReadbackBuffer};
 use super::kernels::{
     Mat3MulArgs, PcgAlphaTermsArgs, PcgBetaResidentArgs,
-    PcgBetaTermsArgs, PcgDotTermsArgs, VecAddScaledArgs, VecAddScaledIndirectArgs,
+    PcgDotTermsArgs, VecAddScaledArgs, VecAddScaledIndirectArgs,
     PcgFoldAlphaArgs, PcgFoldBetaArgs, PcgRigidGroupL1Args,
     PcgUpdateRowFoldedArgs,
     VecBlockSumAbsCooperativeArgs, VecBlockSumCooperativeArgs,
-    VecBlockSumDualCooperativeArgs, VecBlockSumPairCooperativeArgs,
+    VecBlockSumDualCooperativeArgs,
     VecCombineArgs,
     VecCombineIndirectArgs, VecFillArgs,
 };
@@ -223,6 +227,10 @@ const FOLD_WIDTH: usize = super::reduce::BLOCK;
 /// and the values each level folds are unchanged, and 64 lanes share it, so the
 /// level's thread count is 64 times what it was.
 const FOLD_LANES: u32 = 64;
+// THE TWO SINGLE-GROUP FOLDS READ THEIR PARTIALS IN THE LANE-MAJOR LAYOUT the
+// writers lay down for exactly this many lanes (`PCG_FOLD_LANES` and
+// `pcg_fold_slot` in spmv.kernel.cpp), so the dispatch width is pinned to it.
+const _: () = assert!(FOLD_LANES == 64);
 
 /// Where each scalar of the recurrence lives in the workspace's scalar buffer.
 ///
@@ -425,114 +433,9 @@ unsafe fn encode_fold(
     }
 }
 
-/// Fold TWO arrays of the same length to two scalars, in one dispatch chain.
-///
-/// EVERY LEVEL IS ONE DISPATCH INSTEAD OF TWO, and nothing else changes: each
-/// output is the block sum of its own array over the same [`FOLD_WIDTH`] and in
-/// the same ascending order [`encode_fold`] uses, so both scalars are
-/// bit-identical to what two separate chains would produce and the curvature
-/// bound stated against that shape still holds. It changes the launch count and
-/// nothing else.
-///
-/// THE TWO ARRAYS NEED SEPARATE SCRATCH, because a level reads both and writes
-/// both, so one region cannot serve. `second_base` is where the second array's
-/// levels begin, and [`State::size_for`] sizes the buffer for both.
-///
-/// # Safety
-/// Every buffer must outlive the dispatches this appends, and both outputs must
-/// name exactly one float.
-/// Fold TWO arrays of one length to two scalars in ONE dispatch.
-///
-/// [`encode_fold_pair`] walks a fixed-width tree because it starts from a
-/// FULL-LENGTH array and no single group should own `rows` elements. The
-/// partials the folded apply writes are one per group, so the tree has nothing
-/// left to do: a single group whose window is the whole array gives each lane a
-/// contiguous run of it, and the two outputs are folded by that one group.
-///
-/// # Safety
-/// Every buffer must outlive the dispatch this appends, and both outputs must
-/// name exactly one float.
-unsafe fn encode_fold_pair_once(
-    encoder: &mut dyn Encoder,
-    first_source: ppf_cts_compute::Handle,
-    second_source: ppf_cts_compute::Handle,
-    count: usize,
-    first_out: ppf_cts_compute::Handle,
-    second_out: ppf_cts_compute::Handle,
-) -> Result<(), Fault> {
-    debug_assert!(count > 0, "a fold of nothing has no group to dispatch");
-    let args = VecBlockSumPairCooperativeArgs {
-        first_source,
-        second_source,
-        length: count as u32,
-        // THE WINDOW IS THE WHOLE ARRAY, which is what makes this one group:
-        // `vec_lane_run` splits `width` across the lanes, so a width equal to
-        // the length leaves nothing for a second group to own.
-        width: count as u32,
-        first_total: first_out,
-        second_total: second_out,
-        count: 1,
-        seam_arena_count: 0,
-    };
-    encoder.groups(&args, 1, FOLD_LANES)
-}
-
-unsafe fn encode_fold_pair(
-    encoder: &mut dyn Encoder,
-    first_source: ppf_cts_compute::Handle,
-    second_source: ppf_cts_compute::Handle,
-    count: usize,
-    scratch: &Buffer<f32>,
-    second_base: usize,
-    first_out: ppf_cts_compute::Handle,
-    second_out: ppf_cts_compute::Handle,
-) -> Result<(), Fault> {
-    debug_assert!(count > 0, "a fold of nothing has no level to dispatch");
-    let mut first_in = first_source;
-    let mut second_in = second_source;
-    let mut remaining = count;
-    let mut cursor = 0usize;
-    loop {
-        let blocks = remaining.div_ceil(FOLD_WIDTH);
-        let (first_dst, second_dst) = if blocks == 1 {
-            (first_out, second_out)
-        } else {
-            (
-                scratch.span(cursor, blocks),
-                scratch.span(second_base + cursor, blocks),
-            )
-        };
-        let args = VecBlockSumPairCooperativeArgs {
-            first_source: first_in,
-            second_source: second_in,
-            length: remaining as u32,
-            width: FOLD_WIDTH as u32,
-            first_total: first_dst,
-            second_total: second_dst,
-            count: blocks as u32,
-            seam_arena_count: 0,
-        };
-        encoder.groups(
-            &args,
-            blocks as u32,
-            FOLD_LANES,
-        )?;
-        if blocks == 1 {
-            return Ok(());
-        }
-        cursor += blocks;
-        first_in = first_dst;
-        second_in = second_dst;
-        remaining = blocks;
-    }
-}
-
 /// Fold TWO arrays of DIFFERENT lengths to two scalars, in one dispatch chain.
 ///
-/// [`encode_fold_pair`] shares one length and one block count between its two
-/// arrays, which is the honest restriction for it: the curvature and its bound
-/// are two views of one pass and are folded in lockstep. THE TWO CHAINS HERE
-/// ARE NOT IN LOCKSTEP. `||r||_1` runs over `3 * rows` floats and `r . z` over
+/// THE TWO CHAINS ARE NOT IN LOCKSTEP. `||r||_1` runs over `3 * rows` floats and `r . z` over
 /// `rows` of them, so their levels have different extents and one reaches a
 /// single element before the other does.
 ///
@@ -731,6 +634,9 @@ unsafe fn encode_combine_indirect(
     a: f32,
     coefficient_b: ppf_cts_compute::Handle,
     skip: ppf_cts_compute::Handle,
+    // `Some(product)` zeroes `product` in the same pass, for an apply that
+    // accumulates into it (see `accumulates` in `solve_scheduled`).
+    clear: Option<ppf_cts_compute::Handle>,
     n: usize,
 ) -> Result<(), Fault> {
     if n == 0 {
@@ -743,25 +649,14 @@ unsafe fn encode_combine_indirect(
         a,
         coefficient_b,
         skip,
+        // A handle the body never writes when `clear_on` is zero still has to
+        // name a live allocation, so the destination stands in for it.
+        clear: clear.unwrap_or(destination),
+        clear_on: u32::from(clear.is_some()),
         count: n as u32,
         seam_arena_count: 0,
     };
     encoder.elements(&args, n as u32)
-}
-
-/// `destination = a * source + b * destination`, the aliasing form.
-///
-/// # Safety
-/// Both slices must outlive the dispatch this appends.
-unsafe fn encode_combine_in_place(
-    encoder: &mut dyn Encoder,
-    source: ppf_cts_compute::Handle,
-    destination: ppf_cts_compute::Handle,
-    a: f32,
-    b: f32,
-    n: usize,
-) -> Result<(), Fault> {
-    encode_combine_raw(encoder, source, destination, destination, a, b, n)
 }
 
 /// Why a solve stopped.
@@ -911,6 +806,11 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// The search direction `p`, for the breakdown dump (`dump_linsys.rs`).
+    pub fn direction(&self) -> ppf_cts_compute::Handle {
+        self.p.handle()
+    }
+
     /// Size every vector for a scene of `rows` vertices.
     pub fn size_for(&mut self, device: &mut impl Device, rows: u32) -> Result<(), Fault> {
         let n = 3 * rows as usize;
@@ -941,7 +841,7 @@ impl Workspace {
             .size(device, slot::COUNT, AllocLabel("pcg.scalar"))?;
         self.cause
             .size(device, cause_slot::COUNT, AllocLabel("pcg.cause"))?;
-        // TWICE THE CHAIN, because `encode_fold_pair` runs two arrays through
+        // TWICE THE CHAIN, because `encode_fold_dual` runs two arrays through
         // the levels at once and a level reads both while writing both, so one
         // region cannot serve. The single-array folds beside it use the first
         // half and are unaffected.
@@ -1224,6 +1124,15 @@ fn solve_scheduled<D: Device>(
         });
     }
     let term_rows = terms.rows();
+    // WHETHER THE LOOP'S APPLY ADDS INTO `A p` RATHER THAN WRITING IT. The
+    // scattering apply (`Operator::accumulates`) adds every row's
+    // contributions, its own included, so `A p` must be zero when it starts.
+    // Instead of a fill before each apply, the seed leaves it zero and every
+    // direction combine zeroes it again after the update, the last pass of the
+    // iteration that reads it, so each apply still opens on zero and adds the
+    // same terms into it.
+    //
+    let accumulates = op.accumulates();
 
     // r = b - A x0, the preconditioner, the first search direction and BOTH
     // opening scalars, in ONE boundary. Consecutive entries of a region are
@@ -1256,6 +1165,17 @@ fn solve_scheduled<D: Device>(
                 op.encode_apply(encoder, x, ap_h, row_absolute.handle(),
                                 row_curvature.handle())?;
                 encode_combine_raw(encoder, b, ap_h, r_h, 1.0, -1.0, n)?;
+                // THE LOOP'S FIRST PRODUCT OPENS AT ZERO, the one the
+                // direction combine leaves behind for every later one.
+                if accumulates {
+                    let zero = VecFillArgs {
+                        array: ap_h,
+                        value: 0.0,
+                        count: n as u32,
+                        seam_arena_count: 0,
+                    };
+                    encoder.elements(&zero, n as u32)?;
+                }
                 // err0 = ||r||_1, the denominator every relative residual below
                 // is measured against. It is the SEEDED residual and never
                 // ||b||_1; see the module doc.
@@ -1466,6 +1386,12 @@ fn solve_scheduled<D: Device>(
         // uses, so both per-group partial arrays are indexed the same way and
         // both are at most `rows / APPLY_GROUP` long.
         let update_groups = rows.div_ceil(super::operator::APPLY_GROUP);
+        assert!(
+            terms.rows() >= super::operator::fold_span(update_groups) as usize,
+            "the update's partials need {} floats in the fold layout, the term arrays hold {}",
+            super::operator::fold_span(update_groups),
+            terms.rows()
+        );
         let curvature_h = row_curvature.handle();
         let alpha_noise_slot = scalar.span(slot::ALPHA_NOISE, 1);
         let beta_noise_slot = scalar.span(slot::BETA_NOISE, 1);
@@ -1484,8 +1410,8 @@ fn solve_scheduled<D: Device>(
                 // not `rows` of them. Measured before this: 81,920 rows folded
                 // 320, then 2, then 1, three dispatches for each of two chains
                 // every iteration.
-                let groups =
-                    op.encode_apply_folded(encoder, p_h, ap_h, curvature_h, absolute_h, latch_slot)?;
+                let groups = op.encode_apply_folded(
+                    encoder, p_h, ap_h, curvature_h, absolute_h, latch_slot, accumulates)?;
                 // p^T A p, and the scale its round-off bound is taken from.
                 //
                 // THE SCALE COMES OUT OF THE APPLY ITSELF: the operator sums
@@ -1663,7 +1589,9 @@ fn solve_scheduled<D: Device>(
                         encoder.groups(&beta_fold_args, 1, FOLD_LANES)?;
                     }
                 }
-                encode_combine_indirect(encoder, z_h, p_h, p_h, 1.0, beta_slot, combine_skip_slot, n)?;
+                encode_combine_indirect(
+                    encoder, z_h, p_h, p_h, 1.0, beta_slot, combine_skip_slot,
+                    accumulates.then_some(ap_h), n)?;
             }
             Ok(())
             })?);
@@ -1870,39 +1798,6 @@ fn pcg_alpha<D: Device>(
     Ok(PcgScalar { value, cause })
 }
 
-fn pcg_beta<D: Device>(
-    device: &mut D,
-    // THE TWO OUT-BUFFERS, not the whole workspace: the caller has already
-    // destructured it into disjoint field borrows, so a second borrow of the
-    // whole would conflict with the vectors the same iteration is using.
-    verdict: &mut ReadbackBuffer<f32>,
-    verdict_cause: &mut ReadbackBuffer<i32>,
-    rz_next: f32,
-    rz_previous: f32,
-) -> Result<PcgScalar, Fault> {
-    let args = PcgBetaTermsArgs {
-        // As `pcg_alpha`: the workspace's, because a handle names an allocation.
-        value_out: verdict.span(0, 1),
-        noise_out: verdict.span(1, 1),
-        cause_out: verdict_cause.span(0, 1),
-        rz_next,
-        rz_previous,
-        count: 1,
-        seam_arena_count: 0,
-    };
-    // Safety: the three out-parameters outlive the dispatch.
-    unsafe { device.launch("pcg.beta", &args, 1) }?;
-    // THE MIRRORS, brought current before the verdict is read: taking a handle
-    // above staled both by construction.
-    verdict.download(device)?;
-    verdict_cause.download(device)?;
-    let value = verdict.host()[0];
-    let noise = verdict.host()[1];
-    let cause = verdict_cause.host()[0];
-    let _ = noise;
-    Ok(PcgScalar { value, cause })
-}
-
 /// Per-row inner-product terms, folded under `reduce`'s fixed shape.
 ///
 /// TWO ARRAYS BECAUSE THE SHARED BODY YIELDS TWO NUMBERS. `pcg_dot_terms`
@@ -1918,24 +1813,6 @@ struct DotTerms<'a> {
 }
 
 impl DotTerms<'_> {
-    /// Refresh the PRODUCT mirror, which is the only one anything reads.
-    ///
-    /// THE MAGNITUDE ARRAY IS DELIBERATELY LEFT STALE. `pcg_dot_terms` is a
-    /// shared body that yields both numbers from one expression, so the
-    /// gathered output has to be bound and written; nothing on this side folds
-    /// it, because the scale the curvature bound is taken from is
-    /// [`norm_product`](Self::norm_product) rather than the per-row magnitude
-    /// (see the module doc). Downloading it anyway would be `rows` floats a
-    /// Newton iteration carried across the seam for no reader.
-    ///
-    /// Leaving it stale is loud rather than quiet: `ReadbackBuffer::host`
-    /// panics on a mirror that a dispatch named and no download refreshed, so
-    /// a future reader who folds it gets an assertion naming the buffer, not
-    /// the contents from before the pass.
-    fn download(&mut self, device: &mut impl Device) -> Result<(), Fault> {
-        self.product.download(device)
-    }
-
     /// The per-row product array, as a handle, for the DEVICE fold that
     /// reduces it.
     ///
@@ -2047,28 +1924,6 @@ impl DotTerms<'_> {
         })?;
         scalars.download(device)?;
         Ok(scalars.host()[slot::FOLD_SCRATCH])
-    }
-
-    /// `a . b` and the round-off scale the curvature bound is taken from,
-    /// measured over the same two vectors.
-    ///
-    /// THE SCALE IS THE CAUCHY-SCHWARZ SURROGATE, not the fold beside the dot,
-    /// for the reason [`norm_product`](Self::norm_product) records: this
-    /// backend's per-row magnitude has already spent the row's own
-    /// cancellation, so it is not the quantity the shared bound is written
-    /// against.
-    fn dot_with_bound<D: Device>(
-        &mut self,
-        device: &mut D,
-        a: ppf_cts_compute::Handle,
-        b: ppf_cts_compute::Handle,
-        n: usize,
-        fold: &Buffer<f32>,
-        scalars: &mut ReadbackBuffer<f32>,
-    ) -> Result<(f32, f32), Fault> {
-        let dot = self.dot(device, a, b, n, fold, scalars)?;
-        let scale = self.norm_product(device, a, b, n, fold, scalars)?;
-        Ok((dot, scale))
     }
 
     /// The Cauchy-Schwarz surrogate taken GROUP BY GROUP and summed:

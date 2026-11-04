@@ -68,29 +68,6 @@ template <class T>
     return result;
 }
 
-[[seam::device_fn]] inline AABB aabb_make_triangle(
-    const Vec3f &x0, const Vec3f &x1,
-    const Vec3f &x2, float margin_float) {
-    AABB result;
-    for (unsigned dimension = 0; dimension < 3; ++dimension) {
-        result.min[dimension] =
-            aabb_min(x0[dimension],
-                         aabb_min(x1[dimension], x2[dimension]));
-        result.max[dimension] =
-            aabb_max(x0[dimension],
-                         aabb_max(x1[dimension], x2[dimension]));
-    }
-    result.active = true;
-    if (margin_float != 0.0f) {
-        const float margin(margin_float);
-        for (unsigned dimension = 0; dimension < 3; ++dimension) {
-            result.min[dimension] -= margin;
-            result.max[dimension] += margin;
-        }
-    }
-    return result;
-}
-
 [[seam::device_fn]] inline AABB aabb_make_edge(
     const Vec3f &x0, const Vec3f &x1,
     float margin_float) {

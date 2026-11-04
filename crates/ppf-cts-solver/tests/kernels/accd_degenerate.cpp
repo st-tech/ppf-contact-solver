@@ -298,7 +298,7 @@ void run_bounded(float *value, unsigned *flagged) {
         accd::OverlapInfo overlap = poisoned_overlap();
         value[CTRL_COMOVING] =
             accd::point_point_ccd(a0, a1, b0, b1, OFFSET, GHAT,
-                                  param.line_search_max_t, param.ccd_eps,
+                                  param.line_search_max_t, param.line_search_max_t, param.ccd_eps,
                                   &overlap);
         flagged[CTRL_COMOVING] = report_bits(value[CTRL_COMOVING], overlap);
     }
@@ -316,7 +316,7 @@ void run_bounded(float *value, unsigned *flagged) {
         accd::OverlapInfo overlap = poisoned_overlap();
         value[SANITY_APPROACH] =
             accd::point_point_ccd(a0, a1, b0, b1, OFFSET, GHAT,
-                                  param.line_search_max_t, param.ccd_eps,
+                                  param.line_search_max_t, param.line_search_max_t, param.ccd_eps,
                                   &overlap);
         flagged[SANITY_APPROACH] = report_bits(value[SANITY_APPROACH], overlap);
     }
@@ -419,7 +419,7 @@ void run_collapsed(float *value, unsigned *flagged) {
         Sweep s = pp_sweep();
         value[PP_COINCIDENT] = accd::point_point_ccd(
             s.a, s.b, s.a, s.b, OFFSET, GHAT, param.line_search_max_t,
-            param.ccd_eps, &overlap);
+            param.line_search_max_t, param.ccd_eps, &overlap);
         flagged[PP_COINCIDENT] = report_bits(value[PP_COINCIDENT], overlap);
         // The values the host reads to build its OverlappingStart crash. The
         // distance is exactly zero, which needs no units. The offset is left
@@ -436,7 +436,7 @@ void run_collapsed(float *value, unsigned *flagged) {
         value[PT_COLLAPSED] =
             accd::point_triangle_ccd(s.a, s.b, s.a, s.a, s.a, s.b, s.b, s.b,
                                      OFFSET, GHAT, param.line_search_max_t,
-                                     param.ccd_eps, &overlap);
+                                     param.line_search_max_t, param.ccd_eps, &overlap);
         flagged[PT_COLLAPSED] = report_bits(value[PT_COLLAPSED], overlap);
     }
 
@@ -446,7 +446,7 @@ void run_collapsed(float *value, unsigned *flagged) {
         Sweep s = pe_sweep();
         value[PE_COLLAPSED] =
             accd::point_edge_ccd(s.a, s.b, s.a, s.a, s.b, s.b, OFFSET, GHAT,
-                                 param.line_search_max_t, param.ccd_eps,
+                                 param.line_search_max_t, param.line_search_max_t, param.ccd_eps,
                                  &overlap);
         flagged[PE_COLLAPSED] = report_bits(value[PE_COLLAPSED], overlap);
     }
@@ -457,7 +457,7 @@ void run_collapsed(float *value, unsigned *flagged) {
         Sweep s = ee_sweep();
         value[EE_COLLAPSED] =
             accd::edge_edge_ccd(s.a, s.a, s.a, s.a, s.b, s.b, s.b, s.b, OFFSET,
-                                GHAT, param.line_search_max_t, param.ccd_eps,
+                                GHAT, param.line_search_max_t, param.line_search_max_t, param.ccd_eps,
                                 &overlap);
         flagged[EE_COLLAPSED] = report_bits(value[EE_COLLAPSED], overlap);
     }

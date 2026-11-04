@@ -132,6 +132,7 @@ fn table() -> &'static [KernelDecl] {
                     host_refs: &[],
                     diag: false,
                     generated: true,
+                    speculate: false,
                 })
                 .collect()
         })

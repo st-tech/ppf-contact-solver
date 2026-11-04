@@ -116,7 +116,6 @@ svd3x2(const Mat3x2f &input, Mat3x2f &u,
 // references, and a gather hands the body `buffer[index]`, which is an lvalue.
 // The last output is one float per element rather than a matrix, so it carries
 // no `[[seam::pod]]`: there is no layout for a compiler to disagree about.
-[[seam::entry]]
 [[seam::device_fn]] inline void svd3x2_shifted(
     const Mat3x2f &input, Mat3x2f &u,
     Vec2f &shifted_sigma, Mat2x2f &vt,

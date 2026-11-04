@@ -100,13 +100,18 @@ pub fn dump() {
 
 extern "C" fn dump_at_exit() {
     dump();
+    ppf_cts_compute::host::kstats::dump();
+    ppf_cts_compute::host::kstats::dump_check();
 }
 
 /// Install the exit hook, once. `libc::atexit` is what `crate::status_writer`
 /// already uses for the same reason: a solver run ends without unwinding
 /// through a shutdown path that a `Drop` could hang on.
 pub fn register() {
-    if !enabled() {
+    if !enabled()
+        && !ppf_cts_compute::host::kstats::enabled()
+        && !ppf_cts_compute::host::kstats::speculate_check()
+    {
         return;
     }
     static ONCE: std::sync::Once = std::sync::Once::new();

@@ -23,7 +23,6 @@
 // are two element gathers into one element scatter: the body takes one face's
 // material-frame quantity and its inverse rest shape and returns the
 // world-frame result, which the scatter writes at the thread index.
-[[seam::entry(force)]]
 [[seam::device_fn]] inline Mat3x3f
 face_convert_force(const Mat3x2f &gradient_f,
                        const Mat2x2f &inverse_rest) {
@@ -39,7 +38,6 @@ face_convert_force(const Mat3x2f &gradient_f,
     return result;
 }
 
-[[seam::entry(hessian)]]
 [[seam::device_fn]] inline Mat9x9f
 face_convert_hessian(const Mat6x6f &hessian_f,
                          const Mat2x2f &inverse_rest) {

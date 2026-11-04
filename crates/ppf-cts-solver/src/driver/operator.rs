@@ -48,6 +48,20 @@ use super::spmv::FixedCsrView;
 /// that follows the same extent.
 pub const APPLY_GROUP: u32 = 256;
 
+/// The floats a fold of `groups` per-group partials occupies in the lane-major
+/// layout the folded passes write them in (`pcg_fold_slot` in
+/// spmv.kernel.cpp): every slot is below this. Up to one group per fold lane
+/// the layout is the identity; past it, whole runs of `ceil(groups / 64)`.
+///
+pub fn fold_span(groups: u32) -> u32 {
+    const LANES: u32 = 64;
+    if groups <= LANES {
+        groups
+    } else {
+        groups.div_ceil(LANES) * LANES
+    }
+}
+
 /// Lanes that share one row in the dynamic apply.
 ///
 /// A row's non-zeros are strided across eight lanes and folded into the first
@@ -158,6 +172,14 @@ impl Operator {
     /// Rows, which is the vertex count.
     pub fn rows(&self) -> u32 {
         self.fixed.rows
+    }
+
+    /// Whether [`Self::encode_apply_folded`] ADDS into its result rather than
+    /// writing it: the scattering apply above [`SYM_MIN_ROWS`], which the
+    /// difference form never takes. Such an apply needs its result zeroed
+    /// first, by its own fill or by a caller that passes `result_zeroed`.
+    pub fn accumulates(&self) -> bool {
+        self.difference.is_none() && self.dynamic.is_some() && self.fixed.rows >= SYM_MIN_ROWS
     }
 
     /// The argument record for `result = (A + B + C) x`.
@@ -385,6 +407,10 @@ impl Operator {
         curvature_total: ppf_cts_compute::Handle,
         absolute_total: ppf_cts_compute::Handle,
         latch: ppf_cts_compute::Handle,
+        // THE CALLER HAS ALREADY ZEROED `result`. Read only where the apply
+        // accumulates ([`Self::accumulates`]), which otherwise opens with a
+        // fill of its own.
+        result_zeroed: bool,
     ) -> Result<u32, Fault> {
         let rows = self.fixed.rows;
         assert_eq!(self.fixed.offset.size as usize, rows as usize + 1);
@@ -397,7 +423,8 @@ impl Operator {
             // ONE ROW A LANE, as the contact-free apply is, so the group count
             // is the plain one whether or not the scene carries contact.
             assert!(
-                curvature_total.size >= groups && absolute_total.size >= groups,
+                curvature_total.size >= fold_span(groups)
+                    && absolute_total.size >= fold_span(groups),
                 "the partial arrays must hold one float per group: {groups} groups \
                  against {} and {}",
                 curvature_total.size,
@@ -442,8 +469,8 @@ impl Operator {
         // the larger of the two rather than assuming.
         let dynamic_groups = (rows * SPMV_ROW_LANES).div_ceil(APPLY_GROUP);
         assert!(
-            curvature_total.size >= dynamic_groups.max(groups)
-                && absolute_total.size >= dynamic_groups.max(groups),
+            curvature_total.size >= fold_span(dynamic_groups.max(groups))
+                && absolute_total.size >= fold_span(dynamic_groups.max(groups)),
             "the partial arrays must hold one float per group: {groups} groups \
              against {} and {}",
             curvature_total.size,
@@ -468,13 +495,15 @@ impl Operator {
             // and a stale value would survive the pass. The fill rides the same
             // submit as the apply, so the pair costs one boundary.
             Some(d) if rows >= SYM_MIN_ROWS => {
-                let zero = VecFillArgs {
-                    array: result,
-                    value: 0.0,
-                    count: 3 * rows,
-                    seam_arena_count: 0,
-                };
-                encoder.elements(&zero, 3 * rows)?;
+                if !result_zeroed {
+                    let zero = VecFillArgs {
+                        array: result,
+                        value: 0.0,
+                        count: 3 * rows,
+                        seam_arena_count: 0,
+                    };
+                    encoder.elements(&zero, 3 * rows)?;
+                }
                 let args = OperatorApplySymmetricFoldedArgs {
                     dyn_index: d.index,
                     dyn_value: d.value,

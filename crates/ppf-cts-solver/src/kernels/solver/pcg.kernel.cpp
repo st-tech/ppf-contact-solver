@@ -132,43 +132,6 @@ pcg_curvature_noise(float absolute_dot) {
     return result;
 }
 
-[[seam::device_fn]] inline PcgUpdate3 pcg_update3(
-    const float *p, const float *ap,
-    float *x, float *r,
-    float *z, const float *inverse_diagonal,
-    unsigned row, float alpha) {
-    float residual[3];
-    for (unsigned dimension = 0; dimension < 3; ++dimension) {
-        const unsigned index = 3 * row + dimension;
-        x[index] += alpha * p[index];
-        residual[dimension] = r[index] - alpha * ap[index];
-        r[index] = residual[dimension];
-    }
-    // The attribute leads the declaration because C++ admits an attribute only
-    // at the head of a declaration or at the end of the decl-specifier
-    // sequence, never between `const` and the type it qualifies. MSL reads
-    // `device const float *` and `const device float *` as the same type.
-    const float *matrix = inverse_diagonal + 9 * row;
-    Vec3f preconditioned;
-    preconditioned[0] =
-        matrix[0] * residual[0] + matrix[3] * residual[1] +
-        matrix[6] * residual[2];
-    preconditioned[1] =
-        matrix[1] * residual[0] + matrix[4] * residual[1] +
-        matrix[7] * residual[2];
-    preconditioned[2] =
-        matrix[2] * residual[0] + matrix[5] * residual[1] +
-        matrix[8] * residual[2];
-    PcgUpdate3 result{0.0f, 0.0f};
-    for (unsigned dimension = 0; dimension < 3; ++dimension) {
-        z[3 * row + dimension] = preconditioned[dimension];
-        result.rz += residual[dimension] * preconditioned[dimension];
-        result.error += residual[dimension] < 0.0f ? -residual[dimension]
-                                                  : residual[dimension];
-    }
-    return result;
-}
-
 // One row's contribution to a vector inner product, and the magnitude of that
 // same contribution.
 //
@@ -222,76 +185,6 @@ pcg_dot_terms(const float *a,
     absolute_product = term.magnitude;
 }
 
-// THE ITERATE, THE RESIDUAL, THE PRECONDITIONED RESIDUAL AND THE `r . z` TERMS,
-// in one pass over the row. It is `cg_fused_update_kernel`'s shape, which does
-// the same four things over one pass and is what holds a PCG iteration to four
-// dispatches rather than one per update.
-//
-// THE ORDER INSIDE THE ROW IS THE POINT AND IS NOT AN OPTIMIZATION. `z` is the
-// preconditioner applied to the residual AFTER this step's update, and the
-// terms are that same updated residual against that `z`, so the three cannot be
-// reordered and a caller cannot pair an `r` from one iteration with a `z` from
-// another. Splitting them into separate dispatches, which is what this
-// replaces, made that ordering a property of the CALL SITE rather than of the
-// arithmetic.
-//
-// EVERY VALUE IS THE ONE THE SPLIT PASSES PRODUCED, bit for bit: the same
-// `fma` for the iterate and the residual, the same column-major `mat3_mul` for
-// the preconditioner, and the same per-row accumulation and absolute value for
-// the terms. Only the number of dispatches changes.
-//
-// A ROW IS THREE COMPONENTS, so this is dispatched over ROWS while the vectors
-// it walks are `3 * rows` floats, and each output is a base pointer the body
-// indexes rather than a `[[seam::scatter]]`, because a body returns one value
-// and this produces five.
-[[seam::entry(row)]]
-[[seam::device_fn]] inline void pcg_update_row(
-    const float *direction,
-    const float *product_direction,
-    const float *alpha,
-    const float *inverse_diagonal,
-    float *iterate, float *residual,
-    float *preconditioned,
-    float *term_product,
-    float *term_magnitude, unsigned row) {
-    const float scale = *alpha;
-    float updated[3];
-    for (unsigned c = 0; c < 3u; ++c) {
-        const unsigned i = 3u * row + c;
-        iterate[i] = fmath::fma(scale, direction[i], iterate[i]);
-        updated[c] = fmath::fma(-scale, product_direction[i], residual[i]);
-        residual[i] = updated[c];
-    }
-    // THE PRECONDITIONER, over the residual THIS ROW JUST WROTE. Reading it
-    // back out of `residual` would be the same value; taking it from the local
-    // says so, and costs no load.
-    //
-    // THE BLOCK IS INDEXED, NOT ALIASED BY A LOCAL POINTER. MSL requires an
-    // explicit address space on every pointer type, so `const float *block =
-    // inverse_diagonal + 9 * row` is "pointer type must have explicit address
-    // space qualifier" there while nvcc and a host compiler take it without a
-    // word. Indexing the parameter needs no address space of its own and is
-    // the same three loads.
-    const unsigned block = 9u * row;
-    float applied[3];
-    applied[0] = inverse_diagonal[block + 0] * updated[0] +
-                 inverse_diagonal[block + 3] * updated[1] +
-                 inverse_diagonal[block + 6] * updated[2];
-    applied[1] = inverse_diagonal[block + 1] * updated[0] +
-                 inverse_diagonal[block + 4] * updated[1] +
-                 inverse_diagonal[block + 7] * updated[2];
-    applied[2] = inverse_diagonal[block + 2] * updated[0] +
-                 inverse_diagonal[block + 5] * updated[1] +
-                 inverse_diagonal[block + 8] * updated[2];
-    float dot = 0.0f;
-    for (unsigned c = 0; c < 3u; ++c) {
-        preconditioned[3u * row + c] = applied[c];
-        dot += updated[c] * applied[c];
-    }
-    term_product[row] = dot;
-    term_magnitude[row] = fmath::abs(dot);
-}
-
 // THE FUSED ROW WITH ITS TWO SCALARS FOLDED IN: the pass that writes the
 // iterate, the residual and the preconditioned residual also reduces `r . z`
 // and `||r||_1`, and only the two per-GROUP totals leave the kernel.
@@ -324,6 +217,11 @@ pcg_dot_terms(const float *a,
         return;
     }
     const unsigned row = block * threads + lane;
+    // THE FOLD'S LANE-MAJOR SLOT (`pcg_fold_slot`) for this group's partials,
+    // formed here, where its two divisions overlap the loads, rather than
+    // in the writer lane after the reduction, where every group would wait
+    // on them.
+    const unsigned fold_slot = pcg_fold_slot(block, (rows + threads - 1u) / threads);
     float dot = 0.0f;
     float norm = 0.0f;
     if (row < rows) {
@@ -357,8 +255,8 @@ pcg_dot_terms(const float *a,
     const float residual_folded =
         compute::block_sum(norm, scratch + 32, lane, threads);
     if (compute::is_block_writer(lane, threads)) {
-        product_total[block] = product_folded;
-        residual_total[block] = residual_folded;
+        product_total[fold_slot] = product_folded;
+        residual_total[fold_slot] = residual_folded;
     }
 }
 
@@ -405,22 +303,6 @@ pcg_dot_terms(const float *a,
 
 [[seam::entry(count)]] void pcg_alpha_terms(
     float rz, float p_ap, float absolute_dot,
-    float *value_out,
-    float *noise_out,
-    int *cause_out,
-    unsigned count);
-
-[[seam::device_fn]] inline void pcg_beta_terms(
-    float rz_next, float rz_previous, float &value,
-    float &noise, int &cause) {
-    const PcgScalar result = pcg_beta(rz_next, rz_previous);
-    value = result.value;
-    noise = result.noise;
-    cause = result.cause;
-}
-
-[[seam::entry(count)]] void pcg_beta_terms(
-    float rz_next, float rz_previous,
     float *value_out,
     float *noise_out,
     int *cause_out,
@@ -658,9 +540,13 @@ pcg_dot_terms(const float *a,
     pcg_fold_run(length, threads, lane, first, last);
     float curvature_mine = 0.0f;
     float absolute_mine = 0.0f;
-    for (unsigned k = first; k < last; ++k) {
-        curvature_mine += curvature_source[k];
-        absolute_mine += absolute_source[k];
+    // THE RUN IN THE WRITERS' LANE-MAJOR LAYOUT (`pcg_fold_slot`): element
+    // `k` of this lane's run sits at `(k - first) * lanes + lane`. The dispatch
+    // width is PCG_FOLD_LANES (pcg.rs asserts it), so `first` is `lane * per`
+    // for the same `per` the writers used.
+    for (unsigned k = first, at = lane; k < last; ++k, at += PCG_FOLD_LANES) {
+        curvature_mine += curvature_source[at];
+        absolute_mine += absolute_source[at];
     }
     const float curvature_folded =
         compute::block_sum(curvature_mine, scratch, lane, threads);
@@ -802,9 +688,10 @@ pcg_dot_terms(const float *a,
     pcg_fold_run(length, threads, lane, first, last);
     float product_mine = 0.0f;
     float residual_mine = 0.0f;
-    for (unsigned k = first; k < last; ++k) {
-        product_mine += product_source[k];
-        residual_mine += residual_source[k];
+    // THE RUN IN THE WRITERS' LANE-MAJOR LAYOUT, as in `pcg_fold_alpha`.
+    for (unsigned k = first, at = lane; k < last; ++k, at += PCG_FOLD_LANES) {
+        product_mine += product_source[at];
+        residual_mine += residual_source[at];
     }
     const float product_folded =
         compute::block_sum(product_mine, scratch, lane, threads);
@@ -917,28 +804,3 @@ pcg_rigid_group_l1(const float *reduced, unsigned body_base,
     norm = pcg_rigid_body_l1(reduced, body_base, body);
 }
 
-// One group's relative residual against its own seeded initial residual.
-//
-// A group whose seeded initial residual is exactly zero has no scale of its
-// own (it starts solved and can only pick up residual through coupling to
-// another group), so it is measured against the whole system's initial scale,
-// which the caller has already established is positive. Every scale is
-// therefore positive and a ratio can only go non-finite if the residual itself
-// does.
-//
-// A NON-FINITE RATIO IS MAPPED TO INFINITY ON PURPOSE. The caller folds these
-// with a max reduction, and a max DROPS a NaN (`max(NaN, x)` returns `x`), so a
-// NaN residual would read as convergence. Infinity survives the reduction and
-// trips the caller's non-finite check. The finiteness test is spelled as the
-// negation of NaN-or-infinite because those two names are the ones every
-// backend prologue carries.
-[[seam::device_fn]] inline float
-pcg_group_relative_residual(float current, float initial,
-                                float fallback_scale) {
-    const float scale = initial > 0.0f ? initial : fallback_scale;
-    const float ratio = fmath::div(current, scale);
-    if (fmath::isnan(ratio) || fmath::isinf(ratio)) {
-        return fmath::infinity();
-    }
-    return ratio;
-}

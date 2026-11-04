@@ -68,7 +68,7 @@ class _ParamProxy:
       sizes; the box around the group is never measured. Set it to
       ``False`` to give every object the absolute ``contact_gap`` /
       ``contact_offset`` values directly. ``contact_gap_limit_percent``
-      (Solid, Shell and Rod; 1 to 50, default 25) caps the gap of either
+      (every type but Sand; 1 to 50, default 25) caps the gap of either
       mode at that share of the room between mesh neighbors, which is the
       smallest triangle altitude or rod segment length nearby less twice
       the contact offset, so a mesh finer than its gap does not press its

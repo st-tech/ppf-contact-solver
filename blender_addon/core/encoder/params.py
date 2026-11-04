@@ -584,6 +584,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "STATIC": [
                 "contact-gap",
                 "contact-offset",
+                "contact-gap-limit",
                 "friction",
                 "soft-constraint",
                 "allow-self-intersection",
@@ -616,6 +617,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "friction",
                 "contact-gap",
                 "contact-offset",
+                "contact-gap-limit",
                 "model",
                 "hinge",
                 "velocity",
@@ -766,7 +768,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "contact-gap": contact_gap_value,
             "contact-offset": contact_offset_value,
             # The share of the room between mesh neighbors the gap may take.
-            # The strip loop below keeps it for SOLID, SHELL and ROD, and the
+            # The strip loop below keeps it for every type but SAND, and the
             # frontend lowers each element's gap to it. A plain float rather
             # than the float32 its neighbors are: the frontend refuses a
             # fraction outside 0.01 to 0.5, and float32(0.01) is below 0.01.

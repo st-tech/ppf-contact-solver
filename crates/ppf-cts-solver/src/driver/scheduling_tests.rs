@@ -96,8 +96,11 @@ fn exercise(
     );
     let result = f.floats(&vec![0.0; 3 * rows]);
     let groups = rows.div_ceil(if width == 0 { 256 } else { 32 });
-    let curvature = f.floats(&vec![0.0; groups]);
-    let absolute = f.floats(&vec![0.0; groups]);
+    // THE FOLD LAYOUT'S SPAN, not the group count: the folded passes write
+    // their partials lane-major (`operator::fold_span`).
+    let span = super::super::operator::fold_span(groups as u32) as usize;
+    let curvature = f.floats(&vec![0.0; span]);
+    let absolute = f.floats(&vec![0.0; span]);
     let empty_index = f.indices(&[]);
     let empty_value = f.floats(&[]);
     let empty_offsets = f.indices(&vec![0; rows + 1]);
@@ -178,8 +181,8 @@ fn exercise(
         iterate: f.floats(&vec![0.0; rows * 3]),
         residual: f.floats(&vec![1.0; rows * 3]),
         preconditioned: f.floats(&vec![0.0; rows * 3]),
-        product_total: f.floats(&vec![0.0; update_groups]),
-        residual_total: f.floats(&vec![0.0; update_groups]),
+        product_total: f.floats(&vec![0.0; super::super::operator::fold_span(update_groups as u32) as usize]),
+        residual_total: f.floats(&vec![0.0; super::super::operator::fold_span(update_groups as u32) as usize]),
         latch: idle_latch,
         rows: rows as u32,
         count: update_groups as u32,

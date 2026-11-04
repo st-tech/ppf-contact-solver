@@ -89,8 +89,6 @@ pub struct Sizes {
     /// still condenses spin into the solve and the post-solve integrate still
     /// has to run.
     pub grains: usize,
-    #[allow(dead_code)]
-    pub fixed_nnz: usize,
 }
 
 /// Seed only the COMMITTED pose from the scene, leaving the iterate alone.
@@ -567,28 +565,6 @@ pub(crate) fn reseed_inv_rest(
     }
 }
 
-/// A device block of vertex properties, for tests.
-#[cfg(test)]
-pub(crate) fn position_block_prop(
-    device: &mut impl Device,
-    host: &[crate::data::VertexProp],
-    label: &'static str,
-) -> Buffer<crate::data::VertexProp> {
-    let mut buffer = Buffer::none();
-    buffer
-        .size(device, host.len(), AllocLabel(label))
-        .expect("the test allocation succeeds");
-    buffer
-        .write(device, 0, host)
-        .expect("the test upload succeeds");
-    buffer
-}
-
-/// The scene's device-resident static arrays, as a carrier, for tests.
-///
-/// A fixture that calls a contact or collider entry point needs the same
-/// handles a step would pass, and this builds them from the state the fixture
-/// already allocated rather than from its own copies.
 /// Re-stage the fixed pattern from a scene a fixture has CHANGED.
 ///
 /// `allocate` stages the pattern once, which is right in production because the
@@ -615,14 +591,6 @@ pub(crate) fn reseed_pattern<D: Device>(
         .and_then(|()| stage_static_u32(device, &mut state.transpose_offset, pattern.transpose_offset, "csr.transpose_offset"))
         .expect("the fixture re-stages its pattern");
     state.fixed_rows = pattern.rows;
-}
-
-#[cfg(test)]
-pub(crate) fn mesh_refs_of(state: &mut SolverState) -> crate::driver::contact::MeshRefs {
-    // DELEGATES rather than rebuilding. This is the fourth place that built the
-    // carrier by hand, and adding one field to `MeshRefs` broke all four; there
-    // is now one builder and the fixtures use it.
-    state.refs()
 }
 
 /// The `u32` counterpart of [`position_block`], for topology in tests.
@@ -1552,7 +1520,7 @@ pub struct FaceStrainScratch {
     // and converted forms and both Hessians in registers, so the twenty-two
     // per-face arrays that carried them between fifteen dispatches are gone.
     // What is left is the membership the pass early-outs on.
-    /// The line search's per-face time of impact, folded by `reduce::min`.
+    /// The line search's per-face time of impact, folded by `reduce::DeviceFold::min`.
     pub toi: ReadbackBuffer<f32>,
     /// Faces the dispatch's own gate admits, and the subset of those whose
     /// largest shifted singular value is positive. The second is what is
@@ -1596,7 +1564,7 @@ pub struct RodStrainScratch {
     pub push_column: Vec<u32>,
     pub push_block: Vec<f32>,
     pub push_stored: Vec<u32>,
-    /// The line search's per-rod time of impact, folded by `reduce::min`.
+    /// The line search's per-rod time of impact, folded by `reduce::DeviceFold::min`.
     pub toi: ReadbackBuffer<f32>,
     pub candidate: Vec<u32>,
     pub active: Vec<u32>,
@@ -2550,7 +2518,6 @@ impl SolverState {
             stitches,
             rod_bend_sites,
             grains,
-            fixed_nnz,
         };
 
         self.positions

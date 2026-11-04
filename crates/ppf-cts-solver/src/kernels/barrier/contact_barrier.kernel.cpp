@@ -24,20 +24,6 @@
 // operator is a different function there.
 
 [[seam::device_fn]] inline float
-barrier_energy(float gap, float ghat, float offset, Barrier kind) {
-    if (kind == Barrier::Cubic) {
-        return cubic::energy(gap, ghat, offset);
-    }
-    if (kind == Barrier::Quad) {
-        return quadratic::energy(gap, ghat, offset);
-    }
-    if (kind == Barrier::Log) {
-        return logarithm::energy(gap, ghat, offset);
-    }
-    return 0.0f;
-}
-
-[[seam::device_fn]] inline float
 barrier_gradient(float gap, float ghat, float offset, Barrier kind) {
     if (kind == Barrier::Cubic) {
         return cubic::gradient(gap, ghat, offset);

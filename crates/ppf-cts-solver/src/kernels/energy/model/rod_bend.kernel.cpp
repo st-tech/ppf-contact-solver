@@ -202,7 +202,6 @@ rod_bend_force(const Vec3f &x0,
                                  hessian);
 }
 
-
 // THE TURNING ANGLE AND THE BENDING PAIR, each reading its site's three nodes
 // THROUGH the site's own index list. The bound beside that list is not
 // bookkeeping: a slot is DATA rather than the thread index, so the count guard
@@ -220,15 +219,6 @@ rod_bend_force(const Vec3f &x0,
     [[seam::indices(3)]] const unsigned *node_index,
     [[seam::bound]] unsigned vertex_count,
     float *angle,
-    unsigned count);
-
-[[seam::entry(count)]] void rod_bend_force_hessian(
-    [[seam::through]] const Vec3f *x,
-    [[seam::indices(3)]] const unsigned *node_index,
-    [[seam::bound]] unsigned vertex_count,
-    const float *rest_angle,
-    Mat3x3f *force,
-    Mat9x9f *hessian,
     unsigned count);
 
 // THE WHOLE ROD BENDING TERM IN ONE THREAD: it reads the site's two incident

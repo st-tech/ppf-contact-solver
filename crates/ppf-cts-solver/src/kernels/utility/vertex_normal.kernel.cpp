@@ -59,7 +59,6 @@ vertex_normal_face_term(const Vec3f &z0,
 // the face's own index triple, which is an indirect gather and none of the
 // three shapes an entry declaration expresses, so its launcher stays
 // hand-written until the body takes the addressing itself.
-[[seam::entry(normal)]]
 [[seam::device_fn]] inline Vec3f
 vertex_normal_finalize(const Vec3f &accumulated) {
     Vec3f normal = accumulated;

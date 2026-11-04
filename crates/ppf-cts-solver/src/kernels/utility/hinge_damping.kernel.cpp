@@ -98,21 +98,3 @@
                                            hessian, lagged);
 }
 
-// FOUR POSITIONS AND FOUR START-OF-STEP POSES READ THROUGH THE HINGE'S OWN
-// INDEX LIST, which for the shell hinge is the (2,1,0,3) order the dihedral math
-// wants rather than the mesh order: the driver hands this entry the REMAPPED
-// list, and `lagged` and `gradient` were evaluated in that same order.
-//
-// The bound, the two non-const gathers and the read-before-write rule are the
-// family's, and `utility/face_damping.kernel.cpp` states them once.
-[[seam::entry(count)]] void hinge_damping(
-    [[seam::through]] const Vec3f *x,
-    [[seam::through]] const Vec3f *current,
-    [[seam::indices(4)]] const unsigned *hinge,
-    [[seam::bound]] unsigned vertex_count,
-    const float *beta,
-    float dt,
-    Mat3x4f *gradient,
-    Mat12x12f *hessian,
-    const Mat12x12f *lagged,
-    unsigned count);

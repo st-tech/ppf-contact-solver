@@ -356,10 +356,12 @@ afterwards. See
 [Apply Soft Constraints](../params/material.md#apply-soft-constraints) for how
 to choose the stiffness.
 
-A Static group draws no **Local Gap Limit** row. That limit keeps a
-deformable mesh from pressing on its own neighbors, and the faces of a
-collider never come into contact with each other, so a collider's gap is
-used exactly as set, however fine its mesh is. See
+A Static group draws a **Local Gap Limit** row, `25` by default. The faces
+of a collider never come into contact with each other, so here the limit does
+not prevent locking: it keeps each face's gap at no more than that share of
+the room its neighbors leave. A large collider whose gap comes from **Use
+Object Bounding Box Diagonal** is then not solved at a gap far wider than its
+triangles. See
 [Local Gap Limit](../params/material.md#local-gap-limit).
 
 :::{note}

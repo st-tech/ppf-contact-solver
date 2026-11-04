@@ -37,7 +37,6 @@
 // `compute::atomic_float_t` is the seam's own name for the destination's
 // element type, `float` under nvcc and on the host and `atomic_float` under
 // MSL: a `float *` here would compile on two backends and fail on the third.
-[[seam::entry]]
 [[seam::device_fn]] inline void face_atomic_embed_force(
     const Vec3u &face,
     const Mat3x3f &gradient,
@@ -50,64 +49,3 @@
     }
 }
 
-// The same scatter over an ACTIVE SUBSET, reached through `active` rather than
-// through a host-compacted run. `hinge_active_embed_force` states the argument
-// in full: the Hessian half of these passes already takes this shape, the order
-// is unchanged because `active` is ascending and the slot is the thread index,
-// and the thread-space copies are this body's own work because its element is
-// DATA rather than the thread index.
-[[seam::device_fn]] inline void
-face_active_embed_force(const unsigned *active,
-                             const unsigned *face,
-                             const float *gradient,
-                             compute::atomic_float_t *force,
-                             unsigned slot) {
-    const unsigned element = active[slot];
-    Vec3u nodes;
-    for (unsigned i = 0; i < 3u; ++i) {
-        nodes[i] = face[3u * element + i];
-    }
-    Mat3x3f local;
-    for (unsigned k = 0; k < 9u; ++k) {
-        local.m[k] = gradient[9u * element + k];
-    }
-    face_atomic_embed_force(nodes, local, force);
-}
-
-// THE SAME EMBED WITH THE ELEMENT AS THE THREAD INDEX AND THE RUN DECIDED HERE,
-// which is `strainlimiting.cu:57`'s shape: one dispatch over the shell face
-// count, gated on the face's own records and on the SVD's verdict, with no list
-// compacted anywhere.
-//
-// THE ORDER IS THE COMPACTED RUN'S ORDER. The gate skips exactly the faces the
-// run omitted and the survivors are visited in the same ascending sequence, so
-// the `Scatter::Atomic` row's serial ascending pass on the host arm reaches the
-// three-vertex embeds in the order it did before.
-[[seam::entry(element)]]
-[[seam::device_fn]] inline void
-face_live_embed_force(const float *live,
-                      const unsigned *face,
-                      const float *gradient,
-                      compute::atomic_float_t *force,
-                      unsigned element) {
-    if (live[element] <= 0.0f) {
-        return;
-    }
-    Vec3u nodes;
-    for (unsigned i = 0; i < 3u; ++i) {
-        nodes[i] = face[3u * element + i];
-    }
-    Mat3x3f local;
-    for (unsigned k = 0; k < 9u; ++k) {
-        local.m[k] = gradient[9u * element + k];
-    }
-    face_atomic_embed_force(nodes, local, force);
-}
-
-[[seam::entry(count, slot)]] void face_active_embed_force(
-    const unsigned *active,
-    const unsigned *face,
-    const float *gradient,
-    compute::atomic_float_t *force,
-    unsigned slot,
-    unsigned count);

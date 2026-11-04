@@ -86,7 +86,6 @@ tet_convert_force(const Mat3x3f &gradient_f,
     return result;
 }
 
-[[seam::entry(hessian)]]
 [[seam::device_fn]] inline Mat12x12f
 tet_convert_hessian(const Mat9x9f &hessian_f,
                         const Mat3x3f &inverse_rest, const float &mass) {
@@ -107,23 +106,6 @@ tet_convert_hessian(const Mat9x9f &hessian_f,
     }
     return result;
 }
-
-// The shape-function gradients, whose four `Vec3f` per tet are a RUN and not an
-// element, which is why `gradient` is a stride rather than a scatter: the body
-// returns the four gradients as one column-major `Mat3x4f`, so the entry
-// scatters 48 bytes at the tet's own index, which is the same memory the
-// launcher this replaces addressed as `out + 4 * t`.
-//
-// NOTHING IN THIS DRIVER DISPATCHES IT. Its id is declared past `id::COUNT` in
-// `src/driver/kernels.rs` with no row in the dispatch table, the arrangement
-// `vec_fill` and `vec_combine_indirect` already use, so `decl_of`
-// answers `Fault::MissingKernel` by name rather than reading past the table.
-// The two converters above reach the same body directly, each computing the
-// four gradients into its own thread storage.
-[[seam::entry(count)]] void tet_shape_gradients(
-    const Mat3x3f *inverse_rest,
-    Mat3x4f *gradient,
-    unsigned count);
 
 [[seam::entry(count)]] void tet_deformation_gradient(
     [[seam::through]] const Vec3f *x,

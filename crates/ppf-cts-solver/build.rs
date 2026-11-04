@@ -53,94 +53,12 @@ impl Backend {
         }
     }
 
-    /// The BACKEND LOGIC tree the recipe compiles beside its own sources,
-    /// relative to this crate's manifest. `None` where nothing has been split
-    /// out yet.
-    ///
-    /// It is a third crate because it fits neither of the other two: it is
-    /// backend-specific, so it cannot come back here (no backend name appears
-    /// anywhere in this crate), and it is none of the five verbs
-    /// `ppf-cts-compute` is held to, so it cannot stay there. The crate exists
-    /// to be deleted, one file at a time, as each becomes neutral Rust in
-    /// `src/driver` or a generated entry point.
-    fn logic_dir(self) -> Option<&'static str> {
-        match self {
-            // GONE. The CUDA orchestrator was this backend's logic tree until
-            // the neutral driver took over driving it; what a CUDA build
-            // compiles now is `ppf-cts-compute/cuda` plus one object per
-            // generated entry point, and none of it is simulation.
-            Backend::Cuda => None,
-            // NEVER HAD ONE. This backend was added after the orchestrators were
-            // deleted, so it has only ever been mechanism plus generated entry
-            // points, which is what rule (1b) asks of a backend library.
-            Backend::Rocm => None,
-            // GONE, on the same terms as CUDA's: the neutral driver drives
-            // this backend and the orchestrator that was its logic tree is
-            // deleted. What a Metal build compiles is `ppf-cts-compute/metal`
-            // plus one object per generated entry point, and none of it is
-            // simulation.
-            Backend::Metal => None,
-            // The CPU backend has no C++ tree of its own to split: what it
-            // compiles is the neutral kernel bodies through `entrypoints/`.
-            Backend::Cpu => None,
-        }
-    }
-
     fn lib_name(self) -> Option<&'static str> {
         match self {
             Backend::Cuda => Some("simbackend_cuda"),
             Backend::Metal => Some("simbackend_metal"),
             Backend::Rocm => Some("ppfbe_rocm"),
             Backend::Cpu => None,
-        }
-    }
-
-    /// Whether this build links a [`ppf_cts_compute::Device`] implementation
-    /// the neutral Rust driver in `src/driver` drives, and therefore whether
-    /// that module is compiled at all.
-    ///
-    /// THE DRIVER IS NOT A BACKEND, and this method is where that stops being a
-    /// claim and becomes a build fact. It holds the Newton loop, the linear
-    /// solve, the assembly order and every dispatch decision, written once for
-    /// every target. What
-    /// decides whether it is compiled is not which target this is but whether
-    /// anything below it implements the seam, and that question is answered
-    /// here, in the one file that is allowed to know a target's name.
-    ///
-    /// It answers false for a C++ backend for a reason that fails SILENTLY if
-    /// it is got wrong. `src/driver/mod.rs` defines the whole `advance()`
-    /// surface with `#[no_mangle]`, and each C++ backend library exports the
-    /// same symbols; building both is neither a compile error nor a link error,
-    /// because the binary's own definitions win at dynamic link and the library
-    /// is simply never called. Every value gate then stays green over a path
-    /// nothing takes. Section 12.4 A of the plan states it; this is where it is
-    /// enforced.
-    fn links_neutral_driver(self, abi_backend: bool) -> bool {
-        match self {
-            // CUDA ANSWERS YES, FULL STOP. The driver drives it: it refuses no
-            // capability the orchestrator implemented, and a CUDA build links
-            // `libppfbe_cuda` and nothing else. `abi_backend` is no longer
-            // consulted here because there is no configuration in which a CUDA
-            // build wants the C++ `advance()` surface instead.
-            Backend::Cuda => {
-                let _ = abi_backend;
-                true
-            }
-            // METAL ANSWERS YES, FULL STOP, on the same terms CUDA does. The
-            // driver runs all 23 acceptance scenes on that backend and all 27
-            // of its fixtures, so the C++ orchestrator it would replace is
-            // deleted and there is no configuration in which a Metal build
-            // wants a `advance()` surface other than this one.
-            Backend::Metal => {
-                let _ = abi_backend;
-                true
-            }
-            Backend::Cpu => true,
-            // YES, FULL STOP, on the same terms as CUDA. This backend was added
-            // after the orchestrators were deleted, so the neutral driver is the
-            // only thing that has ever driven it and there is no C++ `advance()`
-            // surface for `abi_backend` to select between.
-            Backend::Rocm => true,
         }
     }
 
@@ -617,7 +535,7 @@ fn guard_cpu() {
 /// both in the list below now, each having landed in the change that removed its
 /// entry from `refusal.rs`. `sand_rigid` needs `contact/grain_pair` with it,
 /// the per-grain angular accumulators being contact's to produce.
-const KERNELS: [&str; 93] = [
+const KERNELS: [&str; 89] = [
     // The linear solve.
     "solver/spmv",
     "solver/block_jacobi",
@@ -689,11 +607,6 @@ const KERNELS: [&str; 93] = [
     // `energy/face_force.kernel.cpp` and `energy/tet_force.kernel.cpp` also
     // call, so the two arrangements of the same material share one definition.
     "energy/model/material_diff_table",
-    // The BaraffWitkin membrane as a staged pass. Its material is composed in
-    // `energy/model/baraffwitkin.hpp`, which the fused body in
-    // `energy/face_force.kernel.cpp` also calls, so the two arrangements of the
-    // same material share one definition.
-    "energy/model/baraffwitkin",
     // The per-face inflation pressure. NO LONGER ABSENT: the doc above listed
     // it among the bodies this backend does not implement, and the entry beside
     // it is what removed that refusal.
@@ -779,17 +692,14 @@ const KERNELS: [&str; 93] = [
     "contact/ccd_sweep",
     "contact/vertex_constraint",
     "main/momentum",
-    "contact/pair_cache",
     // The broad phase.
     "contact/aabb",
     "contact/aabb_traversal",
     "lbvh/lbvh",
-    "lbvh/bitonic",
     // Plasticity.
     "plasticity/plasticity",
     // The element scatters.
     "utility/face_scatter",
-    "utility/face_hessian_scatter",
     "utility/hinge_scatter",
     "utility/collision_window",
     "utility/rod_scatter",
@@ -836,14 +746,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_vertex"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_float"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.record_count"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.memory_word0"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.memory_word1"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.memory_slip"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.record_word0"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.record_word1"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.record_vertex"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.record_float"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.record_count"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_word0"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_word1"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.memory_slip"),
@@ -852,14 +754,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_vertex"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_float"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.record_count"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_word0"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_word1"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.memory_slip"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.record_word0"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.record_word1"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.record_vertex"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.record_float"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.record_count"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_word0"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_word1"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.memory_slip"),
@@ -868,14 +762,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_vertex"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_float"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.record_count"),
-    ("contact/contact_narrow", "ContactPointPointArgs.memory_word0"),
-    ("contact/contact_narrow", "ContactPointPointArgs.memory_word1"),
-    ("contact/contact_narrow", "ContactPointPointArgs.memory_slip"),
-    ("contact/contact_narrow", "ContactPointPointArgs.record_word0"),
-    ("contact/contact_narrow", "ContactPointPointArgs.record_word1"),
-    ("contact/contact_narrow", "ContactPointPointArgs.record_vertex"),
-    ("contact/contact_narrow", "ContactPointPointArgs.record_float"),
-    ("contact/contact_narrow", "ContactPointPointArgs.record_count"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_word0"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_word1"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.memory_slip"),
@@ -884,38 +770,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_vertex"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_float"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.record_count"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_word0"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_word1"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.memory_slip"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_word0"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_word1"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_vertex"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_float"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.record_count"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_word0"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_word1"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.memory_slip"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_word0"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_word1"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_vertex"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_float"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.record_count"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_word0"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_word1"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.memory_slip"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_word0"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_word1"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_vertex"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_float"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.record_count"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_word0"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_word1"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.memory_slip"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_word0"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_word1"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_vertex"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_float"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.record_count"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_word0"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_word1"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.memory_slip"),
@@ -988,9 +842,7 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "FrictionFrozenEmbedArgs.frame_gradient"),
     ("contact/contact_narrow", "FrictionFrozenEmbedArgs.frame_self_block"),
     ("contact/contact_narrow", "FrictionFrozenEmbedArgs.frozen_stiffness"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.edge_slot"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.edge_slot"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge_slot"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.edge_slot"),
     ("contact/friction_frame", "FrictionFrameApplyArgs.x0"),
     ("contact/friction_frame", "FrictionFrameApplyArgs.record_vertex"),
@@ -1069,12 +921,9 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("main/momentum", "MomentumEmbedArgs.field_air_velocity"),
     ("main/velocity", "VelocityTermsArgs.prop"),
     ("main/dx_seed", "DxSeedArgs.prop"),
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.inverse_rest"),
     // THE INVERSE REST MATRICES. Both sides write them: the creep scatters
     // from a kernel and a checkpoint restore writes them wholesale, which
     // ReadbackBuffer serves now that it has a host seed.
-    ("utility/face_convert", "FaceConvertForceArgs.inverse_rest"),
-    ("utility/face_convert", "FaceConvertHessianArgs.inverse_rest"),
     ("utility/face_deformation", "FaceDeformationGradientArgs.inverse_rest"),
     // THE COMPOSED SPECTRAL HESSIAN, which reaches the same buffers as the
     // pair it replaces and so is device-resident on the same terms.
@@ -1090,31 +939,12 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // THE PER-ELEMENT MASS, gathered by the converter so the scale rides the
     // conversion rather than a second pass over the materialized pack.
     ("utility/tet_convert", "TetConvertForceArgs.mass"),
-    ("utility/tet_convert", "TetConvertHessianArgs.mass"),
-    ("utility/tet_convert", "TetConvertHessianArgs.inverse_rest"),
     ("utility/tet_convert", "TetDeformationGradientArgs.inverse_rest"),
     // THE PER-OBJECT STATISTICS CHANNEL. The counter is written by an ATOMIC
     // from inside the contact kernels, exactly as `contact.cu` writes it, so
     // it is device-resident on every backend rather than a host fold over a
     // downloaded pair list. Its two index maps are read on the device beside
     // it.
-    ("contact/contact_narrow", "ContactPointFaceArgs.statistics_contact_count"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.statistics_object_index"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.statistics_contact_count"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.statistics_object_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.statistics_contact_count"),
-    ("contact/contact_narrow", "ContactPointPointArgs.statistics_object_index"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.statistics_contact_count"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.statistics_object_index"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.statistics_contact_count"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.statistics_object_index"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.statistics_static_object_index"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.statistics_contact_count"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.statistics_object_index"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.statistics_static_object_index"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.statistics_contact_count"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.statistics_object_index"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.statistics_static_object_index"),
     ("contact/vertex_constraint", "VertexConstraintArgs.statistics_contact_count"),
     ("contact/vertex_constraint", "VertexConstraintArgs.statistics_object_index"),
     // THE RESIDUAL THE FRICTION ANCHOR IS READ OFF. It is a COPY of the force
@@ -1122,26 +952,12 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // lives under, so it is device-resident on exactly the terms `force` is.
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.friction_load"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.friction_cone"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.friction_load"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.friction_cone"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.friction_load"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.friction_cone"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.friction_load"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.friction_cone"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.friction_load"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.friction_cone"),
-    ("contact/contact_narrow", "ContactPointPointArgs.friction_load"),
-    ("contact/contact_narrow", "ContactPointPointArgs.friction_cone"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.friction_load"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.friction_cone"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.friction_load"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.friction_cone"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.friction_load"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.friction_cone"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.friction_load"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.friction_cone"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.friction_load"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.friction_cone"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.friction_load"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.friction_cone"),
     ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.friction_load"),
@@ -1152,45 +968,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/vertex_constraint", "VertexConstraintArgs.friction_cone"),
     ("contact/vertex_constraint", "VertexConstraintArgs.fixed_index"),
     ("contact/vertex_constraint", "VertexConstraintArgs.fixed_offset"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.fixed_index"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.fixed_offset"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.fixed_index"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.fixed_offset"),
-    ("contact/contact_narrow", "ContactPointPointArgs.fixed_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.fixed_offset"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.fixed_index"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.fixed_offset"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.fixed_index"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.fixed_offset"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.fixed_index"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.fixed_offset"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.fixed_index"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.fixed_offset"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.face_prop"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.vertex_param"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.face_param"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge_prop"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.vertex_param"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge_param"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_param"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.edge_prop"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.edge_param"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.face_prop"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.face_param"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.static_vertex_prop"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.static_vertex_param"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.static_x"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.vertex_param"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.static_face_prop"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.static_face_param"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.static_face"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.static_x"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.edge_prop"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.edge_param"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.static_edge_prop"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.static_edge_param"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.static_edge"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.static_x"),
     ("contact/aabb", "AabbPointContactQueryArgs.params"),
     ("contact/aabb", "AabbPointContactQueryMaskedArgs.params"),
     ("contact/aabb", "AabbVertexScanQueryArgs.params"),
@@ -1208,13 +985,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/aabb", "AabbEdgeContactQueryMaskedArgs.prop"),
     ("contact/aabb", "AabbEdgeContactQueryArgs.params"),
     ("contact/aabb", "AabbEdgeContactQueryMaskedArgs.params"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.vertex_prop"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.vertex_prop"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_prop"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.vertex_prop"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.vertex_prop"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.vertex_prop"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.vertex_prop"),
     // THE PER-VERTEX PROPERTIES, staged rather than static because the plastic
     // creep still writes them on the host. StagedBuffer::handle panics if a
     // dispatch names them before the upload, so a forgotten upload traps.
@@ -1226,14 +996,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/aabb", "AabbVertexScanQueryArgs.prop"),
     ("contact/aabb", "AabbVertexScanQueryMaskedArgs.prop"),
     ("contact/aabb", "AabbLeafVertexArgs.prop"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.face"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.face"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge"),
-    ("contact/contact_narrow", "ContactPointPointArgs.face"),
-    ("contact/contact_narrow", "ContactPointPointArgs.edge"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.edge"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.face"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.edge"),
     // THE MESH TOPOLOGY the broad phase reads. `SolverState` already seeds
     // mesh_face and mesh_edge at allocate, so these fields name a buffer that
     // was device-resident before this change and was simply not being used.
@@ -1308,20 +1070,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("main/dx_seed", "DxSeedArgs.target"),
     ("main/position_step", "PositionStepArgs.eval_x"),
     ("main/stretch", "RodStretchRatioGatedArgs.x"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.x0"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.x"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.x0"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.x"),
-    ("contact/contact_narrow", "ContactPointPointArgs.x0"),
-    ("contact/contact_narrow", "ContactPointPointArgs.x"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.x0"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.x"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.x0"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.x"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.x0"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.x"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.x0"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.x"),
     // THE POSITION COMPONENT, and it is one unit because residency is keyed by
     // <Record>.<field>: the iterate, the committed positions, the implicit
     // target, every broad-phase query and centroid that reads them, and the
@@ -1335,20 +1083,9 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("utility/tet_damping", "TetDampingArgs.x"),
     ("utility/tet_damping", "TetDampingArgs.current"),
     ("utility/face_deformation", "FaceDeformationGradientArgs.x"),
-    ("utility/face_damping", "FaceDampingArgs.x"),
-    ("utility/face_damping", "FaceDampingArgs.current"),
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.x"),
-    ("utility/hinge_damping", "HingeDampingArgs.x"),
-    ("utility/hinge_damping", "HingeDampingArgs.current"),
-    ("energy/model/rod_bend", "RodBendForceHessianArgs.x"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.x"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.current"),
     ("energy/model/stitch", "StitchForceHessianGatheredArgs.x"),
     ("strainlimiting/rod_strain", "RodStrainForceHessianGatedArgs.x"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.x"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.x"),
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.finish"),
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.start"),
     ("strainlimiting/strain_toi", "RodStrainToiGatedArgs.finish"),
     ("strainlimiting/strain_toi", "RodStrainToiGatedArgs.start"),
     ("solver/spmv", "FixedCsrProductRowArgs.index"),
@@ -1362,28 +1099,12 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("csrmat/dynamic_csr", "DynScatterTransposePassArgs.cursor"),
     ("csrmat/dynamic_csr", "DynCountTransposePassArgs.transpose_count"),
     ("csrmat/fixed_csr", "FixedCsrAtomicPushArgs.value"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.index"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.offset"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.value"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.index"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.offset"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.value"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.fixed_value"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.fixed_value"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.fixed_value"),
     ("main/momentum", "MomentumEmbedArgs.neighbor_index"),
     ("main/momentum", "MomentumEmbedArgs.neighbor_offset"),
     ("main/momentum", "MomentumEmbedArgs.face"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_edge_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_edge_offset"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_face_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.vertex_face_offset"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge_face_index"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.edge_face_offset"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.fixed_value"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.fixed_value"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.fixed_value"),
-    ("contact/contact_narrow", "ContactPointPointArgs.fixed_value"),
     ("contact/vertex_constraint", "VertexConstraintArgs.fixed_value"),
     ("contact/vertex_constraint", "VertexConstraintArgs.vertex_param"),
     ("plasticity/plasticity", "PlasticityCreepRestAngleArgs.rest_angle"),
@@ -1399,11 +1120,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("csrmat/fixed_csr", "FixedCsrAtomicPushArgs.column"),
     ("csrmat/fixed_csr", "FixedCsrAtomicPushArgs.block"),
     ("csrmat/fixed_csr", "FixedCsrAtomicPushArgs.stored"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.x"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.rest_length"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.weight"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.gradient"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.hessian"),
     ("energy/rod_force", "RodStretchEmbedArgs.x"),
     ("energy/rod_force", "RodStretchEmbedArgs.current"),
     ("energy/rod_force", "RodStretchEmbedArgs.edge"),
@@ -1417,11 +1133,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("energy/rod_force", "RodStretchEmbedArgs.fixed_value"),
     ("energy/rod_force", "RodStretchEmbedArgs.refused"),
     ("energy/rod_force", "RodStretchEmbedArgs.witness"),
-    ("utility/rod_damping", "RodDampingArgs.x"),
-    ("utility/rod_damping", "RodDampingArgs.current"),
-    ("utility/rod_damping", "RodDampingArgs.beta"),
-    ("utility/rod_damping", "RodDampingArgs.gradient"),
-    ("utility/rod_damping", "RodDampingArgs.hessian"),
     ("contact/aabb", "AabbLeafActiveArgs.nodes"),
     ("contact/aabb", "AabbLeafActiveArgs.aabb"),
     ("lbvh/lbvh", "LbvhNodesArgs.nodes"),
@@ -1605,21 +1316,12 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("lbvh/lbvh", "LbvhNodesArgs.sorted"),
     ("lbvh/lbvh", "LbvhNodeDepthArgs.parent"),
     ("lbvh/lbvh", "LbvhNodeDepthArgs.depth"),
-    ("contact/pair_cache", "PairCacheRecordInterleavedArgs.pair_data"),
-    ("contact/pair_cache", "PairCacheRecordInterleavedArgs.count"),
-    ("contact/pair_cache", "PairCacheRecordInterleavedArgs.overflow"),
-    ("contact/pair_cache", "PairCacheRecordInterleavedArgs.pairs"),
     ("contact/aabb", "AabbMergeLevelArgs.level"),
     ("strainlimiting/strain_toi", "ShellMaxStrainArgs.deformation"),
     ("strainlimiting/strain_toi", "ShellMaxStrainArgs.strain"),
     ("strainlimiting/strain_toi", "RodStrainValueArgs.difference"),
     ("strainlimiting/strain_toi", "RodStrainValueArgs.rest_length"),
     ("strainlimiting/strain_toi", "RodStrainValueArgs.strain"),
-    ("energy/model/face_pressure", "FacePressureEmbedArgs.vert"),
-    ("energy/model/face_pressure", "FacePressureEmbedArgs.face"),
-    ("energy/model/face_pressure", "FacePressureEmbedArgs.pressure"),
-    ("energy/model/face_pressure", "FacePressureEmbedArgs.gradient"),
-    ("energy/model/face_pressure", "FacePressureEmbedArgs.hessian"),
     ("energy/model/torque", "TorqueGroupFrameArgs.group"),
     ("energy/model/torque", "TorqueGroupFrameArgs.member"),
     ("energy/model/torque", "TorqueGroupFrameArgs.position"),
@@ -1634,11 +1336,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/vertex_constraint", "VertexConstraintArgs.out_grain_angular"),
     ("contact/vertex_constraint", "VertexConstraintArgs.out_grain_coupling"),
     ("contact/vertex_constraint", "VertexConstraintArgs.out_grain_rotational"),
-    ("contact/contact_narrow", "ContactPointPointArgs.grain_inv_inertia"),
-    ("contact/contact_narrow", "ContactPointPointArgs.grain_omega"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_grain_torque"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_grain_stiffness"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_grain_normal"),
     // The SAND grain's three rows, every buffer field: all three run inside
     // the step and the first two inside the Newton loop.
     ("energy/model/sand_rigid", "SandGrainIntegrateRowArgs.inverse_rolling_inertia"),
@@ -1879,8 +1576,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // reference runs it ON THE DEVICE, so a host pointer here would be the sort
     // itself relocated, which is what rule (1a-0) forbids rather than a readback
     // it permits.
-    ("lbvh/bitonic", "BitonicStepArgs.key"),
-    ("lbvh/bitonic", "BitonicStepArgs.index"),
     // THE AGGREGATE LOCK'S ELEVEN ROWS, every buffer field of every record. The
     // projector runs inside the Newton solve, so a host pointer here would be a
     // download per dispatch on a GPU backend and would put the residency
@@ -1962,9 +1657,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("solver/pcg", "PcgRigidGroupL1Args.norm"),
     ("solver/pcg", "PcgAlphaTermsArgs.noise_out"),
     ("solver/pcg", "PcgAlphaTermsArgs.cause_out"),
-    ("solver/pcg", "PcgBetaTermsArgs.value_out"),
-    ("solver/pcg", "PcgBetaTermsArgs.noise_out"),
-    ("solver/pcg", "PcgBetaTermsArgs.cause_out"),
     // The Schwarz domain construction. Every one of these is device-resident
     // from the start, which is the easy direction: a field is a handle unless
     // something on the host reads the buffer, and nothing here does. The
@@ -2291,7 +1983,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // handle, and a buffer one of them names cannot move until its entry point
     // is generated.
     ("eigenanalysis/tet_eigenanalysis", "TetSpectralForceArgs.force"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.hessian"),
     // THE TET SPECTRAL CHAIN'S INTERMEDIATES: the reflection-corrected SVD's
     // `U` and `V^T`, and the material diff table's two derivative arrays. Each
     // is written by one dispatch and read by the next with no host access
@@ -2318,7 +2009,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("utility/svd3x2", "Svd3x2Args.sigma"),
     ("utility/svd3x2", "ShellStrainRestoreSigmaArgs.restored"),
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.sigma"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.sigma"),
     ("utility/face_deformation", "ShellStretchTermsArgs.sigma"),
     // `state.rod_strain.strain`: the per-rod strain reading, written by the
     // gated force-and-Hessian pass and read by the stiffness pass, with no host
@@ -2422,7 +2112,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // The two strain limiters' times of impact. Their entries SCATTER a
     // value-returning body, so the dispatch writes every element and only the
     // no-candidate branch needs the device seed.
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.toi"),
     ("strainlimiting/strain_toi", "ShellStrainToiFromRecordsArgs.start"),
     ("strainlimiting/strain_toi", "ShellStrainToiFromRecordsArgs.finish"),
     ("strainlimiting/strain_toi", "ShellStrainToiFromRecordsArgs.face"),
@@ -2444,14 +2133,7 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // fourteen buffers are written and read only by kernels; the fourteenth,
     // `state.rod.stiffness`, is host-gathered and is staged.
     ("primitives/vec_ops", "ElementAddScaledArgs.source"),
-    ("utility/face_convert", "FaceConvertForceArgs.force"),
-    ("utility/face_convert", "FaceConvertHessianArgs.hessian"),
     ("utility/tet_convert", "TetConvertForceArgs.force"),
-    ("utility/tet_convert", "TetConvertHessianArgs.hessian"),
-    ("energy/model/rod_bend", "RodBendForceHessianArgs.force"),
-    ("energy/model/rod_bend", "RodBendForceHessianArgs.hessian"),
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.force"),
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.hessian"),
     ("strainlimiting/rod_strain", "RodStrainForceHessianGatedArgs.force"),
     ("strainlimiting/rod_strain", "RodStrainForceHessianGatedArgs.hessian"),
     ("utility/face_deformation", "ShellStretchTermsArgs.largest"),
@@ -2464,7 +2146,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // two strain-limiter stiffnesses and the shrink minimum are touched by
     // kernels alone.
     ("primitives/vec_ops", "ElementAddScaledArgs.scale"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.stiffness"),
     ("energy/model/shell_bend_stiffness", "ShellBendStiffnessAndDampingArgs.prop"),
     ("energy/model/shell_bend_stiffness", "ShellBendStiffnessAndDampingArgs.hinge_param"),
     ("energy/model/shell_bend_stiffness", "ShellBendStiffnessAndDampingArgs.kind"),
@@ -2472,8 +2153,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("energy/model/shell_bend_stiffness", "ShellBendStiffnessAndDampingArgs.stiffness"),
     ("energy/model/shell_bend_stiffness", "ShellBendStiffnessAndDampingArgs.damping"),
     ("energy/model/rod_bend_stiffness", "RodBendStiffnessArgs.stiffness"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.stiffness"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.x"),
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.x"),
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.current"),
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.face"),
@@ -2490,15 +2169,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.fixed_value"),
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.refused"),
     ("strainlimiting/shell_strain", "ShellStrainEmbedArgs.witness"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.face"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.face_slots"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.index"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.offset"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.value"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.prop"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.face_param"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.shifted_sigma"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessFromRecordsArgs.stiffness"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.stiffness"),
     ("utility/face_deformation", "ShellStretchTermsArgs.shrink_min"),
     // THE DESTINATION half, and the last of the three. These are the
@@ -2510,14 +2180,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("primitives/vec_ops", "ElementAddScaledArgs.destination"),
     ("utility/tet_damping", "TetDampingArgs.gradient"),
     ("utility/tet_damping", "TetDampingArgs.hessian"),
-    ("utility/face_damping", "FaceDampingArgs.gradient"),
-    ("utility/face_damping", "FaceDampingArgs.hessian"),
-    ("utility/hinge_damping", "HingeDampingArgs.gradient"),
-    ("utility/hinge_damping", "HingeDampingArgs.hessian"),
-    ("utility/hinge_damping", "HingeDampingArgs.lagged"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.gradient"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.hessian"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.lagged"),
     // The Dirichlet mask: which vertices had their per-vertex DOF eliminated.
     // Host-written once per step from the vertex props, host-SUMMED for the
     // one-time count, and read by the lift, the prescribe and the drag. A
@@ -2577,9 +2239,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // plus the two Dirichlet rows. Nothing in production reads it on the host:
     // the only host touch was the opening `fill(0.0)`, which is a `vec_fill`
     // dispatch now, and the mirror exists for the tests that compare it.
-    ("utility/face_scatter", "FaceAtomicEmbedForceArgs.force"),
-    ("utility/hinge_scatter", "HingeAtomicEmbedForceArgs.force"),
-    ("utility/rod_scatter", "RodAtomicEmbedForceArgs.force"),
     ("utility/collision_window", "CollisionWindowVertexArgs.vertex_group"),
     ("utility/collision_window", "CollisionWindowVertexArgs.windows"),
     ("utility/collision_window", "CollisionWindowVertexArgs.window_count"),
@@ -2591,7 +2250,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("utility/collision_window", "CollisionWindowEdgeArgs.edge"),
     ("utility/collision_window", "CollisionWindowEdgeArgs.edge_active"),
     ("utility/stitch_scatter", "StitchAtomicEmbedForceArgs.force"),
-    ("utility/vertex_scatter", "VertexAtomicEmbedForceArgs.force"),
     ("utility/vertex_scatter", "VertexFixIndexFromRecordsArgs.prop"),
     ("utility/vertex_scatter", "VertexFixIndexFromRecordsArgs.fix_index"),
     ("utility/vertex_scatter", "VertexDofRemovalMaskArgs.prop"),
@@ -2759,34 +2417,11 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("primitives/radix", "RadixScatterArgs.global_offsets"),
     ("primitives/vec_ops", "VecBlockSumAbsCooperativeArgs.source"),
     ("primitives/vec_ops", "VecBlockSumAbsCooperativeArgs.total"),
-    ("primitives/vec_ops", "VecBlockSumPairCooperativeArgs.first_source"),
-    ("primitives/vec_ops", "VecBlockSumPairCooperativeArgs.second_source"),
-    ("primitives/vec_ops", "VecBlockSumPairCooperativeArgs.first_total"),
-    ("primitives/vec_ops", "VecBlockSumPairCooperativeArgs.second_total"),
     ("primitives/vec_ops", "VecBlockSumDualCooperativeArgs.first_source"),
     ("primitives/vec_ops", "VecBlockSumDualCooperativeArgs.second_source"),
     ("primitives/vec_ops", "VecBlockSumDualCooperativeArgs.first_total"),
     ("primitives/vec_ops", "VecBlockSumDualCooperativeArgs.second_total"),
     ("primitives/vec_ops", "VecBlockSumArgs.total"),
-    ("primitives/vec_ops", "VecBlockSumAbsArgs.source"),
-    ("primitives/vec_ops", "VecBlockSumAbsArgs.total"),
-    ("primitives/vec_ops", "VecBlockSumPairArgs.first_source"),
-    ("primitives/vec_ops", "VecBlockSumPairArgs.second_source"),
-    ("primitives/vec_ops", "VecBlockSumPairArgs.first_total"),
-    ("primitives/vec_ops", "VecBlockSumPairArgs.second_total"),
-    ("primitives/vec_ops", "VecBlockSumDualArgs.first_source"),
-    ("primitives/vec_ops", "VecBlockSumDualArgs.second_source"),
-    ("primitives/vec_ops", "VecBlockSumDualArgs.first_total"),
-    ("primitives/vec_ops", "VecBlockSumDualArgs.second_total"),
-    ("solver/pcg", "PcgUpdateRowArgs.direction"),
-    ("solver/pcg", "PcgUpdateRowArgs.product_direction"),
-    ("solver/pcg", "PcgUpdateRowArgs.alpha"),
-    ("solver/pcg", "PcgUpdateRowArgs.inverse_diagonal"),
-    ("solver/pcg", "PcgUpdateRowArgs.iterate"),
-    ("solver/pcg", "PcgUpdateRowArgs.residual"),
-    ("solver/pcg", "PcgUpdateRowArgs.preconditioned"),
-    ("solver/pcg", "PcgUpdateRowArgs.term_product"),
-    ("solver/pcg", "PcgUpdateRowArgs.term_magnitude"),
     ("solver/pcg", "PcgUpdateRowFoldedArgs.direction"),
     ("solver/pcg", "PcgUpdateRowFoldedArgs.product_direction"),
     ("solver/pcg", "PcgUpdateRowFoldedArgs.alpha"),
@@ -2865,26 +2500,11 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("primitives/vec_ops", "VecCombineIndirectArgs.destination"),
     ("primitives/vec_ops", "VecCombineIndirectArgs.coefficient_b"),
     ("primitives/vec_ops", "VecCombineIndirectArgs.skip"),
+    ("primitives/vec_ops", "VecCombineIndirectArgs.clear"),
     // The contact Hessian embed: every array it touches is device-resident,
     // which is the point of the conversion. It reads the staged pairs, pushes
     // into the fixed matrix's own values, and appends a refused block to the
     // dynamic matrix's staging, so nothing crosses the seam but the claim.
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.active"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.arity"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.index"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.hessian"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.fixed_index"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.fixed_offset"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.fixed_value"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.claim"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.stage_row"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.stage_column"),
-    ("contact/contact_assembly", "ContactEmbedHessianBlocksArgs.stage_block"),
-    ("contact/contact_assembly", "ContactEmbedForceTermsArgs.active"),
-    ("contact/contact_assembly", "ContactEmbedForceTermsArgs.arity"),
-    ("contact/contact_assembly", "ContactEmbedForceTermsArgs.index"),
-    ("contact/contact_assembly", "ContactEmbedForceTermsArgs.gradient"),
-    ("contact/contact_assembly", "ContactEmbedForceTermsArgs.force"),
     ("solver/pcg", "PcgAlphaResidentArgs.rz"),
     ("solver/pcg", "PcgAlphaResidentArgs.p_ap"),
     ("solver/pcg", "PcgAlphaResidentArgs.absolute_sum"),
@@ -2984,17 +2604,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // the host compaction READS them, which is `ReadbackBuffer`; `pair` is the
     // chunk of candidates the HOST fills from the caller's slice, which is
     // `StagedBuffer` and is re-uploaded per chunk because the window moves.
-    ("contact/contact_narrow", "ContactPointPointArgs.pair"),
-    ("contact/contact_narrow", "ContactPointPointArgs.active"),
-    ("contact/contact_narrow", "ContactPointPointArgs.arity"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_vertex_force"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_fixed_value"),
-    ("contact/contact_narrow", "ContactPointPointArgs.dyn_claim"),
-    ("contact/contact_narrow", "ContactPointPointArgs.dyn_row"),
-    ("contact/contact_narrow", "ContactPointPointArgs.dyn_column"),
-    ("contact/contact_narrow", "ContactPointPointArgs.dyn_block"),
-    ("contact/contact_narrow", "ContactPointPointArgs.out_overlap"),
     // THE THREE FUSED COLLIDER TRAVERSALS. Every buffer is device-resident for
     // the same reason the self-contact traversals' are: the pass finds its own
     // candidates and deposits them without the host seeing either, so nothing
@@ -3079,30 +2688,10 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.out_overlap"),
     // The active-subset force scatter: every buffer is device-resident, the
     // element reached through `active` rather than through a compacted upload.
-    ("utility/face_scatter", "FaceActiveEmbedForceArgs.active"),
-    ("utility/face_scatter", "FaceActiveEmbedForceArgs.face"),
-    ("utility/face_scatter", "FaceActiveEmbedForceArgs.gradient"),
-    ("utility/face_scatter", "FaceActiveEmbedForceArgs.force"),
-    ("utility/face_scatter", "FaceLiveEmbedForceArgs.live"),
-    ("utility/face_scatter", "FaceLiveEmbedForceArgs.face"),
-    ("utility/face_scatter", "FaceLiveEmbedForceArgs.gradient"),
-    ("utility/face_scatter", "FaceLiveEmbedForceArgs.force"),
-    ("utility/rod_scatter", "RodPackedEmbedForceArgs.active"),
-    ("utility/rod_scatter", "RodPackedEmbedForceArgs.edge"),
-    ("utility/rod_scatter", "RodPackedEmbedForceArgs.gradient"),
-    ("utility/rod_scatter", "RodPackedEmbedForceArgs.force"),
-    ("utility/rod_scatter", "RodActiveEmbedForceArgs.active"),
     ("utility/rod_scatter", "RodLiveEmbedForceArgs.live"),
     ("utility/rod_scatter", "RodLiveEmbedForceArgs.edge"),
     ("utility/rod_scatter", "RodLiveEmbedForceArgs.gradient"),
     ("utility/rod_scatter", "RodLiveEmbedForceArgs.force"),
-    ("utility/rod_scatter", "RodActiveEmbedForceArgs.edge"),
-    ("utility/rod_scatter", "RodActiveEmbedForceArgs.gradient"),
-    ("utility/rod_scatter", "RodActiveEmbedForceArgs.force"),
-    ("utility/hinge_scatter", "HingeActiveEmbedForceArgs.active"),
-    ("utility/hinge_scatter", "HingeActiveEmbedForceArgs.hinge"),
-    ("utility/hinge_scatter", "HingeActiveEmbedForceArgs.gradient"),
-    ("utility/hinge_scatter", "HingeActiveEmbedForceArgs.force"),
     ("utility/hinge_scatter", "HingeLiveEmbedForceArgs.live"),
     ("utility/hinge_scatter", "HingeLiveEmbedForceArgs.hinge"),
     ("utility/hinge_scatter", "HingeLiveEmbedForceArgs.gradient"),
@@ -3138,17 +2727,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.query"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.assembled"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.out_overlap"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.pair"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.active"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.arity"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.out_index"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.out_vertex_force"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.out_fixed_value"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.dyn_claim"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.dyn_row"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.dyn_column"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.dyn_block"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.out_overlap"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.statistics_contact_count"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.statistics_object_index"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.fixed_index"),
@@ -3175,17 +2753,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.query"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.assembled"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.out_overlap"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.pair"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.active"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.arity"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.out_index"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.out_vertex_force"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.out_fixed_value"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.dyn_claim"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.dyn_row"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.dyn_column"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.dyn_block"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.out_overlap"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.statistics_contact_count"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.statistics_object_index"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.fixed_index"),
@@ -3209,17 +2776,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.query"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.assembled"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.out_overlap"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.pair"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.active"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.arity"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.out_index"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.out_vertex_force"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.out_fixed_value"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.dyn_claim"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.dyn_row"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.dyn_column"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.dyn_block"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.out_overlap"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.statistics_contact_count"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.statistics_object_index"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.fixed_index"),
@@ -3243,27 +2799,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.assembled"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.out_overlap"),
     // The collision-mesh half, the same six buffers through the same Stage.
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.pair"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.active"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.arity"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.out_index"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.out_force"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.out_hessian"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.out_overlap"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.pair"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.active"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.arity"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.out_index"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.out_force"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.out_hessian"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.out_overlap"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.pair"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.active"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.arity"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.out_index"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.out_force"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.out_hessian"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.out_overlap"),
     // THE COLLISION-WINDOW MASKS, recomputed on the host from the clock every
     // step and read only by the masked broad-phase queries and the leaf pass.
     // `None` still means no table at all, which is why the masked and unmasked
@@ -3274,8 +2809,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/aabb", "AabbEdgeScanQueryMaskedArgs.active"),
     ("contact/aabb", "AabbVertexScanQueryMaskedArgs.active"),
     ("contact/aabb", "AabbLeafActiveArgs.active"),
-    ("utility/rod_damping", "RodDampingArgs.edge"),
-    ("energy/rod_force", "RodStretchDiffTableArgs.edge"),
     ("plasticity/plasticity", "PlasticityFaceInverseRestArgs.face"),
     ("plasticity/plasticity", "PlasticityTetInverseRestArgs.tet"),
     // THE MESH TOPOLOGY. The scene's connectivity is written when the scene is
@@ -3284,18 +2817,13 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // never refreshed. That immutability is the whole argument, and it is what
     // separates these from `prop.vertex`, which plasticity rewrites every step
     // through a path no mirror could see.
-    ("utility/face_damping", "FaceDampingArgs.face"),
     ("utility/face_deformation", "FaceDeformationGradientArgs.face"),
     ("strainlimiting/rod_strain", "RodStrainForceHessianGatedArgs.edge"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.edge"),
     ("strainlimiting/rod_strain", "RodStrainStiffnessGatedArgs.edge_slots"),
     ("strainlimiting/strain_toi", "RodStrainToiGatedArgs.edge"),
     ("main/stretch", "RodStretchRatioGatedArgs.edge"),
-    ("energy/model/shell_bend_stiffness", "ShellBendArealDensityGatheredArgs.hinge"),
     ("energy/model/shell_bend_stiffness", "ShellBendArealDensityFromRecordsArgs.hinge"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.face"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.face_slots"),
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.face"),
     ("utility/tet_damping", "TetDampingArgs.tet"),
     ("utility/tet_convert", "TetDeformationGradientArgs.tet"),
     ("main/dirichlet", "DirichletPrescribeGatedArgs.diagonal"),
@@ -3307,9 +2835,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // by the same gate loop that already staged `authored_limit`. The limit is
     // named by BOTH the assembly and the line-search path, so both upload; the
     // mass is named by the assembly path alone.
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.effective_limit"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.mass"),
-    ("strainlimiting/strain_toi", "ShellStrainToiGatedArgs.effective_limit"),
     ("utility/svd3x3", "Svd3x3RvArgs.u"),
     ("utility/svd3x3", "Svd3x3RvArgs.sigma"),
     ("utility/svd3x3", "Svd3x3RvArgs.vt"),
@@ -3319,11 +2844,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("eigenanalysis/tet_eigenanalysis", "TetSpectralForceArgs.gradient_sigma"),
     ("eigenanalysis/tet_eigenanalysis", "TetSpectralForceArgs.u"),
     ("eigenanalysis/tet_eigenanalysis", "TetSpectralForceArgs.vt"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.sigma"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.gradient_sigma"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.hessian_sigma"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.u"),
-    ("eigenanalysis/tet_eigenanalysis", "TetSpectralHessianArgs.vt"),
     ("plasticity/plasticity", "PlasticityCreepSingular3Args.singular_values"),
     ("plasticity/plasticity", "PlasticityTetInverseRestArgs.u"),
     ("plasticity/plasticity", "PlasticityTetInverseRestArgs.vt"),
@@ -3360,9 +2880,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.mu"),
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.lambda"),
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.dispatch"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.model"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.mu"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.lambda"),
     // THE STEP'S THREE PER-VERTEX SCRATCH ARRAYS AND THE PIN INDEX GATHER.
     //
     // The start-of-step VELOCITY is a device allocation nothing reads: the pass
@@ -3431,25 +2948,15 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // it could move while it stood.
     ("utility/svd3x2", "Svd3x2Args.u"),
     ("utility/svd3x2", "Svd3x2Args.vt"),
-    ("utility/svd3x2", "Svd3x2ShiftedArgs.u"),
-    ("utility/svd3x2", "Svd3x2ShiftedArgs.vt"),
     // THE LARGEST SHIFTED SINGULAR VALUE, a readback: the host reads it to
     // build the strain limiter's active list, which is the second half of
     // that layer's entry gate. One float per face per Newton iteration.
-    ("utility/svd3x2", "Svd3x2ShiftedArgs.largest_shifted"),
     // `state.face_strain.shifted_sigma`: the singular values shifted by one,
     // which is the strain the limiter barrier is a function of. Written by the
     // SVD stage and read by the three strain stages with no host access in
     // between, so it completes the component its neighbors `svd_u` and
     // `svd_vt` were already in.
-    ("utility/svd3x2", "Svd3x2ShiftedArgs.shifted_sigma"),
     ("utility/svd3x2", "ShellStrainRestoreSigmaArgs.shifted"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableGatedArgs.shifted_sigma"),
-    ("strainlimiting/shell_strain", "ShellStrainStiffnessGatedArgs.shifted_sigma"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralForceArgs.u"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralForceArgs.vt"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.u2"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.vt"),
     ("plasticity/plasticity", "PlasticityFaceInverseRestArgs.u"),
     ("plasticity/plasticity", "PlasticityFaceInverseRestArgs.vt"),
     // THE CREPT REST MATRICES, the other direction again and the one place
@@ -3469,21 +2976,14 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("utility/face_deformation", "FaceDeformationGradientArgs.deformation"),
     ("utility/tet_convert", "TetDeformationGradientArgs.deformation"),
     ("utility/svd3x2", "Svd3x2Args.input"),
-    ("utility/svd3x2", "Svd3x2ShiftedArgs.input"),
     ("utility/svd3x3", "Svd3x3RvArgs.input"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.deformation"),
     ("utility/tet_convert", "TetConvertForceArgs.gradient_f"),
-    ("utility/tet_convert", "TetConvertHessianArgs.hessian_f"),
     // `state.face.gradient_f` and `state.face.hessian_f`, the shell membrane's
     // force and Hessian in the deformation-gradient basis. The same shape as
     // the tet pair above and moved for the same reason, once the last of the
     // four records naming them stopped being hand-written: the spectral force,
     // the spectral Hessian and the BaraffWitkin arm write them, the two
     // converters read them, and no host code touches them in between.
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralForceArgs.force"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.hessian"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.gradient_f"),
-    ("energy/model/baraffwitkin", "FaceBaraffwitkinArgs.hessian_f"),
     // THE MATERIAL DIFF TABLE IN THE SINGULAR-VALUE BASIS, the shell analogue
     // of `state.tet.gradient_sigma` and `state.tet.hessian_sigma`, which have
     // been device allocations since the tet chain moved. Two owners, the
@@ -3498,24 +2998,11 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // move while it stood.
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.gradient_sigma"),
     ("energy/model/material_diff_table", "FaceMaterialDiffTableArgs.hessian_sigma"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralForceArgs.gradient_sigma"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.gradient_sigma"),
-    ("eigenanalysis/face_eigenanalysis", "FaceSpectralHessianArgs.hessian_sigma"),
     // THE AUTHORED STRAIN LIMIT, the barrier's own coordinate origin. STAGED:
     // the gate loop fills it on the host out of the scene's material table, and
     // the diff table is the only record that names it. The EFFECTIVE limit
     // beside it, the shrink-corrected one, cannot follow: two hand-written
     // records name that.
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableGatedArgs.authored_limit"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableGatedArgs.deda"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableGatedArgs.d2ed2a"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.shifted_sigma"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.prop"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.face_param"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.deda"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.d2ed2a"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.largest_shifted"),
-    ("strainlimiting/shell_strain", "ShellStrainDiffTableFromRecordsArgs.live"),
     // THE CREEP STEP FRACTION AND THE CREPT SINGULAR VALUES, the two device
     // intermediates of the plastic chain. `plasticity_alpha` computes the
     // fraction from the scene's rate and the step and the three creep passes
@@ -3535,8 +3022,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("plasticity/plasticity", "PlasticityCreepSingular3Args.updated"),
     ("plasticity/plasticity", "PlasticityFaceInverseRestArgs.singular"),
     ("plasticity/plasticity", "PlasticityTetInverseRestArgs.singular"),
-    ("utility/face_convert", "FaceConvertForceArgs.gradient_f"),
-    ("utility/face_convert", "FaceConvertHessianArgs.hessian_f"),
     // The two bending layers' per-element material parameters. These are BUILT
     // ON THE HOST, out of the scene's material table, so each is a
     // `StagedBuffer`: a host array the assembly fills element by element, a
@@ -3554,9 +3039,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // TWO CALL SITES AND ONE FIELD EACH, because the layer evaluates the same
     // body twice: at the iterate, and at the start-of-step pose the lagged
     // damping Hessian is built from.
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.prop"),
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.live"),
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.scale"),
     ("energy/model/shell_bend", "ShellBendEmbedArgs.x"),
     ("energy/model/shell_bend", "ShellBendEmbedArgs.current"),
     ("energy/model/shell_bend", "ShellBendEmbedArgs.hinge"),
@@ -3583,18 +3065,8 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // rather than the `VertexProp` they come from because a shared body takes
     // the arrays it was written against and not a struct whose layout it would
     // have to know.
-    ("energy/model/shell_bend_stiffness", "ShellBendArealDensityGatheredArgs.vertex_mass"),
-    ("energy/model/shell_bend_stiffness", "ShellBendArealDensityGatheredArgs.vertex_area"),
-    ("energy/model/shell_bend_stiffness", "ShellBendArealDensityGatheredArgs.areal_density"),
     ("energy/model/shell_bend_stiffness", "ShellBendArealDensityFromRecordsArgs.vertex_prop"),
     ("energy/model/shell_bend_stiffness", "ShellBendArealDensityFromRecordsArgs.areal_density"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.areal_density"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.bend"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.warp"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.weft"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.sin2"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.length"),
-    ("energy/model/shell_bend_stiffness", "ShellBendStiffnessArgs.area"),
     ("energy/model/rod_bend_stiffness", "RodBendStiffnessArgs.bend"),
     ("energy/model/rod_bend_stiffness", "RodBendStiffnessArgs.mass"),
     ("energy/model/rod_bend_stiffness", "RodBendStiffnessArgs.length0"),
@@ -3654,9 +3126,7 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // plastic one now dispatches on the fixture's own target; the assembly one
     // keeps its independent stencil and allocates it on the target it
     // dispatches on.
-    ("energy/model/rod_bend", "RodBendForceHessianArgs.node_index"),
     ("energy/model/rod_bend", "RodBendAngleArgs.node_index"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.node_index"),
     // THE PERMUTED HINGE QUADRUPLES AND THE ROD BENDING REST ANGLES, the two
     // host-built arrays their bending layers read at every pose. The
     // permutation is applied on the host, once per assembly, and read by the
@@ -3665,9 +3135,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // plastic creep rewrites, and read by the rod bending pass at both poses.
     // Each host copy stays readable through `StagedBuffer::host`, which is what
     // the scatters' index gathers and the CSR push loops read.
-    ("energy/model/shell_bend", "ShellBendForceHessianCheckedArgs.hinge"),
-    ("utility/hinge_damping", "HingeDampingArgs.hinge"),
-    ("energy/model/rod_bend", "RodBendForceHessianArgs.rest_angle"),
     ("utility/tet_damping", "TetDampingArgs.beta"),
     // THE FUSED TET ELASTIC LAYER. Every buffer it names is already a device
     // allocation: the two position buffers and the tet table the staged chain
@@ -3711,17 +3178,6 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("energy/face_force", "FaceElasticEmbedFromRecordsArgs.index"),
     ("energy/face_force", "FaceElasticEmbedFromRecordsArgs.offset"),
     ("energy/face_force", "FaceElasticEmbedFromRecordsArgs.value"),
-    ("utility/face_damping", "FaceDampingArgs.beta"),
-    ("utility/hinge_damping", "HingeDampingArgs.beta"),
-    ("utility/rod_bend_damping", "RodBendDampingArgs.beta"),
-    ("utility/face_scatter", "FaceAtomicEmbedForceArgs.face"),
-    ("utility/face_scatter", "FaceAtomicEmbedForceArgs.gradient"),
-    ("utility/hinge_scatter", "HingeAtomicEmbedForceArgs.hinge"),
-    ("utility/hinge_scatter", "HingeAtomicEmbedForceArgs.gradient"),
-    ("utility/rod_scatter", "RodAtomicEmbedForceArgs.edge"),
-    ("utility/rod_scatter", "RodAtomicEmbedForceArgs.gradient"),
-    ("utility/vertex_scatter", "VertexAtomicEmbedForceArgs.vert"),
-    ("utility/vertex_scatter", "VertexAtomicEmbedForceArgs.gradient"),
     // THE DYNAMIC CONTACT MATRIX, whose storage moved from a host `Vec` per row
     // to the reference's flat slab: one row-offset array, one flat column array
     // and one flat block array, with a `Row` reduced to an offset into them. The
@@ -3770,20 +3226,12 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // ALLOW EXISTING INTERSECTIONS' LINK TABLE, which every contact, CCD and
     // intersection-scan record reads through `pair_filter.kernel.cpp`. Built
     // once at scene build and staged once, like the neighbor adjacencies.
-    ("contact/contact_narrow", "ContactPointFaceArgs.start_link_index"),
-    ("contact/contact_narrow", "ContactPointFaceArgs.start_link_offset"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.start_link_index"),
     ("contact/contact_narrow", "ContactPointFaceTraverseArgs.start_link_offset"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.start_link_index"),
-    ("contact/contact_narrow", "ContactPointEdgeArgs.start_link_offset"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.start_link_index"),
     ("contact/contact_narrow", "ContactPointEdgeTraverseArgs.start_link_offset"),
-    ("contact/contact_narrow", "ContactPointPointArgs.start_link_index"),
-    ("contact/contact_narrow", "ContactPointPointArgs.start_link_offset"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.start_link_index"),
     ("contact/contact_narrow", "ContactPointPointTraverseArgs.start_link_offset"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.start_link_index"),
-    ("contact/contact_narrow", "ContactEdgeEdgeArgs.start_link_offset"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.start_link_index"),
     ("contact/contact_narrow", "ContactEdgeEdgeTraverseArgs.start_link_offset"),
     ("contact/ccd_sweep", "CcdPointFaceArgs.start_link_index"),
@@ -3810,16 +3258,10 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("contact/intersect_geometry", "IntersectScanCollisionMeshArgs.start_link_offset"),
     ("contact/intersect_geometry", "IntersectScanCollisionEdgeArgs.start_link_index"),
     ("contact/intersect_geometry", "IntersectScanCollisionEdgeArgs.start_link_offset"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.start_link_index"),
-    ("contact/collision_narrow", "CollisionPointFaceM2cArgs.start_link_offset"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.start_link_index"),
     ("contact/collision_narrow", "CollisionPointFaceM2cTraverseArgs.start_link_offset"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.start_link_index"),
-    ("contact/collision_narrow", "CollisionPointFaceC2mArgs.start_link_offset"),
     ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.start_link_index"),
     ("contact/collision_narrow", "CollisionPointFaceC2mTraverseArgs.start_link_offset"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.start_link_index"),
-    ("contact/collision_narrow", "CollisionEdgeEdgeArgs.start_link_offset"),
     ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.start_link_index"),
     ("contact/collision_narrow", "CollisionEdgeEdgeTraverseArgs.start_link_offset"),
 ];
@@ -4467,13 +3909,6 @@ fn main() {
     if backend == Backend::Cuda {
         println!("cargo:rustc-cfg=cuda_backend");
     }
-    // Whether `src/main.rs` compiles the neutral driver. It is decided here
-    // rather than spelled at the module, because the module is the one thing in
-    // the crate that must not know a target exists: gating it on a backend's
-    // own name would say the driver belongs to that backend, and it belongs to
-    // all of them. `Backend::links_neutral_driver` carries the reason a C++
-    // backend answers false, and why getting that wrong is silent.
-    println!("cargo:rustc-check-cfg=cfg(neutral_driver)");
     // Whether this build LINKS a library implementing the seam's C ABI, so the
     // `ppf_cts_compute::abi::AbiDevice` route to it can be exercised. The name
     // states the fact and not the target, because the fact is what a Rust file
@@ -4481,18 +3916,6 @@ fn main() {
     // Cargo.toml, and a test gated on a target's name would be the first
     // sentence of a fork.
     println!("cargo:rustc-check-cfg=cfg(abi_backend_linked)");
-    // The DRIVER feature, not the ABI one. `cuda-abi` builds and links the
-    // library; this asks for the neutral driver to be what calls it. They are
-    // separate because `cuda-abi` is a build gate that must keep producing a
-    // binary the C++ orchestrator runs.
-    // NEITHER TARGET CONSULTS IT ANY MORE: both answer yes unconditionally,
-    // because both orchestrators are deleted and the driver is the only
-    // `advance()` either one has.
-    let abi_backend_feature = env::var("CARGO_FEATURE_CUDA_DRIVER").is_ok()
-        || env::var("CARGO_FEATURE_METAL_ABI").is_ok();
-    if backend.links_neutral_driver(abi_backend_feature) {
-        println!("cargo:rustc-cfg=neutral_driver");
-    }
     if backend != Backend::Cuda {
         println!("cargo:warning=building the {} backend", backend.label());
     }
@@ -4539,8 +3962,9 @@ fn main() {
         build_kernels();
         return;
     }
-    // THE DRIVER'S HOST ARM NEEDS ITS ENTRY POINTS WHEREVER THE DRIVER IS
-    // COMPILED, and that is now more than one backend. `launch.rs` declares the
+    // THE DRIVER'S HOST ARM NEEDS ITS ENTRY POINTS ON EVERY BACKEND, because
+    // every backend compiles the driver: the C++ orchestrators it replaced are
+    // deleted, so no build has another `advance()`. `launch.rs` declares the
     // generated entry points and the remaining hand-written shims in an
     // unconditional `extern "C"` block, so a build with the driver live and
     // this call skipped fails at link with a list of undefined symbols naming
@@ -4550,9 +3974,7 @@ fn main() {
     // The objects it produces are not what a C ABI build DISPATCHES through:
     // that goes through `be_encode_dispatch` into the linked library. They are
     // what the host arm and the driver's own tests bind to.
-    if backend.links_neutral_driver(abi_backend_feature) {
-        build_kernels();
-    }
+    build_kernels();
 
     // Safe for every remaining backend: only `Backend::Cpu` answers `None`, and
     // it returned above.
@@ -4671,21 +4093,6 @@ fn main() {
             // asks for this library is the same one that routes the driver at
             // it, so the orchestrator it would replace is not built either.
             make.arg("abi");
-        }
-        // WHERE THE BACKEND LOGIC TREE IS, on the same terms as the neutral
-        // one: absolute, because make runs with `cpp_dir` as its working
-        // directory, and named by the caller so the recipe hardcodes no path
-        // between crates.
-        if let Some(logic_dir) = backend.logic_dir() {
-            let logic_root = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join(logic_dir);
-            let logic_root = logic_root
-                .canonicalize()
-                .unwrap_or_else(|e| panic!("build.rs: {} is unreadable: {e}", logic_root.display()));
-            // Watched for the same reason the neutral tree is: cargo would
-            // otherwise skip make after an edit there and leave a library built
-            // from the previous sources.
-            println!("cargo:rerun-if-changed={logic_dir}");
-            make.arg(format!("BACKEND_LOGIC_ROOT={}", logic_root.display()));
         }
         let output = make
             .arg(format!("-j{num_threads}"))

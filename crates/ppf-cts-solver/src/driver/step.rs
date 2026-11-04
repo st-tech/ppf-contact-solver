@@ -622,7 +622,7 @@ pub unsafe fn advance<D: Device>(
     // GATED ON THE TWO ELEMENT COUNTS, so a tet-only scene pays nothing and
     // emits nothing. The reduction is here rather than in the walk because this
     // backend's determinism rests on every fold having one stated shape;
-    // `reduce::max`'s floor argument is the identity the fold opens with, which
+    // `DeviceFold::max`'s floor argument is the identity the fold opens with, which
     // is how the shell and rod folds chain into one verdict.
     if state.sizes.shell_faces > 0 || state.sizes.rods > 0 {
         assemble::stretch_indicator(device, data, state)?;
@@ -857,41 +857,7 @@ pub unsafe fn advance<D: Device>(
                      pin's path, or make it a soft pull pin."
                 );
             }
-            // WHICH ELEMENT HOLDS THE STEP, read off the last line search. Two
-            // downloads, paid once and only by a run that has already failed.
-            if let Some(contact) = state.contact.as_mut() {
-                if let Some(clamp) = contact.clamp(device, prm.line_search_max_t)? {
-                    log::message!("### {}", describe_clamp(&clamp, state.prop_vertex.host()));
-                    // WHICH COLLIDERS HOLD IT (issue #160). The clamp names the
-                    // cloth vertex; what an artist can change is the pinned
-                    // collider closing on it. Diagnosed here, at the stall, and
-                    // not before the step: `driver/pinch.rs` gives the reasons.
-                    use super::contact::ClampElement;
-                    let stuck = match clamp.element {
-                        ClampElement::Vertex(n) | ClampElement::VertexOrColliderVertex(n) => {
-                            Some(n as u32)
-                        }
-                        ClampElement::ColliderVertex(_) | ClampElement::Edge(_) => None,
-                    };
-                    if let Some(vertex) = stuck {
-                        state.positions.download(device)?;
-                        let pinch = super::pinch::find(
-                            data,
-                            state.positions.host(),
-                            state.prop_vertex.host(),
-                            vertex,
-                        );
-                        if let Some(pinch) = &pinch {
-                            let name = |object: Option<u32>| match object {
-                                Some(index) => format!("object {index}"),
-                                None => "an unnamed object".to_string(),
-                            };
-                            log::message!("### {}", super::pinch::describe(pinch, &name));
-                        }
-                        super::pinch::record(pinch);
-                    }
-                }
-            }
+            report_hold(device, data, state, prm.line_search_max_t)?;
             result.newton_progress = false;
             return Ok(result);
         }
@@ -2076,7 +2042,7 @@ pub unsafe fn advance<D: Device>(
                 crate::data::PrecondMode::BlockJacobi => None,
             };
             super::dump_linsys::maybe_dump(device, &operator, force.handle(), eval_x.handle(), vertices)?;
-            pcg::solve(
+            let report = pcg::solve(
                 device,
                 &operator,
                 inverse.span(0, 9 * vertices),
@@ -2086,7 +2052,19 @@ pub unsafe fn advance<D: Device>(
                 sweep,
                 prm.cg_tol,
                 prm.cg_max_iter,
-            )?
+            )?;
+            if matches!(report.outcome, pcg::Outcome::IndefiniteMatrix) {
+                super::dump_linsys::dump_on_breakdown(
+                    device,
+                    &operator,
+                    force.handle(),
+                    eval_x.handle(),
+                    vertices,
+                    work.direction(),
+                    state.prop_vertex.host(),
+                )?;
+            }
+            report
         };
         drop(operator);
         // Give the value array back so the next iteration reuses it.
@@ -2626,6 +2604,10 @@ pub unsafe fn advance<D: Device>(
                     log::c_exponential(f64::from(sl_toi), 2)
                 );
             }
+            // The same diagnosis as the stall's: a CCD failure in a scene with
+            // prescribed geometry is, as often, a pin or a collider driven into
+            // something that cannot yield (issue #160).
+            report_hold(device, data, state, prm.line_search_max_t)?;
             result.ccd_success = false;
             return Ok(result);
         }
@@ -3199,6 +3181,54 @@ pub unsafe fn advance<D: Device>(
 ///
 /// # Safety
 /// `param` must address a live `ParamSet`.
+/// Name the element that holds a failed step, and, when that is cloth caught by
+/// (or a pin driven into) geometry that cannot yield, the objects and what to
+/// change (issue #160). Two downloads, paid once and only by a run that has
+/// already failed. `driver/pinch.rs` gives the reasons it is done here, at the
+/// failure, and not before the step.
+fn report_hold<D: Device>(
+    device: &mut D,
+    data: &DataSet,
+    state: &mut SolverState,
+    line_search_max_t: f32,
+) -> FatalResult<()> {
+    let Some(contact) = state.contact.as_mut() else {
+        return Ok(());
+    };
+    let Some(clamp) = contact.clamp(device, line_search_max_t)? else {
+        return Ok(());
+    };
+    log::message!("### {}", describe_clamp(&clamp, state.prop_vertex.host()));
+    use super::contact::ClampElement;
+    // The candidate vertices: the clamped vertex, or both ends of the clamped
+    // edge. A collider vertex names nothing the artist can change by itself.
+    let candidates: Vec<u32> = match clamp.element {
+        ClampElement::Vertex(n) | ClampElement::VertexOrColliderVertex(n) => vec![n as u32],
+        // SAFETY: `data` is the live `DataSet` `advance` was handed.
+        ClampElement::Edge(n) => unsafe { super::scene::slice(&data.mesh.mesh.edge) }
+            .get(n)
+            .map(|e| vec![e[0], e[1]])
+            .unwrap_or_default(),
+        ClampElement::ColliderVertex(_) => Vec::new(),
+    };
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    state.positions.download(device)?;
+    let pinch = candidates.iter().find_map(|&vertex| {
+        super::pinch::find(data, state.positions.host(), state.prop_vertex.host(), vertex)
+    });
+    if let Some(pinch) = &pinch {
+        let name = |object: Option<u32>| match object {
+            Some(index) => format!("object {index}"),
+            None => "an unnamed object".to_string(),
+        };
+        log::message!("### {}", super::pinch::describe(pinch, &name));
+    }
+    super::pinch::record(pinch);
+    Ok(())
+}
+
 unsafe fn assert_unsupported_absent(data: &DataSet, param: *const ParamSet) -> FatalResult<()> {
     let refusals = super::refusal::scene_refusals(data, &*param);
     if refusals.is_empty() {

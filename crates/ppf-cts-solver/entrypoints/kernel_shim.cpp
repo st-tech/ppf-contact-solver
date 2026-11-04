@@ -304,18 +304,6 @@ uint32_t row_dedupe_abi(uint32_t *index, float *value, uint32_t count,
 
 extern "C" {
 
-// The slot holding block (i, j), or 0xFFFFFFFF when the pattern has none.
-// `transpose_out` reports that the stored block is the transpose of the one
-// asked for, which is how the upper-triangle-only storage answers a lower query.
-uint32_t fixed_csr_find_abi(const uint32_t *index, const uint32_t *offset,
-                                uint32_t row_count, uint32_t i, uint32_t j,
-                                int *transpose_out) {
-    const FixedCsrLookup lookup =
-        fixed_csr_find(index, offset, row_count, i, j);
-    *transpose_out = lookup.transpose ? 1 : 0;
-    return lookup.slot;
-}
-
 // Reads block (i, j) into nine column-major floats. A pair the pattern does not
 // carry reads as the zero block, which is what the matrix means by its absence.
 void fixed_csr_read_abi(const uint32_t *index, const uint32_t *offset,
@@ -833,33 +821,6 @@ void extend_contact4_entry(const float *weight, const float *force,
 } // extern "C"
 
 // ---------------------------------------------------------------------------
-// The detect-once pair cache.
-//
-// `count` is a CLAIM atomic: it exists so each recorded pair gets a slot no
-// other pair got, and no row partition can deliver that, so this one is not
-// made safe by the scatter rule the rest of the file relies on. Under a
-// parallel dispatch the host seam's plain read-add-write races.
-//
-// The body counts EVERY pair, whether or not it fit, and sets `overflow` when
-// one did not. That is deliberate: the requirement is then known even when it
-// was not met, which is what lets the capacity be sized from measurement rather
-// than from a constant. Do not read a full cache as the pair count.
-// ---------------------------------------------------------------------------
-
-#include "contact/pair_cache.kernel.cpp"
-
-extern "C" {
-
-// THE RECORDER IS NOT HERE. The cache, its counter and its overflow flag reach
-// the body as base pointers and the two endpoint arrays as element gathers, so
-// it declares its own entry point beside the body
-// (`src/kernels/contact/pair_cache.kernel.cpp`) and the range shim is rendered into
-// `entrypoints/entries.cpp`. The claim is still not made safe by a partition, and
-// that is still the caller's to keep.
-
-} // extern "C"
-
-// ---------------------------------------------------------------------------
 // Bounding volumes: the leaf builders, the fold operator, and the overlap test.
 //
 // `AABB` crosses as itself rather than as loose floats. It is a box of two
@@ -895,28 +856,6 @@ void aabb_merge_active_abi(const AABB *a, const AABB *b, AABB *out) {
 int aabb_overlap_abi(const AABB *a, const AABB *b) {
     return aabb_overlap(*a, *b) ? 1 : 0;
 }
-
-} // extern "C"
-
-// ---------------------------------------------------------------------------
-// The bitonic sorting-network step.
-//
-// The step is shared because it defines the COMPARATOR, and the comparator is
-// what fixes the total order the Morton sort produces; two orders are two trees.
-// The schedule around it (which subsequence and stride, in which order) is the
-// caller's, as is the choice to run a different sort algorithm entirely, so long
-// as the resulting order is this one.
-// ---------------------------------------------------------------------------
-
-#include "lbvh/bitonic.kernel.cpp"
-
-extern "C" {
-
-// THE STEP IS NOT HERE. Both arrays reach the body as base pointers and the
-// thread index is forwarded, because a comparator addresses its own element and
-// its partner's and the partner is the body's arithmetic, so it declares its
-// own entry point beside the body (`src/kernels/lbvh/bitonic.kernel.cpp`) and the
-// range shim is rendered into `entrypoints/entries.cpp`.
 
 } // extern "C"
 

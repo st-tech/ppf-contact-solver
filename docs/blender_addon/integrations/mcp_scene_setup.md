@@ -374,7 +374,7 @@ the flag yourself: sending `contact_gap` or `contact_offset` sets it to
 `false`, and sending `contact_gap_rat` or `contact_offset_rat` sets it to
 `true`, in the same call.
 
-`contact_gap_limit_percent`, on **Solid**, **Shell** and **Rod** groups,
+`contact_gap_limit_percent`, on every group type but **Sand**,
 belongs to neither mode and can be sent with either pair. It caps each
 element's gap at that percentage (1 to 50, 25 by default) of the room its mesh
 neighbors leave, so the gap an element is solved at can be smaller than the one

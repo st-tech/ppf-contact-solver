@@ -302,10 +302,6 @@ impl DynCsrMat {
         }
     }
 
-    pub fn row_count(&self) -> usize {
-        self.nrow
-    }
-
     /// Contributions staged this step, before any compaction.
     ///
     /// BOTH PATHS COUNT. A block appended by a kernel is staged exactly as one
@@ -313,11 +309,6 @@ impl DynCsrMat {
     /// this total rather than either half.
     pub fn staged(&self) -> usize {
         self.stage_row.len() + self.staged_on_device
-    }
-
-    /// Blocks the last build stored.
-    pub fn stored(&self) -> usize {
-        self.stored
     }
 
     /// Begin a step's assembly.

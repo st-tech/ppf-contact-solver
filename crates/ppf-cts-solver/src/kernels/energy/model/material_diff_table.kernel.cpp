@@ -120,8 +120,8 @@ enum : unsigned {
 //
 // BARAFFWITKIN NEVER FORMS THE SVD, which is why it is a code here rather than
 // an arm. It goes from the deformation gradient to the gradient and the Hessian
-// directly, and `energy/model/baraffwitkin.kernel.cpp` is the pass that then
-// OVERWRITES the zero table this one leaves.
+// directly, which the fused face pass (`energy/face_force.kernel.cpp`) does
+// through `energy/model/baraffwitkin.hpp` in place of this zero table.
 [[seam::device_fn]] inline unsigned face_material_diff_table(
     unsigned model, const Vec2f &sigma, float mu, float lambda,
     Vec2f *gradient_sigma,

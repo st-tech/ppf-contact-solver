@@ -43,9 +43,9 @@
 //! CPU shape a fixed, stated thing rather than whatever rayon chose today.
 
 // The folds themselves are called from `step.rs`, `contact.rs`, `collider.rs`
-// and `pcg.rs`. The allow covers `sum_with_bound`, which only this module's own
-// tests reach, and is scoped per module so a genuinely unused item elsewhere
-// still surfaces.
+// and `pcg.rs`. The allow covers `sum`, the host oracle that `pcg.rs`'s tests
+// compare the device fold against and that no production path calls, and is
+// scoped per module so a genuinely unused item elsewhere still surfaces.
 #![allow(dead_code)]
 
 use rayon::prelude::*;
@@ -176,109 +176,6 @@ pub fn sum_abs(values: &[f32]) -> f32 {
     total
 }
 
-/// Largest value under the same fixed shape, with `initial` as the identity.
-///
-/// A maximum is associative AND commutative in fp32 (no rounding is involved),
-/// so unlike the sums above its answer cannot depend on the order. The block
-/// shape is kept anyway: this backend's contract is that every reduction has
-/// one stated shape, and an exception that happens to be safe today is one a
-/// later reader has to re-derive. NaN propagates rather than being skipped,
-/// because a NaN reaching a max-reduced quantity (`max_u`, `max_dx`, the reach
-/// from the origin) means the step already produced one and the driver's own
-/// checks must see it.
-pub fn max(values: &[f32], initial: f32) -> f32 {
-    if values.is_empty() {
-        return initial;
-    }
-    let blocks: Vec<f32> = values
-        .par_chunks(BLOCK)
-        .map(|chunk| {
-            let mut best = initial;
-            for value in chunk {
-                if value.is_nan() {
-                    return f32::NAN;
-                }
-                if *value > best {
-                    best = *value;
-                }
-            }
-            best
-        })
-        .collect();
-    let mut best = initial;
-    for block in &blocks {
-        if block.is_nan() {
-            return f32::NAN;
-        }
-        if *block > best {
-            best = *block;
-        }
-    }
-    best
-}
-
-/// Smallest value under the same fixed shape, with `initial` as the identity.
-///
-/// The mirror of [`max`], and it exists for the line search: a time of impact
-/// is min-reduced over the mesh, with `line_search_max_t` as the identity, and
-/// the reduction has to be the one this backend states rather than whatever
-/// `Iterator::fold` happens to do.
-pub fn min(values: &[f32], initial: f32) -> f32 {
-    if values.is_empty() {
-        return initial;
-    }
-    let blocks: Vec<f32> = values
-        .par_chunks(BLOCK)
-        .map(|chunk| {
-            let mut best = initial;
-            for value in chunk {
-                if value.is_nan() {
-                    return f32::NAN;
-                }
-                if *value < best {
-                    best = *value;
-                }
-            }
-            best
-        })
-        .collect();
-    let mut best = initial;
-    for block in &blocks {
-        if block.is_nan() {
-            return f32::NAN;
-        }
-        if *block < best {
-            best = *block;
-        }
-    }
-    best
-}
-
-/// The signed sum and its round-off bound, reduced together.
-///
-/// The two must come from one traversal in the same shape: the bound is only
-/// meaningful against the sum it was measured beside. Returning them separately
-/// from two calls would let a caller pair a sum with a bound from a different
-/// shape, which is exactly the mistake this returns a tuple to prevent.
-pub fn sum_with_bound(values: &[f32]) -> (f32, f32) {
-    if values.is_empty() {
-        return (0.0, 0.0);
-    }
-    // ONE TRAVERSAL, IN THE COOPERATIVE SHAPE, which is what makes the bound
-    // meaningful against the sum: `vec_block_sum_pair_cooperative` folds the two
-    // over the SAME lane runs, and a bound reduced in a different shape is a
-    // bound on a different sum. The magnitude is taken at the first level only,
-    // as it is there.
-    let mut signed: Vec<f32> = values.par_chunks(BLOCK).map(block_total).collect();
-    let mut magnitude: Vec<f32> =
-        values.par_chunks(BLOCK).map(block_total_abs).collect();
-    while signed.len() > 1 {
-        signed = signed.par_chunks(BLOCK).map(block_total).collect();
-        magnitude = magnitude.par_chunks(BLOCK).map(block_total).collect();
-    }
-    (signed[0], magnitude[0])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,19 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bound_and_its_sum_come_from_one_traversal() {
-        let values = cancelling(50_000);
-        let (signed, magnitude) = sum_with_bound(&values);
-        assert_eq!(signed.to_bits(), sum(&values).to_bits());
-        assert_eq!(magnitude.to_bits(), sum_abs(&values).to_bits());
-        assert!(
-            magnitude > signed.abs(),
-            "a cancelling input must have a magnitude sum far above its signed \
-             sum, or it does not exercise what the bound is for"
-        );
-    }
-
-    #[test]
     fn the_fold_is_f32_throughout() {
         // 2^24 + 1 is the first integer f32 cannot represent, so adding 1 to
         // 2^24 in f32 stalls while an f64 partial would not. One block is enough
@@ -356,27 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn the_maximum_carries_its_identity_and_propagates_nan() {
-        assert_eq!(max(&[], 3.0), 3.0);
-        assert_eq!(max(&[1.0, -2.0, 0.5], 0.0), 1.0);
-        assert_eq!(max(&[-1.0, -2.0], 0.0), 0.0, "the identity is a floor");
-        assert!(max(&[1.0, f32::NAN, 2.0], 0.0).is_nan());
-        // Long enough to cross the block boundary, so the serial fold over the
-        // block totals is exercised rather than one block's own loop.
-        let mut long = vec![0.25f32; 4 * BLOCK + 7];
-        long[3 * BLOCK + 1] = 9.5;
-        assert_eq!(max(&long, 0.0), 9.5);
-    }
-
-    #[test]
-    fn the_minimum_mirrors_the_maximum() {
-        assert_eq!(min(&[], 1.0), 1.0);
-        assert_eq!(min(&[0.5, 0.25, 2.0], 1.0), 0.25);
-        assert_eq!(min(&[2.0, 3.0], 1.0), 1.0, "the identity is a ceiling");
-        assert!(min(&[1.0, f32::NAN], 1.0).is_nan());
-    }
-
-    #[test]
     fn an_empty_input_sums_to_zero() {
         assert_eq!(sum(&[]).to_bits(), 0.0f32.to_bits());
         assert_eq!(sum_abs(&[]).to_bits(), 0.0f32.to_bits());
@@ -387,7 +250,7 @@ mod tests {
 ///
 /// # What this replaces
 ///
-/// The functions above fold a HOST SLICE, so every caller had to download the
+/// The host folds above take a HOST SLICE, so every caller had to download the
 /// array first: nine sites did that once per Newton iteration, over the line
 /// search's per-primitive time of impact, the step's maximum displacement and
 /// reach, and the strain limiter's ratios. The line those crossed is this:
