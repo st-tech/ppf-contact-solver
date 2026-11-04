@@ -65,7 +65,7 @@ Our video tutorials page is [here](https://st-tech.github.io/ppf-contact-solver/
 - **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
 - **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
 - **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
-- **🟥 ~~AMD GPUs untested:~~** ~~The ROCm backend has never run on real AMD hardware. We rely on community bug reports.~~ No longer true: AMD (ROCm) is now shipped. See [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860).
+- **🟥 ~~AMD GPUs untested:~~** ~~The ROCm backend has never run on real AMD hardware. We rely on community bug reports.~~ No longer true; AMD (ROCm) has been tested. See [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860).
 - **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
 - **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
 
@@ -1028,6 +1028,10 @@ Examples include pinned panels driven through each other ([#116](https://github.
 If a cloth is pinched by an animated character or a shape-keyed collider (see [#160](https://github.com/st-tech/ppf-contact-solver/issues/160)), the solver may stop with "Newton solve made no progress (over-constrained configuration)". In that case, enable "Soft Constraint" on the group of the collider. The collider then gives way slightly where it presses on the cloth, and the scene can run to the end.
 
 <img src="https://github.com/user-attachments/assets/f9053c49-d2a1-4117-962c-35455882e011" alt="Apply Soft Constraints" width="500">
+
+If the cloth has pins, changing the pin type to "Pull" can also fix the failure. If you have any pins, please turn them all to "Pull" pins.
+
+<img src="https://github.com/user-attachments/assets/3b9a9dd3-d585-48ff-8aa1-cf7d3313a5c0" alt="Pull pin type" width="280">
 
 ## ❓ Frequently Asked Questions
 
