@@ -339,6 +339,12 @@ struct DataSet {
     Vec<Vec3f> cosserat_rest_darboux;
     Vec<float> cosserat_bend_invlen;
     Vec<float> cosserat_rest_metric;
+    // Tie constraints: per tie the held vertex, then TIE_SLOTS controller
+    // vertices and their affine weights per tie. Empty when the scene has
+    // none.
+    Vec<unsigned> tie_vertex;
+    Vec<unsigned> tie_ctrl;
+    Vec<float> tie_weight;
 };
 
 #endif

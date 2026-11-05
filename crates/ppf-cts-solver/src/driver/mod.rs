@@ -155,6 +155,7 @@ mod scene;
 mod seed;
 mod state;
 mod step;
+pub mod tie;
 #[cfg(test)]
 mod test_scene;
 pub mod bvh;

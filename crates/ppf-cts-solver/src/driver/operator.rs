@@ -166,12 +166,111 @@ pub struct Operator {
     pub diagonal: ppf_cts_compute::Handle,
     /// The difference form, when the solve asks for it.
     pub difference: Option<DifferenceView>,
+    /// The tie constraints, on a scene that carries them. Every application of
+    /// the operator is then `F K E` (`super::tie`): the input is expanded onto
+    /// the held rows, the product taken in the full space, and the output
+    /// folded back onto the free rows, so whichever solve applies it solves on
+    /// the subspace the ties leave free. `None` leaves the operator exactly as
+    /// it is on every other scene.
+    pub tie: Option<super::tie::View>,
 }
 
 impl Operator {
     /// Rows, which is the vertex count.
     pub fn rows(&self) -> u32 {
         self.fixed.rows
+    }
+
+    /// The same operator without the tie wrap, for a solve that wraps a
+    /// LARGER composition itself: the Cosserat solve's frame couplings read and
+    /// write the vertex rows of the same vectors, so its expand and fold have
+    /// to run around the whole augmented apply rather than around this one.
+    pub fn without_tie(&self) -> Operator {
+        Operator {
+            dynamic: self.dynamic,
+            fixed: FixedCsrView {
+                index: self.fixed.index,
+                offset: self.fixed.offset,
+                value: self.fixed.value,
+                transpose_pair: self.fixed.transpose_pair,
+                transpose_offset: self.fixed.transpose_offset,
+                rows: self.fixed.rows,
+            },
+            diagonal: self.diagonal,
+            difference: self.difference,
+            tie: None,
+        }
+    }
+
+    /// Append `result = (A + B + C) x`, or `F (A + B + C) E x` on a scene with
+    /// ties; see [`Self::encode_apply_unwrapped`] for the arguments.
+    ///
+    /// WITH TIES, `absolute` and `curvature` are formed on the EXPANDED input
+    /// `e = E x`, and `e . K e = x . F K E x` exactly, so the curvature the
+    /// solve reads is the reduced one; the magnitudes are those of the sum
+    /// whose round-off the bound has to cover.
+    ///
+    /// # Safety
+    /// As [`Self::encode_apply_unwrapped`].
+    pub unsafe fn encode_apply(
+        &self,
+        encoder: &mut dyn Encoder,
+        x: ppf_cts_compute::Handle,
+        result: ppf_cts_compute::Handle,
+        absolute: ppf_cts_compute::Handle,
+        curvature: ppf_cts_compute::Handle,
+    ) -> Result<(), Fault> {
+        match self.tie {
+            None => self.encode_apply_unwrapped(encoder, x, result, absolute, curvature),
+            Some(tie) => {
+                tie.encode_expand(encoder, x, tie.expanded)?;
+                self.encode_apply_unwrapped(encoder, tie.expanded, tie.unfolded, absolute,
+                                            curvature)?;
+                tie.encode_fold(encoder, tie.unfolded, result)
+            }
+        }
+    }
+
+    /// [`Self::encode_apply_folded_unwrapped`], wrapped by the ties as
+    /// [`Self::encode_apply`] is.
+    ///
+    /// THE INNER PRODUCT LANDS IN THE TIE SCRATCH, which nobody zeroed, so an
+    /// accumulating apply is told so (`result_zeroed = false`) and opens with
+    /// its own fill whatever the caller said about `result`. The fold then
+    /// WRITES every row of `result`, so the caller's zeroing is not needed and
+    /// not harmed.
+    ///
+    /// # Safety
+    /// As [`Self::encode_apply_folded_unwrapped`].
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn encode_apply_folded(
+        &self,
+        encoder: &mut dyn Encoder,
+        x: ppf_cts_compute::Handle,
+        result: ppf_cts_compute::Handle,
+        curvature_total: ppf_cts_compute::Handle,
+        absolute_total: ppf_cts_compute::Handle,
+        latch: ppf_cts_compute::Handle,
+        result_zeroed: bool,
+    ) -> Result<u32, Fault> {
+        match self.tie {
+            None => self.encode_apply_folded_unwrapped(
+                encoder, x, result, curvature_total, absolute_total, latch, result_zeroed),
+            Some(tie) => {
+                tie.encode_expand(encoder, x, tie.expanded)?;
+                let groups = self.encode_apply_folded_unwrapped(
+                    encoder,
+                    tie.expanded,
+                    tie.unfolded,
+                    curvature_total,
+                    absolute_total,
+                    latch,
+                    false,
+                )?;
+                tie.encode_fold(encoder, tie.unfolded, result)?;
+                Ok(groups)
+            }
+        }
     }
 
     /// Whether [`Self::encode_apply_folded`] ADDS into its result rather than
@@ -289,7 +388,7 @@ impl Operator {
     /// signed contributions to `x^T A x`. The caller folds it into the scale
     /// the curvature bound is taken from; a caller that does not want it passes
     /// a buffer it ignores, which costs one store per row.
-    pub unsafe fn encode_apply(
+    unsafe fn encode_apply_unwrapped(
         &self,
         encoder: &mut dyn Encoder,
         x: ppf_cts_compute::Handle,
@@ -399,7 +498,8 @@ impl Operator {
     /// # Safety
     /// Every handle must outlive the dispatch this appends, and both partial
     /// arrays must name at least the returned group count.
-    pub unsafe fn encode_apply_folded(
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn encode_apply_folded_unwrapped(
         &self,
         encoder: &mut dyn Encoder,
         x: ppf_cts_compute::Handle,
@@ -780,6 +880,7 @@ mod tests {
             },
             diagonal: diagonal_in.handle(),
             difference: None,
+            tie: None,
         };
         let x_host = vec![1.0f32, 0.0, 0.0, 2.0, 0.0, 0.0];
         let x = device_in(&mut device, &x_host, "test.x");
@@ -846,6 +947,7 @@ mod tests {
             },
             diagonal: diagonal_in.handle(),
             difference: None,
+            tie: None,
         };
 
         let x_host = vec![1.0f32, 1.0, 0.0];
@@ -910,6 +1012,7 @@ mod tests {
                 },
                 diagonal: diagonal_in.handle(),
                 difference: None,
+                tie: None,
             };
             let x_in = device_in(&mut device, &x, "test.x");
             let mut result = device_out(&mut device, 3 * rows, "test.result");
@@ -967,6 +1070,7 @@ mod tests {
             },
             diagonal: diagonal_in.handle(),
             difference: None,
+            tie: None,
         };
         // A DEVICE ALLOCATION, because the pass writes through a handle now, and
         // a mirror to read the eighteen floats back out of.

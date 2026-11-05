@@ -1556,6 +1556,10 @@ pub unsafe fn advance<D: Device>(
         // holds the state's fields disjointly and so cannot lend the whole of
         // it to a method.
         let pattern_refs = state.fixed_pattern_refs();
+        // THE TIES' VIEW, `None` on a scene without one. It rides on the
+        // operator, so every application of it below, in whichever solve, is
+        // the operator restricted to the subspace the ties leave free.
+        let tie_view = state.tie.view(state.dof_mask.handle());
         // The disjoint field borrows the solve needs, taken once: the operator
         // reads the block diagonal while the preconditioner, the right-hand
         // side, the direction and the PCG workspace are written.
@@ -1596,6 +1600,7 @@ pub unsafe fn advance<D: Device>(
             } else {
                 None
             },
+            tie: tie_view,
         };
         // The row sums, after the Dirichlet pass above, which is the last
         // writer of the operator's blocks, and before anything applies it.
@@ -1603,6 +1608,27 @@ pub unsafe fn advance<D: Device>(
             operator.sum_rows(device)?;
         }
         operator.precond_diagonal(device, precond_diagonal.span(0, 9 * vertices))?;
+        if let Some(tie) = tie_view {
+            // THE REDUCED PRECONDITIONER, before the diagonal is inverted: each
+            // free controller's block becomes the exact diagonal block of the
+            // reduced operator, and each Cosserat edge's Schwarz block the
+            // matching principal submatrix of it, so the factor never pairs a
+            // reduced diagonal with an unreduced coupling (which is not
+            // positive definite).
+            tie.precond(device, &operator, precond_diagonal.span(0, 9 * vertices))?;
+            if state.cosserat.slots > 0 {
+                let frames = state.cosserat.blocks(removed > 0);
+                tie.edge_blocks(device, &operator, frames.edge_nodes, frames.slots,
+                                precond_diagonal.span(0, 9 * vertices))?;
+            }
+            // THE SEED'S CONSISTENCY TERM AND THE FOLDED RIGHT-HAND SIDE. Every
+            // writer of `dx` and `force` before the solve has run (the Dirichlet
+            // seed, the lift, the assembly), so the held rows are taken last:
+            // each held row of `dx` carries the difference back onto its tie,
+            // and each held row's force joins its free controllers' rows.
+            tie.seed(device, eval_x.handle(), dx.handle())?;
+            tie.fold_force(device, force.handle())?;
+        }
         // THE INVERSION IS A DISPATCH, not a host walk. The loop over the rows
         // is the kernel's, and so is the verdict, which comes back through the
         // diagnostic lane rather than as a returned row. The payload the entry
@@ -1662,6 +1688,8 @@ pub unsafe fn advance<D: Device>(
                 dx.handle(),
                 work,
                 &mut state.pcg_cosserat,
+                state.tie.augmented_scratch(),
+                tie_view.map(|t| t.edge_block),
                 prm.cg_tol,
                 prm.cg_max_iter,
                 state.friction_memory.frame_coupling(state.positions.handle(), state.dof_mask.handle(), frictional),
@@ -2066,6 +2094,12 @@ pub unsafe fn advance<D: Device>(
             }
             report
         };
+        // THE HELD ROWS OF THE CORRECTION, from their controllers' solved rows
+        // and the consistency term the seed left in them, before anything reads
+        // `dx` (the rescale, the step, the line search).
+        if let Some(tie) = tie_view {
+            tie.finish(device, dx.handle())?;
+        }
         drop(operator);
         // Give the value array back so the next iteration reuses it.
         state.fixed_values = fixed.into_values();

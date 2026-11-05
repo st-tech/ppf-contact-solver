@@ -557,82 +557,93 @@ pub mod id {
     pub const OPERATOR_APPLY_SYMMETRIC_FOLDED: KernelId = KernelId(237);
     pub const MAT3_MUL: KernelId = KernelId(241);
     pub const FIXED_CSR_PRODUCT_ROW: KernelId = KernelId(242);
+    /// Tie constraints (`solver/tie.kernel.cpp`), dispatched by `super::tie`:
+    /// the expand and fold around the operator, the zero pass, the seed's
+    /// consistency term, the held rows' finish and the reduced
+    /// preconditioner's diagonal and Cosserat edge blocks.
+    pub const TIE_EXPAND_ROW: KernelId = KernelId(243);
+    pub const TIE_FOLD_ROW: KernelId = KernelId(244);
+    pub const TIE_ZERO_ROW: KernelId = KernelId(245);
+    pub const TIE_CONSISTENCY_ROW: KernelId = KernelId(246);
+    pub const TIE_FINISH_ROW: KernelId = KernelId(247);
+    pub const TIE_PRECOND_ROW: KernelId = KernelId(248);
+    pub const TIE_EDGE_BLOCK_ROW: KernelId = KernelId(249);
     /// One locked group's centroid drift and largest member displacement, read back to verify the lock held.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const TRANSLATION_LOCK_DRIFT_ROW: KernelId = KernelId(243);
+    pub const TRANSLATION_LOCK_DRIFT_ROW: KernelId = KernelId(250);
     /// Zero one group's frame before the two accumulation passes fill it.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_FRAME_CLEAR_ROW: KernelId = KernelId(244);
+    pub const LOCK_FRAME_CLEAR_ROW: KernelId = KernelId(251);
     /// One group's centroid, the accumulated sum divided by its total mass.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_FRAME_CENTER_OF_MASS_ROW: KernelId = KernelId(245);
+    pub const LOCK_FRAME_CENTER_OF_MASS_ROW: KernelId = KernelId(252);
     /// One member's mass-weighted position into its group's centroid sum.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_CENTER_OF_MASS_ACCUMULATE_ROW: KernelId = KernelId(246);
+    pub const LOCK_CENTER_OF_MASS_ACCUMULATE_ROW: KernelId = KernelId(253);
     /// One member's contribution to its group's inertia about that centroid.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_INERTIA_ACCUMULATE_ROW: KernelId = KernelId(247);
+    pub const LOCK_INERTIA_ACCUMULATE_ROW: KernelId = KernelId(254);
     /// One member's contribution to C v, the constraint-space image of the vector being projected.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_ROW_SUMS_ACCUMULATE_ROW: KernelId = KernelId(248);
+    pub const LOCK_ROW_SUMS_ACCUMULATE_ROW: KernelId = KernelId(255);
     /// One residual correction of the free part toward the group's right-hand side.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_REFINE_TOWARD_RHS_ROW: KernelId = KernelId(249);
+    pub const LOCK_REFINE_TOWARD_RHS_ROW: KernelId = KernelId(256);
     /// Remove the constraint-space component from one member's three rows.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_PROJECT_OUT_ROWS_ROW: KernelId = KernelId(250);
+    pub const LOCK_PROJECT_OUT_ROWS_ROW: KernelId = KernelId(257);
     /// The affine feasible correction q: exact pin increments on removed rows, the minimum-norm free part elsewhere.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_SEED_FREE_SOLUTION_ROW: KernelId = KernelId(251);
+    pub const LOCK_SEED_FREE_SOLUTION_ROW: KernelId = KernelId(258);
     /// One member's contribution to the group's best-fit angular increment, for the read-only tangent check.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_TORQUE_ACCUMULATE_ROW: KernelId = KernelId(252);
+    pub const LOCK_TORQUE_ACCUMULATE_ROW: KernelId = KernelId(259);
     /// One group's constraint rows and their Gram matrix, from the frame.
     ///
     /// DISPATCHED by `super::lock`, which transcribes `FullProjector` in
     /// `src/kernels/solver/translation_lock.hpp` dispatch for dispatch.
-    pub const LOCK_CONSTRAINT_ASSEMBLE_ROW: KernelId = KernelId(253);
-    pub const ROD_STRAIN_FORCE_HESSIAN_GATED: KernelId = KernelId(254);
-    pub const ROD_STRAIN_STIFFNESS_GATED: KernelId = KernelId(255);
-    pub const SHELL_STRAIN_EMBED: KernelId = KernelId(256);
-    pub const SHELL_STRAIN_TOI_FROM_RECORDS: KernelId = KernelId(259);
-    pub const SHELL_MAX_STRAIN: KernelId = KernelId(257);
-    pub const ROD_STRAIN_VALUE: KernelId = KernelId(258);
-    pub const ROD_STRAIN_TOI_GATED: KernelId = KernelId(260);
-    pub const FACE_DEFORMATION_GRADIENT: KernelId = KernelId(264);
-    pub const SHELL_STRETCH_TERMS: KernelId = KernelId(265);
-    pub const COLLISION_WINDOW_VERTEX: KernelId = KernelId(261);
-    pub const COLLISION_WINDOW_FACE: KernelId = KernelId(262);
-    pub const COLLISION_WINDOW_EDGE: KernelId = KernelId(263);
-    pub const STITCH_ATOMIC_EMBED_FORCE: KernelId = KernelId(268);
-    pub const SVD3X2: KernelId = KernelId(269);
-    pub const SHELL_STRAIN_RESTORE_SIGMA: KernelId = KernelId(270);
-    pub const SVD3X3_RV: KernelId = KernelId(271);
-    pub const TET_CONVERT_FORCE: KernelId = KernelId(272);
-    pub const TET_DEFORMATION_GRADIENT: KernelId = KernelId(273);
-    pub const TET_DAMPING: KernelId = KernelId(274);
-    pub const VERTEX_FIX_INDEX_FROM_RECORDS: KernelId = KernelId(275);
-    pub const VERTEX_DOF_REMOVAL_MASK: KernelId = KernelId(276);
+    pub const LOCK_CONSTRAINT_ASSEMBLE_ROW: KernelId = KernelId(260);
+    pub const ROD_STRAIN_FORCE_HESSIAN_GATED: KernelId = KernelId(261);
+    pub const ROD_STRAIN_STIFFNESS_GATED: KernelId = KernelId(262);
+    pub const SHELL_STRAIN_EMBED: KernelId = KernelId(263);
+    pub const SHELL_STRAIN_TOI_FROM_RECORDS: KernelId = KernelId(266);
+    pub const SHELL_MAX_STRAIN: KernelId = KernelId(264);
+    pub const ROD_STRAIN_VALUE: KernelId = KernelId(265);
+    pub const ROD_STRAIN_TOI_GATED: KernelId = KernelId(267);
+    pub const FACE_DEFORMATION_GRADIENT: KernelId = KernelId(271);
+    pub const SHELL_STRETCH_TERMS: KernelId = KernelId(272);
+    pub const COLLISION_WINDOW_VERTEX: KernelId = KernelId(268);
+    pub const COLLISION_WINDOW_FACE: KernelId = KernelId(269);
+    pub const COLLISION_WINDOW_EDGE: KernelId = KernelId(270);
+    pub const STITCH_ATOMIC_EMBED_FORCE: KernelId = KernelId(275);
+    pub const SVD3X2: KernelId = KernelId(276);
+    pub const SHELL_STRAIN_RESTORE_SIGMA: KernelId = KernelId(277);
+    pub const SVD3X3_RV: KernelId = KernelId(278);
+    pub const TET_CONVERT_FORCE: KernelId = KernelId(279);
+    pub const TET_DEFORMATION_GRADIENT: KernelId = KernelId(280);
+    pub const TET_DAMPING: KernelId = KernelId(281);
+    pub const VERTEX_FIX_INDEX_FROM_RECORDS: KernelId = KernelId(282);
+    pub const VERTEX_DOF_REMOVAL_MASK: KernelId = KernelId(283);
 
     /// THE ELEMENT-WISE MULTI-LEVEL SCAN, the exclusive scan every pass that
     /// needs one dispatches. Three ids because
@@ -686,8 +697,8 @@ pub mod id {
     pub const COLLISION_POINT_FACE_M2C_TRAVERSE: KernelId = KernelId(22);
     pub const COLLISION_POINT_FACE_C2M_TRAVERSE: KernelId = KernelId(23);
     pub const COLLISION_EDGE_EDGE_TRAVERSE: KernelId = KernelId(24);
-    pub const HINGE_LIVE_EMBED_FORCE: KernelId = KernelId(266);
-    pub const ROD_LIVE_EMBED_FORCE: KernelId = KernelId(267);
+    pub const HINGE_LIVE_EMBED_FORCE: KernelId = KernelId(273);
+    pub const ROD_LIVE_EMBED_FORCE: KernelId = KernelId(274);
     pub const TET_SPECTRAL_CONVERT_HESSIAN: KernelId = KernelId(121);
     /// The operator in its difference form, DISPATCHED by `super::operator`. The
     /// value is renumbered from the canonical walk by `renumber-kernel-ids.py`.
@@ -740,7 +751,7 @@ pub mod id {
     /// The number of rows in [`TABLE`], which is every entry point the
     /// neutral tree declares. A library built from this tree carries the
     /// same number in the same order, because both come from one walk.
-    pub const COUNT: usize = 277;
+    pub const COUNT: usize = 284;
 }
 
 // ===========================================================================
@@ -1036,6 +1047,13 @@ include!(concat!(env!("OUT_DIR"), "/kernelgen/solver/pcg.entry.rs"));
 // One row of the block-Jacobi preconditioner, and the diagnostic lane its
 // positive-definiteness verdict leaves through.
 include!(concat!(env!("OUT_DIR"), "/kernelgen/solver/block_jacobi.entry.rs"));
+
+// Tie constraints (`solver/tie.kernel.cpp`): the expand and fold that wrap the
+// operator, the zero pass for a preconditioner that mixes rows, the seed's
+// consistency term, the held rows' finish and the reduced preconditioner's
+// two passes. Every buffer is a base pointer the body indexes, with the row
+// forwarded.
+include!(concat!(env!("OUT_DIR"), "/kernelgen/solver/tie.entry.rs"));
 
 // Start-of-step velocity, squared speed and distance from the origin, rendered
 // from the declaration beside `velocity_terms`.
@@ -3863,6 +3881,81 @@ pub static TABLE: [KernelDecl; id::COUNT] = [
         5.0,
         size_of::<FixedCsrProductRowArgs>(),
         FIXED_CSR_PRODUCT_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_EXPAND_ROW,
+        TIE_EXPAND_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TieExpandRowArgs>(),
+        TIE_EXPAND_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_FOLD_ROW,
+        TIE_FOLD_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TieFoldRowArgs>(),
+        TIE_FOLD_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_ZERO_ROW,
+        TIE_ZERO_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TieZeroRowArgs>(),
+        TIE_ZERO_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_CONSISTENCY_ROW,
+        TIE_CONSISTENCY_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TieConsistencyRowArgs>(),
+        TIE_CONSISTENCY_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_FINISH_ROW,
+        TIE_FINISH_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TieFinishRowArgs>(),
+        TIE_FINISH_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_PRECOND_ROW,
+        TIE_PRECOND_ROW_NAME,
+        // One thread per row, writing only its own row: every pass is a
+        // gather, and a held vertex is never a controller, so no thread
+        // reads a row another thread writes.
+        Scatter::Disjoint,
+        4.0,
+        size_of::<TiePrecondRowArgs>(),
+        TIE_PRECOND_ROW_HOST_REF_OFFSETS,
+    ),
+    decl_generated(
+        id::TIE_EDGE_BLOCK_ROW,
+        TIE_EDGE_BLOCK_ROW_NAME,
+        // One thread per Cosserat slot, writing only its own 27 floats.
+        Scatter::Disjoint,
+        8.0,
+        size_of::<TieEdgeBlockRowArgs>(),
+        TIE_EDGE_BLOCK_ROW_HOST_REF_OFFSETS,
     ),
     decl_generated_diag(
         id::TRANSLATION_LOCK_DRIFT_ROW,

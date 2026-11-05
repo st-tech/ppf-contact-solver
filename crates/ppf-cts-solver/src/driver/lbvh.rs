@@ -994,10 +994,13 @@ pub unsafe fn refresh_vertex_leaves<D: Device>(
 
 /// Re-merge every internal box from the leaves up.
 ///
-/// Levels run deepest first, ONE DISPATCH PER LEVEL, because the sequence of
-/// levels is the ordering that matters: a node's children must already carry
-/// their merged boxes. Within a level the nodes are distinct and their children
-/// sit strictly deeper, which is what makes the row `Scatter::Disjoint`.
+/// Levels run deepest first, ONE DISPATCH PER TWO LEVELS, because the sequence
+/// of levels is the ordering that matters: a node's children must already
+/// carry their merged boxes, and a fused dispatch forms its nodes' children
+/// itself from grandchildren an earlier dispatch merged. Within a level the
+/// nodes are distinct, each child has exactly one parent, and the grandchildren
+/// it reads sit strictly deeper than anything it writes, which is what keeps
+/// the row `Scatter::Disjoint`.
 ///
 /// # Safety
 /// As [`refresh_face_leaves`].
@@ -1018,8 +1021,26 @@ pub unsafe fn propagate<D: Device>(device: &mut D, tree: &mut Tree) -> FatalResu
     // `level_offset` IS A HOST ARRAY, not a readback, so nothing in this loop
     // asks the device anything: the bounds come from the level scan that ran
     // before it.
+    //
+    // TWO DEPTHS PER DISPATCH, AND NONE FOR THE DEEPEST. A dispatch over depth
+    // `d` with `fused` set also forms and writes the boxes of depth `d + 1`
+    // from depth `d + 2` (`aabb_merge_level`), which is the same call on the
+    // same operands the depth-`d + 1` dispatch made, so every box is the same
+    // bits and the refit costs half the dispatches. The deepest depth holds
+    // only leaves (a child is one deeper than its parent), so its dispatch
+    // returned on every thread and is not issued. Walking down from the
+    // deepest interior depth `levels - 2`, each fused dispatch sits one above
+    // the pair it covers; a single depth left over at the top is a plain one.
+    //
     device.run("lbvh.propagate", |encoder| {
-        for level in (0..levels).rev() {
+        let mut upper = levels as isize - 2;
+        while upper >= 0 {
+            let (level, fused) = if upper >= 1 {
+                ((upper - 1) as usize, 1u32)
+            } else {
+                (0usize, 0u32)
+            };
+            upper -= if fused != 0 { 2 } else { 1 };
             let begin = tree.level_offset[level] as usize;
             let end = tree.level_offset[level + 1] as usize;
             let size = end - begin;
@@ -1030,6 +1051,7 @@ pub unsafe fn propagate<D: Device>(device: &mut D, tree: &mut Tree) -> FatalResu
                 level: tree.level_data.span(begin, size),
                 nodes: tree.node.handle(),
                 aabb: tree.aabb.span(0, tree.aabb.len()),
+                fused,
                 count: size as u32,
                 seam_arena_count: 0,
             };
@@ -1895,6 +1917,129 @@ mod tests {
             "the fixture produced only the self-pairs, so it does not \
              discriminate; make the boxes overlap"
         );
+    }
+
+    /// The shipped walk's order, test at the pop (`walkPop` in the proof the
+    /// traversal cites), run on the host over the read-back tree.
+    fn pop_tested_walk(host: &TreeHost, root: usize, query: &Aabb) -> Vec<u32> {
+        let mut visits = Vec::new();
+        let mut stack = vec![root];
+        while let Some(index) = stack.pop() {
+            if !overlap(&host.aabb[index], query) {
+                continue;
+            }
+            let (first, second) = (host.node[2 * index], host.node[2 * index + 1]);
+            if second == 0 {
+                visits.push(first - 1);
+            } else {
+                stack.push(first as usize - 1);
+                stack.push(second as usize - 1);
+            }
+        }
+        visits
+    }
+
+    #[test]
+    fn the_walk_visits_what_the_pop_tested_walk_visits_in_its_order() {
+        // THE PUSH-TESTED WALK IS THE POP-TESTED ONE, ORDER INCLUDED: the
+        // shared body tests a child's box before pushing it, and the visitor
+        // must still be handed the same primitives in the same sequence,
+        // because a visitor that accumulates floats or keeps the first
+        // flagged overlap depends on the order and not only on the set.
+        // `query_pairs` lists each query's hits in visit order, so comparing it
+        // query by query against the host reference checks exactly that.
+        // Boxes of three sizes give leaves that pass, internal nodes that pass
+        // and fail, and queries that find nothing.
+        let n = 700usize;
+        let (cx, cy, cz) = cloud(n);
+        let boxes: Vec<Aabb> = (0..n)
+            .map(|i| box_about([cx[i], cy[i], cz[i]], [0.02f32, 0.3, 1.5][i % 3]))
+            .collect();
+        let queries: Vec<Aabb> = (0..n)
+            .map(|i| box_about([cy[i], cz[i] * 0.5, cx[i]], [0.05f32, 0.6, 0.01][i % 3]))
+            .collect();
+        let mut device = device();
+        let mut tree = tree_from_centroids(&mut device, &cx, &cy, &cz);
+        set_leaf_boxes(&mut device, &mut tree, &boxes);
+        let host = tree_host(&mut device, &mut tree);
+        let mut scratch = WalkScratch::default();
+        let mut qbuf = Buffer::<Aabb>::none();
+        let query = boxes_on_device(&mut device, &queries, &mut qbuf);
+        let pairs = query_pairs(&mut device, &mut tree, query, n, &mut scratch)
+            .expect("the traversal must not fault");
+        let mut walked: Vec<Vec<u32>> = vec![Vec::new(); n];
+        for pair in pairs.chunks(2) {
+            walked[pair[0] as usize].push(pair[1]);
+        }
+        let mut hits = 0usize;
+        for (q, box_q) in queries.iter().enumerate() {
+            let reference = pop_tested_walk(&host, tree.root as usize, box_q);
+            assert_eq!(
+                walked[q], reference,
+                "query {q}: the push-tested walk handed the visitor a different \
+                 sequence from the pop-tested walk"
+            );
+            hits += reference.len();
+        }
+        assert!(hits > n, "the fixture finds too few pairs to discriminate");
+    }
+
+    #[test]
+    fn the_fused_refit_is_the_per_level_refit_bit_for_bit() {
+        // TWO DEPTHS PER DISPATCH CHANGES NO BOX. `propagate` merges depth
+        // `d + 1` inside the depth-`d` dispatch and skips the deepest depth;
+        // the reference here is the shipped schedule, one unfused dispatch per
+        // depth from the deepest up, over the same leaves. Every box is
+        // compared bit for bit, the leaves' signed zeros included.
+        let mut device = device();
+        for n in [2usize, 3, 5, 64, 333, 1000] {
+            let (cx, cy, cz) = cloud(n);
+            let boxes: Vec<Aabb> = (0..n)
+                .map(|i| {
+                    let mut b = box_about([cx[i], cy[i], cz[i]], 0.25);
+                    if i % 7 == 0 {
+                        b.min[1] = -0.0;
+                        b.max[1] = 0.0;
+                    }
+                    b.active = i % 11 != 3;
+                    b
+                })
+                .collect();
+            let mut tree = tree_from_centroids(&mut device, &cx, &cy, &cz);
+            set_leaf_boxes(&mut device, &mut tree, &boxes);
+            let fused = tree_host(&mut device, &mut tree).aabb;
+            let levels = tree.level_offset.len() - 1;
+            unsafe {
+                device
+                    .run("test.per_level_refit", |encoder| {
+                        for level in (0..levels).rev() {
+                            let begin = tree.level_offset[level] as usize;
+                            let size = tree.level_offset[level + 1] as usize - begin;
+                            if size == 0 {
+                                continue;
+                            }
+                            let args = AabbMergeLevelArgs {
+                                level: tree.level_data.span(begin, size),
+                                nodes: tree.node.handle(),
+                                aabb: tree.aabb.span(0, tree.aabb.len()),
+                                fused: 0,
+                                count: size as u32,
+                                seam_arena_count: 0,
+                            };
+                            encoder.elements(&args, size as u32)?;
+                        }
+                        Ok(())
+                    })
+                    .expect("the per-level refit runs");
+            }
+            let per_level = tree_host(&mut device, &mut tree).aabb;
+            let bits = |b: &Aabb| {
+                (b.min.map(f32::to_bits), b.max.map(f32::to_bits), b.active)
+            };
+            for (node, (a, b)) in fused.iter().zip(&per_level).enumerate() {
+                assert_eq!(bits(a), bits(b), "n = {n}: node {node} differs");
+            }
+        }
     }
 
     #[test]

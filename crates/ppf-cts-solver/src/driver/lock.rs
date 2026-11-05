@@ -1035,6 +1035,7 @@ mod tests {
             },
             diagonal: diag_d.handle(),
             difference: None,
+            tie: None,
         };
 
         let rows = RowInputs {

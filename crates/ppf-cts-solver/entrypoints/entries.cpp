@@ -104,6 +104,8 @@
 // lane rather than a scatter: a block that is not positive definite is an
 // assembly defect upstream, so the host discards the whole dispatch on it.
 #include "solver/block_jacobi.entry.cpp"
+// Tie constraints: every pass a gather over its own row or Cosserat slot.
+#include "solver/tie.entry.cpp"
 #include "solver/translation_lock_check.entry.cpp"
 #include "solver/translation_lock_frames.entry.cpp"
 #include "solver/translation_lock_rows.entry.cpp"

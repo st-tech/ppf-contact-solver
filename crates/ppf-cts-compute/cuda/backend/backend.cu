@@ -205,6 +205,11 @@ struct BeRegion {
     // reasonable summary the moment a production pass began recording.
     std::string label;
     cudaGraphExec_t exec;
+    // THE CAPTURED BODY, kept so `be_replay` can build `unrolled` from it.
+    cudaGraph_t graph;
+    // `REPLAY_UNROLL` chained copies of the body, instantiated on the first
+    // replay that has that many repeats; see `be_replay`.
+    cudaGraphExec_t unrolled;
     // The re-issue form, kept when capture was refused or failed.
     std::vector<Item> items;
     unsigned dispatch_count;
@@ -1515,6 +1520,8 @@ extern "C" BeStatus be_encode_record(BeEncoder *enc, BeRegion **out,
     region->deferred = false;
     region->label = enc->region ? enc->region : "(unnamed)";
     region->exec = nullptr;
+    region->graph = nullptr;
+    region->unrolled = nullptr;
     region->dispatch_count = enc->dispatch_count;
     region->fill_count = enc->fill_count;
     region->allocator_generation = be->generation;
@@ -1526,10 +1533,12 @@ extern "C" BeStatus be_encode_record(BeEncoder *enc, BeRegion **out,
         if (code == cudaSuccess && graph) {
             cudaGraphExec_t exec = nullptr;
             code = cudaGraphInstantiate(&exec, graph, 0);
-            cudaGraphDestroy(graph);
             if (code == cudaSuccess) {
                 region->deferred = true;
                 region->exec = exec;
+                region->graph = graph;
+            } else {
+                cudaGraphDestroy(graph);
             }
         }
         if (!region->deferred) {
@@ -1594,6 +1603,46 @@ extern "C" void be_region_info(BeRegion *region, BeRegionInfo *out) {
     out->allocator_generation = region->allocator_generation;
 }
 
+// HOW MANY COPIES OF A RECORDED BODY ONE REPLAY LAUNCH CARRIES; see
+// `be_replay`. The PCG's batches run 4 to about 30 repeats.
+static constexpr uint32_t REPLAY_UNROLL = 8;
+
+// `copies` child copies of `body` appended to `chain`, each depending on the
+// one before. The node handle's type is the one `add` takes, deduced rather
+// than spelled.
+template <class Node>
+static cudaError_t chain_copies(cudaGraph_t chain, cudaGraph_t body, uint32_t copies,
+                                cudaError_t (*add)(Node *, cudaGraph_t, const Node *,
+                                                   size_t, cudaGraph_t)) {
+    cudaError_t code = cudaSuccess;
+    Node previous = nullptr;
+    for (uint32_t i = 0; i < copies && code == cudaSuccess; ++i) {
+        Node node = nullptr;
+        code = add(&node, chain, previous ? &previous : nullptr, previous ? 1 : 0, body);
+        previous = node;
+    }
+    return code;
+}
+
+// `REPLAY_UNROLL` child copies of the region's captured graph, each depending
+// on the one before, instantiated once and kept beside the single-copy exec.
+static cudaError_t build_unrolled(BeRegion *region) {
+    cudaGraph_t chain = nullptr;
+    cudaError_t code = cudaGraphCreate(&chain, 0);
+    if (code != cudaSuccess) {
+        return code;
+    }
+    code = chain_copies(chain, region->graph, REPLAY_UNROLL, cudaGraphAddChildGraphNode);
+    if (code == cudaSuccess) {
+        code = cudaGraphInstantiate(&region->unrolled, chain, 0);
+        if (code != cudaSuccess) {
+            region->unrolled = nullptr;
+        }
+    }
+    cudaGraphDestroy(chain);
+    return code;
+}
+
 extern "C" BeStatus be_replay(BeBackend *be, BeRegion *region,
                                    uint32_t repeats, BeDiagSummary *out_diag,
                                    BeError *err) {
@@ -1623,7 +1672,36 @@ extern "C" BeStatus be_replay(BeBackend *be, BeRegion *region,
     // reported the failure. The wait before the drain is what stops the read
     // racing repeats already on the stream, and it is allowed to fail, since a
     // poisoned context still leaves the mapped pages readable.
-    for (uint32_t i = 0; i < repeats; ++i) {
+    //
+    // A RECORDED BODY GOES OUT `REPLAY_UNROLL` COPIES AT A TIME. Each graph
+    // launch costs the GPU an idle gap at its boundary (measured about 2.4 us
+    // after the PCG iteration's last kernel, against 0.1 us between kernels
+    // inside one launch), so the repeats are issued as launches of a graph of
+    // `REPLAY_UNROLL` chained copies of the body while that many remain, and
+    // the rest one copy at a time. Launches on the one stream run in order and
+    // the copies depend on each other in order, so the body still runs exactly
+    // `repeats` times back to back.
+    //
+    uint32_t remaining = repeats;
+    if (region->deferred && repeats >= REPLAY_UNROLL) {
+        if (!region->unrolled) {
+            const cudaError_t code = build_unrolled(region);
+            if (code != cudaSuccess) {
+                return fault(be, err, code, "the unrolled replay graph");
+            }
+        }
+        while (remaining >= REPLAY_UNROLL) {
+            const cudaError_t code = cudaGraphLaunch(region->unrolled, be->queue);
+            if (code != cudaSuccess) {
+                const BeStatus failed = fault(be, err, code, "cudaGraphLaunch");
+                cudaStreamSynchronize(be->queue);
+                drain_diag(be, out_diag);
+                return failed;
+            }
+            remaining -= REPLAY_UNROLL;
+        }
+    }
+    for (uint32_t i = 0; i < remaining; ++i) {
         if (region->deferred) {
             const cudaError_t code = cudaGraphLaunch(region->exec, be->queue);
             if (code != cudaSuccess) {
@@ -1683,6 +1761,12 @@ extern "C" void be_region_release(BeBackend *, BeRegion *region) {
     }
     if (region->exec) {
         cudaGraphExecDestroy(region->exec);
+    }
+    if (region->unrolled) {
+        cudaGraphExecDestroy(region->unrolled);
+    }
+    if (region->graph) {
+        cudaGraphDestroy(region->graph);
     }
     delete region;
 }

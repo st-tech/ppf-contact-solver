@@ -2333,6 +2333,7 @@ mod tests {
                 fixed: resident.view(),
                 diagonal,
                 difference: None,
+                tie: None,
             }
         }
     }
@@ -4438,6 +4439,11 @@ pub unsafe fn solve_cosserat<D: Device>(
     x: ppf_cts_compute::Handle,
     work: &mut Workspace,
     aug: &mut CosseratWorkspace,
+    // The tie state's augmented scratch, when the operator carries ties.
+    tie_scratch: Option<(&Buffer<f32>, &Buffer<f32>)>,
+    // With ties, the position half of each edge's Schwarz block, which the
+    // factor reads in place of the vertex diagonal and the fixed coupling.
+    tie_edge_block: Option<ppf_cts_compute::Handle>,
     tolerance: f32,
     max_iterations: u32,
     friction: Option<super::friction_memory::FrameCoupling>,
@@ -4498,16 +4504,50 @@ pub unsafe fn solve_cosserat<D: Device>(
         Ok(())
     };
 
+    // THE TIES WRAP THE WHOLE AUGMENTED APPLY, not the vertex operator alone:
+    // the frames' couplings and the framed friction read the vertex rows of
+    // the same input and write into the vertex rows of the same output, so a
+    // held vertex's row must be expanded before they read it and folded after
+    // they write it. The vertex operator is therefore taken without its own
+    // wrap here, and the expand and the fold run once around the composition,
+    // into the tie state's augmented scratch.
+    let inner = op.without_tie();
+    let wrap = match (op.tie, tie_scratch) {
+        (Some(view), Some((expanded, unfolded))) => Some((view, expanded, unfolded)),
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(super::scene::Fatal::invariant(
+                "solver driver: the scene carries ties and Cosserat frames, and the augmented \
+                 solve was given no scratch to expand into"
+                    .to_string(),
+            ));
+        }
+    };
+
     // y = K u: the vertex operator on the vertex rows, then the frames' rows
     // and their share of the vertex rows, then the bend couplings.
     let apply = |device: &mut D,
                  input: &Buffer<f32>,
                  output: &Buffer<f32>|
      -> Result<(), Fault> {
-        op.apply(
+        // With ties: `src = E input` (the frame rows copied unchanged) and the
+        // composition writes `dst`, which is folded into `output` afterwards.
+        let (src, dst) = match wrap {
+            Some((view, expanded, unfolded)) => {
+                let (source, target) = (input.handle(), expanded.handle());
+                device.run("tie.cosserat.expand", |encoder| {
+                    // Safety: both buffers hold the augmented length.
+                    unsafe { view.encode_expand(encoder, source, target) }
+                })?;
+                device.copy(target, nx * width, source, nx * width, nt * width)?;
+                (expanded, unfolded)
+            }
+            None => (input, output),
+        };
+        inner.apply(
             device,
-            input.span(0, nx),
-            output.span(0, nx),
+            src.span(0, nx),
+            dst.span(0, nx),
             apply_absolute,
             discard_curvature,
         )?;
@@ -4518,9 +4558,9 @@ pub unsafe fn solve_cosserat<D: Device>(
             self_block: frames.self_block,
             coupling_from: frames.coupling_from,
             coupling_to: frames.coupling_to,
-            input: input.handle(),
-            output: output.handle(),
-            output_atomic: output.handle(),
+            input: src.handle(),
+            output: dst.handle(),
+            output_atomic: dst.handle(),
             theta_base,
             count: slots,
             seam_arena_count: 0,
@@ -4530,8 +4570,8 @@ pub unsafe fn solve_cosserat<D: Device>(
             let site_args = CosseratApplySiteRowArgs {
                 bend_slots: frames.bend_slots,
                 site_block: frames.site_block,
-                input: input.handle(),
-                output: output.handle(),
+                input: src.handle(),
+                output: dst.handle(),
                 theta_base,
                 count: frames.sites,
                 seam_arena_count: 0,
@@ -4550,14 +4590,22 @@ pub unsafe fn solve_cosserat<D: Device>(
                 record_capacity: f.capacity,
                 frozen_stiffness: f.frozen_stiffness,
                 dof_mask: f.dof_mask,
-                input: input.handle(),
-                output: output.handle(),
+                input: src.handle(),
+                output: dst.handle(),
                 absolute: apply_absolute,
                 theta_base,
                 count: f.capacity,
                 seam_arena_count: 0,
             };
             device.launch("friction_frame.apply", &friction_args, f.capacity)?;
+        }
+        if let Some((view, _, unfolded)) = wrap {
+            let (source, target) = (unfolded.handle(), output.handle());
+            device.run("tie.cosserat.fold", |encoder| {
+                // Safety: both buffers hold the augmented length.
+                unsafe { view.encode_fold(encoder, source, target) }
+            })?;
+            device.copy(target, nx * width, source, nx * width, nt * width)?;
         }
         project(device, output.handle())
     };
@@ -4619,6 +4667,17 @@ pub unsafe fn solve_cosserat<D: Device>(
             seam_arena_count: 0,
         };
         device.launch("cosserat.cg.chain_add", &add, frames.chains)?;
+        // THE EDGE BLOCKS MIX ROWS, so a held vertex's row can come out
+        // nonzero from its neighbors' residuals; zeroing it keeps the
+        // preconditioned residual on the subspace the ties leave free, which
+        // is `Pi M^-1 Pi`, SPD there as a principal block of an SPD inverse.
+        if let Some((view, _, _)) = wrap {
+            let target = out.handle();
+            device.run("tie.cosserat.zero", |encoder| {
+                // Safety: the buffer holds the augmented length.
+                unsafe { view.encode_zero(encoder, target) }
+            })?;
+        }
         project(device, out.handle())
     };
 
@@ -4719,6 +4778,10 @@ pub unsafe fn solve_cosserat<D: Device>(
         site_self: frames.site_self,
         coupling_from: frames.coupling_from,
         coupling_to: frames.coupling_to,
+        // With ties, the edge's reduced position blocks; without, a handle the
+        // factor never reads, which `use_edge_block` says.
+        edge_block: tie_edge_block.unwrap_or(frames.coupling_to),
+        use_edge_block: u32::from(tie_edge_block.is_some()),
         factor: frames.factor,
         count: slots,
         seam_arena_count: 0,

@@ -444,10 +444,43 @@ template <class T>
 // A LEAF AMONG THE LEVEL IS LEFT ALONE, which is what the zero second child
 // means, and the caller relies on it: the leaf boxes were written by the leaf
 // pass and merging them again would bound them by themselves.
+//
+// A CHILD'S BOX, merged here first when `fused` asks for it: an interior child
+// is formed from ITS children and written, exactly as the dispatch one level
+// deeper would have formed and written it, and a leaf child keeps its own box.
+// The value is returned so the parent merges the register, not a reread.
+[[seam::device_fn]] inline AABB aabb_merge_child(
+    const unsigned *nodes, AABB *aabb, unsigned child, unsigned fused) {
+    if (fused == 0u) {
+        const AABB own = aabb[child];
+        return own;
+    }
+    const unsigned grand_second = nodes[2 * child + 1];
+    if (grand_second == 0u) {
+        const AABB own = aabb[child];
+        return own;
+    }
+    const AABB left_box = aabb[nodes[2 * child] - 1u];
+    const AABB right_box = aabb[grand_second - 1u];
+    const AABB merged = aabb_merge_active(left_box, right_box);
+    aabb[child] = merged;
+    return merged;
+}
+
+// TWO DEPTHS PER DISPATCH when `fused` is set. A thread of depth `d` forms
+// each interior child's box from the grandchildren (depth `d + 2`, merged by
+// an earlier dispatch), writes it, and merges the two into its own, so one
+// dispatch does the work of the depth-`d + 1` and depth-`d` passes. Every
+// node is still formed by the same `aabb_merge_active` call on the same two
+// operand values, so every box is the same bits whatever the merge does with
+// signed zeros; and every depth-`d + 1` node has exactly one parent, at depth
+// `d`, so each is written by one thread and the row stays `Disjoint`.
+//
 [[seam::entry(element)]]
 [[seam::device_fn]] inline void aabb_merge_level(
     const unsigned *level,
     const unsigned *nodes, AABB *aabb,
+    unsigned fused,
     unsigned element) {
     const unsigned node = level[element];
     const unsigned second = nodes[2 * node + 1];
@@ -462,7 +495,7 @@ template <class T>
     // exactly as evaluating them as arguments did, and a level's children sit
     // strictly deeper than its own nodes, so neither is the box this thread
     // writes.
-    const AABB left_box = aabb[left];
-    const AABB right_box = aabb[second - 1u];
+    const AABB left_box = aabb_merge_child(nodes, aabb, left, fused);
+    const AABB right_box = aabb_merge_child(nodes, aabb, second - 1u, fused);
     aabb[node] = aabb_merge_active(left_box, right_box);
 }

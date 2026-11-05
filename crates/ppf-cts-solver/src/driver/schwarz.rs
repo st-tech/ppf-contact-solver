@@ -2613,6 +2613,7 @@ mod gather_tests {
             },
             diagonal: dg.handle(),
             difference: None,
+            tie: None,
         };
         // The apply's magnitude sum, which this test does not read.
         let mut absolute: ppf_cts_compute::Buffer<f32> = Default::default();
@@ -2896,6 +2897,7 @@ mod level0_tests {
             },
             diagonal: dg.handle(),
             difference: None,
+            tie: None,
         };
         // The apply's magnitude sum, which this test does not read.
         let mut absolute: ppf_cts_compute::Buffer<f32> = Default::default();

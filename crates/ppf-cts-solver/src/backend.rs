@@ -724,6 +724,56 @@ impl Backend {
             );
         }
 
+        // A TIE-HELD VERTEX FOLLOWS ITS CONTROLLERS' OUTPUTS, for the reason a
+        // pin is placed exactly above. When a controller is placed on its
+        // exact path at t_frame and the held vertex is lerped between the two
+        // steps, the two are drawn on different curves: the chord of a turning
+        // pin misses its arc by up to r * theta^2 / 8, and the held vertex
+        // would appear off its tie by that much at every frame that falls
+        // inside a step, though the solver holds it to round-off at every step.
+        // So the held vertex is written as the combination of its controllers'
+        // outputs plus the lerp of its own residual off the tie, which is the
+        // round-off the solver leaves; with no pinned controller this is the
+        // plain lerp, since a lerp of an affine combination is the combination
+        // of the lerps. A controller is never itself held, so every output read
+        // here is final.
+        {
+            // Safety: the scene arrays live as long as `dataset`.
+            let held: &[u32] = unsafe { crate::driver::tie::scene_slice(&dataset.tie_vertex) };
+            let ctrl: &[u32] = unsafe { crate::driver::tie::scene_slice(&dataset.tie_ctrl) };
+            let weight: &[f32] = unsafe { crate::driver::tie::scene_slice(&dataset.tie_weight) };
+            let slots = crate::driver::tie::TIE_SLOTS;
+            for (tie, &t) in held.iter().enumerate() {
+                let t = t as usize;
+                let p = self.state.prev_vertex.column(t);
+                let c = self.state.curr_vertex.column(t);
+                let mut combined = [0.0f64; 3];
+                let mut residual_prev = [0.0f64; 3];
+                let mut residual_curr = [0.0f64; 3];
+                for slot in 0..slots {
+                    let w = weight[slots * tie + slot];
+                    if w == 0.0 {
+                        continue;
+                    }
+                    let g = ctrl[slots * tie + slot] as usize;
+                    let pg = self.state.prev_vertex.column(g);
+                    let cg = self.state.curr_vertex.column(g);
+                    for k in 0..3 {
+                        combined[k] += f64::from(w) * output_positions[g][k];
+                        residual_prev[k] += f64::from(w) * (f64::from(p[k]) - f64::from(pg[k]));
+                        residual_curr[k] += f64::from(w) * (f64::from(c[k]) - f64::from(cg[k]));
+                    }
+                }
+                for k in 0..3 {
+                    let residual = residual_prev[k]
+                        + f64::from(alpha) * (residual_curr[k] - residual_prev[k]);
+                    let value = combined[k] + residual * f64::from(inv_world);
+                    output_positions[t][k] = value;
+                    outputs[t][k] = value as f32;
+                }
+            }
+        }
+
         // Write visible vertices in chunks; the exact full pose is retained for
         // solver-side object statistics. Interior SOLID vertices are not
         // written to PC2, but volume analysis needs them.

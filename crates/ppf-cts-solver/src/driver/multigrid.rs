@@ -1000,6 +1000,7 @@ mod tests {
             },
             diagonal: diagonal.handle(),
             difference: None,
+            tie: None,
         };
         operator.precond_diagonal(device, block_diagonal.handle()).unwrap();
         let block_diagonal_handle = block_diagonal.handle();

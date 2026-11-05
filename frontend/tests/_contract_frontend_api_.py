@@ -79,6 +79,7 @@ EXPECTED_PUBLIC_NAMES = {
     "fetch_asset",
     "get_cache_dir",
     "sdf",
+    "tie_weights",
     "list_backends",
     "probe_backend",
     "set_backend",

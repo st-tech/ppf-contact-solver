@@ -1438,4 +1438,11 @@ pub struct DataSet {
     /// is corrected by along and across the rest rotation's axis
     /// (`crate::cosserat::rest_metric`).
     pub cosserat_rest_metric: CVec<f32>,
+    /// Tie constraints (`driver/tie.rs`): per tie, the held vertex; per tie,
+    /// `TIE_SLOTS` controller vertices and their affine weights, a shorter tie
+    /// padded with weight zero. Every array is empty when the scene has no
+    /// tie. Mirrors the tail of the C++ `DataSet` in `data.hpp`.
+    pub tie_vertex: CVec<u32>,
+    pub tie_ctrl: CVec<u32>,
+    pub tie_weight: CVec<f32>,
 }

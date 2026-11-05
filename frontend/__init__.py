@@ -682,6 +682,7 @@ __all__ = [
     "Utils",
     "BlenderApp",
     "sdf",
+    "tie_weights",
     "list_backends",
     "probe_backend",
     "set_backend",
@@ -715,6 +716,7 @@ from ._scene_ import (
 # ``frontend._scene_fixed_`` class path, so alias the old module name to
 # ``_scene_`` and let those pickles keep unpickling.
 _sys.modules.setdefault(f"{__name__}._scene_fixed_", _sys.modules[f"{__name__}._scene_"])
+from ._tie_ import tie_weights
 from ._session_ import (
     FixedSession,
     ParamManager,

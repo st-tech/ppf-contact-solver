@@ -318,6 +318,42 @@ pub fn scene_refusals(data: &DataSet, param: &ParamSet) -> Vec<Refusal> {
         }
     }
 
+    // TIES COMPOSE WITH THE PLAIN BLOCK-JACOBI SOLVE AND THE COSSERAT SOLVE
+    // ONLY, and every other combination is refused by name rather than run
+    // through an operator that does not carry the wrap. The PDRD reduced solve
+    // and the projected lock define their own operator over the vertex rows,
+    // and the Schwarz and multigrid hierarchies are built from the unreduced
+    // matrices, so taking any of them would solve a system in which a held
+    // vertex is free.
+    let ties = data.tie_vertex.size as u64;
+    if ties > 0 {
+        if bodies > 0 {
+            out.push(Refusal {
+                feature: "PDRD rigid bodies in a scene with tie constraints, whose reduced \
+                          solve has no tie form",
+                count: bodies,
+                unit: "bodies",
+            });
+        }
+        if lock_groups > 0 {
+            out.push(Refusal {
+                feature: "projected translation or rotation locks in a scene with tie \
+                          constraints, whose projected solve has no tie form",
+                count: lock_groups,
+                unit: "lock groups",
+            });
+        }
+        if param.precond == PrecondMode::Schwarz || param.precond == PrecondMode::Multigrid {
+            out.push(Refusal {
+                feature: "the Schwarz or multigrid preconditioner in a scene with tie \
+                          constraints, whose hierarchy is built over the unreduced vertex \
+                          rows; use precond = block-jacobi",
+                count: ties,
+                unit: "ties",
+            });
+        }
+    }
+
     out
 }
 

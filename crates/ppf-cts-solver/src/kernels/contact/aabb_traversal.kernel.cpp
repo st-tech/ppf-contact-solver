@@ -55,19 +55,27 @@ template <typename F, typename T, typename D>
     if (root >= node_count) {
         return 0;
     }
+    // EVERY NODE ON THE STACK HAS ALREADY PASSED ITS BOX TEST. A child is
+    // tested when its parent is expanded, before it is pushed, rather than
+    // after it is popped, so a rejected child costs its box load and nothing
+    // else: no stack store, no loop turn, no stack load. Both children's boxes
+    // are loaded together.
+    //
+    // THE VISITOR IS HANDED THE SAME PRIMITIVES IN THE SAME ORDER. Every
+    // visitor's `test` is `aabb_overlap(box, q)`, a pure function of the
+    // node's box and the query, so when it runs cannot change its answer; the
+    // accepted children are pushed in the shipped order (`first`, then
+    // `second`), and the stack holds exactly the accepted subset of what the
+    // test-at-pop walk held at the same point, so it is never deeper and the
+    // overflow guard below cannot fire where it did not.
+    //
+    const AABB root_box = aabb[root];
+    if (!op.test(root_box, query)) {
+        return 0;
+    }
     stack[head++] = root;
     while (head) {
         const unsigned index = stack[--head];
-        DIAG_ASSERT4(diag, index < node_count, static_cast<float>(index),
-                    static_cast<float>(node_count), static_cast<float>(root),
-                    static_cast<float>(head));
-        if (index >= node_count) {
-            break;
-        }
-        const AABB box = aabb[index];
-        if (!op.test(box, query)) {
-            continue;
-        }
         const unsigned first = node[2 * index];
         const unsigned second = node[2 * index + 1];
         if (second == 0) {
@@ -90,8 +98,24 @@ template <typename F, typename T, typename D>
             if (first == 0 || second == 0) {
                 break;
             }
-            stack[head++] = first - 1;
-            stack[head++] = second - 1;
+            // A CHILD INDEX IS DATA, so it is bounds-checked before its box
+            // is read, where the walk used to check it after the pop.
+            DIAG_ASSERT4(diag, first - 1 < node_count && second - 1 < node_count,
+                        static_cast<float>(first - 1),
+                        static_cast<float>(second - 1),
+                        static_cast<float>(node_count),
+                        static_cast<float>(index));
+            if (first - 1 >= node_count || second - 1 >= node_count) {
+                break;
+            }
+            const AABB first_box = aabb[first - 1];
+            const AABB second_box = aabb[second - 1];
+            if (op.test(first_box, query)) {
+                stack[head++] = first - 1;
+            }
+            if (op.test(second_box, query)) {
+                stack[head++] = second - 1;
+            }
         }
     }
     return count;

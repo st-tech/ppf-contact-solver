@@ -85,6 +85,13 @@ pub struct Scene {
     /// set; a stitch without one derives its rest length from contact gaps.
     stitch_rest_length: Vec<f32>,
     stitch_has_rest_length: Vec<bool>,
+    /// Tie constraints, one held vertex per tie and `TIE_SLOTS` controllers
+    /// and affine weights per tie, read from `tie_vertex.bin`, `tie_ind.bin`
+    /// and `tie_w.bin`, all three written or none. Empty when the scene has
+    /// no tie. `driver::tie` validates them at `initialize()`.
+    tie_vertex: Vec<u32>,
+    tie_ind: Vec<u32>,
+    tie_w: Vec<f32>,
     pin: Vec<Pin>,
     display_pin: Vec<DisplayPin>,
     wall: Vec<InvisibleWall>,
@@ -1836,6 +1843,32 @@ impl Scene {
         assert_eq!(stitch_rest_length_vec.len(), n_stitch);
         assert_eq!(stitch_has_rest_length_vec.len(), n_stitch);
 
+        // Tie constraints: three files written together or not at all.
+        let (tie_vertex_vec, tie_ind_vec, tie_w_vec) = {
+            let vertex = read_vec::<u32>(&format!("{}/bin/tie_vertex.bin", args.path));
+            let ind = read_vec::<u32>(&format!("{}/bin/tie_ind.bin", args.path));
+            let w = read_vec::<f32>(&format!("{}/bin/tie_w.bin", args.path));
+            match (vertex, ind, w) {
+                (Ok(vertex), Ok(ind), Ok(w)) => {
+                    let slots = crate::driver::tie::TIE_SLOTS;
+                    assert!(
+                        ind.len() == slots * vertex.len() && w.len() == slots * vertex.len(),
+                        "tie_ind.bin and tie_w.bin hold {} and {} entries for {} ties; \
+                         each tie carries {slots} controller slots",
+                        ind.len(),
+                        w.len(),
+                        vertex.len()
+                    );
+                    (vertex, ind, w)
+                }
+                (Err(_), Err(_), Err(_)) => (Vec::new(), Vec::new(), Vec::new()),
+                _ => panic!(
+                    "the tie files are written as a set, and only some of tie_vertex.bin, \
+                     tie_ind.bin and tie_w.bin are present"
+                ),
+            }
+        };
+
         let args_path = format!("{}/param.toml", args.path);
         let file_content = fs::read_to_string(args_path).unwrap();
         let config: Config = toml::from_str(&file_content).unwrap();
@@ -2075,6 +2108,9 @@ impl Scene {
             stitch_stiffness: stitch_stiffness_vec,
             stitch_rest_length: stitch_rest_length_vec,
             stitch_has_rest_length: stitch_has_rest_length_vec,
+            tie_vertex: tie_vertex_vec,
+            tie_ind: tie_ind_vec,
+            tie_w: tie_w_vec,
             pin,
             display_pin,
             wall,
@@ -3687,6 +3723,11 @@ impl Scene {
     /// (x, y, z). Length 3 * pdrd_vert_list.len().
     pub fn pdrd_rest_centered(&self) -> &[f32] {
         &self.pdrd_rest_centered
+    }
+
+    /// The tie constraints: held vertices, controller slots and weights.
+    pub fn ties(&self) -> (&[u32], &[u32], &[f32]) {
+        (&self.tie_vertex, &self.tie_ind, &self.tie_w)
     }
 
     pub fn cosserat_edge(&self) -> &[u8] {

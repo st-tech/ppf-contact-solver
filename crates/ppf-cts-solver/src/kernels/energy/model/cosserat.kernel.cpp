@@ -983,6 +983,8 @@ cosserat_inertia_grad_hess(const Mat3x3f &m0, Vec3f &gradient, Mat3x3f &hessian)
     const float *site_self,
     const float *coupling_from,
     const float *coupling_to,
+    const float *edge_block,
+    unsigned use_edge_block,
     float *factor,
     DiagHandle diag,
     unsigned slot) {
@@ -991,19 +993,39 @@ cosserat_inertia_grad_hess(const Mat3x3f &m0, Vec3f &gradient, Mat3x3f &hessian)
     for (unsigned e = 0; e < 81u; ++e) {
         k[e] = 0.0f;
     }
-    // Column-major 3x3 blocks into the row-major 9x9 `k[9 * row + column]`.
-    for (unsigned i = 0; i < 3u; ++i) {
-        for (unsigned j = 0; j < 3u; ++j) {
-            k[9u * i + j] = vertex_diagonal[9u * nodes[0] + i + 3u * j];
-            k[9u * (3u + i) + 3u + j] = vertex_diagonal[9u * nodes[1] + i + 3u * j];
+    // THE POSITION HALF OF THE BLOCK COMES FROM ONE OF TWO PLACES. Without tie
+    // constraints it is the two vertices' diagonal blocks and the fixed
+    // matrix's coupling between them. With ties it is the edge's own three
+    // blocks a tie pass wrote (`solver/tie.kernel.cpp`, `tie_edge_block_row`),
+    // so the block is a principal submatrix of the REDUCED operator, whose
+    // diagonal the vertex blocks then hold: pairing that diagonal with the
+    // unreduced coupling gives a block that is not positive definite, and the
+    // floored factor below would turn that into an overflow.
+    if (use_edge_block != 0u) {
+        for (unsigned i = 0; i < 3u; ++i) {
+            for (unsigned j = 0; j < 3u; ++j) {
+                k[9u * i + j] = edge_block[27u * slot + i + 3u * j];
+                k[9u * (3u + i) + 3u + j] = edge_block[27u * slot + 9u + i + 3u * j];
+                const float coupled = edge_block[27u * slot + 18u + i + 3u * j];
+                k[9u * i + 3u + j] = coupled;
+                k[9u * (3u + j) + i] = coupled;
+            }
         }
-    }
-    const Mat3x3f between = fixed_csr_read(fixed_index, fixed_offset, fixed_value,
-                                           row_count, nodes[0], nodes[1]);
-    for (unsigned i = 0; i < 3u; ++i) {
-        for (unsigned j = 0; j < 3u; ++j) {
-            k[9u * i + 3u + j] = between(i, j);
-            k[9u * (3u + j) + i] = between(i, j);
+    } else {
+        // Column-major 3x3 blocks into the row-major 9x9 `k[9 * row + column]`.
+        for (unsigned i = 0; i < 3u; ++i) {
+            for (unsigned j = 0; j < 3u; ++j) {
+                k[9u * i + j] = vertex_diagonal[9u * nodes[0] + i + 3u * j];
+                k[9u * (3u + i) + 3u + j] = vertex_diagonal[9u * nodes[1] + i + 3u * j];
+            }
+        }
+        const Mat3x3f between = fixed_csr_read(fixed_index, fixed_offset, fixed_value,
+                                               row_count, nodes[0], nodes[1]);
+        for (unsigned i = 0; i < 3u; ++i) {
+            for (unsigned j = 0; j < 3u; ++j) {
+                k[9u * i + 3u + j] = between(i, j);
+                k[9u * (3u + j) + i] = between(i, j);
+            }
         }
     }
     if (held[slot] != 0u) {

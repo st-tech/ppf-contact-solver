@@ -139,6 +139,9 @@ def stitch_endpoint_distance(
     return distance
 
 
+# Controller slots per tie, the solver's `driver::tie::TIE_SLOTS`.
+TIE_SLOTS = 8
+
 # How a stitch row's rest length is decided, as the scene build carries it from
 # `Scene.cross_stitch` and `Object.stitch` to `FixedScene.set_stitch`.
 _STITCH_REST_DERIVED = 0  # half the mean contact gap of the six vertices
@@ -498,6 +501,9 @@ class FixedScene:
         self._stitch_stiffness = np.zeros(0)
         self._stitch_rest_length = np.zeros(0, dtype=np.float32)
         self._stitch_has_rest_length = np.zeros(0, dtype=bool)
+        self._tie_vertex = np.zeros(0, dtype=np.uint32)
+        self._tie_ind = np.zeros((0, TIE_SLOTS), dtype=np.uint32)
+        self._tie_w = np.zeros((0, TIE_SLOTS), dtype=np.float32)
         self._static_param = {}
         self._static_transform_animations: list[tuple[int, TransformAnimation]] = []
         self._wall = wall
@@ -1670,6 +1676,20 @@ class FixedScene:
                 has_rest.astype(np.uint8).tofile(
                     os.path.join(bin_path, "stitch_has_rest_length.bin")
                 )
+        # Tie constraints: three files written together, and none without a tie,
+        # so every scene without one writes exactly the files it always did. A
+        # FixedScene pickled before ties existed carries no tie fields.
+        tie_vertex = getattr(self, "_tie_vertex", np.zeros(0, dtype=np.uint32))
+        if len(tie_vertex):
+            np.asarray(tie_vertex, dtype=np.uint32).tofile(
+                os.path.join(bin_path, "tie_vertex.bin")
+            )
+            np.asarray(self._tie_ind, dtype=np.uint32).tofile(
+                os.path.join(bin_path, "tie_ind.bin")
+            )
+            np.asarray(self._tie_w, dtype=np.float32).tofile(
+                os.path.join(bin_path, "tie_w.bin")
+            )
         pbar.update(1)
 
         def write_pin_bins(section: str, i: int, pin: PinData) -> None:
@@ -1901,6 +1921,28 @@ class FixedScene:
                 f"but the static mesh has {len(vert[1])} vertices"
             )
             self._invisible_static_vert = invisible
+
+    def set_tie(self, vertex, ind, w) -> "FixedScene":
+        """Set the tie constraints in solver vertex indices.
+
+        Typically invoked by :meth:`Scene.build` from :meth:`Scene.tie`.
+
+        Args:
+            vertex: ``(N,)`` held solver vertices.
+            ind: ``(N, 8)`` controller solver vertices.
+            w: ``(N, 8)`` affine weights, each row summing to one, zero in an
+                unused slot.
+        """
+        vertex = np.ascontiguousarray(vertex, dtype=np.uint32)
+        ind = np.ascontiguousarray(ind, dtype=np.uint32).reshape(-1, TIE_SLOTS)
+        w = np.ascontiguousarray(w, dtype=np.float32).reshape(-1, TIE_SLOTS)
+        if ind.shape[0] != len(vertex) or w.shape[0] != len(vertex):
+            raise ValueError(
+                f"{len(vertex)} held vertices but {ind.shape[0]} controller rows and "
+                f"{w.shape[0]} weight rows"
+            )
+        self._tie_vertex, self._tie_ind, self._tie_w = vertex, ind, w
+        return self
 
     def set_stitch(
         self,
@@ -2591,6 +2633,8 @@ class Scene:
         self._wall: list[Wall] = []
         self._surface_map_by_name: dict[str, tuple] = {}
         self._cross_stitch: list[dict] = []
+        # Tie constraints, one dict per Scene.tie call.
+        self._tie: list[dict] = []
         # Keyframe times shared by every animated material in this scene.
         # Empty means no object animates a material, which writes no
         # bin/param_anim and leaves the solver on its build-time tables.
@@ -2932,6 +2976,183 @@ class Scene:
         )
         return self
 
+    def tie(
+        self,
+        source: str,
+        vertex,
+        targets,
+        ind,
+        w,
+        target_of=None,
+    ) -> "Scene":
+        """Hold vertices of one object exactly on affine combinations of others.
+
+        Each held vertex ``source[vertex[k]]`` is constrained to
+        ``sum_i w[k, i] * x(target_of[k, i], ind[k, i])``, with each row of
+        ``w`` summing to one. The held vertex owns no degree of freedom: it
+        moves exactly with its controllers, its mass and forces act on them,
+        and no stiffness is involved. Weights may lie outside ``[0, 1]``,
+        which is how a point above a surface or a yarn layer is reached; use
+        :func:`frontend.tie_weights` to compute least-norm weights over nearby
+        vertices. Contact between the held vertex and everything else,
+        its controllers included, stays on.
+
+        A held vertex may not be pinned and may not control another tie, and
+        a scene with ties is solved with the block-Jacobi preconditioner
+        (Cosserat rods are supported; PDRD bodies and Lock Translation or
+        Rotation are refused beside ties).
+
+        Args:
+            source (str): Reference name of the object whose vertices are held.
+            vertex: ``(N,)`` held vertices, local to ``source``.
+            targets (str or list[str]): The controller objects.
+            ind: ``(N, K)`` controller vertices, ``K <= 8``, each local to its
+                target object.
+            w: ``(N, K)`` affine weights, each row summing to one. A zero
+                weight leaves its slot unused.
+            target_of: ``(N, K)`` index into ``targets`` per slot; omitted
+                when ``targets`` names one object.
+
+        Returns:
+            Scene: This scene, for chaining.
+
+        Raises:
+            ValueError: On a malformed row, an out-of-range index, a row whose
+                weights do not sum to one, or a vertex held twice.
+
+        Example:
+            Hold a floss vertex at a combination of four ground vertices::
+
+                scene.tie("floss", [10], "ground", [[3, 4, 9, 10]],
+                          [[0.4, 0.3, -0.2, 0.5]])
+        """
+        if isinstance(targets, str):
+            targets = [targets]
+        targets = list(targets)
+        for name in [source, *targets]:
+            obj = self.select(name)
+            if obj.obj_type not in ("tri", "tet", "rod"):
+                raise ValueError(
+                    f"tie object '{self._label(name, obj)}' is a "
+                    f"'{obj.obj_type}' object; a tie holds the vertices of a "
+                    "surface, a tetrahedral mesh or a rod"
+                )
+        vertex_arr = np.asarray(vertex)
+        ind_arr = np.asarray(ind)
+        w_arr = np.asarray(w, dtype=np.float64)
+        if vertex_arr.ndim != 1 or len(vertex_arr) == 0:
+            raise ValueError(f"tie vertex must be (N,) with N > 0, got {vertex_arr.shape}")
+        n = len(vertex_arr)
+        if ind_arr.ndim != 2 or ind_arr.shape[0] != n or not 1 <= ind_arr.shape[1] <= TIE_SLOTS:
+            raise ValueError(
+                f"tie ind must be (N, K) with N = {n} and 1 <= K <= {TIE_SLOTS}, got "
+                f"{ind_arr.shape}"
+            )
+        if w_arr.shape != ind_arr.shape:
+            raise ValueError(f"tie w has shape {w_arr.shape} but ind has {ind_arr.shape}")
+        if not np.issubdtype(ind_arr.dtype, np.integer) or not np.issubdtype(
+            vertex_arr.dtype, np.integer
+        ):
+            raise ValueError("tie vertex and ind must hold integers")
+        if target_of is None:
+            if len(targets) != 1:
+                raise ValueError(
+                    "tie target_of is required when targets names more than one object"
+                )
+            target_of_arr = np.zeros(ind_arr.shape, dtype=np.int64)
+        else:
+            target_of_arr = np.asarray(target_of, dtype=np.int64)
+            if target_of_arr.shape != ind_arr.shape:
+                raise ValueError(
+                    f"tie target_of has shape {target_of_arr.shape} but ind has "
+                    f"{ind_arr.shape}"
+                )
+            if target_of_arr.min() < 0 or target_of_arr.max() >= len(targets):
+                raise ValueError(
+                    f"tie target_of spans [{int(target_of_arr.min())}, "
+                    f"{int(target_of_arr.max())}] but {len(targets)} targets are named"
+                )
+        n_source = len(self.select(source).get("V"))
+        if vertex_arr.min() < 0 or vertex_arr.max() >= n_source:
+            raise ValueError(
+                f"tie vertices span [{int(vertex_arr.min())}, {int(vertex_arr.max())}] but "
+                f"'{self._label(source, self.select(source))}' has {n_source} vertices"
+            )
+        for k, name in enumerate(targets):
+            sel = target_of_arr == k
+            if sel.any():
+                count = len(self.select(name).get("V"))
+                used = ind_arr[sel]
+                if used.min() < 0 or used.max() >= count:
+                    raise ValueError(
+                        f"tie controllers in '{self._label(name, self.select(name))}' "
+                        f"span [{int(used.min())}, {int(used.max())}] but it has "
+                        f"{count} vertices"
+                    )
+        if not np.all(np.isfinite(w_arr)):
+            raise ValueError("tie weights must be finite")
+        sums = w_arr.sum(axis=1)
+        worst = int(np.argmax(np.abs(sums - 1.0)))
+        if abs(sums[worst] - 1.0) > 1e-5:
+            raise ValueError(
+                f"tie weights of row {worst} sum to {float(sums[worst])}; a tie is an "
+                "affine combination and its weights sum to one"
+            )
+        if len(np.unique(vertex_arr)) != n:
+            raise ValueError("tie holds one vertex twice in one call")
+        self._tie.append(
+            {
+                "source_name": source,
+                "vertex": vertex_arr.astype(np.int64),
+                "targets": targets,
+                "ind": ind_arr.astype(np.int64),
+                "w": w_arr,
+                "target_of": target_of_arr,
+            }
+        )
+        return self
+
+    def _resolve_ties(self, map_by_name, vertex_world):
+        """Map every tie to solver vertex indices and check it holds at rest.
+
+        Returns ``(vertex (N,), ind (N, TIE_SLOTS), w (N, TIE_SLOTS))``. A
+        shorter row is padded with weight zero on a repeat of its first
+        controller. A held vertex built off its tie is refused rather than
+        pulled onto it by the solver, which would kick it with a velocity.
+        """
+        rows_v, rows_i, rows_w = [], [], []
+        for tie in self._tie:
+            src = np.asarray(map_by_name[tie["source_name"]], dtype=np.int64)
+            held = src[tie["vertex"]]
+            n, k = tie["ind"].shape
+            glob = np.empty((n, k), dtype=np.int64)
+            for t, name in enumerate(tie["targets"]):
+                sel = tie["target_of"] == t
+                glob[sel] = np.asarray(map_by_name[name], dtype=np.int64)[tie["ind"][sel]]
+            ind = np.repeat(glob[:, :1], TIE_SLOTS, axis=1)
+            w = np.zeros((n, TIE_SLOTS), dtype=np.float64)
+            ind[:, :k] = glob
+            w[:, :k] = tie["w"]
+            rows_v.append(held)
+            rows_i.append(ind)
+            rows_w.append(w)
+        vertex = np.concatenate(rows_v)
+        ind = np.concatenate(rows_i)
+        w = np.concatenate(rows_w)
+        if len(np.unique(vertex)) != len(vertex):
+            raise ValueError("a vertex is held by two ties; a vertex is held by one tie")
+        target = np.einsum("nk,nkd->nd", w, vertex_world[ind])
+        miss = np.linalg.norm(target - vertex_world[vertex], axis=1)
+        scale = max(1.0, float(np.abs(vertex_world).max()))
+        worst = int(np.argmax(miss))
+        if miss[worst] > 1e-6 * scale:
+            raise ValueError(
+                f"tie of solver vertex {int(vertex[worst])} misses its combination by "
+                f"{float(miss[worst]):.3e} at rest; build the weights against the "
+                "positions the scene is built at (frontend.tie_weights)"
+            )
+        return vertex.astype(np.uint32), ind.astype(np.uint32), w.astype(np.float32)
+
     @staticmethod
     def _label(name: str, obj: "Object") -> str:
         """The name a refusal gives the object keyed `name`.
@@ -3230,6 +3451,10 @@ class Scene:
             for cs in self._cross_stitch
             for side in ("source_name", "target_name")
         }
+        # A tie joins simulated vertices only, as a stitch does, so every
+        # object it names stays simulated.
+        stitched |= {t["source_name"] for t in self._tie}
+        stitched |= {name for t in self._tie for name in t["targets"]}
         for name, obj in self._object.items():
             if name in stitched and obj.pdrd:
                 raise ValueError(
@@ -4860,6 +5085,9 @@ class Scene:
                 rest_length=rest_length if given.any() else None,
                 rest_length_given=given if given.any() else None,
             )
+
+        if self._tie:
+            fixed.set_tie(*self._resolve_ties(map_by_name, fixed.vertex(True)))
 
         fixed._contact_gap_participants = tuple(
             self._contact_gap_participants(gap_limits)

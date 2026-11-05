@@ -462,7 +462,7 @@ fn main() {
             edge: scene.cosserat_edge(),
             tilt: scene.cosserat_tilt(),
         };
-        let dataset = builder::build(
+        let mut dataset = builder::build(
             &sim_args,
             mesh,
             &velocity,
@@ -472,6 +472,12 @@ fn main() {
             lock_data,
             cosserat_data,
         );
+        {
+            let (vertex, ind, w) = scene.ties();
+            dataset.tie_vertex = cvec::CVec::from(vertex);
+            dataset.tie_ctrl = cvec::CVec::from(ind);
+            dataset.tie_weight = cvec::CVec::from(w);
+        }
         info!("Dataset built successfully");
 
         let param = builder::make_param(&sim_args);

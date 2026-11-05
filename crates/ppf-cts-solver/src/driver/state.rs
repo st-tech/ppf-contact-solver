@@ -918,6 +918,10 @@ pub struct SolverState {
     /// every scene without a Cosserat rod, and every Cosserat dispatch is gated
     /// on it.
     pub cosserat: super::cosserat::State,
+    /// Tie constraints: the topology, staged once, and the scratch the wrapped
+    /// operator expands into and folds out of. `tie.ties` is zero on a scene
+    /// without one.
+    pub tie: super::tie::State,
     pub pcg_cosserat: super::pcg::CosseratWorkspace,
 
     pub lock: super::lock::Scratch,
@@ -2336,6 +2340,14 @@ impl SolverState {
                 self.pcg_cosserat
                     .allocate(device, vertices, self.cosserat.slots, self.cosserat.chains)?;
             }
+            // THE TIES, validated and staged once, with the augmented scratch the
+            // Cosserat solve wraps when the scene carries frames.
+            self.tie.allocate(
+                device,
+                data,
+                vertices,
+                if self.cosserat.slots > 0 { 3 * vertices + 3 * self.cosserat.slots } else { 0 },
+            )?;
             // The SAND blocks, sized for every vertex whatever the scene holds:
             // the analytic contact writes all of them.
             self.grain_angular
@@ -2985,7 +2997,23 @@ impl SolverState {
         if count == 0 {
             return Ok(());
         }
-        {
+        // A PIN SET THAT DID NOT CHANGE IS NOT RE-STAGED. Writing through
+        // `at()` withdraws the staged buffer's clean prefix and the upload
+        // then carries the whole array across the bus, every step, for a
+        // scene whose pins have not moved. When every index already matches,
+        // the host copy is the one that was last uploaded, so leaving it alone
+        // and letting `upload` elide leaves the device holding the same bytes
+        // the copy would have; a buffer some other writer dirtied still
+        // uploads, because `upload` decides that from its own clean prefix.
+        //
+        let unchanged = {
+            let staged = self.prop_vertex.host();
+            (0..count).all(|i| {
+                staged[i].fix_index == props[i].fix_index
+                    && staged[i].pull_index == props[i].pull_index
+            })
+        };
+        if !unchanged {
             let staged = self.prop_vertex.at();
             for i in 0..count {
                 staged[i].fix_index = props[i].fix_index;
@@ -3020,14 +3048,30 @@ impl SolverState {
         faces: &[crate::data::FaceProp],
         edges: &[crate::data::EdgeProp],
     ) -> FatalResult<()> {
+        // THE SAME ELISION AS THE PIN INDICES, on every field of every record:
+        // a record set that matches the staged copy field for field, bit for
+        // bit, is not copied again, and `upload` elides when the buffer is
+        // otherwise clean. Padding is not compared; the device reads none.
         let face_count = self.prop_face.len().min(faces.len());
         if face_count > 0 {
-            self.prop_face.at()[..face_count].copy_from_slice(&faces[..face_count]);
+            let same = self.prop_face.host()[..face_count]
+                .iter()
+                .zip(&faces[..face_count])
+                .all(|(a, b)| same_face(a, b));
+            if !same {
+                self.prop_face.at()[..face_count].copy_from_slice(&faces[..face_count]);
+            }
             self.prop_face.upload(device)?;
         }
         let edge_count = self.prop_edge.len().min(edges.len());
         if edge_count > 0 {
-            self.prop_edge.at()[..edge_count].copy_from_slice(&edges[..edge_count]);
+            let same = self.prop_edge.host()[..edge_count]
+                .iter()
+                .zip(&edges[..edge_count])
+                .all(|(a, b)| same_edge(a, b));
+            if !same {
+                self.prop_edge.at()[..edge_count].copy_from_slice(&edges[..edge_count]);
+            }
             self.prop_edge.upload(device)?;
         }
         Ok(())
@@ -3407,4 +3451,28 @@ mod restage_tests {
             "the re-stage reset a crept rest angle to its build-time value"
         );
     }
+}
+
+/// Whether two face records are the same, field by field and bit for bit: a
+/// float compares by its bits, so a signed zero or a NaN payload is a change.
+/// Compared by field rather than by the record's bytes, because the `bool`
+/// fields leave padding that holds nothing defined.
+fn same_face(a: &crate::data::FaceProp, b: &crate::data::FaceProp) -> bool {
+    a.area.to_bits() == b.area.to_bits()
+        && a.mass.to_bits() == b.mass.to_bits()
+        && a.fixed == b.fixed
+        && a.rest_excluded == b.rest_excluded
+        && a.collider == b.collider
+        && a.param_index == b.param_index
+        && a.pin_allow_intersection == b.pin_allow_intersection
+}
+
+/// [`same_face`] for an edge record.
+fn same_edge(a: &crate::data::EdgeProp, b: &crate::data::EdgeProp) -> bool {
+    a.length.to_bits() == b.length.to_bits()
+        && a.initial_length.to_bits() == b.initial_length.to_bits()
+        && a.mass.to_bits() == b.mass.to_bits()
+        && a.fixed == b.fixed
+        && a.param_index == b.param_index
+        && a.pin_allow_intersection == b.pin_allow_intersection
 }

@@ -2071,6 +2071,10 @@ pub fn build(
         cosserat_rest_darboux: CVec::from(cosserat_rest_darboux.as_slice()),
         cosserat_bend_invlen: CVec::from(cosserat_bend_invlen.as_slice()),
         cosserat_rest_metric: CVec::from(cosserat_rest_metric.as_slice()),
+        // Filled by the caller from the scene (`main.rs`), which owns them.
+        tie_vertex: CVec::new(),
+        tie_ctrl: CVec::new(),
+        tie_weight: CVec::new(),
     }
 }
 
