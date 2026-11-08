@@ -1037,8 +1037,6 @@ If the cloth has pins, changing the pin type to "Pull" can also fix the failure.
 | Then, if &lt;XXX&gt; can do all of that, will you adopt it? | The adoption cost is not free. Also, incorporating third-party techniques requires our internal legal review. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
-| Does the author speak English? When I post an issue, I prefer the author read it directly, not an AI translating it into Japanese and passing it to the author. | Direct read. No translation. |
-| What are the third-party alternatives? | Ask ChatGPT. |
 | Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
@@ -1054,11 +1052,8 @@ If the cloth has pins, changing the pin type to "Pull" can also fix the failure.
 | But LLMs can make mistakes. | The author makes more mistakes. |
 | Did you write everything using AI? | We try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. We know what we are doing. |
 | Is this really free? | Yes. |
-| Free? AI coded? Sounds cheap. | This project is years of research. It started even before ChatGPT existed. |
-| AI slacking off? | No! Tremendous human effort is poured into it. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
-| You forked other repo and just made small changes? | No. Everything is written from scratch. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
 | I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE) (and, for the Blender add-on, the [GPL-3.0-or-later](./blender_addon/LICENSE)), you are free to distribute and commercialize your own. |
 
