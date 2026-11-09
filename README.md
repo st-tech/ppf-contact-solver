@@ -111,6 +111,7 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
   - [✅ How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections)
   - [🚨 Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup)
 - [❓ Frequently Asked Questions](#-frequently-asked-questions)
+- [⭐ Star History](#-star-history)
 - [🙏 Acknowledgements](#-acknowledgements)
 
 ### 📚 Advanced Contents
@@ -1056,6 +1057,16 @@ If the cloth has pins, changing the pin type to "Pull" can also fix the failure.
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
 | This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
 | I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE) (and, for the Blender add-on, the [GPL-3.0-or-later](./blender_addon/LICENSE)), you are free to distribute and commercialize your own. |
+
+## ⭐ Star History
+
+<a href="https://www.star-history.com/?repos=st-tech%2Fppf-contact-solver&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=st-tech/ppf-contact-solver&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## 🙏 Acknowledgements
 
