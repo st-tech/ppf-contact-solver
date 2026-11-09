@@ -139,6 +139,9 @@ on:
         type: string
         default: 'drape'
 
+permissions:
+  contents: read
+
 jobs:
   # ============================================================
   # THE STAMP EVERY ARCHIVE CARRIES, computed once. Every platform's jobs

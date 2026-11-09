@@ -32,6 +32,9 @@ on:
           - ap-northeast-3
           - ap-northeast-2
 
+permissions:
+  contents: read
+
 jobs:
   run-on-gpu:
     name: Run on GPU Instance

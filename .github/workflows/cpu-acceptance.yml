@@ -45,6 +45,9 @@ on:
         type: string
         default: '2'
 
+permissions:
+  contents: read
+
 jobs:
   measure:
     name: CPU acceptance (${{ matrix.arch }})

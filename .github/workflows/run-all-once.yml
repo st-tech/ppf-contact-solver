@@ -29,6 +29,9 @@ on:
           - ap-northeast-3
           - ap-northeast-2
 
+permissions:
+  contents: read
+
 jobs:
   run-batch-1:
     name: Run Batch 1

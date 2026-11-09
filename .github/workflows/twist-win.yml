@@ -28,6 +28,9 @@ on:
           - ap-northeast-3
           - ap-northeast-2
 
+permissions:
+  contents: read
+
 jobs:
   run-example:
     name: Run twist (Windows)

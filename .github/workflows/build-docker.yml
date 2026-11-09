@@ -61,6 +61,9 @@ env:
   # the instance's SSH keys or other home-dir junk.
   REMOTE_SRC: /home/ubuntu/src
 
+permissions:
+  contents: read
+
 jobs:
   build-image:
     name: Build + smoke-test on GPU Instance

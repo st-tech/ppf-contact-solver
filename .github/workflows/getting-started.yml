@@ -70,6 +70,9 @@ on:
           - ap-northeast-3
           - ap-northeast-2
 
+permissions:
+  contents: read
+
 jobs:
   headless:
     name: Run headless on GPU Instance
