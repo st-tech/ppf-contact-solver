@@ -2092,6 +2092,16 @@ pub unsafe fn advance<D: Device>(
                     state.prop_vertex.host(),
                 )?;
             }
+            if matches!(report.outcome, pcg::Outcome::NonSpdPreconditioner)
+                && (*param).precond == crate::data::PrecondMode::Multigrid
+                && std::env::var_os("PPF_DUMP_MG_ON_BREAKDOWN").is_some()
+            {
+                super::dump_linsys::write_tagged(
+                    device, &operator, force.handle(), eval_x.handle(), vertices, "mgbreak",
+                )?;
+                let (r, z) = work.residual_and_preconditioned();
+                super::multigrid::dump_on_breakdown(device, &state.multigrid, r, z)?;
+            }
             report
         };
         // THE HELD ROWS OF THE CORRECTION, from their controllers' solved rows

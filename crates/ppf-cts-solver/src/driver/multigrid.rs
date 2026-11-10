@@ -114,9 +114,7 @@ pub struct State {
     rows: u32,
     built: bool,
     levels: Vec<Level>,
-    /// The finest level's smoother, and the contact matrix's bound the first
-    /// coarse operator is handed.
-    contact: Buffer<f32>,
+    /// The finest level's smoother.
     step: Buffer<f32>,
     inverse: Buffer<f32>,
     /// The finest level's iterate and the operator applied to it.
@@ -244,7 +242,6 @@ pub unsafe fn build<D: Device>(
     state.rows = vertices;
     state.built = true;
     state.levels.clear();
-    state.contact.size(device, (9 * n).max(1), AllocLabel("multigrid.contact"))?;
     state.inverse.size(device, (9 * n).max(1), AllocLabel("multigrid.inverse"))?;
     state.x.size(device, (3 * n).max(1), AllocLabel("multigrid.x"))?;
     state.product.size(device, (3 * n).max(1), AllocLabel("multigrid.product"))?;
@@ -407,12 +404,16 @@ pub unsafe fn install<D: Device>(
 ///
 /// `block_diagonal` is the operator's whole block diagonal, the one the
 /// block-Jacobi preconditioner inverts, and `removed` the per-vertex mask of
-/// the degrees of freedom a pin removed.
+/// the degrees of freedom a pin removed. The first coarse operator is the
+/// Galerkin product of the operator's difference form, so its row sums
+/// ([`State::difference`]) must already hold this operator's: the step driver
+/// runs [`Operator::sum_rows`] before it refreshes.
 ///
 /// # Safety
 /// [`build`] must have run for this operator's row count, which
-/// [`State::require_built`] answers, and every handle must name a live
-/// allocation of the operator's arrays.
+/// [`State::require_built`] answers, every handle must name a live
+/// allocation of the operator's arrays, and the row sums must be this
+/// operator's.
 pub unsafe fn refresh<D: Device>(
     device: &mut D,
     state: &mut State,
@@ -425,7 +426,7 @@ pub unsafe fn refresh<D: Device>(
     if vertices == 0 {
         return Ok(());
     }
-    let contact = state.contact.handle();
+    let row_sum = state.row_sum.handle();
     let step = state.step.handle();
     let inverse = state.inverse.handle();
     let levels = &state.levels;
@@ -445,7 +446,6 @@ pub unsafe fn refresh<D: Device>(
             transpose_offset: rows.transpose_offset,
             diagonal: block_diagonal,
             step,
-            contact,
             inverse,
             count: vertices,
             seam_arena_count: 0,
@@ -461,13 +461,19 @@ pub unsafe fn refresh<D: Device>(
                     node_of: level.node_of.handle(),
                     weight_of: level.weight_of.handle(),
                     removed,
+                    dynamic_index: rows.dynamic_index,
+                    dynamic_value: rows.dynamic_value,
+                    dynamic_offset: rows.dynamic_offset,
+                    reference_index: rows.reference_index,
+                    reference_value: rows.reference_value,
+                    reference_offset: rows.reference_offset,
+                    global_value: rows.global_value,
                     fixed_index: rows.fixed_index,
                     fixed_offset: rows.fixed_offset,
                     fixed_value: rows.fixed_value,
                     transpose_pair: rows.transpose_pair,
                     transpose_offset: rows.transpose_offset,
-                    diagonal: rows.diagonal,
-                    contact,
+                    row_sum,
                     reach_offset: level.reach_offset.handle(),
                     reach_column: level.reach_column.handle(),
                     reach_value: level.reach_value.handle(),
@@ -676,6 +682,87 @@ unsafe fn encode_level(
     };
     encoder.elements(&sweep, level.nodes)?;
     Ok(level.y.handle())
+}
+
+/// `PPF_DUMP_MG_ON_BREAKDOWN=1`: when a solve this preconditioner served
+/// breaks down on `r^T M^-1 r`, write every array the cycle reads, with the
+/// residual and the `z` it produced, to `$PPF_DUMP_DIR`, so the cycle can be
+/// replayed in double precision on the host. `mg_manifest.json` names each
+/// array's file, element type and length. Diagnostic only: it reads back, and
+/// it is off unless asked for.
+///
+/// WHAT IT DECIDES. The cycle is positive
+/// semidefinite in exact arithmetic whenever every level's `2 M / step - A` is,
+/// whatever the coarse operators' own signs. So a replay that finds `r^T B r`
+/// positive in double precision from these same arrays, with each level's
+/// bound intact, places the breakdown in the single-precision application.
+///
+pub fn dump_on_breakdown<D: Device>(
+    device: &mut D,
+    state: &State,
+    residual: Handle,
+    preconditioned: Handle,
+) -> FatalResult<()> {
+    if std::env::var_os("PPF_DUMP_MG_ON_BREAKDOWN").is_none() {
+        return Ok(());
+    }
+    use std::io::Write;
+    let dir = std::env::var("PPF_DUMP_DIR").unwrap_or_else(|_| ".".to_string());
+    let mut manifest: Vec<String> = Vec::new();
+    let mut put = |name: &str, kind: &str, bytes: Vec<u8>, len: usize| {
+        let path = format!("{dir}/mg_{name}.bin");
+        std::fs::write(&path, &bytes).unwrap_or_else(|e| panic!("mg dump: {path}: {e}"));
+        manifest.push(format!("\"{name}\": {{\"type\": \"{kind}\", \"len\": {len}}}"));
+    };
+    fn read_f32<D: Device>(device: &mut D, handle: Handle, len: usize) -> FatalResult<Vec<u8>> {
+        let mut back = ppf_cts_compute::ReadbackBuffer::<f32>::default();
+        back.size(device, len.max(1), AllocLabel("mg_dump.f32"))?;
+        device.copy(back.handle(), 0, handle, 0, 4 * len)?;
+        back.download(device)?;
+        Ok(back.host()[..len].iter().flat_map(|v| v.to_le_bytes()).collect())
+    }
+    fn read_u32<D: Device>(device: &mut D, handle: Handle, len: usize) -> FatalResult<Vec<u8>> {
+        let mut back = ppf_cts_compute::ReadbackBuffer::<u32>::default();
+        back.size(device, len.max(1), AllocLabel("mg_dump.u32"))?;
+        device.copy(back.handle(), 0, handle, 0, 4 * len)?;
+        back.download(device)?;
+        Ok(back.host()[..len].iter().flat_map(|v| v.to_le_bytes()).collect())
+    }
+    let n = state.rows as usize;
+    let removed = state.removed.expect("the multigrid broke down before its levels were refreshed");
+    put("row_sum", "f32", read_f32(device, state.row_sum.handle(), 9 * n)?, 9 * n);
+    put("inverse", "f32", read_f32(device, state.inverse.handle(), 9 * n)?, 9 * n);
+    put("step", "f32", read_f32(device, state.step.handle(), n)?, n);
+    put("removed", "u32", read_u32(device, removed, n)?, n);
+    put("r", "f32", read_f32(device, residual, 3 * n)?, 3 * n);
+    put("z", "f32", read_f32(device, preconditioned, 3 * n)?, 3 * n);
+    let mut finer = n;
+    for (depth, level) in state.levels.iter().enumerate() {
+        let nodes = level.nodes as usize;
+        let blocks = level.blocks as usize;
+        let gathered = level.gather_row.handle().size as usize;
+        let d = |name: &str| format!("d{depth}_{name}");
+        put(&d("node_of"), "u32", read_u32(device, level.node_of.handle(), WIDTH * finer)?, WIDTH * finer);
+        put(&d("weight_of"), "f32", read_f32(device, level.weight_of.handle(), WIDTH * finer)?, WIDTH * finer);
+        put(&d("gather_offset"), "u32", read_u32(device, level.gather_offset.handle(), nodes + 1)?, nodes + 1);
+        put(&d("gather_row"), "u32", read_u32(device, level.gather_row.handle(), gathered)?, gathered);
+        put(&d("gather_weight"), "f32", read_f32(device, level.gather_weight.handle(), gathered)?, gathered);
+        put(&d("offset"), "u32", read_u32(device, level.offset.handle(), nodes + 1)?, nodes + 1);
+        put(&d("column"), "u32", read_u32(device, level.column.handle(), blocks)?, blocks);
+        put(&d("value"), "f32", read_f32(device, level.value.handle(), 9 * blocks)?, 9 * blocks);
+        put(&d("inverse"), "f32", read_f32(device, level.inverse.handle(), 9 * nodes)?, 9 * nodes);
+        put(&d("step"), "f32", read_f32(device, level.step.handle(), nodes)?, nodes);
+        finer = nodes;
+    }
+    let body = format!(
+        "{{\"vertices\": {n}, \"levels\": {}, \"width\": {WIDTH}, \"step\": {STEP}, \"arrays\": {{{}}}}}",
+        state.levels.len(),
+        manifest.join(", ")
+    );
+    let mut f = std::fs::File::create(format!("{dir}/mg_manifest.json")).expect("mg manifest");
+    f.write_all(body.as_bytes()).expect("mg manifest");
+    eprintln!("[mg dump] wrote the multigrid's arrays to {dir}");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1114,6 +1201,269 @@ mod tests {
                 }
             }
             above = want;
+        }
+    }
+
+    /// Contact couplings `(i, j)` of stiffness `k` along `x`, added to a sheet
+    /// as the assembly adds them: the off-diagonal block `-k e_x e_x^T` stored,
+    /// and its diagonal halves on the block diagonal.
+    fn add_contacts(sheet: &mut Sheet, pairs: &[(u32, u32)], k: f64) {
+        for &(i, j) in pairs {
+            for v in [i, j] {
+                sheet.diagonal[9 * v as usize] += k as f32;
+                sheet.dense[(3 * v as usize, 3 * v as usize)] += k;
+            }
+            sheet.dense[(3 * i as usize, 3 * j as usize)] -= k;
+            sheet.dense[(3 * j as usize, 3 * i as usize)] -= k;
+            let mut off = [[0.0; 3]; 3];
+            off[0][0] = -k;
+            sheet.contact.push((i.min(j), i.max(j), off));
+        }
+        sheet.contact.sort_by_key(|c| (c.0, c.1));
+    }
+
+    /// Whether the first level's reach pattern holds, in `row`'s run, every
+    /// node `from` interpolates from: the host's side of the kernel's test.
+    fn reach_holds(level: &multigrid_grid::Level, row: u32, from: u32) -> bool {
+        let reach = &level.reach;
+        let run = &reach.column[reach.offset[row as usize] as usize..reach.offset[row as usize + 1] as usize];
+        (0..WIDTH).all(|k| {
+            level.transfer.weight[WIDTH * from as usize + k] == 0.0
+                || run.contains(&level.transfer.node[WIDTH * from as usize + k])
+        })
+    }
+
+    /// A STIFF CONTACT REACHES THE COARSE LEVELS AS ITSELF. Pairs a few
+    /// vertices apart, coupled forty thousand times more stiffly than the
+    /// springs and a million times more than the inertia, which is a felt's
+    /// contact a few micrometers deep: the first coarse operator is the
+    /// Galerkin product of the operator with each pair the pattern holds taken
+    /// exactly and each other pair as its diagonal bound, every level below is
+    /// the product of the one above, and the common motion of the whole sheet
+    /// has the curvature of its mass alone.
+    ///
+    /// WHAT THIS CATCHES. With every pair as its diagonal bound the common
+    /// motion's curvature is the mass plus `4 k` a pair, here a hundred
+    /// million times the mass. What it is allowed to miss by is the row sums'
+    /// own round-off, `eps k` on each row a contact touches: a property of the
+    /// matrix as stored (`solver/spmv.kernel.cpp`), not of the product.
+    ///
+    #[test]
+    fn a_stiff_contact_reaches_the_coarse_levels_as_itself() {
+        let n = 13usize;
+        let mut held = sheet(n, 2.0e3, 1.0, 0, &[]);
+        let hierarchy = hierarchy_of(&held);
+        let first = &hierarchy.levels[0];
+        let mut exact = Vec::new();
+        let mut bounded = Vec::new();
+        for j in 0..n as u32 - 2 {
+            for i in (0..n as u32).step_by(3) {
+                let (a, b) = (j * n as u32 + i, (j + 2) * n as u32 + i);
+                if reach_holds(first, a, b) && reach_holds(first, b, a) {
+                    exact.push((a, b));
+                } else {
+                    bounded.push((a, b));
+                }
+            }
+        }
+        assert!(exact.len() >= 8, "only {} pairs are held by the pattern", exact.len());
+        let k = (1u32 << 20) as f64;
+        // the common motion first, with only the pairs the pattern holds
+        add_contacts(&mut held, &exact, k);
+        let mut device = host_device();
+        let mut resident = on_device(&mut device, &held);
+        let (state, _) = ready(&mut device, &held, &mut resident);
+        let plan = &hierarchy.levels[0];
+        let value = read_f32(&mut device, &state.levels[0].value, 9 * plan.pattern.blocks());
+        // `1^T P^T A P 1` over the x unknowns: `P 1 = 1`, so it is `1^T A 1`,
+        // the mass of every vertex (the springs and the contacts sum to zero)
+        let curvature: f64 = (0..plan.pattern.blocks()).map(|slot| value[9 * slot] as f64).sum();
+        let mass = held.vertices as f64;
+        let roundoff = 2.0 * exact.len() as f64 * f32::EPSILON as f64 * k;
+        assert!(
+            (curvature - mass).abs() <= roundoff,
+            "the common motion's coarse curvature is {curvature} against a mass of {mass}, beyond the \
+             row sums' round-off {roundoff} ({} contacts of stiffness {k:e})",
+            exact.len()
+        );
+        drop(resident);
+
+        // then every pair, the ones the pattern cannot hold as their bound
+        let mut mixed = sheet(n, 2.0e3, 1.0, 0, &[]);
+        let all: Vec<(u32, u32)> = exact.iter().chain(&bounded).cloned().collect();
+        add_contacts(&mut mixed, &all, k);
+        let mut device = host_device();
+        let mut resident = on_device(&mut device, &mixed);
+        let (state, hierarchy) = ready(&mut device, &mixed, &mut resident);
+        let mut above = mixed.dense.clone();
+        for &(a, b) in &bounded {
+            let (x, y) = (3 * a as usize, 3 * b as usize);
+            above[(x, y)] += k;
+            above[(y, x)] += k;
+            above[(x, x)] += k;
+            above[(y, y)] += k;
+        }
+        for (depth, plan) in hierarchy.levels.iter().enumerate() {
+            let p = dense_transfer(&plan.transfer, &[]);
+            let want = p.transpose() * &above * &p;
+            let scale = want.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let value = read_f32(&mut device, &state.levels[depth].value, 9 * plan.pattern.blocks());
+            for node in 0..plan.pattern.rows() {
+                for slot in plan.pattern.offset[node] as usize..plan.pattern.offset[node + 1] as usize {
+                    let column = plan.pattern.column[slot] as usize;
+                    for r in 0..3 {
+                        for c in 0..3 {
+                            let got = value[9 * slot + 3 * c + r] as f64;
+                            let expect = want[(3 * node + r, 3 * column + c)];
+                            assert!(
+                                (got - expect).abs() <= 2.0e-5 * scale,
+                                "level {depth} block ({node}, {column}) entry ({r}, {c}): {got} against {expect}"
+                            );
+                        }
+                    }
+                }
+            }
+            above = want;
+        }
+    }
+
+    /// THE SMOOTHER'S BOUND HOLDS FOR THE NUMBERS STORED, at a contact eight
+    /// million times stiffer than the inertia: `2 W - A` is positive
+    /// semidefinite for `W` the inverse of the stored `step M^-1`, which is
+    /// what makes the cycle positive semidefinite, on the finest level and on
+    /// every coarse one.
+    ///
+    /// WHAT THIS CATCHES. A bound taken through the Gram product `B B^T` loses
+    /// half the digits: here
+    /// that is `sqrt(eps) k`, about two thousand times the inertia, short in the
+    /// one direction only the inertia holds. The tolerance is the double
+    /// precision eigensolve's own.
+    ///
+    #[test]
+    fn the_smoother_bound_holds_for_the_stored_numbers_at_a_stiff_contact() {
+        let n = 11usize;
+        let mut stiff = sheet(n, 2.0e3, 1.0, 0, &[]);
+        let pairs: Vec<(u32, u32)> =
+            (0..n as u32 - 2).map(|j| (j * n as u32 + 4, (j + 2) * n as u32 + 4)).collect();
+        add_contacts(&mut stiff, &pairs, (1u32 << 23) as f64);
+        // the contacts along a direction no axis holds, so the block's soft
+        // directions are not the coordinate ones
+        let normal = [0.6f64, 0.64, 0.48];
+        let k = (1u32 << 23) as f64;
+        for c in &mut stiff.contact {
+            for r in 0..3 {
+                for col in 0..3 {
+                    c.2[r][col] = -k * normal[r] * normal[col];
+                }
+            }
+        }
+        let mut dense = stiff.dense.clone();
+        for &(a, b) in &pairs {
+            for (x, y) in [(a, a), (b, b), (a, b), (b, a)] {
+                let sign = if x == y { 1.0 } else { -1.0 };
+                for r in 0..3 {
+                    for col in 0..3 {
+                        let at = (3 * x as usize + r, 3 * y as usize + col);
+                        let axis = if r == col && r == 0 { k } else { 0.0 };
+                        dense[at] += sign * (k * normal[r] * normal[col] - axis);
+                    }
+                }
+            }
+            for v in [a, b] {
+                for r in 0..3 {
+                    for col in 0..3 {
+                        let axis = if r == col && r == 0 { k } else { 0.0 };
+                        stiff.diagonal[9 * v as usize + 3 * col + r] += (k * normal[r] * normal[col] - axis) as f32;
+                    }
+                }
+            }
+        }
+        stiff.dense = dense;
+        let mut device = host_device();
+        let mut resident = on_device(&mut device, &stiff);
+        let (state, hierarchy) = ready(&mut device, &stiff, &mut resident);
+        // the operator as stored, in double precision
+        let check = |inverse: &[f32], steps: &[f32], a: &DMatrix<f64>, what: &str| {
+            let rows = steps.len();
+            let mut gap = -a.clone();
+            for v in 0..rows {
+                let block = nalgebra::Matrix3::<f64>::from_fn(|r, c| inverse[9 * v + 3 * c + r] as f64);
+                if block.iter().all(|x| *x == 0.0) {
+                    continue;
+                }
+                let w = block.try_inverse().expect("a smoother block is invertible");
+                for r in 0..3 {
+                    for c in 0..3 {
+                        gap[(3 * v + r, 3 * v + c)] += 2.0 * w[(r, c)];
+                    }
+                }
+            }
+            let scale = a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let lowest = nalgebra::SymmetricEigen::new(0.5 * (&gap + gap.transpose()))
+                .eigenvalues
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                lowest >= -1.0e-12 * scale,
+                "{what}: 2 W - A has an eigenvalue of {lowest} at a scale of {scale:e}"
+            );
+        };
+        let mut stored = DMatrix::<f64>::zeros(3 * stiff.vertices, 3 * stiff.vertices);
+        {
+            let flat = |block: &Block| nalgebra::Matrix3::<f64>::from_fn(|r, c| block[r][c] as f32 as f64);
+            for (i, j, block) in &stiff.contact {
+                let b = flat(block);
+                for r in 0..3 {
+                    for c in 0..3 {
+                        stored[(3 * *i as usize + r, 3 * *j as usize + c)] += b[(r, c)];
+                        stored[(3 * *j as usize + c, 3 * *i as usize + r)] += b[(r, c)];
+                    }
+                }
+            }
+            // the fixed matrix and the diagonal, from their stored floats
+            for row in 0..stiff.vertices {
+                for slot in stiff.offset[row] as usize..stiff.offset[row + 1] as usize {
+                    let col = stiff.index[slot] as usize;
+                    for r in 0..3 {
+                        for c in 0..3 {
+                            let x = stiff.value[9 * slot + 3 * c + r] as f64;
+                            stored[(3 * row + r, 3 * col + c)] += x;
+                            if col != row {
+                                stored[(3 * col + c, 3 * row + r)] += x;
+                            }
+                        }
+                    }
+                }
+                for r in 0..3 {
+                    for c in 0..3 {
+                        stored[(3 * row + r, 3 * row + c)] += stiff.diagonal[9 * row + 3 * c + r] as f64;
+                    }
+                }
+            }
+        }
+        let inverse = read_f32(&mut device, &state.inverse, 9 * stiff.vertices);
+        let steps = read_f32(&mut device, &state.step, stiff.vertices);
+        check(&inverse, &steps, &stored, "the finest level");
+        for (depth, plan) in hierarchy.levels.iter().enumerate() {
+            let level = &state.levels[depth];
+            let nodes = plan.pattern.rows();
+            let value = read_f32(&mut device, &level.value, 9 * plan.pattern.blocks());
+            let mut a = DMatrix::<f64>::zeros(3 * nodes, 3 * nodes);
+            for node in 0..nodes {
+                for slot in plan.pattern.offset[node] as usize..plan.pattern.offset[node + 1] as usize {
+                    let col = plan.pattern.column[slot] as usize;
+                    for r in 0..3 {
+                        for c in 0..3 {
+                            a[(3 * node + r, 3 * col + c)] = value[9 * slot + 3 * c + r] as f64;
+                        }
+                    }
+                }
+            }
+            let a = 0.5 * (&a + a.transpose());
+            let inverse = read_f32(&mut device, &level.inverse, 9 * nodes);
+            let steps = read_f32(&mut device, &level.step, nodes);
+            check(&inverse, &steps, &a, &format!("level {depth}"));
         }
     }
 

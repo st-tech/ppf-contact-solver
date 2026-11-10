@@ -811,6 +811,12 @@ impl Workspace {
         self.p.handle()
     }
 
+    /// The residual `r` and the preconditioned `z = M^-1 r` the last iterate
+    /// left, for the multigrid breakdown dump (`multigrid::dump_on_breakdown`).
+    pub fn residual_and_preconditioned(&mut self) -> (ppf_cts_compute::Handle, ppf_cts_compute::Handle) {
+        (self.r.handle(), self.z.handle())
+    }
+
     /// Size every vector for a scene of `rows` vertices.
     pub fn size_for(&mut self, device: &mut impl Device, rows: u32) -> Result<(), Fault> {
         let n = 3 * rows as usize;
@@ -1244,7 +1250,11 @@ fn solve_scheduled<D: Device>(
     // values. Without that latch this would silently drop a `pAp <= 0`.
     const RESID_CHECK_STRIDE: u32 = 4;
     const NEAR_TOL_FACTOR: f32 = 8.0;
-    let mut stride = RESID_CHECK_STRIDE;
+    // THE MULTIGRID BREAKDOWN DUMP CHECKS EVERY ITERATE (`multigrid::
+    // dump_on_breakdown`): a sweep preconditioner has no latch, so a batch goes
+    // on past a breakdown and leaves a later iterate's `r` and `z` behind.
+    let every_iterate = sweep.is_some() && std::env::var_os("PPF_DUMP_MG_ON_BREAKDOWN").is_some();
+    let mut stride = if every_iterate { 1 } else { RESID_CHECK_STRIDE };
     // CLEAR THE LATCH BEFORE THE LOOP. The workspace is allocated once and
     // reused by every solve, and the latch is sticky BY DESIGN, so without this
     // a breakdown in one solve would abort the next one before it had taken a
@@ -1671,8 +1681,21 @@ fn solve_scheduled<D: Device>(
                 // assembled Newton Hessian is not SPD.
                 PCG_BREAK_PAP => Outcome::IndefiniteMatrix,
                 // The previous iterate's `r^T M^-1 r` was non-positive, so beta
-                // could not be formed.
-                PCG_BREAK_RZ => Outcome::NonSpdPreconditioner,
+                // could not be formed. ITS VALUE IS REPORTED, because the
+                // verdict alone cannot tell the causes apart: NaN (a non-finite
+                // entry upstream), exactly zero (underflow of a nearly
+                // converged solve), or a finite negative value (a
+                // preconditioner that is not SPD, or whose fp32 application is
+                // too ill-conditioned to resolve the sign).
+                PCG_BREAK_RZ => {
+                    ::log::info!(
+                        "* cg breakdown: r^T M^-1 r = {:e} at iter {} (reresid {:.3e})",
+                        scalar.host()[slot::BREAK_VALUE],
+                        broke_at,
+                        residual
+                    );
+                    Outcome::NonSpdPreconditioner
+                }
                 // Unresolvable above the round-off of its own sum. Steihaug:
                 // the direction so far is still a descent direction.
                 //

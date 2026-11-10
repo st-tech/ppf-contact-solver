@@ -99,6 +99,19 @@ pub fn dump_on_breakdown<D: Device>(
     Ok(())
 }
 
+/// The same files under a caller's tag, for a breakdown another module
+/// diagnoses (`multigrid::dump_on_breakdown`).
+pub fn write_tagged<D: Device>(
+    device: &mut D,
+    operator: &Operator,
+    force: Handle,
+    eval_x: Handle,
+    vertices: usize,
+    tag: &str,
+) -> FatalResult<()> {
+    write_system(device, operator, force, eval_x, vertices, tag)
+}
+
 /// Write the assembled system to `$PPF_DUMP_DIR/{linsys,evalx,split}_<tag>.bin`.
 fn write_system<D: Device>(
     device: &mut D,
