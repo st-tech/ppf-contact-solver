@@ -49,12 +49,17 @@
 //!   contact normal makes the product cancel (`spmv.kernel.cpp`).
 //! - an apply that produces no such sum passes the Cauchy-Schwarz surrogate
 //!   `|p|_2 |Ap|_2 >= sum_i |p_i . (Ap)_i|`, formed from three plain inner
-//!   products. The locked and PDRD-reduced solves take this one, through
+//!   products. The PDRD-reduced solve takes this one, through
 //!   [`DotTerms::norm_product`].
 //!
-//! The surrogate is the LOOSER of the two, and that is why it is admissible
-//! where the fused sum is unavailable: it errs toward truncating rather than
-//! aborting.
+//! THE LOCKED SOLVE TAKES THE FUSED SCALE, R + D: the entry-level magnitude R
+//! its apply writes per row, which is the fused sum above, plus D, the
+//! magnitude of the dot it forms against the projected product. The surrogate
+//! is not admissible there. On a stiff scene it is wrong both ways: far above
+//! the round-off where `Ap` is large in directions `p` hardly spans, so it
+//! truncated resolvable curvatures, and blind to the product's own round-off,
+//! so it aborted on a curvature inside it (measured on a 12x felt under the
+//! rotation lock).
 //!
 //! **THE PER-ROW MAGNITUDE BESIDE THE DOT IS NOT A THIRD OPTION.**
 //! `pcg_dot_terms` sums a row's three components BEFORE taking the absolute
@@ -1849,9 +1854,9 @@ impl DotTerms<'_> {
 
     /// The magnitude array's handle, for the fused row that writes it.
     ///
-    /// IT STILL HAS NO READER on this side, for the reason the note above
-    /// gives; the fused body produces both numbers from one expression exactly
-    /// as `pcg_dot_terms` does, so the output has to be bound either way.
+    /// The locked solve reads it as D, beside its apply's R (never alone, for
+    /// the reason the module's note gives); the fused body produces both numbers
+    /// from one expression exactly as `pcg_dot_terms` does.
     fn magnitude_handle(&mut self) -> ppf_cts_compute::Handle {
         self.magnitude.handle()
     }
@@ -3599,6 +3604,37 @@ impl LockedWorkspace {
 /// Every handle must name a live allocation sized for the scene, and the
 /// projector must have been `prepare`d against the same positions this solve
 /// runs at, with `locked.q` holding the correction that call produced.
+/// `PPF_LOCK_PROBE=1`: measure, on the locked solve, how far one projection leaves a vector from the tangent space:
+/// |v| / |Q v| and |Q(Q v) - Q v| / |Q v|, the leftover a further pass removes. `scratch` is overwritten. Diagnostic
+/// only.
+///
+#[allow(clippy::too_many_arguments)]
+unsafe fn lock_probe<D: Device>(
+    device: &mut D,
+    projector: &mut super::lock::Projector<'_>,
+    terms: &mut DotTerms<'_>,
+    raw_norm2: f32,
+    projected: ppf_cts_compute::Handle,
+    scratch: ppf_cts_compute::Handle,
+    n: usize,
+    fold: &Buffer<f32>,
+    scalars: &mut ReadbackBuffer<f32>,
+    what: &str,
+    iteration: u32,
+) -> super::scene::FatalResult<()> {
+    let q2 = terms.dot(device, projected, projected, n, fold, scalars)?;
+    combine(device, projected, projected, scratch, 1.0, 0.0, n)?;
+    projector.project(device, scratch, 1)?;
+    combine(device, scratch, projected, scratch, 1.0, -1.0, n)?;
+    let d2 = terms.dot(device, scratch, scratch, n, fold, scalars)?;
+    ::log::info!(
+        "* lock probe {what} iter {iteration}: |v|/|Qv| {:.3e}, |Q(Qv)-Qv|/|Qv| {:.3e}",
+        (raw_norm2 / q2).sqrt(),
+        (d2 / q2).sqrt()
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn solve_locked<D: Device>(
     device: &mut D,
@@ -3656,11 +3692,8 @@ pub unsafe fn solve_locked<D: Device>(
         ..
     } = work;
     let mut terms = DotTerms { product, magnitude };
-    // THE APPLY WRITES ITS MAGNITUDE SUM SOMEWHERE AND THIS PATH IGNORES IT.
-    // The locked and reduced solves take their curvature bound from the
-    // Cauchy-Schwarz surrogate instead, because the operator they call is
-    // wrapped in projections and its per-row sum is not the sum that forms
-    // their `p^T A p`.
+    // THE APPLY WRITES ITS MAGNITUDE SUM PER ROW, and the loop's curvature bound reads it (R + D below). The
+    // residual's applies write it too and nothing reads it there.
     let discard_absolute = row_absolute.handle();
     let discard_curvature = row_curvature.handle();
 
@@ -3698,8 +3731,13 @@ pub unsafe fn solve_locked<D: Device>(
             }
         }
     })?;
+    let probe = std::env::var_os("PPF_LOCK_PROBE").is_some();
+    let raw = if probe { terms.dot(device, z.handle(), z.handle(), n, fold, scalars)? } else { 0.0 };
     projector
         .project(device, z.handle(), 1)?;
+    if probe {
+        lock_probe(device, projector, &mut terms, raw, z.handle(), ap.handle(), n, fold, scalars, "z", 0)?;
+    }
     let mut rz = terms.dot(device, r.handle(), z.handle(), n, fold, scalars)?;
     // The negation traps a NaN, which `<= 0.0` would let through; the idiom is
     // the unlocked solve's.
@@ -3746,11 +3784,38 @@ pub unsafe fn solve_locked<D: Device>(
         })?;
         scalars.download(device)?;
         let pap = scalars.host()[slot::P_AP];
-        // As the unlocked solve: `|p|_2 |Ap|_2`, read after `pap` because it
-        // reuses the same fold buffers.
-        let absolute_dot =
-            terms.norm_product(device, p.handle(), ap.handle(), n, fold, scalars)?;
+        // THE CURVATURE'S ROUND-OFF BOUND, R + D: R the product M p's own magnitude, sum_i |p_i| sum_j |M_ij| |p_j|, which the apply wrote per row, and D the dot's,
+        // sum_i |p_i (Q M Q p)_i|, which the dot terms wrote per row beside the products. The Cauchy-Schwarz
+        // surrogate |p|_2 |A p|_2 this solve took before is wrong both ways on a stiff scene: far above the round-off
+        // where A p is large in directions p hardly spans (measured: every truncation of a 12x felt's locked drape
+        // had p^T A p at 2e-3 to 8e-2 of R, resolved), and blind to the product's own round-off (its abort had
+        // p^T A p = -0.54 against R = 2.5e8, inside it).
+        //
+        let bound_slot = scalars.span(slot::FOLD_SCRATCH, 1);
+        let magnitude_rows = terms.magnitude_handle();
+        let product_rows = row_absolute.handle();
+        device.run("pcg.locked.bound_dot", |encoder| {
+            // Safety: the dot terms' magnitudes and the fold scratch are borrowed for the whole call.
+            unsafe { encode_fold(encoder, magnitude_rows, rows as usize, fold, bound_slot, false) }
+        })?;
+        scalars.download(device)?;
+        let dot_magnitude = scalars.host()[slot::FOLD_SCRATCH];
+        device.run("pcg.locked.bound_product", |encoder| {
+            // Safety: the apply's row magnitudes and the fold scratch are borrowed for the whole call.
+            unsafe { encode_fold(encoder, product_rows, rows as usize, fold, bound_slot, false) }
+        })?;
+        scalars.download(device)?;
+        let product_magnitude = scalars.host()[slot::FOLD_SCRATCH];
+        let absolute_dot = product_magnitude + dot_magnitude;
         let scalar = pcg_alpha(device, verdict, verdict_cause, rz, pap, absolute_dot)?;
+        if probe && (scalar.cause != PCG_BREAK_NONE || iteration <= 3) {
+            ::log::info!(
+                "* lock probe curvature iter {iteration}: pAp {pap:.3e}, R {product_magnitude:.3e}, D {dot_magnitude:.3e}, \
+                 pAp/(R+D) {:.3e}, cause {}",
+                pap / absolute_dot,
+                scalar.cause
+            );
+        }
         if scalar.cause != PCG_BREAK_NONE {
             let outcome = if scalar.cause == PCG_BREAK_PAP {
                 Outcome::IndefiniteMatrix
@@ -3836,8 +3901,16 @@ pub unsafe fn solve_locked<D: Device>(
                 }
             }
         })?;
+        let raw = if probe && (iteration <= 5 || iteration % 500 == 0) {
+            terms.dot(device, z.handle(), z.handle(), n, fold, scalars)?
+        } else {
+            0.0
+        };
         projector
             .project(device, z.handle(), 1)?;
+        if probe && (iteration <= 5 || iteration % 500 == 0) {
+            lock_probe(device, projector, &mut terms, raw, z.handle(), ap.handle(), n, fold, scalars, "z", iteration)?;
+        }
         let rz_next = terms.dot(device, r.handle(), z.handle(), n, fold, scalars)?;
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(rz_next > 0.0) {
