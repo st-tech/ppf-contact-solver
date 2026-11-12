@@ -14,6 +14,8 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 > 🤖 **LLM Transparency:** We **highly** respect that readers expect to hear the author's original voice and tone, which we work to retain throughout. Our use of LLMs is clarified in [(Markdown)](./articles/llm_transparency.md).
 
+> ⚖️ **Criticism for Fairness:** Criticism of this solver exists, and we share it for fairness. See our summary [(Markdown)](./articles/criticism.md).
+
 ## 📌 TL;DR
 
 To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html).
@@ -66,6 +68,7 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
 - **🟥 ~~AMD GPUs untested:~~** ~~The ROCm backend has never run on real AMD hardware. We rely on community bug reports.~~ No longer true; AMD (ROCm) has been tested. See [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860).
 - **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
 - **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
+- **⚖️ Criticism exists:** We share critical comments from a third-party video for fairness [(Markdown)](./articles/criticism.md).
 
 ## 🔖 Table of Contents
 
@@ -1032,6 +1035,7 @@ If the cloth has pins, changing the pin type to "Pull" can also fix the failure.
 | --- | --- |
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | A fashion company made this? | Yes. |
+| Is there any criticism of this solver? | Yes. See [Criticism for Fairness](./articles/criticism.md). |
 | Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
 | This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
 | Then why not use &lt;XXX&gt;? | We need to check two things for &lt;XXX&gt;. First, whether it provides a strain limit guarantee, which is very important for us. Second, whether it runs entirely in single precision, since any use of double precision would prevent it from compiling on Apple Metal. |
