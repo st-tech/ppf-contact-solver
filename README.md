@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📌 TL;DR
 
-To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read Criticism [(Markdown)](./articles/criticism.md) before use.
+To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
 
 ## 👀 Quick Look
 
@@ -33,6 +33,18 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
 🌐 Click the URL and explore our examples
 
 ![glance-jupyter](./asset/image/glance-jupyter.webp)
+
+## 🚧 Disclaimer and Limitations
+
+- **⏳ Offline use:** Not real time, though some examples reach interactive rates.
+- **🐢 Not the fastest:** Other recent work reports faster results.
+- **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
+- **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
+- **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
+- **🟥 AMD GPUs not tested every version:** The ROCm backend has run on real AMD hardware (see [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860)), but the author owns no AMD hardware and does not test every version. We rely on community bug reports.
+- **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
+- **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
+- **⚖️ Criticism exists:** We share critical comments from community videos for fairness [(Markdown)](./articles/criticism.md).
 
 ## ✨ Highlights
 
@@ -57,18 +69,6 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
 - **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
 - **✨ Stay Clean**: You can remove all traces after use.
 - **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
-
-### 🚧 Gentle Disclaimer and Limitations
-
-- **⏳ Offline use:** Not real time, though some examples reach interactive rates.
-- **🐢 Not the fastest:** Other recent work reports faster results.
-- **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
-- **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
-- **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
-- **🟥 ~~AMD GPUs untested:~~** ~~The ROCm backend has never run on real AMD hardware. We rely on community bug reports.~~ No longer true; AMD (ROCm) has been tested. See [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860).
-- **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
-- **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
-- **⚖️ Criticism exists:** We share critical comments from a third-party video for fairness [(Markdown)](./articles/criticism.md).
 
 ## 🔖 Table of Contents
 
@@ -934,7 +934,7 @@ Why no intersections remain after a successful step, and why an intersection err
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
 | Why should I believe you? | We perform explicit intersection checks at the end of every step. See [How Do We Promise No Intersections?](./articles/penetration_free.md#-how-do-we-promise-no-intersections). |
-| Overhyped? | Many people seem to think it runs in real time and are disappointed to learn that it does not. We have laid out clear limitations in [Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations). |
+| Overhyped? | Many people seem to think it runs in real time and are disappointed to learn that it does not. We have laid out clear limitations in [Disclaimer and Limitations](#-disclaimer-and-limitations). |
 | I got an intersection error. Where is your guarantee? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](./articles/penetration_free.md#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 | But LLMs can make mistakes. | The author makes more mistakes. |
