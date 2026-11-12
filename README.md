@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📌 TL;DR
 
-To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html).
+To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read Criticism [(Markdown)](./articles/criticism.md) before use.
 
 ## 👀 Quick Look
 
@@ -95,10 +95,6 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
   - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
   - [📦 Action Artifacts](#-action-artifacts)
 - [📡 Deploying on Cloud Services](#-deploying-on-cloud-services)
-  - [📦 Deploying on vast.ai](#-deploying-on-vastai)
-  - [📦 Deploying on Scaleway](#-deploying-on-scaleway)
-  - [📦 Deploying on Amazon Web Services](#-deploying-on-amazon-web-services)
-  - [📦 Deploying on Google Compute Engine](#-deploying-on-google-compute-engine)
 - [🤝 Community Response](#-community-response)
   - [📺 YouTube](#-youtube)
   - [🎬 Shorts and Reels](#-shorts-and-reels)
@@ -106,13 +102,10 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
   - [🧩 Blender Add-ons](#-blender-add-ons)
   - [📣 Sharing Your Work](#-sharing-your-work)
 - [💼 Commercial Use and Beyond](#-commercial-use-and-beyond)
-  - [🔧 Building Your Own Solver](#-building-your-own-solver)
 - [📬 Contributing](#-contributing)
 - [💬 Participating Discussions](#-participating-discussions)
 - [📨 Reaching the Author](#-reaching-the-author)
 - [🔒 Our Penetration-free Guarantee](#-our-penetration-free-guarantee)
-  - [✅ How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections)
-  - [🚨 Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup)
 - [❓ Frequently Asked Questions](#-frequently-asked-questions)
 - [⭐ Star History](#-star-history)
 - [🙏 Acknowledgements](#-acknowledgements)
@@ -652,35 +645,7 @@ All these examples run on our Python frontend through JupyterLab. Click any note
 
 ### 💰 Budget Table on AWS
 
-Below is a table summarizing the estimated costs for running our examples on a NVIDIA L4 instance `g6.2xlarge` at Amazon Web Services US regions (`us-east-1` and `us-east-2`).
-
-- 💰 Uptime cost is approximately $1 per hour.
-- ⏳ Deployment time is approximately 8 minutes ($0.13). Instance loading takes 3 minutes, and Docker pull & load takes 5 minutes.
-- 🎮 The NVIDIA L4 delivers [30.3 TFLOPS for FP32](https://www.nvidia.com/en-us/data-center/l4/), offering approximately 36% of the [performance of an RTX 4090](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090/).
-- 🎥 Video frame rate is 60fps.
-
-| **Example** | **Cost** | **Time** | **#Frame** | **#Vert** | **#Face** | **#Tet** | **#Rod** | **Max Strain** |
-|--------------|-------|-------|-----|--------|--------|--------|---------|-----|
-| trapped      | $0.08 | 4.66m | 300 | 135.4K | 216.5K | 416.5K | ```N/A```     | ```N/A``` |
-| twist        | $0.37 | 22.4m | 430 | 204.0K | 406.8K | ```N/A```    | ```N/A```     | ```N/A``` |
-| stack        | $0.28 | 16.5m | 120 | 167.4K | 327.7K | 12.7K  | ```N/A```     | 5%  |
-| trampoline   | $0.13 | 8.03m | 60  | 36.4K  | 56.8K  | 78.2K  | ```N/A```     | 1%  |
-| needle       | $0.20 | 11.7m | 120 | 86.8K  | 169.0K | 12.7K  | ```N/A```     | 5%  |
-| cards        | $0.08 | 4.54m | 180 | 9.4K   | 13.9K  | 6.0K   | ```N/A```     | ```N/A``` |
-| domino       | $0.06 | 3.38m | 250 | 0.5K   | 0.8K   | 0.3K   | ```N/A```     | ```N/A``` |
-| drape        | $0.04 | 2.67m | 100 | 81.9K  | 161.3K | ```N/A```    | ```N/A```     | 5% |
-| curtain      | $0.18 | 10.6m | 300 | 64.0K  | 124.2K | ```N/A```    | ```N/A```     | 5% |
-| friction     | $0.16 | 9.63m | 850 | 3.3K   | 4.3K   | 12.0K  | ```N/A```     | ```N/A``` |
-| hang         | $0.14 | 8.54m | 200 | 16.4K  | 32.3K  | ```N/A```    | ```N/A```     | 1%  |
-| belt         | $0.08 | 5.09m | 200 | 12.3K  | 23.3K  | ```N/A```    | ```N/A```     | 5%  |
-| codim        | $0.11 | 6.80m | 240 | 61.6K  | 73.6K  | 234.5K | 1.3K    | ```N/A``` |
-| fishingknot  | $0.08 | 4.89m | 350 | 19.6K  | 36.9K  | ```N/A```    | ```N/A```     | 5%  |
-| fitting      | $0.02 | 1.26m | 240 | 28.5K  | 54.9K  | ```N/A```    | ```N/A```     | 10% |
-| noodle       | $0.09 | 5.25m | 240 | 116.3K | ```N/A```    | ```N/A```    | 116.2K  | ```N/A``` |
-| ribbon       | $0.25 | 14.8m | 480 | 35.6K  | 53.0K  | 12.6K  | ```N/A```     | ```N/A``` |
-| woven        | $0.39 | 23.2m | 450 | 115.6K | ```N/A```    | ```N/A```    | 115.4K  | ```N/A``` |
-| yarn         | $0.01 | 0.25m | 120 | 28.6K  | ```N/A```    | ```N/A```    | 28.5K   | ```N/A``` |
-| roller       | $0.04 | 2.64m | 180 | 6.2K   | 11.0K  | 7.1K   | ```N/A```     | ```N/A``` |
+Estimated costs for running our examples on an NVIDIA L4 instance at Amazon Web Services [(Markdown)](./articles/budget_aws.md).
 
 #### 🏗️ Large Scale Examples
 
@@ -812,51 +777,7 @@ Also, we apply small jitters to the position of objects in the scene, so **at ea
 
 ## 📡 Deploying on Cloud Services
 
-Running our solver on the cloud has a few practical advantages:
-
-- **💰 Pay only when you use it**: Spin up an instance, run your experiment, and delete it when you're done. You pay for hours, not for a GPU sitting on your desk.
-- **📈 Scale on demand**: If you have a deadline, just launch multiple instances and run experiments in parallel. No waiting in a queue.
-- **🤝 Share with collaborators**: Send the JupyterLab link to a remote teammate and they can watch the simulation right alongside you.
-- **🔒 Cloud-grade security**: You inherit whatever security the provider gives you, which is usually a lot more than you'd set up yourself.
-- **🐛 Reproducible environments**: Users and developers share the same kernel and driver, making bug reproduction more reliable than across heterogeneous local setups.
-- **🛠️ No hardware maintenance**: No driver updates, no thermal management, and no replacement costs when hardware fails.
-
-Below, we describe how to deploy our solver on major cloud services. These instructions are up to date as of late 2024 and are subject to change.
-
-> ⚠️ For all the services below, don't forget to delete the instance after use, or you'll be charged for nothing. 💸
-
-### 📦 Deploying on [vast.ai](https://vast.ai)
-
-- Select our template [(Link)](https://cloud.vast.ai?ref_id=85288&template_id=29158e5c91e1b4b9543b6a027a837979).
-- For a step-by-step video tutorial, see ["Setting Up vast.ai"](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html).
-- Create an instance and connect via SSH with port forwarding, e.g. `ssh -L 8080:localhost:8080 root@<host> -p <port>`, then open `http://localhost:8080` in your browser.
-
-### 📦 Deploying on [Scaleway](https://www.scaleway.com/en/)
-
-- Set zone to `fr-par-2`
-- Select type `L4-1-24G` or `GPU-3070-S`
-- Choose `Ubuntu Jammy GPU OS 12`
-- *Do not skip* the Docker container creation in the installation process; it is required.
-- This setup costs approximately €0.76 per hour.
-- CLI instructions are described in [(Markdown)](./articles/cloud.md#-scaleway).
-
-### 📦 Deploying on [Amazon Web Services](https://aws.amazon.com/en/)
-
-- Amazon Machine Image (AMI): `Deep Learning Base AMI with Single CUDA (Ubuntu 24.04)`
-- Instance Type: `g6.2xlarge` (Recommended)
-- This setup costs around $1 per hour.
-- *Do not skip* the Docker container creation in the installation process; it is required.
-
-### 📦 Deploying on [Google Compute Engine](https://cloud.google.com/products/compute)
-
-- Select `GPUs`. We recommend the GPU type `NVIDIA L4` because it's affordable and accessible, as it does not require a high quota. You may select `T4` instead for testing purposes.
-- Do **not** check `Enable Virtual Workstation (NVIDIA GRID)`.
-- We recommend the machine type `g2-standard-8`.
-- Choose a Deep Learning VM OS image from the family `common-cu129-ubuntu-2404-nvidia-580` (NVIDIA driver 580) and set the disk size to `50GB`.
-- As of late 2024, this configuration costs approximately $0.86 per hour in `us-central1 (Iowa)` and $1.00 per hour in `asia-east1 (Taiwan)`.
-- Port number `8080` is reserved by the OS image. Set `$MY_WEB_PORT` to `8888`. When connecting via `gcloud`, use the following format:  `gcloud compute ssh --zone "xxxx" "instance-name" -- -L 8080:localhost:8888`.
-- *Do not skip* the Docker container creation in the installation process; it is required.
-- CLI instructions are described in [(Markdown)](./articles/cloud.md#-google-compute-engine).
+We describe how to deploy the solver on vast.ai, Scaleway, Amazon Web Services and Google Compute Engine [(Markdown)](./articles/cloud_services.md).
 
 ## 🤝 Community Response
 
@@ -971,63 +892,25 @@ If you post about it on [X.com](https://x.com), please consider using the [**#ZO
 
 ## 💼 Commercial Use and Beyond
 
-This project is released under the [Apache License 2.0](./LICENSE). In plain terms, you may use, modify, and redistribute the code in commercial products, including proprietary software, without paying royalties or open-sourcing your own code. You only need to preserve the license notice and the attribution required by the license.
-
-The one exception is the code that calls Blender's Python API (`bpy`). Blender requires an add-on to preserve the same freedoms Blender grants, so the Blender add-on (`blender_addon/`), its example scripts (`examples/blender/`) and the tests that load it (`addon_host_tests/`) are licensed under the [GNU General Public License, version 3 or later](./blender_addon/LICENSE) (`GPL-3.0-or-later`). Everything else, including the solver and the Python frontend, remains Apache 2.0. [LICENSING.md](./LICENSING.md) maps each path to its license.
-
-If you build something on top of this solver, we would love to hear about it, but you are not obligated to disclose anything.
-
-### 🔧 Building Your Own Solver
-
-If you like, we suggest taking the whole source code apart and building your own solver tailored to your specific needs. With the recent advances in coding agents, this is very likely possible even without any expertise in physics or coding.
-
-Once you build your own, you are free to publish it as your own project or commercialize it, as long as you follow the license terms described above.
-
-You don't need to use this project as is. Customize it as you like!
+This project is released under the [Apache License 2.0](./LICENSE), except the Blender add-on, which is licensed under GPL-3.0-or-later. Details, and how to build your own solver [(Markdown)](./articles/commercial_use.md).
 
 ## 📬 Contributing
 
-We cannot accept pull requests directly, since that involves resolving copyright and licensing matters with [ZOZO, Inc.](https://corp.zozo.com/en/) Instead, please open an issue for bug reports and proposals, or fork the repository and share a reference implementation for us to review. Substantial contributions will be credited here.
-
-Issues are triaged in batches by a single part-time maintainer (Ryoichi Ando) and labeled `queued` (seen), `in-progress` (started), or `worked` (answered at least once), so please be patient if a response takes a while.
-
-When reporting an issue, please attach a `.blend` file that reproduces it if possible. Remove any copyrightable materials from the scene or replace them with openly licensed alternatives. Because GitHub does not support direct `.blend` uploads, compress the file into a ZIP archive (for example, `scene.blend.zip`) before attaching it.
-
-Please do not submit any other copyrightable materials through Issues or Discussions. Thank you!
+We cannot accept pull requests directly. Please open an issue for bug reports and proposals [(Markdown)](./articles/contributing.md).
 
 ## 💬 Participating Discussions
 
-We have opened [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) as a place for questions, ideas, and conversations about the solver. Feel free to drop by to ask questions, share your work, or chat with the community.
+Questions, ideas and conversations are welcome in [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) [(Markdown)](./articles/contact.md).
 
 ## 📨 Reaching the Author
 
-This project is owned by [ZOZO, Inc.](https://corp.zozo.com/en/) and maintained by Ryoichi Ando.
-
-For bug reports or feature requests, please open an issue on GitHub. For usage questions, [GitHub Discussions](https://github.com/st-tech/ppf-contact-solver/discussions) is the best place to ask. Either route is the fastest way to reach the author and keeps the conversation searchable for other users.
-
-If you would prefer to reach out privately, you can also email the author at <ryoichi.ando@zozo.com>. Please do not send any copyrightable materials; anything of that kind will never be read by the author and will be deleted upon receipt.
-
-If you used this project in a public piece of work, whether a paper, a production credit, or a personal project, the author would love to feature it here. A link to your article, project page, or website is all we need (rather than images or clips themselves, since hosting them here may run into licensing issues), and we will be happy to add it.
+How to reach the author, and how to share your work [(Markdown)](./articles/contact.md#-reaching-the-author).
 
 ## 🔒 Our Penetration-free Guarantee
 
 We employ Continuous Collision Detection (CCD), **not Discrete Collision Detection (DCD)**. Our [cubic barrier](#-technical-materials) theoretically guarantees penetration-free contact by construction, not heuristics, **only when a solution is found.** A solution may not be found in extreme cases. In such cases, as well as with bugs, the solver may crash, stall, or take nearly forever to find a solution. **What we guarantee is that every step that succeeds is free of intersections.**
 
-### ✅ How Do We Promise No Intersections?
-
-An intersection checker confirms **zero penetration** after every successful run and every step in [GitHub Actions](#-github-actions), so no hidden intersections are left behind.
-
-### 🚨 Intersection Errors Can Also Indicate an Impossible Setup
-
-Examples include pinned panels driven through each other ([#116](https://github.com/st-tech/ppf-contact-solver/issues/116)) and cloth trapped in a self-intersecting character animation ([#110](https://github.com/st-tech/ppf-contact-solver/issues/110)). Stopping preserves the guarantee, while completing would silently accept penetration. Check the scene before reporting a bug.
-
-If a cloth is pinched by an animated character or a shape-keyed collider (see [#160](https://github.com/st-tech/ppf-contact-solver/issues/160)), the solver may stop with "Newton solve made no progress (over-constrained configuration)". In that case, enable "Soft Constraint" on the group of the collider. The collider then gives way slightly where it presses on the cloth, and the scene can run to the end.
-
-<img src="https://github.com/user-attachments/assets/f9053c49-d2a1-4117-962c-35455882e011" alt="Apply Soft Constraints" width="500">
-
-If the cloth has pins, changing the pin type to "Pull" can also fix the failure. If you have any pins, please turn them all to "Pull" pins.
-
-<img src="https://github.com/user-attachments/assets/3b9a9dd3-d585-48ff-8aa1-cf7d3313a5c0" alt="Pull pin type" width="280">
+Why no intersections remain after a successful step, and why an intersection error can also mean an impossible setup [(Markdown)](./articles/penetration_free.md).
 
 ## ❓ Frequently Asked Questions
 
@@ -1050,9 +933,9 @@ If the cloth has pins, changing the pin type to "Pull" can also fix the failure.
 | I don't have GPUs. Can I use this? | Yes, all the features run on the CPU backend (or Metal on Apple silicon), but it does not scale to large-scale scenes. See [Requirements](#️-requirements). |
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
 | Is it really intersection-free? | If the simulation does not crash or stall, yes, it is exactly 100% intersection-free. We never promise that the simulation will not crash or stall. |
-| Why should I believe you? | We perform explicit intersection checks at the end of every step. See [How Do We Promise No Intersections?](#-how-do-we-promise-no-intersections). |
+| Why should I believe you? | We perform explicit intersection checks at the end of every step. See [How Do We Promise No Intersections?](./articles/penetration_free.md#-how-do-we-promise-no-intersections). |
 | Overhyped? | Many people seem to think it runs in real time and are disappointed to learn that it does not. We have laid out clear limitations in [Gentle Disclaimer and Limitations](#-gentle-disclaimer-and-limitations). |
-| I got an intersection error. Where is your guarantee? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](#-intersection-errors-can-also-indicate-an-impossible-setup). |
+| I got an intersection error. Where is your guarantee? | In some situations, penetration is structurally unavoidable. See [Intersection Errors Can Also Indicate an Impossible Setup](./articles/penetration_free.md#-intersection-errors-can-also-indicate-an-impossible-setup). |
 | Doesn't LLM-assisted coding compromise reliability? | The author can neither write code faster than an LLM nor write smarter or more polished code than the latest LLM models. We run extensive tests through [GitHub Actions](#-github-actions) to assure reliability as best we can. |
 | But LLMs can make mistakes. | The author makes more mistakes. |
 | Did you write everything using AI? | We try to let AI handle what it is reliable at. However, Claude Code did not exist when our [TOG paper (2024)](#-technical-materials) was published, and until it did, we wrote everything ourselves, except for completions suggested by Copilot. We know what we are doing. |
