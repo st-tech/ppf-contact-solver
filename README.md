@@ -20,6 +20,8 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
 
+⚠️ When not in use, disable or uninstall our add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
+
 ## 👀 Quick Look
 
 🎨 Simulate remotely from our [Blender add-on](https://st-tech.github.io/ppf-contact-solver) (screenshots taken on macOS; you can also run locally on a modern NVIDIA GPU on Windows or Linux, or on an Apple silicon Mac)
@@ -40,6 +42,7 @@ To use this through Blender, watch the [CGMatter walkthrough](https://www.youtub
 - **🐢 Not the fastest:** Other recent work reports faster results.
 - **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
 - **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
+- **🔌 Disable when not in use:** Disable or uninstall the add-on when you are not using it. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
 - **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
 - **🟥 AMD GPUs not tested every version:** The ROCm backend has run on real AMD hardware (see [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860)), but the author owns no AMD hardware and does not test every version. We rely on community bug reports.
 - **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
@@ -304,6 +307,8 @@ Follow this page [How to Install](https://st-tech.github.io/ppf-contact-solver/b
 <p align="center">
   <a href="https://st-tech.github.io/ppf-contact-solver"><img src="./asset/image/read-blender-addon-docs.svg" alt="Read Blender Add-on Documentation" height="35"></a>
 </p>
+
+> ⚠️ When not in use, disable or uninstall the add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
 
 🎬 Prefer video? [CGMatter](https://www.youtube.com/@CGMatter) walks through the full setup in this video tutorial:
 
@@ -924,6 +929,7 @@ Why no intersections remain after a successful step, and why an intersection err
 | Then why not use &lt;XXX&gt;? | We need to check two things for &lt;XXX&gt;. First, whether it provides a strain limit guarantee, which is very important for us. Second, whether it runs entirely in single precision, since any use of double precision would prevent it from compiling on Apple Metal. |
 | Then, if &lt;XXX&gt; can do all of that, will you adopt it? | The adoption cost is not free. Also, incorporating third-party techniques requires our internal legal review. |
 | Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
+| Can I leave the add-on enabled? | When not in use, disable or uninstall it. Undiscovered bugs may affect performance, auto-save, or other parts of Blender (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed). |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
 | Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
