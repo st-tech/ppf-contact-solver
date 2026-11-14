@@ -20,7 +20,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
 
-⚠️ When not in use, disable or uninstall our add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
+⚠️ When not in use, disable or uninstall our add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed). We do our best to remove bugs.
 
 ## 👀 Quick Look
 
