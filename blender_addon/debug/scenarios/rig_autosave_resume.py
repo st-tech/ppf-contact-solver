@@ -28,11 +28,17 @@
 # THE BOUND IS MEASURED, NOT CHOSEN. The resumed run is compared with the
 # uninterrupted one over frames K+1..N. Two runs of one scene on one build may
 # differ by the backend's own nondeterminism (parallel reductions in another
-# order), and that is exactly what the control measures: it diverges from the
-# uninterrupted run over all N frames, while a correct resume diverges over
-# only N-K, so the control's largest difference over the compared frames bounds
-# what a correct resume can show. On a deterministic backend the control
-# agrees to the bit, and a correct resume must too. A resume that loses a piece
+# order), and that is what the control measures. ONE CONTROL IS ONE SAMPLE OF
+# THAT NOISE, NOT A CEILING ON IT. It diverges from the uninterrupted run over
+# all N frames and a correct resume over only N-K, but the largest coordinate
+# difference saturates at the noise's own scale, so the two are samples of the
+# same size and a correct resume exceeds the control about half the time
+# (measured on CUDA: 3.32e-7 against a control of 3.28e-7). The bound is
+# therefore the triangle one: resumed - uninterrupted = (resumed - control) +
+# (control - uninterrupted), and for a correct resume the first term is
+# another sample at the control's scale, so a correct resume stays within
+# twice the control. On a deterministic backend the control agrees to the bit,
+# and a correct resume must too. A resume that loses a piece
 # of run state (a Cosserat frame, a friction memory, a crept rest shape, a
 # velocity) restarts that piece and differs by a physical amount.
 #
@@ -57,11 +63,11 @@
 #                                  frames 0..K byte for byte, and wrote
 #                                  K+1..N.
 #   <c>_D_resume_matches           the resumed frames K+1..N agree with the
-#                                  uninterrupted ones within the control's
-#                                  largest difference over the same frames,
-#                                  or one float32 step at the scene's largest
-#                                  coordinate if that is larger and the control
-#                                  is not zero,
+#                                  uninterrupted ones within twice the
+#                                  control's largest difference over the same
+#                                  frames, that difference taken as at least
+#                                  one float32 step at the scene's largest
+#                                  coordinate when the control is not zero,
 #                                  and the scene moved by more than that bound
 #                                  over K..N.
 #   <c>_E_resume_prunes            after the resume the checkpoint set is the
@@ -383,9 +389,14 @@ def run_case(case):
     # a correct resume can sit at a one-step flip, and which coordinate flips
     # decides which is larger. So the bound is never below that step there. A
     # deterministic backend (control zero) must still match to the bit.
+    # TWICE, by the triangle bound in the header: the control is one sample of
+    # the noise, and a correct resume is resumed-control plus control-
+    # uninterrupted, two samples at that scale. A resume that lost run state
+    # differs by a physical amount, which the motion requirement keeps far
+    # above this.
     extent = max(float(np.abs(positions(uninterrupted[n])).max()) for n in window)
     step = float(np.spacing(np.float32(extent)))
-    allowed = max(bound, step) if bound > 0.0 else 0.0
+    allowed = 2.0 * max(bound, step) if bound > 0.0 else 0.0
     record(case + "_D_resume_matches", resume_diff <= allowed and motion > allowed,
            {"resume_from": resume_from, "largest_resume_difference_m": resume_diff,
             "control_bound_m": bound, "rounding_step_m": step, "allowed_m": allowed,
