@@ -623,7 +623,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             // `1 / sqrt(N)`). Every other vertex is exactly as before.
             const bool secant = prop.restitution > 0.0f && !plane.kinematic;
             const float start_gap =
-                secant ? (current[i] - plane.ground).dot(up) : ghat;
+                secant ? (current_i - plane.ground).dot(up) : ghat;
             const float stiffness_mass =
                 secant && prop.body_vertex_count > 0u
                     ? mass * static_cast<float>(prop.body_vertex_count)
