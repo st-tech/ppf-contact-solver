@@ -25,6 +25,7 @@ _PARAM_PROPS = {
     "contact_gap", "contact_gap_rat",
     "contact_offset", "contact_offset_rat",
     "contact_gap_limit_percent",
+    "allow_rest_proximity", "rest_proximity_distance",
     "enable_strain_limit", "strain_limit_percent",
     "enable_inflate", "inflate_pressure",
     "force_field_weight",
@@ -35,7 +36,7 @@ _PARAM_PROPS = {
     "stitch_stiffness",
     # STATIC-specific (used only when the group's object_type is "STATIC").
     # PDRD-specific (used only when the group's object_type is "PDRD").
-    "pdrd_density",
+    "pdrd_density", "pdrd_restitution",
     # SAND-specific (used only when the group's object_type is "SAND").
     "sand_grain_radius", "sand_particle_mass", "sand_friction",
 }
@@ -87,7 +88,8 @@ class _ParamProxy:
       ``shrink`` (Solid, uniform), ``length_factor`` (Rod, labeled
       **Shrink** in the panel; it scales the rod's rest edge length)
     - **Stitch**: ``stitch_stiffness`` (Solid and Shell)
-    - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric). The PDRD hinge
+    - **PDRD-specific**: ``pdrd_density`` (kg/m^3, volumetric) and
+      ``pdrd_restitution`` (0 to 1, an approximate bounce). The PDRD hinge
       joint is per-object, set via :meth:`set_hinge` (not a group material).
     - **Sand-specific**: ``sand_grain_radius`` (meters), ``sand_particle_mass``
       (grams; the encoder sends kilograms), ``sand_friction``.  Once

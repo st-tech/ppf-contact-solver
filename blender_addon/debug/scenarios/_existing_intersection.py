@@ -330,6 +330,150 @@ if SECTION == "run":
               {"finished": finished, "near_vertices": int(near.sum()),
                "rest_y": rest_near, "floor": FLOOR})
 
+if SECTION == "rest":
+    # ALLOW REST PROXIMITY, the distance form of the same linking: a pair of
+    # elements sharing no vertex that starts closer than the mean of its two
+    # sides' distances is linked as a tangle is. The witness is a sheet
+    # parallel to a held one, GAP apart, with zero contact offsets, so the
+    # scene is clean and builds whatever the option says: only the distance
+    # decides whether it links anything.
+    REST = "allow-rest-proximity"
+    GAP = 0.004
+
+    def parallel_rest(near_d, held_d=0.0, gap=GAP, offset=0.0, static=False):
+        # `static` pins the held sheet without a move, which makes it a STATIC
+        # collision mesh outside the solved namespace.
+        def populate(app, s):
+            h = s.add("held").at(0.0, 0.0, 0.0)
+            holder = h.pin()
+            if not static:
+                holder.move_by([0.0, 0.0, 0.001], t_start=0.0, t_end=10.0)
+            n = s.add("near").at(0.0, gap, 0.0)
+            if offset:
+                h.param.set("contact-offset", offset)
+                n.param.set("contact-offset", offset)
+            if near_d:
+                n.param.set(REST, near_d)
+            if held_d:
+                h.param.set(REST, held_d)
+        return populate
+
+    def links_of(name, populate, want_links, want_static=False):
+        fixed, kind, text = try_build(name, populate)
+        if fixed is None:
+            check(name, False, {"error": kind, "message": text})
+            return None
+        links = np.asarray(fixed.start_links)
+        records = fixed.start_link_exemptions()
+        n_dyn = len(fixed._vert[1])
+        n_static = (int((links >= n_dyn).any(axis=1).sum())
+                    if len(links) else 0)
+        got = {"links": int(len(links)), "static_links": n_static,
+               "records": [(r.get("type"), r.get("count")) for r in records]}
+        if want_links:
+            ok = (len(links) > 0 and bool((links[:, 0] < links[:, 1]).all())
+                  and len(records) == 1 and records[0]["count"] > 0
+                  and (not want_static or n_static == len(links)))
+        else:
+            ok = len(links) == 0 and records == []
+        check(name, ok, got)
+        return fixed
+
+    links_of("rest_unset_parallel_links_nothing", parallel_rest(0.0), False)
+    # 0.01 on one side: the mean 0.005 exceeds the 0.004 spacing.
+    links_of("rest_covering_distance_links", parallel_rest(0.01), True)
+    links_of("rest_held_side_alone_is_enough",
+             parallel_rest(0.0, held_d=0.01), True)
+    # 0.006 on one side: the mean 0.003 is short of the spacing.
+    links_of("rest_one_side_covers_only_half", parallel_rest(0.006), False)
+    # Against a STATIC collision mesh, whose vertices carry no distance: the
+    # sheet's 0.01 alone (mean 0.005) covers the 4 mm, and every link reaches
+    # into the collider's pool; 0.006 (mean 0.003) does not.
+    links_of("rest_static_collider_is_linked",
+             parallel_rest(0.01, static=True), True, want_static=True)
+    links_of("rest_static_collider_one_side_covers_only_half",
+             parallel_rest(0.006, static=True), False)
+    links_of("rest_both_sides_add_up",
+             parallel_rest(0.006, held_d=0.006), True)
+    # The pair is farther apart than the distance: nothing.
+    links_of("rest_pair_farther_than_distance_keeps_contact",
+             parallel_rest(0.01, gap=0.05), False)
+    # A pair closer than its contact offsets is refused without the option
+    # (as the build section asserts) and linked under any distance, since a
+    # vertex with a distance opts into the existing-intersection linking.
+    links_of("rest_covers_offset_violation",
+             parallel_rest(0.001, offset=0.005), True)
+
+    def negative(app, s):
+        s.add("near").at(0.0, 0.0, 0.0).param.set(REST, -0.01)
+
+    fixed, kind, text = try_build("negative", negative)
+    check("rest_negative_distance_is_refused",
+          kind == "ValueError" and REST in text,
+          {"error": kind, "message": text})
+
+    def sand(app, s):
+        rng = np.random.default_rng(0)
+        app.asset.add.points("grains", rng.uniform(-0.1, 0.1, (20, 3)))
+        s.add("grains").at(0.0, 1.0, 0.0).param.set(REST, 0.01)
+
+    fixed, kind, text = try_build("sand", sand)
+    check("rest_sand_is_refused_by_name",
+          kind == "ValueError" and "sand" in text,
+          {"error": kind, "message": text})
+
+    # THE RUN. Two sheets fall onto two held sheets from the same 4 mm, side
+    # by side in one solve. The one whose distance covers its spacing has
+    # every pair with the held sheet linked, so it must fall THROUGH to the
+    # floor; the one whose distance does not keeps contact and must come to
+    # rest on its held sheet. A third starts 5 cm up with the covering
+    # distance: farther than it, so it keeps contact too.
+    app = App.create("rig_rest_proximity_run")
+    assets(app)
+    scene = app.scene.create()
+    # The fourth case holds its sheet as a STATIC collider.
+    layouts = (("covered", -SPACING, GAP, 0.01),
+               ("uncovered", 0.0, GAP, 0.006),
+               ("far", SPACING, 0.05, 0.01),
+               ("static_covered", 2.0 * SPACING, GAP, 0.01))
+    for name, x, gap, d in layouts:
+        h = scene.add("held").at(x, 0.0, 0.0)
+        holder = h.pin()
+        if name != "static_covered":
+            holder.move_by([0.0, 0.0, 0.001], t_start=0.0, t_end=10.0)
+        scene.add("near").at(x, gap, 0.0).param.set(REST, d)
+    scene.add.invisible.wall([0, FLOOR, 0], [0, 1, 0])
+    begin(SECTION)
+    try:
+        fixed = scene.build(quiet=True)
+        session = app.session.create(fixed)
+        session.param.set("frames", FRAMES)
+        session = session.build()
+        session.start(blocking=True)
+        finished = bool(session.finished())
+        first, _ = session.get.vertex(0)
+        last, _ = session.get.vertex(FRAMES - 1)
+        first = np.asarray(first, dtype=np.float64)[:, :3]
+        last = np.asarray(last, dtype=np.float64)[:, :3]
+    except Exception as error:
+        for name, _x, _gap, _d in layouts:
+            check("rest_run_" + name, False, {"error": repr(error)[:400]})
+        first = None
+    if first is not None:
+        for name, x, gap, _d in layouts:
+            mine = ((np.abs(first[:, 1] - gap) < 1e-4)
+                    & (np.abs(first[:, 0] - x) < 0.3))
+            rest_y = float(last[mine, 1].mean()) if mine.any() else None
+            got = {"finished": finished, "vertices": int(mine.sum()),
+                   "rest_y": rest_y, "floor": FLOOR}
+            if name in ("covered", "static_covered"):
+                ok = (finished and mine.any()
+                      and FLOOR - 0.01 < rest_y < FLOOR + 0.05)
+                check("rest_run_%s_sheet_falls_through" % name, ok, got)
+            else:
+                ok = finished and mine.any() and rest_y > -0.02
+                check("rest_run_%s_sheet_rests_on_held" % name, ok, got)
+
 print("PPFRESULT" + json.dumps(cases))
 '''
 

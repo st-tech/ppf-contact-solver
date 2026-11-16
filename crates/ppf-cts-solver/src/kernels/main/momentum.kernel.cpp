@@ -41,7 +41,8 @@
     unsigned torque_group_count,
     const unsigned *neighbor_index,
     const unsigned *neighbor_offset, unsigned has_neighbor,
-    const unsigned *face, float dt, unsigned inactive_momentum,
+    const unsigned *face, float dt,
+    unsigned inactive_momentum,
     float time_f32, float wind_x, float wind_y, float wind_z, float air_density,
     float air_friction, float isotropic_air_friction, float fix_xz,
     const float *field_air_velocity, unsigned has_field_air,
@@ -56,6 +57,13 @@
     }
     const float mass = prop[i].mass;
     const float area = prop[i].area;
+    // A vertex of a body with a restitution weighs its INERTIA against
+    // `sqrt(theta) dt` with `theta = 1/2` (`restitution_weight` in
+    // driver/state.rs); every other vertex against `dt` itself. Drag and the
+    // field keep the real `dt`, so a restitution leaves their strength as
+    // implicit Euler has it.
+    const float inertia_dt =
+        prop[i].restitution > 0.0f ? fmath::sqrt(0.5f) * dt : dt;
     // THREAD-SPACE COPIES, NOT REFERENCES, and that is a Metal requirement
     // rather than a style: an element reached through a `[[seam::device]]`
     // base pointer is a DEVICE-space lvalue, and MSL will not bind one to the
@@ -180,8 +188,8 @@
 
     if (!pulled) {
         const Vec3f target_i = target[i];
-        f += mass * momentum::gradient(dt, y, target_i);
-        H += mass * momentum::hessian(dt);
+        f += mass * momentum::gradient(inertia_dt, y, target_i);
+        H += mass * momentum::hessian(inertia_dt);
     }
 
     if (isotropic_air_friction) {
@@ -192,8 +200,8 @@
     }
 
     if (momentum::fix_xz_active(y, fix_xz)) {
-        f += momentum::fix_xz_gradient(dt, y, x, mass, fix_xz);
-        H += momentum::fix_xz_hessian(dt, y, mass, fix_xz);
+        f += momentum::fix_xz_gradient(inertia_dt, y, x, mass, fix_xz);
+        H += momentum::fix_xz_hessian(inertia_dt, y, mass, fix_xz);
     }
 
     for (unsigned k = 0; k < 3; ++k) {

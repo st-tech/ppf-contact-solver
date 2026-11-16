@@ -182,7 +182,7 @@ _MAC_DEVICE_SUBDIRS = {
 # needs no `bin/` row: `build-linux-native/bundle.sh` copies each backend into
 # the `target/<backend>/release` directory it was built in and writes the marker
 # there itself, so an extracted distribution and a checkout are the same layout.
-# `bin/` in that distribution holds the backend library and ffmpeg, never a
+# `bin/` in that distribution holds the backend library, never a
 # server, so probing it would accept a directory that cannot launch. The
 # per-backend GPU directories are reached through `_GPU_BACKEND_SUBDIRS` below,
 # as they are on Windows.
@@ -1136,7 +1136,7 @@ def linux_native_server_binary(
     A LINUX DISTRIBUTION IS THE SAME SHAPE AS THE TREE IT WAS BUILT FROM, which
     is why there is no bundle row to add: `build-linux-native/bundle.sh` copies
     each backend into the `target/<backend>/release` directory it was built in.
-    Its `bin/` holds the backend library and ffmpeg and never a server.
+    Its `bin/` holds the backend library and never a server.
 
     *gpu_backend* names the accelerator to run, or ``GPU_BACKEND_AUTO``, and
     *probe* is what asks a build whether its device is usable; see

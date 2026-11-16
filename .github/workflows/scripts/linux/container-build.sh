@@ -56,22 +56,6 @@ dnf -y -q install \
     make git rsync xz tar gzip bzip2 curl which diffutils findutils file procps-ng \
     pkgconf-pkg-config python3.12 python3.12-pip python3.12-devel
 
-# nasm FROM POWERTOOLS, ON x86_64 ONLY. warmup.sh takes a host nasm of 2.13 or
-# newer for x264's x86 assembly and only otherwise fetches one from nasm.us,
-# which the CI network refuses (Build Release #21, 2026-09-17: the pointer
-# check timed out on it and the x86_64 build ended before compiling anything).
-# Measured in this image on dev-head with the firewall open: AlmaLinux 8's nasm
-# (2.15.03) lives in the PowerTools repository, disabled by default, and the
-# enabled repositories answer `Unable to find a match: nasm`; the banner
-# `NASM version 2.15.03 compiled on May 20 2021` satisfies host_nasm_ok, so
-# URL_NASM is never probed here. nasm is an x86 assembler with no aarch64
-# package (Build Release #22 lost its aarch64 leg to naming it for both), and
-# x264's aarch64 code goes through the C compiler, so aarch64 installs nothing.
-if [ "$(uname -m)" = x86_64 ]; then
-    dnf -y -q --enablerepo=powertools install nasm
-    printf 'nasm: %s\n' "$(nasm -v)"
-fi
-
 # The enable script reads variables it does not define.
 set +u
 # shellcheck source=/dev/null

@@ -108,6 +108,21 @@ weighted_separation(const Vec3f *x,
 //
 // The order of the four contributions is fixed, because `force` and `hessian`
 // are fp32 running sums and reordering them is a different answer.
+// Whether any vertex a pair names belongs to a body with a restitution. Such a
+// pair is assembled with its start pose's own closest point as well as the
+// iterate's (the visitors below), and pushes with the barrier's secant over the
+// step (`embed_contact`).
+template <unsigned N>
+[[seam::device_fn]] inline bool pair_has_restitution(
+    const VertexProp *vertex_prop, const unsigned *index) {
+    for (unsigned i = 0; i < N; ++i) {
+        if (vertex_prop[index[i]].restitution > 0.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <unsigned N>
 [[seam::device_fn]] inline bool embed_contact(
     const Vec3f *x0, const Vec3f *x,
@@ -130,7 +145,13 @@ template <unsigned N>
     // iteration (`friction_load_prepare`), and the substep it is divided by.
     const float *friction_load, const float *friction_cone, float dt,
     const unsigned *index,
-    const SVecf<N> &weight, float ghat, float offset,
+    const SVecf<N> &weight,
+    // The weights of the pair's closest point at the START pose. A restitution
+    // pair's secant sweeps from its true distance there, which is the distance
+    // the previous step ended at, so no barrier energy is lost or made at the
+    // step boundary when the closest point moves across the mesh. Every other
+    // pair passes `weight` and never reads it.
+    const SVecf<N> &start_weight, float ghat, float offset,
     float friction, unsigned multiplicity, bool include_friction, unsigned left,
     unsigned right,
     // THE SIDES' COSSERAT FRAMES and contact offsets, which the record keeps for
@@ -160,8 +181,21 @@ template <unsigned N>
     CcdOverlapRecord &out_overlap, DiagHandle diag) {
     SVecf<N> mass;
     SMatf<3 * N, 3 * N> local_hessian = SMatf<3 * N, 3 * N>::Zero();
+    // A PAIR TOUCHING A BODY WITH A RESTITUTION forms its stiffness from the
+    // mass that actually moves at each vertex, its body's for every side that
+    // belongs to a body, and pushes
+    // with the barrier's secant over the step (below). Every other pair is
+    // exactly as before.
+    bool restitution = false;
     for (unsigned i = 0; i < N; ++i) {
-        mass[i] = vertex_prop[index[i]].mass;
+        restitution = restitution || vertex_prop[index[i]].restitution > 0.0f;
+    }
+    for (unsigned i = 0; i < N; ++i) {
+        const VertexProp side = vertex_prop[index[i]];
+        mass[i] = side.mass;
+        if (restitution && side.body_vertex_count > 0u) {
+            mass[i] *= static_cast<float>(side.body_vertex_count);
+        }
         for (unsigned j = 0; j < N; ++j) {
             local_hessian.template block<3, 3>(3 * i, 3 * j) =
                 fixed_csr_read(fixed_index, fixed_offset, fixed_value,
@@ -231,6 +265,32 @@ template <unsigned N>
         stiffness * barrier_edge_gradient(separation, ghat, offset, barrier);
     Mat3x3f hessian =
         stiffness * barrier_edge_hessian(separation, ghat, offset, barrier);
+    // THE RESTITUTION PAIR'S PUSH: the barrier's secant over the step, along
+    // the pair's normal. The cubic barrier pushes `2 (elastic + m / p^2)
+    // (ghat - p)^2 / ghat` at gap `p`, twice the floor's shape, so its mean
+    // over the swept gaps is the floor's closed form doubled. Its work over the
+    // step is `s (n . de)` rather than the potential's drop `s (p1 - p0)`,
+    // because the gap `|e| - offset` is not linear in the separation `e`; the
+    // two differ by the step's turn of the normal, small over one step. A
+    // `lambda de` term would make them equal exactly, but its derivative is not
+    // in the Newton system and the iteration oscillates with it, so restitution
+    // takes the small mismatch instead (approximate by design; see the docs).
+    if (restitution && barrier == Barrier::Cubic) {
+        float elastic;
+        float inertial_mass;
+        contact_stiffness_parts<N>(local_hessian, weight, mass, separation,
+                                   elastic, inertial_mass);
+        const float start =
+            weighted_separation<N>(x0, index, start_weight).norm() - offset;
+        const float end = fmath::sqrt(ex_d2) - offset;
+        float curvature;
+        const float mean = 2.0f * floor_secant_push(start, end, ghat,
+                                                    inertial_mass, elastic,
+                                                    curvature);
+        curvature *= 2.0f;
+        force = -mean * normal;
+        hessian = curvature * normal * normal.transpose();
+    }
     // A PAIR'S FRICTION IS APPLIED BY THE FROZEN PASS from the record the
     // step's first iteration writes (`friction_memory.kernel.cpp`, "THE RECORD
     // IS ALSO THE STEP'S FRICTION"), so this pass evaluates it only to record
@@ -516,15 +576,39 @@ template <unsigned N>
     const Vec3f t0 = x[f[0]];
     const Vec3f t1 = x[f[1]];
     const Vec3f t2 = x[f[2]];
-    const Vec3f c =
+    Vec3f c =
         proximity::point_triangle_distance_coeff<float, float>(p, t0, t1,
                                                                    t2);
+    // A RESTITUTION PAIR also takes its closest point at the start pose
+    // (`embed_contact`'s `start_weight`), and is kept while it leaves the
+    // band, so a projection that has slid off the triangle at the iterate
+    // falls back to the start pose's.
+    const unsigned pair_index[4] = {vertex_index, f[0], f[1], f[2]};
+    const bool restitution = pair_has_restitution<4>(vertex_prop, pair_index);
+    Vec3f c0 = c;
+    if (restitution) {
+        // Thread-space copies, for the reason `weighted_separation` states.
+        const Vec3f p_start = x0[vertex_index];
+        const Vec3f t0_start = x0[f[0]];
+        const Vec3f t1_start = x0[f[1]];
+        const Vec3f t2_start = x0[f[2]];
+        c0 = proximity::point_triangle_distance_coeff<float, float>(
+            p_start, t0_start, t1_start, t2_start);
+    }
     if (!(c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f)) {
-        return false;
+        if (!(restitution && c0.maxCoeff() < 1.0f && c0.minCoeff() > 0.0f)) {
+            return false;
+        }
+        c = c0;
     }
     const Vec3f e = c[0] * (p - t0) +
                     c[1] * (p - t1) +
                     c[2] * (p - t2);
+    SVecf<4> start_weight;
+    start_weight[0] = 1.0f;
+    start_weight[1] = -c0[0];
+    start_weight[2] = -c0[1];
+    start_weight[3] = -c0[2];
     const VertexParam vparam =
         vertex_param[vertex_prop[vertex_index].param_index];
     const FaceParam fparam = face_param[face_prop[face_index].param_index];
@@ -534,7 +618,11 @@ template <unsigned N>
         vparam.friction, fparam.friction, friction_mode);
     const float reach = ghat + offset;
     if (!(e.squaredNorm() < reach * reach)) {
-        return false;
+        if (!(restitution &&
+              weighted_separation<4>(x0, pair_index, start_weight).squaredNorm() <
+                  reach * reach)) {
+            return false;
+        }
     }
     unsigned index[4];
     index[0] = vertex_index;
@@ -566,7 +654,7 @@ template <unsigned N>
                         (p - t0)),
                     vertex_prop[index[1]].object_index,
                     friction_load, friction_cone, dt, index,
-                    weight, ghat,
+                    weight, start_weight, ghat,
                     offset, friction, 1u, true, vertex_index, face_index,
                     FRICTION_MEMORY_UNUSED, FRICTION_MEMORY_UNUSED, 0.0f, 0.0f,
                     out_vertex_force, out_fixed_value, dyn_claim, dyn_row,
@@ -664,13 +752,32 @@ template <unsigned N>
     const Vec3f p = x[vertex_index];
     const Vec3f t0 = x[f[0]];
     const Vec3f t1 = x[f[1]];
-    const Vec2f c =
+    Vec2f c =
         proximity::point_edge_distance_coeff<float, float>(p, t0, t1);
+    // A RESTITUTION PAIR also takes its start pose's closest point, as the
+    // point-face visitor's does.
+    const unsigned pair_index[3] = {vertex_index, f[0], f[1]};
+    const bool restitution = pair_has_restitution<3>(vertex_prop, pair_index);
+    Vec2f c0 = c;
+    if (restitution) {
+        const Vec3f p_start = x0[vertex_index];
+        const Vec3f t0_start = x0[f[0]];
+        const Vec3f t1_start = x0[f[1]];
+        c0 = proximity::point_edge_distance_coeff<float, float>(
+            p_start, t0_start, t1_start);
+    }
     if (!(c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f)) {
-        return false;
+        if (!(restitution && c0.maxCoeff() < 1.0f && c0.minCoeff() > 0.0f)) {
+            return false;
+        }
+        c = c0;
     }
     const Vec3f e =
         c[0] * (p - t0) + c[1] * (p - t1);
+    SVecf<3> start_weight;
+    start_weight[0] = 1.0f;
+    start_weight[1] = -c0[0];
+    start_weight[2] = -c0[1];
     const VertexParam vparam =
         vertex_param[vertex_prop[vertex_index].param_index];
     const EdgeParam eparam = edge_param[edge_prop[edge_index].param_index];
@@ -680,7 +787,11 @@ template <unsigned N>
         vparam.friction, eparam.friction, friction_mode);
     const float reach = ghat + offset;
     if (!(e.squaredNorm() < reach * reach)) {
-        return false;
+        if (!(restitution &&
+              weighted_separation<3>(x0, pair_index, start_weight).squaredNorm() <
+                  reach * reach)) {
+            return false;
+        }
     }
     unsigned multiplicity = 0u;
     bool include_friction = true;
@@ -749,7 +860,7 @@ template <unsigned N>
                     memory_word0, memory_word1, memory_slip, memory_count, record_word0, record_word1, record_vertex, record_float, record_count, record_capacity,
                     surface_kind, vertex_prop[index[1]].object_index,
                     friction_load, friction_cone, dt, index,
-                    weight, ghat,
+                    weight, start_weight, ghat,
                     offset, friction, multiplicity, include_friction,
                     vertex_index, edge_index,
                     // The edge side reads its edge's Cosserat frame, as an
@@ -869,8 +980,18 @@ template <unsigned N>
     const float friction = combine_friction_values(
         vparam_a.friction, vparam_b.friction, friction_mode);
     const float reach = ghat + offset;
+    // A point pair's weights do not depend on the pose, so its start weights
+    // are its weights.
+    const unsigned pair_index[2] = {vertex_index, other};
+    SVecf<2> start_weight;
+    start_weight[0] = 1.0f;
+    start_weight[1] = -1.0f;
     if (!(e.squaredNorm() < reach * reach)) {
-        return false;
+        if (!(pair_has_restitution<2>(vertex_prop, pair_index) &&
+              weighted_separation<2>(x0, pair_index, start_weight).squaredNorm() <
+                  reach * reach)) {
+            return false;
+        }
     }
     unsigned multiplicity = 0u;
     bool include_friction = true;
@@ -989,7 +1110,7 @@ template <unsigned N>
                     // the memory names the other vertex.
                     FRICTION_KIND_POINT_POINT, other,
                     friction_load, friction_cone, dt, index,
-                    weight, ghat,
+                    weight, start_weight, ghat,
                     offset, friction, multiplicity, include_friction,
                     vertex_index, other,
                     FRICTION_MEMORY_UNUSED, FRICTION_MEMORY_UNUSED, 0.0f, 0.0f,
@@ -1120,11 +1241,32 @@ template <unsigned N>
     const Vec3f p1 = x[e0[1]];
     const Vec3f q0 = x[e1[0]];
     const Vec3f q1 = x[e1[1]];
-    const Vec4f c =
+    Vec4f c =
         proximity::edge_edge_distance_coeff<float, float>(p0, p1, q0, q1);
-    if (!(c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f)) {
-        return false;
+    // A RESTITUTION PAIR also takes its start pose's closest points, as the
+    // point-face visitor's does.
+    const unsigned pair_index[4] = {e0[0], e0[1], e1[0], e1[1]};
+    const bool restitution = pair_has_restitution<4>(vertex_prop, pair_index);
+    Vec4f c0 = c;
+    if (restitution) {
+        const Vec3f p0_start = x0[e0[0]];
+        const Vec3f p1_start = x0[e0[1]];
+        const Vec3f q0_start = x0[e1[0]];
+        const Vec3f q1_start = x0[e1[1]];
+        c0 = proximity::edge_edge_distance_coeff<float, float>(
+            p0_start, p1_start, q0_start, q1_start);
     }
+    if (!(c.maxCoeff() < 1.0f && c.minCoeff() > 0.0f)) {
+        if (!(restitution && c0.maxCoeff() < 1.0f && c0.minCoeff() > 0.0f)) {
+            return false;
+        }
+        c = c0;
+    }
+    SVecf<4> start_weight;
+    start_weight[0] = c0[0];
+    start_weight[1] = c0[1];
+    start_weight[2] = -c0[2];
+    start_weight[3] = -c0[3];
     const Vec3f y0 = float(c[0]) * p0 + float(c[1]) * p1;
     const Vec3f y1 = float(c[2]) * q0 + float(c[3]) * q1;
     const Vec3f e = y0 - y1;
@@ -1136,7 +1278,11 @@ template <unsigned N>
         eparam_a.friction, eparam_b.friction, friction_mode);
     const float reach = ghat + offset;
     if (!(e.squaredNorm() < reach * reach)) {
-        return false;
+        if (!(restitution &&
+              weighted_separation<4>(x0, pair_index, start_weight).squaredNorm() <
+                  reach * reach)) {
+            return false;
+        }
     }
     unsigned index[4];
     index[0] = e0[0];
@@ -1165,7 +1311,7 @@ template <unsigned N>
                     // memory names the other edge's object.
                     FRICTION_KIND_EDGE_EDGE, vertex_prop[index[2]].object_index,
                     friction_load, friction_cone, dt, index,
-                    weight, ghat,
+                    weight, start_weight, ghat,
                     offset, friction, 1u, true, edge_index, other,
                     // Each side's Cosserat frame, if its edge carries one.
                     edge_slot[edge_index], edge_slot[other], eparam_a.offset,

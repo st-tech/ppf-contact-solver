@@ -638,6 +638,8 @@ impl Contact {
             let count = self.collider_vertices;
             let query = AabbPointContactQueryArgs {
                 x: vertex,
+                x0: vertex,
+                sweep: 0,
                 prop: self.collider_prop.handle(),
                 params: self.collider_vertex_param.handle(),
                 out: self.collider_point_query.handle(),
@@ -959,8 +961,13 @@ impl Contact {
         _data: &DataSet,
         mesh: MeshRefs,
         x: ppf_cts_compute::Handle,
+        // The step's start pose and whether to sweep the boxes from it to `x`
+        // (a restitution scene: `aabb_point_contact_query`).
+        x0: ppf_cts_compute::Handle,
+        sweep: bool,
         windows: Windows,
     ) -> FatalResult<()> {
+        let sweep = u32::from(sweep);
         if self.surface_vertices > 0 {
             let count = self.surface_vertices;
             // WHICH OF THE TWO ENTRIES, and it is the DRIVER's decision. A
@@ -974,6 +981,8 @@ impl Contact {
                 Some(mask) => {
                     let query = AabbPointContactQueryMaskedArgs {
                         x,
+                        x0,
+                        sweep,
                         prop,
                         params,
                         active: mask,
@@ -986,6 +995,8 @@ impl Contact {
                 None => {
                     let query = AabbPointContactQueryArgs {
                         x,
+                        x0,
+                        sweep,
                         prop,
                         params,
                         out: self.point_query.handle(),
@@ -1006,6 +1017,8 @@ impl Contact {
                 Some(mask) => {
                     let query = AabbEdgeContactQueryMaskedArgs {
                         x,
+                        x0,
+                        sweep,
                         edge,
                         prop,
                         params,
@@ -1019,6 +1032,8 @@ impl Contact {
                 None => {
                     let query = AabbEdgeContactQueryArgs {
                         x,
+                        x0,
+                        sweep,
                         edge,
                         prop,
                         params,
@@ -4530,7 +4545,7 @@ mod tests {
             let mut residual = readback::<f32>(&mut device, 3, "test.residual")
                 .expect("the test allocation succeeds");
             contact.refresh_contact_queries(
-                &mut device, &data, mesh_refs, positions, Windows::default(),
+                &mut device, &data, mesh_refs, positions, positions, false, Windows::default(),
             ).expect("the query boxes are prepared");
             let mut friction_memory =
                 crate::driver::friction_memory::FrictionMemory::allocate(&mut device, 0, 1).unwrap();
@@ -4828,6 +4843,8 @@ mod tests {
         let args = AabbPointContactQueryMaskedArgs {
             // Safety: `x` outlives both dispatches below.
             x: crate::driver::state::position_block(&mut device, &x, "test.x").handle(),
+            x0: crate::driver::state::position_block(&mut device, &x, "test.x0").handle(),
+            sweep: 0,
             prop: crate::driver::state::record_block(&mut device, &prop, "test.prop").handle(),
             params: crate::driver::state::record_block(&mut device, &params, "test.params").handle(),
             active: mask.handle(),
@@ -4846,6 +4863,8 @@ mod tests {
         let args = AabbPointContactQueryArgs {
             // Safety: `x` outlives both dispatches below.
             x: crate::driver::state::position_block(&mut device, &x, "test.x").handle(),
+            x0: crate::driver::state::position_block(&mut device, &x, "test.x0").handle(),
+            sweep: 0,
             prop: crate::driver::state::record_block(&mut device, &prop, "test.prop").handle(),
             params: crate::driver::state::record_block(&mut device, &params, "test.params").handle(),
             out: plain_out.handle(),

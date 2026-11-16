@@ -456,6 +456,7 @@ fn main() {
             translation_modes: scene.translation_lock_modes(),
             rotation_axes: scene.rotation_locks(),
             rotation_modes: scene.rotation_lock_modes(),
+            lock_group: scene.lock_groups(),
             vert_dmap: scene.vert_dmap(),
         };
         let cosserat_data = builder::CosseratSceneData {

@@ -68,7 +68,7 @@ jobs:
   build-image:
     name: Build + smoke-test on GPU Instance
     runs-on: ubuntu-latest
-    # EC2 boot + AMI/VPC lookup + full Docker image build (CUDA + ffmpeg) happen
+    # EC2 boot + AMI/VPC lookup + full Docker image build (CUDA) happen
     # inside the job, so allow generous headroom.
     timeout-minutes: 90
     permissions:

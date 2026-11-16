@@ -326,11 +326,25 @@ fn record_backend(backend: Backend) {
         Backend::Rocm => "rocm",
     };
     println!("cargo:rustc-env=PPF_BACKEND={name}");
-    // OUT_DIR is `<target>/<profile>/build/<pkg>-<hash>/out`, so the profile
-    // directory the artifacts land in is three ancestors up.
+    // OUT_DIR lies under `<target>/<profile>/build/`, and the profile directory
+    // the artifacts land in is the parent of that `build`. HOW DEEP BELOW IT
+    // DEPENDS ON THE CARGO RELEASE: older Cargo writes
+    // `build/<pkg>-<hash>/out`, newer Cargo `build/<pkg>/<hash>/out`. A fixed
+    // ancestor count wrote the marker into `build/` itself under the newer
+    // layout, so the frontend found no build and every run refused. Finding
+    // `build` by name serves both, and finding none is a build error rather
+    // than a marker silently missing.
     let out = env::var("OUT_DIR").expect("OUT_DIR");
-    let Some(profile_dir) = Path::new(&out).ancestors().nth(3) else {
-        return;
+    let Some(profile_dir) = Path::new(&out)
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
+        .and_then(Path::parent)
+    else {
+        panic!(
+            "OUT_DIR {out} has no `build` ancestor, so the profile directory to \
+             write the .ppf-backend marker into is unknown"
+        );
     };
     let marker = profile_dir.join(".ppf-backend");
     if let Ok(previous) = std::fs::read_to_string(&marker) {
@@ -1058,9 +1072,17 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     // creep still writes them on the host. StagedBuffer::handle panics if a
     // dispatch names them before the upload, so a forgotten upload traps.
     ("main/momentum", "MomentumEmbedArgs.prop"),
+    // THE RESTITUTION WEIGHTS, one per vertex, seeded at allocate and again
+    // whenever a keyframed restitution changes.
+    ("main/target", "ComputeTargetSeedArgs.theta"),
     ("contact/vertex_constraint", "VertexConstraintArgs.vertex_prop"),
     ("contact/vertex_constraint", "VertexConstraintSweepArgs.vertex_prop"),
     ("contact/aabb", "AabbPointContactQueryArgs.prop"),
+    // The step's start pose, read by a restitution scene's swept query boxes.
+    ("contact/aabb", "AabbPointContactQueryArgs.x0"),
+    ("contact/aabb", "AabbPointContactQueryMaskedArgs.x0"),
+    ("contact/aabb", "AabbEdgeContactQueryArgs.x0"),
+    ("contact/aabb", "AabbEdgeContactQueryMaskedArgs.x0"),
     ("contact/aabb", "AabbPointContactQueryMaskedArgs.prop"),
     ("contact/aabb", "AabbVertexScanQueryArgs.prop"),
     ("contact/aabb", "AabbVertexScanQueryMaskedArgs.prop"),
@@ -1135,6 +1157,7 @@ const HANDLE_FIELDS: &[(&str, &str)] = &[
     ("main/position_accept", "PositionAcceptArgs.proposed"),
     ("main/target", "ComputeTargetSeedArgs.current"),
     ("main/target", "ComputeTargetSeedArgs.previous"),
+    ("main/target", "ComputeTargetSeedArgs.iterate"),
     ("main/target", "ComputeTargetSeedArgs.target"),
     ("main/dx_seed", "DxSeedArgs.target"),
     ("main/position_step", "PositionStepArgs.eval_x"),

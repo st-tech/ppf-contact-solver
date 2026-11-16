@@ -313,24 +313,32 @@ template <class T>
 // `params[prop[i].param_index]` is a two-level indirection: a record carries one
 // index list and it is spent on neither of them.
 [[seam::entry(element, out)]]
+// UNDER RESTITUTION (`sweep`) the box covers the vertex from the step's start
+// pose to the iterate: a restitution contact keeps pushing while it leaves the
+// band (its secant over the step), so a pair that was in the band at the start
+// is assembled even after its sides have moved apart.
 [[seam::device_fn]] inline AABB aabb_point_contact_query(
-    const Vec3f *x,
+    const Vec3f *x, const Vec3f *x0, unsigned sweep,
     const VertexProp *prop,
     const VertexParam *params, unsigned element) {
     const VertexParam p = params[prop[element].param_index];
     // A thread-space copy, for the reason `aabb_leaf_face` above states.
     const Vec3f x_i = x[element];
-    return aabb_make_point(x_i,
-                               aabb_leaf_margin(p.ghat, p.offset));
+    const float margin = aabb_leaf_margin(p.ghat, p.offset);
+    if (sweep != 0u) {
+        const Vec3f x0_i = x0[element];
+        return aabb_make_swept_point(x0_i, x_i, 1.0f, margin);
+    }
+    return aabb_make_point(x_i, margin);
 }
 
 [[seam::entry(element, out)]]
 [[seam::device_fn]] inline AABB aabb_point_contact_query_masked(
-    const Vec3f *x,
+    const Vec3f *x, const Vec3f *x0, unsigned sweep,
     const VertexProp *prop,
     const VertexParam *params,
     const unsigned *active, unsigned element) {
-    AABB box = aabb_point_contact_query(x, prop, params, element);
+    AABB box = aabb_point_contact_query(x, x0, sweep, prop, params, element);
     if (active[element] == 0u) {
         box.active = false;
     }
@@ -339,7 +347,7 @@ template <class T>
 
 [[seam::entry(element, out)]]
 [[seam::device_fn]] inline AABB aabb_edge_contact_query(
-    const Vec3f *x, const Vec2u *edge,
+    const Vec3f *x, const Vec3f *x0, unsigned sweep, const Vec2u *edge,
     const EdgeProp *prop,
     const EdgeParam *params, unsigned element) {
     const Vec2u e = edge[element];
@@ -347,17 +355,22 @@ template <class T>
     // Thread-space copies, for the reason `aabb_leaf_face` above states.
     const Vec3f x_a = x[e[0]];
     const Vec3f x_b = x[e[1]];
-    return aabb_make_edge(x_a, x_b,
-                              aabb_leaf_margin(p.ghat, p.offset));
+    const float margin = aabb_leaf_margin(p.ghat, p.offset);
+    if (sweep != 0u) {
+        const Vec3f x0_a = x0[e[0]];
+        const Vec3f x0_b = x0[e[1]];
+        return aabb_make_swept_edge(x0_a, x0_b, x_a, x_b, 1.0f, margin);
+    }
+    return aabb_make_edge(x_a, x_b, margin);
 }
 
 [[seam::entry(element, out)]]
 [[seam::device_fn]] inline AABB aabb_edge_contact_query_masked(
-    const Vec3f *x, const Vec2u *edge,
+    const Vec3f *x, const Vec3f *x0, unsigned sweep, const Vec2u *edge,
     const EdgeProp *prop,
     const EdgeParam *params,
     const unsigned *active, unsigned element) {
-    AABB box = aabb_edge_contact_query(x, edge, prop, params, element);
+    AABB box = aabb_edge_contact_query(x, x0, sweep, edge, prop, params, element);
     if (active[element] == 0u) {
         box.active = false;
     }

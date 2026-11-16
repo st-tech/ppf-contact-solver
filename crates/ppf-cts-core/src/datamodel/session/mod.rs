@@ -59,7 +59,7 @@ pub use paths::{
 // via `crate::datamodel::session::paths::FixedSessionDirLayout` if a
 // future caller needs it.
 pub use scripts::{
-    ffmpeg_video_command, locate_bundled_ffmpeg, shell_command_script, solver_subprocess_command,
+    ffmpeg_video_command, shell_command_script, solver_subprocess_command,
     write_shell_command_script,
 };
 pub use types::{FixedSession, Platform, Session, SessionInfo, SessionOutput};

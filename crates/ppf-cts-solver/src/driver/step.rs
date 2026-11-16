@@ -699,6 +699,9 @@ pub unsafe fn advance<D: Device>(
         &prm,
         curr,
         prev,
+        state.eval_x.handle(),
+        false,
+        state.theta.handle(),
         vertices,
         state.target.handle(),
         state.fix.handle(),
@@ -808,6 +811,51 @@ pub unsafe fn advance<D: Device>(
     let mut toi_advanced: f64 = 0.0;
     let mut step: u32 = 1;
     let mut final_step = false;
+    // THE CONTACT STEP'S CONVERGENCE, for restitution only. A restitution
+    // weight carries the committed position's error into the velocity, divided
+    // by `theta * dt`, so a contact step left at the usual single iteration
+    // loses most of its bounce (measured: a ball at restitution 1 regained 0.6%
+    // of its drop). While a contact is active the trailing iteration is
+    // therefore repeated until its increment is within the contacts' own
+    // precision, `constraint_tol * ghat` (the gap the barrier keeps a vertex
+    // above), or until the iteration stops making progress (below), and never
+    // past `max-newton-steps`. A scene with no restitution iterates exactly as
+    // before.
+    let convergence_tolerance: Option<f32> = if state.restitution_active {
+        let floors = super::scene::slice(&data.constraint.floor)
+            .iter()
+            .filter(|floor| !floor.kinematic)
+            .map(|floor| floor.ghat);
+        let materials = super::scene::slice(&data.param_arrays.vertex)
+            .iter()
+            .map(|vertex| vertex.ghat);
+        floors
+            .chain(materials)
+            .filter(|ghat| *ghat > 0.0)
+            .reduce(f32::min)
+            .map(|ghat| (*param).constraint_tol * ghat)
+    } else {
+        None
+    };
+    // How many contacts the iteration assembled, its increment, and the
+    // progress bookkeeping: the smallest increment so far, the one before,
+    // and how many iterations have stalled since the last new minimum. An
+    // iteration stalls when its increment neither sets a new minimum nor grows
+    // past the previous one: shrinking increments converge, growing ones are
+    // Newton climbing out of a contact (the secant over the sweep is
+    // logarithmic in the gap there), and a cycle (through a point the line
+    // search holds, or between iterates whose contact sets differ, both
+    // measured) alternates and stalls on every other iteration.
+    let mut contacts: u64;
+    let mut increment: f32;
+    let mut best_increment = f32::INFINITY;
+    let mut previous_increment = f32::INFINITY;
+    let mut stalled: u32 = 0;
+    let mut repeats: u32 = 0;
+    // Whether the error-reduction iteration is running AGAIN because its
+    // friction record overflowed (STEP B33): its clock and its pins were
+    // already brought back the first time, so only its target is rebuilt.
+    let mut reduction_repeat = false;
     let mut last_toi: f32 = 1.0;
     // Whether any pair of this step can carry friction, and so whether the
     // friction's memory records and commits (`driver/friction_memory.rs`).
@@ -917,7 +965,7 @@ pub unsafe fn advance<D: Device>(
         // STEP B3. The trailing error-reduction iteration: shrink the clock to
         // what was actually integrated and bring the kinematic pins back in
         // step with it BEFORE the targets are rebuilt off them.
-        if final_step {
+        if final_step && !reduction_repeat {
             if toi_advanced < 1.0 && !state.fix.is_empty() {
                 let back = 1.0 - toi_advanced as f32;
                 let pins = state.fix.len() as u32;
@@ -935,11 +983,18 @@ pub unsafe fn advance<D: Device>(
             // f32 rounds twice and gives a different final step size, which is
             // the clock the whole trailing iteration integrates against.
             dt = (f64::from(dt) * toi_advanced) as f32;
+        }
+        // The target the trailing iteration integrates against, rebuilt on
+        // every pass of it: a repeat finds it overwritten by STEP B20.
+        if final_step {
             compute_target(
                 device,
                 &prm,
                 curr,
                 prev,
+                state.eval_x.handle(),
+                false,
+                state.theta.handle(),
                 vertices,
                 state.target.handle(),
                 state.fix.handle(),
@@ -1000,6 +1055,20 @@ pub unsafe fn advance<D: Device>(
         // STEP B6. The momentum layer. INSIDE the assembly scope opened at
         // STEP B4 and OUTSIDE the `asm_elastic` sub-timer below, so the
         // `matrix assembly` total counts it and `asm_elastic` does not.
+        // THE INERTIA'S STEP SIZE. With restitution weight `theta` the step is
+        // an implicit-Euler-shaped solve that weighs inertia by
+        // `1 / (theta dt^2)` toward a seed whose acceleration is scaled by
+        // `theta`, so the momentum row and the rigid bodies' inertia blocks
+        // take `sqrt(theta) * dt`. Every damping term (air drag, the elastic
+        // layers' stiffness damping) and the seed, the pins, the line search
+        // and the clock keep `dt`, so a restitution weight changes no damping
+        // strength. Cosserat frames and grain spin are not weighted. At
+        // `theta = 1` it is `dt`.
+        let solve_dt = if state.restitution_active {
+            state.theta_min.sqrt() * dt
+        } else {
+            dt
+        };
         let _phase = super::phase::start("assemble.momentum");
         assemble::momentum(device, data, param, state, dt)?;
         drop(_phase);
@@ -1172,8 +1241,20 @@ pub unsafe fn advance<D: Device>(
             if let Some(contact) = state.contact.as_mut() {
                 contact.clear_overlap_slots(device)?;
                 if shell.is_ok() && rod.is_ok() && !prm.disable_contact {
+                    // UNDER RESTITUTION a pair in the band at the step's start
+                    // keeps pushing while it leaves (its secant over the step),
+                    // so the leaves and the query boxes both cover the motion
+                    // from the start pose to the iterate, and such a pair is
+                    // found even after its sides have moved apart. The line
+                    // search refreshes the leaves for its own sweep afterwards.
+                    if state.restitution_active {
+                        contact.refresh_leaves(
+                            device, data, mesh_refs, curr, state.eval_x.handle(), 1.0, windows,
+                        )?;
+                    }
                     contact.refresh_contact_queries(
-                        device, data, mesh_refs, state.eval_x.handle(), windows,
+                        device, data, mesh_refs, state.eval_x.handle(), curr,
+                        state.restitution_active, windows,
                     )?;
                 }
             }
@@ -1374,6 +1455,14 @@ pub unsafe fn advance<D: Device>(
             log::mark("advance", "asm_contact", _asm_contact.elapsed());
             contact_result?;
             constraint_result?;
+            // WHICH RESTITUTION BODIES THIS ITERATION'S CONTACTS TOUCHED, read
+            // off what the passes just added on top of the residual snapshot.
+            {
+                let SolverState { restitution, force, residual, .. } = &mut *state;
+                if let Some(restitution) = restitution.as_mut() {
+                    restitution.mark_touched(device, force, residual)?;
+                }
+            }
             // THE RECORD CLOSES once all three have run: one word read back,
             // and the capacity grown when this iteration's pairs did not fit.
             if frictional {
@@ -1444,6 +1533,7 @@ pub unsafe fn advance<D: Device>(
             // (sphere, floor). A useful proxy for how crowded the collision
             // scene is at this iteration.
             log::mark("advance", "num_contact", (self_contact + constraint) as f64);
+            contacts = self_contact + constraint;
         }
         // Name: Matrix Assembly Time
         // Format: list[(time, ms)]
@@ -1823,7 +1913,7 @@ pub unsafe fn advance<D: Device>(
                 &precond_inputs,
                 rigid_blocks,
                 rigid_factor,
-                dt,
+                solve_dt,
             )?;
             // The projector, built exactly as the locked branch builds it, and
             // `None` when the scene carries no lock so the reduced apply keeps
@@ -2298,6 +2388,7 @@ pub unsafe fn advance<D: Device>(
         // decide whether the search direction must be rescaled before
         // the line search.
         log::mark("advance", "max_dx", max_dx as f64);
+        increment = max_dx;
         // A NaN magnitude would read as no step limit through `min`; it stops the
         // run instead. A zero magnitude (nothing moves) needs no limit.
         let max_dx = super::ccd::certified_fraction(max_dx, "search-direction magnitude");
@@ -2906,7 +2997,57 @@ pub unsafe fn advance<D: Device>(
         // STEP B33. Loop control. A continuing iteration REBUILDS the target,
         // which B20 clobbered; without it the next iteration would integrate
         // against the previous iterate's positions.
-        if !result.success() || final_step {
+        if !result.success() {
+            break;
+        }
+        // THE STEP COMMITS THE FRICTION RECORD ITS LAST ITERATION WROTE, so
+        // that record must hold every pair. One that overflowed (its count
+        // more than doubled over the iteration before, as when a body lands
+        // during the step) has grown its capacity, and the error-reduction
+        // iteration runs again to record into it. Each repeat at least
+        // doubles the capacity, so the count of pairs bounds the repeats.
+        if final_step {
+            if frictional && !state.friction_memory.complete() {
+                log::message!("* friction record overflowed; repeating the error reduction step");
+                reduction_repeat = true;
+                continue;
+            }
+            if let Some(tolerance) = convergence_tolerance {
+                if increment < best_increment {
+                    best_increment = increment;
+                    stalled = 0;
+                    // THE ITERATE NEAREST CONVERGENCE SO FAR, kept so that a
+                    // loop which stops short commits it rather than wherever
+                    // the last pass left the body. A restitution step carries
+                    // the committed position's error into the velocity, so
+                    // committing an iterate Newton was still walking out of a
+                    // contact with hands the walk back as a launch. Every
+                    // iterate passed the line search, so any of them is a
+                    // valid pose.
+                    let SolverState { best_x, eval_x, .. } = &mut *state;
+                    if best_x.len() != eval_x.len() {
+                        best_x.size(device, eval_x.len(), ppf_cts_compute::AllocLabel("step.best_x"))?;
+                    }
+                    best_x.copy_from(device, eval_x)?;
+                } else if increment <= previous_increment {
+                    stalled += 1;
+                }
+                previous_increment = increment;
+                if contacts > 0
+                    && increment > tolerance
+                    && stalled < 2
+                    && repeats < prm.max_newton_steps
+                {
+                    repeats += 1;
+                    reduction_repeat = true;
+                    continue;
+                }
+                if contacts > 0 && increment > tolerance && best_increment < increment {
+                    // Stopped short: commit the nearest iterate (above).
+                    let SolverState { best_x, eval_x, .. } = &mut *state;
+                    eval_x.copy_from(device, best_x)?;
+                }
+            }
             break;
         }
         if toi_advanced >= f64::from(prm.target_toi) && step >= prm.min_newton_steps {
@@ -2918,6 +3059,9 @@ pub unsafe fn advance<D: Device>(
                 &prm,
                 curr,
                 prev,
+                state.eval_x.handle(),
+                false,
+                state.theta.handle(),
                 vertices,
                 state.target.handle(),
                 state.fix.handle(),
@@ -3120,7 +3264,43 @@ pub unsafe fn advance<D: Device>(
         // one and the iterate becomes current.
         // ON THE DEVICE, in that order. `fetch()` is what puts these in the
         // arrays `backend.rs` reads.
-        state.positions_prev.copy_from(device, &state.positions)?;
+        // With a restitution weight the carried velocity is not
+        // `(x1 - x0) / dt`, so the history gets the position that makes every
+        // velocity reader see it (the seed kernel's commit mode), formed in
+        // `target`, which the step no longer needs.
+        if state.restitution_active {
+            compute_target(
+                device,
+                &prm,
+                curr,
+                prev,
+                state.eval_x.handle(),
+                true,
+                state.theta.handle(),
+                vertices,
+                state.target.handle(),
+                state.fix.handle(),
+                dt,
+                state.fix_index.handle(),
+                state.field.acceleration(),
+            )?;
+            // A BODY WHOSE IMPACT JUST ENDED takes its coefficient now, as a
+            // change to the velocity `target` is about to carry.
+            {
+                let SolverState { restitution, positions, positions_prev, eval_x, target, .. } =
+                    &mut *state;
+                if let Some(restitution) = restitution.as_mut() {
+                    restitution.commit(
+                        device, positions, positions_prev, eval_x, target, prm.prev_dt, dt,
+                        prm.gravity,
+                    )?;
+                }
+            }
+            state.positions_prev.copy_from(device, &state.target)?;
+            state.positions_last.copy_from(device, &state.positions)?;
+        } else {
+            state.positions_prev.copy_from(device, &state.positions)?;
+        }
         state.positions.copy_from(device, &state.eval_x)?;
         // The frames commit with the positions: a held end driven by
         // `cosserat-end-twist-rate` turns by its rate over this step's `dt`, and
@@ -3339,6 +3519,12 @@ unsafe fn compute_target<D: Device>(
     prm: &StepParams,
     current: Handle,
     previous: Handle,
+    // The iterate the commit mode reads, and whether this dispatch is the
+    // commit (writing the carried history) rather than a seed.
+    iterate: Handle,
+    commit: bool,
+    // Each vertex's restitution weight (`SolverState::theta`).
+    theta: Handle,
     vertices: usize,
     target: Handle,
     fix: Handle,
@@ -3349,6 +3535,9 @@ unsafe fn compute_target<D: Device>(
     let args = ComputeTargetSeedArgs {
         current,
         previous,
+        iterate,
+        theta,
+        commit: i32::from(commit),
         fix_index,
         fix,
         dt,

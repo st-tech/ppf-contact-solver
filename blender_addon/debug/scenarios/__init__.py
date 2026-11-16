@@ -59,6 +59,11 @@ from . import rig_existing_intersection_build
 from . import rig_existing_intersection_run
 from . import bl_existing_intersection
 from . import bl_existing_intersection_draws
+from . import rig_rest_proximity
+from . import bl_allow_rest_proximity
+from . import bl_pdrd_restitution
+from . import rig_friction_record_overflow
+from . import bl_local_servers_start
 from . import bl_server_stop_is_real
 from . import bl_server_ping_keeps_it_up
 from . import rig_server_idle_stop
@@ -457,6 +462,11 @@ REGISTRY = {
     "rig_existing_intersection_run": rig_existing_intersection_run,
     "bl_existing_intersection": bl_existing_intersection,
     "bl_existing_intersection_draws": bl_existing_intersection_draws,
+    "rig_rest_proximity": rig_rest_proximity,
+    "bl_allow_rest_proximity": bl_allow_rest_proximity,
+    "bl_pdrd_restitution": bl_pdrd_restitution,
+    "rig_friction_record_overflow": rig_friction_record_overflow,
+    "bl_local_servers_start": bl_local_servers_start,
 
     # The solver's build-time rest-shape gate: a near-collinear shell face is
     # finite and invertible, so only its conditioning gives it away (issue

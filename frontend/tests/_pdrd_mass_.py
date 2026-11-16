@@ -60,7 +60,7 @@ except ImportError:
 SCRATCH_ROOT = REPO_ROOT / "frontend" / "tests" / "_scratch_pdrd_mass"
 
 # Body row layout of `Scene.build()`'s PDRD table (`PDRD_BODY_ROW_LEN`).
-ROW_LEN = 23
+ROW_LEN = 24
 ROW_VOLUME = 2
 ROW_MASS_PER_VERTEX = 15
 

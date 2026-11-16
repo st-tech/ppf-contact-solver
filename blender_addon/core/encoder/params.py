@@ -507,6 +507,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
                 "allow-existing-intersection",
+                "allow-rest-proximity",
                 "force-field-weight",
             ],
             "SHELL": [
@@ -547,6 +548,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
                 "allow-existing-intersection",
+                "allow-rest-proximity",
                 "force-field-weight",
             ],
             "ROD": [
@@ -579,6 +581,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
                 "allow-existing-intersection",
+                "allow-rest-proximity",
                 "force-field-weight",
             ],
             "STATIC": [
@@ -591,6 +594,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
                 "allow-existing-intersection",
+                "allow-rest-proximity",
             ],
             "SAND": [
                 "sand-particle-mass",
@@ -614,6 +618,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             ],
             "PDRD": [
                 "density",
+                "restitution",
                 "friction",
                 "contact-gap",
                 "contact-offset",
@@ -634,6 +639,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "allow-inter-object-intersection",
                 "allow-inter-group-intersection",
                 "allow-existing-intersection",
+                "allow-rest-proximity",
                 "force-field-weight",
             ],
         }
@@ -716,6 +722,13 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                 "supported on sand, whose grains overlapping at the start are "
                 "not exempted from contact. Turn it off on this group."
             )
+        if group.object_type == "SAND" and group.allow_rest_proximity:
+            # Refused for the reason Allow Existing Intersections is above.
+            raise ValueError(
+                f"Group '{group.name}': Allow Rest Proximity is not supported "
+                "on sand, whose grains form no element the scene-build check "
+                "could find. Set it to 0 on this group."
+            )
         if group.object_type == "SAND":
             # The group ships one grain radius as its contact offset
             # (`object_contact_lengths`), so every grain must share it.
@@ -756,6 +769,10 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             "young-mod": young_modulus,
             "poiss-rat": poisson_ratio,
             "friction": np.float32(group.friction),
+            # A PDRD body's coefficient of restitution against the invisible
+            # walls; the strip loop keeps it for PDRD groups only.
+            "restitution": np.float32(
+                group.pdrd_restitution if group.object_type == "PDRD" else 0.0),
             # SAND (granular) material params; the strip loop below keeps
             # them only for SAND groups via the "SAND" allowlist entry.
             # Particle mass is authored in grams on the UI and shipped to the
@@ -798,6 +815,14 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # out of contact for the run; nothing else is exempted.
             "allow-existing-intersection": _encode_intersection_allowance(
                 group, EXISTING_ALLOWANCE, object_uuids),
+            # Allow Rest Proximity: the checkbox's distance while it is on, a
+            # world-space length scaled by the World Scale like the contact gap
+            # and offset, and 0 while it is off. The pairs that start closer
+            # than the mean of the two sides' values are linked at the
+            # scene-build check as an existing intersection is. 0 links nothing.
+            "allow-rest-proximity": np.float32(
+                group.rest_proximity_distance * state.world_scaling
+                if group.allow_rest_proximity else 0.0),
             # The scene force field's scale on this group's objects (issues
             # #151 and #114): 1.0 applies it as authored, 0.0 opts out.
             "force-field-weight": np.float32(group.force_field_weight),

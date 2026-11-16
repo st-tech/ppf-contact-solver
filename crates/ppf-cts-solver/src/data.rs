@@ -447,6 +447,16 @@ pub struct VertexProp {
     /// counts as another group from every object. Field order must mirror
     /// `VertexProp` in `data_records.hpp` (repr(C) ABI).
     pub group_index: u32,
+    /// The coefficient of restitution of this vertex's PDRD body, 0 for every
+    /// other vertex (and for a body without one), which is the implicit-Euler
+    /// step. A vertex with `restitution > 0` integrates with weight
+    /// `theta = 1 / (1 + restitution)` and its contacts push with the
+    /// barrier's secant over the step (`driver/step.rs`).
+    pub restitution: f32,
+    /// How many vertices this vertex's PDRD body has, 0 off a body. A contact
+    /// at a vertex with `restitution > 0` forms its stiffness from the mass
+    /// that actually moves, the body's, which is this times the vertex's own.
+    pub body_vertex_count: u32,
     /// This vertex's object's intersection allowances, as
     /// `INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT |
     /// INTERSECT_ALLOW_INTER_GROUP`. Resolved per
@@ -625,6 +635,12 @@ pub struct PdrdBodyProp {
     /// off-centroid pivot; the live solve uses the body centroid as the
     /// pivot. Unused when `joint_mode == 0`.
     pub joint_pin: Vec3f,
+    /// Coefficient of restitution `e` in `[0, 1]`: how much of its normal
+    /// approach speed the body keeps when it bounces. A body with one
+    /// integrates elastically (`theta = 1/2`, `driver/state.rs`) and takes the
+    /// coefficient once per impact (`driver/restitution.rs`); 0 is the
+    /// implicit-Euler step every other object takes.
+    pub restitution: f32,
 }
 
 // SAFETY: `#[repr(C)]` with the field order the C++ `PdrdBodyProp` in
@@ -634,9 +650,9 @@ unsafe impl ppf_cts_compute::Pod for PdrdBodyProp {}
 /// Number of `f32` per PDRD body row in `pdrd_body.bin` and
 /// `builder::PdrdSceneData::body_rows`. Layout: `vertex_start`,
 /// `vertex_count`, `volume`, `centroid[3]`, `rest_gram_inv[9 row-major]`,
-/// `mass_per_vertex`, `joint_mode`, `joint_axis[3]`, `joint_pin[3]`
-/// (16 base + 7 joint = 23 floats).
-pub const PDRD_BODY_ROW_LEN: usize = 23;
+/// `mass_per_vertex`, `joint_mode`, `joint_axis[3]`, `joint_pin[3]`,
+/// `restitution` (16 base + 7 joint + 1 = 24 floats).
+pub const PDRD_BODY_ROW_LEN: usize = 24;
 
 #[repr(C)]
 #[derive(Serialize, Deserialize)]

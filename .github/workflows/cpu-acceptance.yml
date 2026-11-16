@@ -121,7 +121,10 @@ jobs:
       - name: The recorded host baseline and the flags the compiler received
         run: |
           set -euo pipefail
-          mapfile -t OUTPUTS < <(grep -l 'PPF_HOST_BASELINE_BUILT' target/cpu/release/build/ppf-cts-solver-*/output)
+          # find, not a glob: Rust 1.100 nests build/<pkg>/<hash>/ where older
+          # Cargo wrote build/<pkg>-<hash>/, and find's `*` serves both. The
+          # depth bound keeps out the kernelgen cache's own `output` files.
+          mapfile -t OUTPUTS < <(find target/cpu/release/build -maxdepth 3 -path '*/build/ppf-cts-solver*/output' -exec grep -l 'PPF_HOST_BASELINE_BUILT' {} +)
           [ "${#OUTPUTS[@]}" -eq 1 ] || { echo "ERROR: expected one solver build output, found ${#OUTPUTS[@]}"; exit 1; }
           OUT="${OUTPUTS[0]}"
           BUILT="$(sed -n 's/^cargo:rustc-env=PPF_HOST_BASELINE_BUILT=//p' "$OUT")"

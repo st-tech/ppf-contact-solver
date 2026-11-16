@@ -75,6 +75,12 @@ ANIMATABLE_MATERIAL_KEYS = {
     "plasticity": {
         "prop": {"SHELL": "plasticity", "SOLID": "plasticity"},
     },
+    # A PDRD body's, not its triangles': the frontend routes it into a
+    # per-body schedule. Keyed down to 0 it puts the body back on the plain
+    # implicit-Euler step, which is how a bouncing body is brought to rest.
+    "restitution": {
+        "prop": {"PDRD": "pdrd_restitution"},
+    },
     "plasticity-threshold": {
         "prop": {"SHELL": "plasticity_threshold", "SOLID": "plasticity_threshold"},
     },

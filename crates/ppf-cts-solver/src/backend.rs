@@ -38,6 +38,7 @@ extern "C" {
     fn update_rest_shape(update: *const RestShapeUpdate);
     fn update_hinge_rest_angles(index: *const u32, angle: *const f32, count: u32);
     fn update_material_params(update: *const MaterialParamUpdate);
+    fn update_pdrd_restitution(values: *const f32, count: u32);
     fn initialize(data: *const DataSet, param: *const ParamSet) -> bool;
     fn override_velocity(indices: *const u32, count: u32, vx: f32, vy: f32, vz: f32, dt: f32);
     fn gather_current_positions(indices: *const u32, count: u32, out: *mut f32);
@@ -1557,6 +1558,11 @@ impl Backend {
                     };
                     unsafe { update_material_params(&update) };
                 }
+            }
+            // A keyframed PDRD restitution, one value per body, sampled where
+            // the material schedules are.
+            if let Some(values) = scene.pdrd_restitution_at(target_time) {
+                unsafe { update_pdrd_restitution(values.as_ptr(), values.len() as u32) };
             }
 
             for (indices, vx, vy, vz) in scene.get_velocity_overrides(self.state.time, param.dt) {

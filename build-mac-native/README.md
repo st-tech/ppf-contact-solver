@@ -528,8 +528,8 @@ cd path/to/ppf-contact-solver
 4. **Keeps the user's `PATH` and appends `/usr/bin:/bin:/usr/sbin:/sbin`.**
    Nothing the program itself runs is resolved through `PATH`: the interpreter
    and every binary are named by absolute path. What `PATH` decides is what a
-   NOTEBOOK finds, and the four notebooks that clone need `git` while video
-   export needs `ffmpeg`, both of which are the user's to supply. Appending the
+   NOTEBOOK finds, and the four notebooks that clone need `git` while an MP4
+   animation needs `ffmpeg`, both of which are the user's to supply. Appending the
    system directories is what guarantees the launcher's own `dirname`,
    `readlink`, `sleep`, `mkdir`, `rsync` and `uname` are reachable from a
    `PATH` that carries none.
@@ -817,11 +817,9 @@ them.
   environment is built before there is a bundled interpreter to build it with,
   and because `warmup.py`'s canonical package list is what both of them are
   read from.
-- **ffmpeg.** The frontend falls back to `shutil.which("ffmpeg")` and skips
-  video export when there is none. If a macOS ffmpeg build is ever added, it
-  takes the pinned pointers from `build-win-native/scripts/downloads.txt`,
-  which is already read by two platforms, rather than adding a second copy
-  here.
+- **ffmpeg.** No distribution ships one. A session's animation export
+  encodes `frame.mp4` with an `ffmpeg` on the user's `PATH`, and without one
+  writes the frames as an animated `frame.webp` with Pillow.
 - **git.** The build host gets it from the command line tools. Nothing puts one
   inside the distribution either, and four example notebooks call it; see "What
   an example notebook fetches" above. Bundling a git would make the

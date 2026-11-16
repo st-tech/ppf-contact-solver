@@ -1762,6 +1762,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_group_intersection_all_objects",
         "allow_existing_intersection",
         "allow_existing_intersection_all_objects",
+        "allow_rest_proximity",
+        "rest_proximity_distance",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1791,6 +1793,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_group_intersection_all_objects",
         "allow_existing_intersection",
         "allow_existing_intersection_all_objects",
+        "allow_rest_proximity",
+        "rest_proximity_distance",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1823,6 +1827,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_group_intersection_all_objects",
         "allow_existing_intersection",
         "allow_existing_intersection_all_objects",
+        "allow_rest_proximity",
+        "rest_proximity_distance",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1842,6 +1848,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_group_intersection_all_objects",
         "allow_existing_intersection",
         "allow_existing_intersection_all_objects",
+        "allow_rest_proximity",
+        "rest_proximity_distance",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -1852,6 +1860,7 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
     "PDRD": {
         "force_field_weight",
         "pdrd_density",
+        "pdrd_restitution",
         "friction",
         "allow_self_intersection",
         "allow_self_intersection_all_objects",
@@ -1861,6 +1870,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "allow_inter_group_intersection_all_objects",
         "allow_existing_intersection",
         "allow_existing_intersection_all_objects",
+        "allow_rest_proximity",
+        "rest_proximity_distance",
         "contact_gap",
         "contact_offset",
         "contact_gap_rat",
@@ -2132,7 +2143,7 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
     - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
     - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent
-    - PDRD: pdrd_density, friction (the hinge joint is per-object; use the set_pdrd_hinge tool)
+    - PDRD: pdrd_density, pdrd_restitution, friction (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
     - STATIC: friction, enable_soft_constraint, soft_constraint_stiffness (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
 
@@ -2188,6 +2199,17 @@ def set_group_material_properties(group_uuid: str, properties: dict):
       at build. It covers self, inter-object and static collider pairs, but
       not the invisible walls and spheres, and either side is enough. It does
       not untangle anything.
+    - allow_rest_proximity and rest_proximity_distance (not SAND): the
+      checkbox (default off) and the DISTANCE it applies while on, in Blender
+      units (scaled by World Scale, default 0.001), one value for the whole
+      group. Pairs of elements that share no vertex and START closer than the
+      distance are exempted from contact for the whole run, exactly as
+      allow_existing_intersection exempts a tangled pair; every other pair
+      keeps full contact. Between two objects with different distances the
+      mean of the two is used, so one side alone covers a pair within half its
+      distance. For dense fiber networks (a felt) whose fibers start nearly
+      touching. A STATIC collider that is only a collision mesh counts as 0.0
+      whatever its own group sets, so set it on the dynamic side.
 
     On a STATIC group all four keys reach the solver whenever the collider is
     part of the solved scene, which covers an animated collider, a

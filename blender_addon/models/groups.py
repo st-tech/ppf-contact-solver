@@ -99,6 +99,9 @@ OBJECT_GROUP_DEFAULTS = {
     # exactly rigidly; its asset stays a Tri surface mesh and no
     # tetrahedralization is performed for PDRD bodies.
     "pdrd_density": 100.0,
+    # PDRD coefficient of restitution: 0 is the solver's ordinary implicit step
+    # (no bounce), 1 asks for an elastic one. Approximate; see the tooltip.
+    "pdrd_restitution": 0.0,
     # SAND-specific parameters. A SAND group is a faceless mesh of loose
     # vertices (grain centers); the grains share one radius and a
     # volumetric density, plus an inter-grain friction coefficient.
@@ -160,6 +163,11 @@ OBJECT_GROUP_DEFAULTS = {
     "allow_inter_object_intersection_all_objects": True,
     "allow_inter_group_intersection_all_objects": True,
     "allow_existing_intersection_all_objects": True,
+    # Allow Rest Proximity: a checkbox, off, and the distance it ships while
+    # on, in Blender units. Off ships 0.0, so a group that never touches it
+    # reaches the solver exactly as before.
+    "allow_rest_proximity": False,
+    "rest_proximity_distance": 0.001,
     "shrink_x": 1.0,
     "shrink_y": 1.0,
     "enable_inflate": False,

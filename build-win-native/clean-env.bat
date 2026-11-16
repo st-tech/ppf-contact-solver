@@ -34,6 +34,7 @@ call :remove "portable MSVC"          "%BUILD_WIN%\msvc"
 call :remove "portable CUDA"          "%BUILD_WIN%\cuda"
 call :remove "portable CUDA temp"     "%BUILD_WIN%\cuda_temp"
 call :remove "MinGit"                 "%BUILD_WIN%\mingit"
+REM Left by older builds, which built an ffmpeg with MSYS2; none is built now.
 call :remove "MSYS2"                  "%BUILD_WIN%\msys64"
 call :remove "ffmpeg"                 "%BUILD_WIN%\ffmpeg"
 call :remove "ffmpeg temp"            "%BUILD_WIN%\temp_ffmpeg"

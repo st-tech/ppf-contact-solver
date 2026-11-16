@@ -46,10 +46,12 @@
 //! iteration can overflow only by more than doubling the count of the one before
 //! it. THE GROWTH WAITS FOR THE NEXT OPEN, never the close that measured it: a
 //! grown buffer does not keep its contents, and the last iteration's record is
-//! what the commit reads. An overflowed record is incomplete, and
-//! [`FrictionMemory::commit`] refuses a step whose LAST iteration overflowed
-//! rather than carry a memory with pairs missing from it, since a missing pair
-//! would restart from zero slip without a word.
+//! what the commit reads. An overflowed record is incomplete, so the Newton
+//! loop does not end on one: when the step's last iteration overflowed, it runs
+//! that iteration again into the grown capacity (`step.rs`, STEP B33). And
+//! [`FrictionMemory::commit`] still refuses an incomplete record rather than
+//! carry a memory with pairs missing from it, since a missing pair would
+//! restart from zero slip without a word.
 
 use ppf_cts_compute::{AllocLabel, Buffer, Device, Handle};
 
@@ -474,6 +476,13 @@ impl FrictionMemory {
             frames: self.frames,
             frozen_stiffness: self.frozen_stiffness.handle(),
         })
+    }
+
+    /// Whether the last closed iteration's record holds every pair it
+    /// counted, which [`FrictionMemory::commit`] requires. The Newton loop
+    /// repeats its last iteration until it does.
+    pub fn complete(&self) -> bool {
+        self.complete
     }
 
     /// Close an iteration's record: read how many pairs it counted, ask the

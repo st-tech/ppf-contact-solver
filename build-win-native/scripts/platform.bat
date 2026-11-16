@@ -33,8 +33,8 @@ REM                         this architecture's URL_<BASE>_<ARCH_KEY> and siblin
 REM
 REM THE ARCHITECTURE IS THE OPERATING SYSTEM'S, NEVER A SETTING. Everything here
 REM builds for the machine it runs on: the bundled interpreter, the wheels pip
-REM installs into it, MinGit and the slim ffmpeg are all the host's, so a build for
-REM another architecture would be a distribution whose pieces do not run together.
+REM installs into it and MinGit are all the host's, so a build for another
+REM architecture would be a distribution whose pieces do not run together.
 REM Nothing cross-compiles.
 REM
 REM AND THE PROCESS HAS TO AGREE WITH IT. Windows on ARM runs x64 programs under

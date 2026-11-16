@@ -29,8 +29,8 @@
 #
 # What it checks is what bundle.sh cannot, because bundle.sh runs on the machine
 # that built the distribution:
-#   - the launcher answers --help naming its real path, and both solvers, both
-#     servers and ffmpeg start with no LD_LIBRARY_PATH;
+#   - the launcher answers --help naming its real path, and both solvers and
+#     both servers start with no LD_LIBRARY_PATH;
 #   - the loader takes the distribution's own bin/libppfbe_<backend>.so;
 #   - the bundled interpreter imports the frontend and JupyterLab through the
 #     launcher's own environment (`ppf-contact-solver python`);
@@ -270,7 +270,7 @@ driver_only() {
 layout() {
     local bad=0 entry dir
     local -a entries=(ppf-contact-solver config.sh README.txt THIRD_PARTY_LICENSES.txt licenses
-        .ppf-selfcontained .git/branch_name.txt bin/ffmpeg python/bin/python3 frontend examples crates)
+        .ppf-selfcontained .git/branch_name.txt python/bin/python3 frontend examples crates)
     for backend in $GPU_BACKENDS; do
         entries+=("bin/libppfbe_$backend.so")
     done
@@ -320,7 +320,6 @@ binaries() {
             bad=1
         fi
     done
-    "$DIST/bin/ffmpeg" -hide_banner -version | head -1 || bad=1
     return "$bad"
 }
 

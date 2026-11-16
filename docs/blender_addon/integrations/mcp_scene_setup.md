@@ -140,6 +140,13 @@ its `allowance` argument is `self`, `inter_object`, `inter_group` or
 [Allow Intersections](../workflow/params/material.md#allow-intersections) and
 [Allow Existing Intersections](../workflow/params/material.md#allow-existing-intersections).
 
+`allow_rest_proximity` is the **Allow Rest Proximity** checkbox and
+`rest_proximity_distance` its **Distance**: while the checkbox is on, the
+pairs that start closer than the distance (scaled by **World Scale**) pass
+through for the whole run. Both take one value for the whole group, neither
+has an `..._all_objects` switch, and a **Sand** group takes neither. See
+[Allow Rest Proximity](../workflow/params/material.md#allow-rest-proximity).
+
 ## Creating Sphere Primitives
 
 When an agent needs a spherical mesh (a ball, a drop, a filler object), create

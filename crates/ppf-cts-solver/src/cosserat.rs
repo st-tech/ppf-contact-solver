@@ -49,6 +49,16 @@ pub struct CosseratEdgeInput {
     pub v1: u32,
     pub tangent: Vec3f,
     pub length: f32,
+    /// The edge's director and length in its REST shape, which the rest Darboux
+    /// vector is read from: the object's bending reference
+    /// (`Object.set_bend_rest_vert`) where both endpoints have one, else the
+    /// authored pose, so equal to `tangent` and `length` for an object without
+    /// a reference. A rod authored bent (a garment bent over its form to start)
+    /// then rests in its reference shape and carries the start's bend as strain,
+    /// as the hinge bending already does from the same reference; `tangent`
+    /// still sets the frame the rod starts in.
+    pub rest_tangent: Vec3f,
+    pub rest_length: f32,
     /// Intrinsic (authored) rest twist rate, in radians per unit length, added
     /// to the twist component of the rest Darboux vector. Zero for an
     /// untwisted rod. A straight rod with a non-zero rest twist stores twist
@@ -374,6 +384,12 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
         // Walk the chain, orienting each edge so its first node is the one we
         // arrive from (director points "forward" along the walk).
         let mut chain: Vec<(usize, na::Rotation3<f32>, Vec3f)> = Vec::new();
+        // The same walk over the REST directors (`rest_tangent`): the frames the
+        // rest Darboux vector is read from. Equal to `chain`'s for an edge whose
+        // rest is its authored pose.
+        let mut rest_chain: Vec<(na::Rotation3<f32>, Vec3f)> = Vec::new();
+        let mut prev_rest_rot: Option<na::Rotation3<f32>> = None;
+        let mut prev_rest_forward: Option<Vec3f> = None;
         // Node the walk stops on; with `start_node` it says whether each end of
         // this chain is a real rod end or a junction.
         let mut terminal_node = start_node;
@@ -391,6 +407,7 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
             } else {
                 (-e.tangent, e.v0)
             };
+            let rest_forward = if e.v0 == cur_node { e.rest_tangent } else { -e.rest_tangent };
             let next_node = if e.v0 == cur_node { e.v1 } else { e.v0 };
 
             // The transported (unrolled) frame. This, NOT the rolled result, is
@@ -403,6 +420,11 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
                 _ => seed_frame(&forward),
             };
             let mut rot = transported;
+            let rest_transported = match (prev_rest_rot, prev_rest_forward) {
+                (Some(pr), Some(pf)) => minimal_rotation(&pf, &rest_forward) * pr,
+                _ => seed_frame(&rest_forward),
+            };
+            let mut rest_rot = rest_transported;
             // Authored roll about the frame's OWN tangent (a right-multiply, so
             // Z stays the tangent and only the material X/Y move). Applied AFTER
             // transport and NOT fed back into `prev_rot`, so it is an absolute
@@ -416,6 +438,10 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
                     &na::Vector3::z_axis(),
                     edge_roll,
                 );
+                rest_rot *= na::Rotation3::from_axis_angle(
+                    &na::Vector3::z_axis(),
+                    edge_roll,
+                );
             }
             let slot = out.quat.len() as u32;
             slot_of[cur_local] = slot;
@@ -426,9 +452,12 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
             out.fixed.push(0); // interior default; chain ends set below.
             out.end_omega.push(0.0); // interior default; chain ends set below.
             chain.push((cur_local, rot, forward));
+            rest_chain.push((rest_rot, rest_forward));
 
             prev_rot = Some(transported);
             prev_forward = Some(forward);
+            prev_rest_rot = Some(rest_transported);
+            prev_rest_forward = Some(rest_forward);
 
             // Advance only THROUGH a simple pass-through node. At a junction
             // (degree >= 3) there is no next edge to prefer and no defined
@@ -493,21 +522,70 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
                 entry.1 *= twist;
                 out.quat[slot_of[entry.0] as usize] = quat_xyzw(&entry.1);
             }
+            // The rest frames' own holonomy, spread the same way, so a ring's
+            // rest Darboux is uniform in its rest shape too.
+            let (r_first, t_first) = rest_chain[0];
+            let (r_last, t_last) = rest_chain[n - 1];
+            let r_close = minimal_rotation(&t_last, &t_first) * r_last;
+            let phi = signed_angle_about(
+                &r_close.matrix().column(0).into(),
+                &r_first.matrix().column(0).into(),
+                &t_first,
+            );
+            let step = phi / n as f32;
+            for (k, entry) in rest_chain.iter_mut().enumerate().skip(1) {
+                entry.0 *= na::Rotation3::from_axis_angle(&na::Vector3::z_axis(), step * k as f32);
+            }
         }
 
         // Rest Darboux at each interior node: between consecutive chain edges.
         // A ring additionally has a site at its seam (last edge -> first edge),
         // which `windows(2)` does not cover, so it is appended below.
+        // From the REST frames: the rest shape's curvature, not the start's.
         let mut pairs: Vec<(usize, na::Rotation3<f32>, usize, na::Rotation3<f32>)> =
-            chain
-                .windows(2)
-                .map(|w| (w[0].0, w[0].1, w[1].0, w[1].1))
+            (0..chain.len().saturating_sub(1))
+                .map(|k| (chain[k].0, rest_chain[k].0, chain[k + 1].0, rest_chain[k + 1].0))
                 .collect();
         if is_loop && chain.len() >= 3 {
-            let (last_local, r_last, _) = chain[chain.len() - 1];
-            let (first_local, r_first, _) = chain[0];
-            pairs.push((last_local, r_last, first_local, r_first));
+            let n = chain.len();
+            pairs.push((chain[n - 1].0, rest_chain[n - 1].0, chain[0].0, rest_chain[0].0));
         }
+        // THE REST FRAMES' ROLL. They are transported from a seed whose roll about
+        // its tangent the reference leaves free, and a change of that roll by
+        // theta turns every site's bending components by theta; so the chain's
+        // rest frames are turned by the theta that best matches the start's
+        // bending in least squares (the 2D Procrustes rotation, atan2 of the
+        // summed cross and dot products). A reference that is the pose moved
+        // rigidly then rests exactly as the pose would, and a bent cloth's crimp
+        // keeps its own plane. A rest equal to the pose has theta exactly 0.
+        let start_pairs: Vec<(na::Rotation3<f32>, na::Rotation3<f32>, f32)> = {
+            let mut v: Vec<(na::Rotation3<f32>, na::Rotation3<f32>, f32)> = chain
+                .windows(2)
+                .map(|w| (w[0].1, w[1].1, 0.5 * (edges[w[0].0].length + edges[w[1].0].length)))
+                .collect();
+            if is_loop && chain.len() >= 3 {
+                let n = chain.len();
+                v.push((chain[n - 1].1, chain[0].1, 0.5 * (edges[chain[n - 1].0].length + edges[chain[0].0].length)));
+            }
+            v
+        };
+        let same_rest = chain
+            .iter()
+            .all(|&(i, _, _)| edges[i].rest_tangent == edges[i].tangent && edges[i].rest_length == edges[i].length);
+        let (mut dot, mut cross) = (0.0f32, 0.0f32);
+        if !same_rest {
+            for ((_, r_prev, _, r_next), (s_prev, s_next, l)) in pairs.iter().zip(&start_pairs) {
+                let a = darboux_of(&(r_prev.matrix().transpose() * r_next.matrix()), 1.0);
+                let b = darboux_of(&(s_prev.matrix().transpose() * s_next.matrix()), if *l > 0.0 { 1.0 / l } else { 0.0 });
+                dot += a.x * b.x + a.y * b.y;
+                cross += a.x * b.y - a.y * b.x;
+            }
+        }
+        let (roll_sin, roll_cos) = if same_rest || (dot == 0.0 && cross == 0.0) {
+            (0.0f32, 1.0f32)
+        } else {
+            cross.atan2(dot).sin_cos()
+        };
         for (local_prev, r_prev, local_next, r_next) in pairs {
             // Shared node is the one common to both edges.
             let ep = &edges[local_prev];
@@ -517,7 +595,7 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
             } else {
                 ep.v1
             };
-            let l = 0.5 * (ep.length + en.length);
+            let l = 0.5 * (ep.rest_length + en.rest_length);
             let inv_len = if l > 0.0 { 1.0 / l } else { 0.0 };
             // Darboux vector via the RELATIVE rotation G0 = R_prev^T R_next
             // (R_prev is the paper's R_{i-1}, R_next is R_i). This is the
@@ -527,6 +605,11 @@ pub fn build_cosserat_frames(edges: &[CosseratEdgeInput]) -> CosseratFrames {
             // vanish exactly at the rest pose.
             let g0 = r_prev.matrix().transpose() * r_next.matrix();
             let mut omega = darboux_of(&g0, inv_len);
+            if !same_rest {
+                let (x, y) = (omega.x, omega.y);
+                omega.x = roll_cos * x - roll_sin * y;
+                omega.y = roll_sin * x + roll_cos * y;
+            }
             // A straight rest discards the shape's own curvature and torsion, so
             // the rod carries the authored form as STRAIN and springs toward
             // straight. Only the geometric part is dropped: the authored
@@ -625,11 +708,97 @@ mod tests {
             v1,
             tangent: t.normalize(),
             length: len,
+            rest_tangent: t.normalize(),
+            rest_length: len,
             rest_twist: 0.0,
             fix_ends: false,
             twist_rate: 0.0,
             straight_rest: false,
             roll: 0.0,
+        }
+    }
+
+    /// A chain of `n` edges along the points of `p`, each edge its own director and length.
+    fn chain_of(p: &[Vec3f]) -> Vec<CosseratEdgeInput> {
+        (0..p.len() - 1)
+            .map(|i| {
+                let d = p[i + 1] - p[i];
+                edge(i as u32, i as u32, i as u32 + 1, d, d.norm())
+            })
+            .collect()
+    }
+
+    /// Points along a circular arc of radius `r` in the x-z plane, `n` + 1 of them, `step` apart in angle.
+    fn arc(n: usize, r: f32, step: f32) -> Vec<Vec3f> {
+        (0..=n).map(|i| Vec3f::new(r * (i as f32 * step).sin(), 0.0, r * (1.0 - (i as f32 * step).cos()))).collect()
+    }
+
+    #[test]
+    fn a_rod_posed_bent_rests_in_its_straight_reference() {
+        // THE REST IS THE REFERENCE, THE START IS THE POSE: a rod authored along an arc with a straight reference
+        // starts in the arc's frames (the ones it is built with when the arc is its own rest) and rests straight
+        // (a zero rest Darboux, as `straight_rest` gives), so it carries the arc as bending strain.
+        let bent = arc(8, 3.0, 0.2);
+        let posed = chain_of(&bent);
+        let own = build_cosserat_frames(&posed);
+        let mut referenced = posed.clone();
+        for e in referenced.iter_mut() {
+            e.rest_tangent = Vec3f::new(1.0, 0.0, 0.0);
+            e.rest_length = 0.6;
+        }
+        let f = build_cosserat_frames(&referenced);
+        assert_eq!(f.quat, own.quat, "the start's frames must be the pose's whatever the reference");
+        assert!(own.bend_sites.iter().any(|s| s.rest_darboux.iter().any(|w| w.abs() > 0.1)), "the arc itself must curve");
+        for s in &f.bend_sites {
+            for w in s.rest_darboux {
+                assert!(w.abs() < 1e-5, "a straight reference rests at a zero Darboux vector, got {:?}", s.rest_darboux);
+            }
+            assert!((s.inv_len - 1.0 / 0.6).abs() < 1e-5, "the rest length is the reference's");
+        }
+    }
+
+    #[test]
+    fn a_reference_moved_rigidly_rests_as_the_pose_does() {
+        // A rigid motion is not a deformation: a crimped rod whose reference is the pose turned rigidly must rest
+        // exactly as the pose does. The rest frames are seeded from the reference's own first tangent, so without
+        // the roll match their crimp would read in another material plane and the rod would start strained.
+        let pose: Vec<Vec3f> = (0..=10)
+            .map(|i| Vec3f::new(0.5 * i as f32, 0.0, if i % 2 == 0 { 0.13 } else { -0.13 }))
+            .collect();
+        let own = build_cosserat_frames(&chain_of(&pose));
+        let turn = na::Rotation3::from_axis_angle(&na::Unit::new_normalize(na::Vector3::new(0.3f32, 0.5, 0.8)), 0.9);
+        let turned: Vec<Vec3f> = pose.iter().map(|p| turn * p).collect();
+        let mut referenced = chain_of(&pose);
+        for (e, r) in referenced.iter_mut().zip(chain_of(&turned)) {
+            e.rest_tangent = r.tangent;
+            e.rest_length = r.length;
+        }
+        let f = build_cosserat_frames(&referenced);
+        assert!(own.bend_sites.iter().any(|s| s.rest_darboux[0].abs() + s.rest_darboux[1].abs() > 0.1), "the crimp must curve");
+        for (a, b) in f.bend_sites.iter().zip(&own.bend_sites) {
+            for k in 0..3 {
+                assert!((a.rest_darboux[k] - b.rest_darboux[k]).abs() < 1e-4, "{:?} against the pose's {:?}", a.rest_darboux, b.rest_darboux);
+            }
+        }
+    }
+
+    #[test]
+    fn a_rod_posed_straight_rests_in_its_bent_reference() {
+        // The other way round: posed straight, referenced along an arc, it rests with the arc's own rest Darboux.
+        let bent = arc(8, 3.0, 0.2);
+        let own = build_cosserat_frames(&chain_of(&bent));
+        let mut straight = chain_of(&(0..=8).map(|i| Vec3f::new(0.6 * i as f32, 0.0, 0.0)).collect::<Vec<_>>());
+        for (e, r) in straight.iter_mut().zip(chain_of(&bent)) {
+            e.rest_tangent = r.tangent;
+            e.rest_length = r.length;
+        }
+        let f = build_cosserat_frames(&straight);
+        assert_eq!(f.bend_sites.len(), own.bend_sites.len());
+        for (a, b) in f.bend_sites.iter().zip(&own.bend_sites) {
+            for k in 0..3 {
+                assert!((a.rest_darboux[k] - b.rest_darboux[k]).abs() < 1e-5, "{:?} against the arc's {:?}", a.rest_darboux, b.rest_darboux);
+            }
+            assert!((a.inv_len - b.inv_len).abs() < 1e-5);
         }
     }
 
@@ -771,6 +940,8 @@ mod tests {
                     v1: (i + 1) % n,
                     tangent: d / len,
                     length: len,
+                    rest_tangent: d / len,
+                    rest_length: len,
                     rest_twist: 0.0,
                     fix_ends: false,
                     twist_rate: 0.0,
@@ -798,6 +969,8 @@ mod tests {
                     v1: i + 1,
                     tangent: t,
                     length: len,
+                    rest_tangent: t,
+                    rest_length: len,
                     rest_twist: 0.0,
                     fix_ends: false,
                     twist_rate: 0.0,
@@ -857,6 +1030,8 @@ mod tests {
                         v1: i + 1,
                         tangent: d / len,
                         length: len,
+                        rest_tangent: d / len,
+                        rest_length: len,
                         rest_twist: twist,
                         fix_ends: false,
                         twist_rate: 0.0,
@@ -1055,6 +1230,8 @@ mod tests {
                     v1: (i + 1) as u32,
                     tangent: d / len,
                     length: len,
+                    rest_tangent: d / len,
+                    rest_length: len,
                     rest_twist: 0.0,
                     fix_ends: true,
                     twist_rate: 0.0,
@@ -1098,6 +1275,8 @@ mod tests {
                 v1: i + 1,
                 tangent: t.normalize(),
                 length: 1.0,
+                rest_tangent: t.normalize(),
+                rest_length: 1.0,
                 rest_twist: 0.0,
                 fix_ends: true,
                 twist_rate: rate,

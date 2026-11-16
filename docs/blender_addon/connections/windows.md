@@ -206,7 +206,7 @@ directory the resolved `ppf-cts-server.exe` came out of,
 
 ```text
 <root>/
-  bin/                     # each GPU backend's library, the runtime it loads, ffmpeg
+  bin/                     # each GPU backend's library and the runtime it loads
   python/python.exe
   target/cuda/release/     # ppf-cts-server.exe, one directory per backend shipped
   target/rocm/release/

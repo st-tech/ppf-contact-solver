@@ -10,7 +10,7 @@
 # failing part way through a provision.
 #
 #     scripts/check-downloads.sh                        every URL_* in downloads.txt
-#     scripts/check-downloads.sh URL_PYTHON_X86_64 URL_NASM    only the named entries
+#     scripts/check-downloads.sh URL_PYTHON_X86_64 URL_RUSTUP  only the named entries
 #     scripts/check-downloads.sh --manifest FILE [KEY...]
 #
 # Naming entries is how warmup.sh probes only what it is about to fetch: an

@@ -60,6 +60,7 @@ box* is the unlabeled box that holds the contact gap and offset rows, with
 | ---------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Model**                                                        | Solid, Shell                          | Solid: **Stable NeoHookean** or **ARAP**. Shell: **Baraff-Witkin** or **ARAP**. A Rod always uses ARAP and has no **Model** row.                                                              |
 | **Density**                                                      | Solid, Shell, Rod, PDRD               | kg/m³ on Solid and PDRD, kg/m² on Shell, kg/m on Rod.                                                                                                                                          |
+| **Restitution**                                                  | PDRD                                  | 0 – 1, how much of its approach speed the body keeps when it bounces. See [Restitution](#restitution).                                                                                         |
 | **Young's Modulus** and **Density-Normalized (Pa/ρ)**            | Solid, Shell, Rod                     | The field label reads **(Pa/ρ)** while the checkbox is on and **(Pa)** while it is off. See [Density-Normalized (Pa/ρ)](#density-normalized-paρ).                                              |
 | **Poisson's Ratio**                                              | Solid, Shell                          | The slider stops at 0.4999. The solver needs a value above 0 and below 0.5, and at `0` it stops with *Poisson's ratio must be positive*.                                                                                                                    |
 | **Friction**                                                     | Solid, Shell, Rod, PDRD, Static, Sand | A Sand group has its own **Friction** row. See [Shared Parameters](#shared-parameters).                                                                                                        |
@@ -144,6 +145,7 @@ end of the row), whatever the group's **Type**:
 - **Strain Limit** and **Pressure (Pa)**.
 - **Theta** and **Threshold** in the **Plasticity** box, and **Bend Theta**
   and **Bend Threshold** in the **Bend Plasticity** box.
+- **Restitution**, which only a **PDRD** group shows.
 
 Which keyframes **Transfer** accepts depends on the group's **Type**. It
 refuses every other keyframe and names the property. The accepted ones are:
@@ -154,7 +156,8 @@ refuses every other keyframe and names the property. The accepted ones are:
   solid are fixed for the whole solve, so a keyframe on **Young's Modulus**,
   **Poisson's Ratio**, the **Plasticity** **Theta** and **Threshold**, or
   **Deformation Damping** is refused.
-- **PDRD**: **Friction**, **Contact Gap** and **Contact Offset**.
+- **PDRD**: **Friction**, **Restitution**, **Contact Gap** and **Contact
+  Offset**.
 - **Static**: **Contact Gap** and **Contact Offset**, only on a collider that
   is part of the solved scene: one that is animated, uses **Apply Soft
   Constraints** or is one end of a cross-stitch (see
@@ -299,6 +302,8 @@ types that show each row.
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | All types                                  | Let an object pass through every other object, with no contact.                                                                                     |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | All types                                  | Let an object pass through objects of other groups, with no contact.                                                                                |
 | **Allow Existing Intersections**     | `allow_existing_intersection`     | `False` | All types except Sand                      | Let the pairs that already overlap at the start pass through, with no contact.                                                                      |
+| **Allow Rest Proximity**             | `allow_rest_proximity`            | `False` | All types except Sand                      | Let the pairs that start closer than **Distance** pass through, with no contact.                                                                    |
+| **Distance**                         | `rest_proximity_distance`         | 0.001   | All types except Sand                      | The distance for **Allow Rest Proximity** (0 or more, scaled by **World Scale**). Drawn while that checkbox is on. It has no padlock.                |
 | **Force Field Weight**               | `force_field_weight`              | 1.0     | All types except Static                    | Scale on the scene's force fields for this group's objects (0 or more; the slider stops at 2). `0` leaves the group unaffected.                     |
 
 A **Rod** group starts with **Contact Offset** at `0.005`, because switching
@@ -1351,7 +1356,7 @@ group. See [Preconditioner](scene.md#preconditioner).
 ## PDRD-Specific
 
 **PDRD** (Painless Differentiable Rotation Dynamics) is an exactly rigid body
-type. Its material block is **Density** and **Friction**. It has no Young's
+type. Its material block is **Density**, **Restitution** and **Friction**. It has no Young's
 modulus, Poisson's ratio, bend, shrink, strain limit or inflate, because the
 body is exactly rigid and has no stiffness to tune, and PDRD bodies are not
 tetrahedralized.
@@ -1359,7 +1364,7 @@ tetrahedralized.
 A **PDRD** group's **Material Params** box draws these rows and boxes, in this
 order:
 
-1. **Density** and **Friction**.
+1. **Density**, **Restitution** and **Friction**.
 2. The [Hinge](#hinge-joints) box.
 3. The contact box, then **Collision Active Duration Windows**. See
    [Shared Parameters](#shared-parameters).
@@ -1372,6 +1377,7 @@ order:
 | UI label            | Property key   | Default | Description                                                                                                  |
 | ------------------- | -------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
 | **Density (kg/m³)** | `pdrd_density` | 100.0   | Volumetric density, in kg/m³. Mass is the density times the enclosed mesh volume. Range 0.01 – 10000.        |
+| **Restitution**     | `pdrd_restitution` | 0.0 | Coefficient of restitution, 0 – 1. See [Restitution](#restitution).                                          |
 
 **Density** sets the body's mass and, through its shape, its rotational
 inertia. The motion is exactly rigid at any mesh resolution, so there is no
@@ -1386,6 +1392,64 @@ Each PDRD body is solved in reduced 6-DOF coordinates (translation plus
 rotation): every Newton iteration fits the single best-fit rigid transform to
 the body and reconstructs its surface from that transform, so the body stays
 exactly rigid by construction rather than through a stiff penalty.
+:::
+
+### Restitution
+
+**Restitution** is how much of its approach speed a PDRD body keeps when it
+bounces, off an invisible wall or off another PDRD body. At **0**, the default,
+the body stops dead when it lands, exactly as before the field existed, and the
+scene runs no differently. At **1** it bounces back to about the height it fell
+from, and values in between bounce in between: a ball dropped onto an
+invisible wall comes back to about **Restitution²** of its drop.
+
+:::{warning}
+Restitution is approximate. The bounce follows the value closely for an
+impact off an invisible wall, but a long or grinding contact bounces somewhat
+less, a bounce off another body may differ from one off a wall, and a value
+near **1** can occasionally gain a little energy. Check the result when the
+exact bounce height matters. Any value above **0** can now and then add
+energy at a large **Step Size**, most visibly when a body slides off an edge
+of another; a body whose value is keyframed down to **0** is free of this from
+that frame on.
+
+Start a body with a restitution clear of what it rests on, by more than the
+contact gap. One placed closer starts with the contact already compressed, and
+the bounce gives that back: the body hops off at the first frame.
+:::
+
+A body with a restitution above 0 never quite comes to rest: each small bounce
+is as elastic as the first, so it keeps rocking or hopping on the floor. To
+let it settle, keyframe **Restitution** down to **0** once the bounces you want
+are over. Right-click the field and choose **Insert Keyframe** (or hover it
+and press **I**) at a frame with the starting value, then again at a later
+frame with 0. Between keys the bounce weakens gradually; from the frame it
+reaches 0 the body takes the solver's usual step and settles as a body with
+Restitution 0 does.
+
+The key works in the panel, with `group.param` and with the MCP tool
+`set_group_material_properties`. It has a padlock and can be keyframed, and a
+material profile does not store it.
+
+:::{admonition} Under the hood
+:class: toggle
+
+A body with a restitution integrates with the weight `θ = ½`: each step is
+`x₁ = x₀ + h v₀ + ½ h² a`, `v₁ = v₀ + h a`, where the solver otherwise takes the
+implicit Euler step (`θ = 1`). Its contacts push with the barrier's average
+over the gaps the step sweeps, rather than with its value at the step's end,
+and their stiffness is formed from a body's mass rather than one vertex's: the
+body's own against an invisible wall, the lighter body's between two. A
+converged step of that kind neither gains nor loses energy, so an impact is
+elastic however it falls across steps. The coefficient is then applied once,
+when the impact is over: of the body's velocity change while it was touching
+something (linear and angular, gravity's share removed), `(1 + e) / 2` is kept,
+which leaves it moving apart at `e` times its approach speed. While a body with
+a restitution touches something, the step's last iteration is repeated until
+it converges, which costs a few extra solves on those steps only. The
+approximations: a body touching several things at once takes one coefficient
+for all of them, a body that never leaves contact (resting, or stacked) keeps
+the elastic step, and two bodies with different values each apply their own.
 :::
 
 ### Hinge Joints
@@ -1761,15 +1825,24 @@ where that row is drawn. All four are off by default.
   contact. See [Allow Existing Intersections](#allow-existing-intersections)
   below.
 
+Below the four, a fifth checkbox, **Allow Rest Proximity**, lets the pairs
+that start the simulation closer than a distance pass through each other for
+the whole simulation. It is off by default, and its **Distance** field is
+drawn only while it is on. See [Allow Rest Proximity](#allow-rest-proximity)
+below.
+
 Each is drawn for every group type, **Static** included, except that a
-**Sand** group has no **Allow Existing Intersections** checkbox. A group that
+**Sand** group has no **Allow Existing Intersections** or **Allow Rest
+Proximity** checkbox. A group that
 still has the checkbox on after its **Type** was changed to **Sand** is
 refused at **Transfer** with a message naming the group. Change the **Type**
 back, turn the checkbox off, and change it to **Sand** again.
 
 With any of the first three checkboxes on, the box shows the line *Allowed
 pairs pass through, with no contact*. With **Allow Existing Intersections** on,
-it shows *Only pairs tangled at the start pass through*. On a **Static** group,
+it shows *Only pairs tangled at the start pass through*, and with **Allow
+Rest Proximity** on, *Pairs this close at the start pass through*. On a
+**Static** group,
 the checkboxes take effect only while the collider is part of the solved scene;
 see [Only One Side Has to Allow It](#only-one-side-has-to-allow-it).
 
@@ -1974,6 +2047,48 @@ barely touches can pass one and fail the other. The run then stops before the
 first frame with an error that names the pair; moving the two apart, or
 further into each other, makes both checks agree.
 :::
+
+### Allow Rest Proximity
+
+Some scenes start with parts that lie almost touching everywhere without
+sharing a vertex. A felt, built as a dense network of fibers, is the typical
+case: its fibers start fractions of a millimeter apart. A contact gap small
+enough to start such a scene free of contact is far below what the solver is
+built for, and every pair that close slows each step.
+
+Check **Allow Rest Proximity** and its **Distance** field appears. The
+distance is in the same units as the
+[Contact Gap](#contact-gap-and-contact-offset), scaled by **World Scale** the
+same way, and starts at `0.001`. While the box is checked, the build finds
+every pair of faces or rod segments that share no vertex and start closer
+than this distance, and lets
+those pairs pass through each other for the whole simulation, exactly as
+**Allow Existing Intersections** lets an overlap through. The pairs that start
+overlapping, or closer than their contact offsets, are among them. Every pair
+that starts farther apart keeps full contact, at the group's ordinary
+**Contact Gap**. One value covers every object of the group. Unchecking the
+box turns it off and keeps the distance for the next time it is checked.
+
+Between two objects with different distances, the mean of the two is used,
+and an object whose group has the box unchecked counts as `0`. A group alone
+at `0.002` therefore covers a pair with such an object up to `0.001` apart. It covers an object with itself, two objects, and an
+object against a **Static** collider, but not the invisible walls and spheres,
+and it is not available on **Sand**. A **Static** collider that only collides
+(it is not animated, soft-constrained or stitched) counts as `0` whatever its
+own group says, so set the distance on the dynamic side: a garment at `0.002`
+covers a collider up to `0.001` away.
+
+:::{important}
+Like **Allow Existing Intersections**, this gives up contact for good between
+the pairs it covers: two fibers that started close may later cross each other.
+Choose the smallest distance that covers the pairs that start too close, which
+is usually a little more than the closest spacing you want ignored, and keep
+the **Contact Gap** below the spacing of the pairs it does not cover.
+:::
+
+After a build, the pairs it covered are tinted light blue on the start frame
+together with any existing intersections, under the same label, *Existing
+Intersections Allowed*.
 
 ## Loose-Edge Stitches
 

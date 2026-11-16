@@ -75,29 +75,3 @@ load_downloads() {
     return 0
 }
 
-# Print the value of one key from a manifest, without exporting anything else.
-# This is how the Linux build reads the ffmpeg entries out of the Windows
-# manifest: that file also defines URL_PYTHON and URL_RUSTUP for Windows, and
-# loading it whole would put those in the caller's environment beside the Linux
-# ones of the same name.
-manifest_value() {
-    local manifest="$1" want="$2" line key found=""
-    if [ ! -f "$manifest" ]; then
-        printf 'ERROR: download manifest not found: %s\n' "$manifest" >&2
-        return 1
-    fi
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            '' | '#'*) continue ;;
-        esac
-        key="${line%%=*}"
-        if [ "$key" = "$want" ]; then
-            found="${line#*=}"
-        fi
-    done < "$manifest"
-    if [ -z "$found" ]; then
-        printf 'ERROR: %s does not set %s\n' "$manifest" "$want" >&2
-        return 1
-    fi
-    printf '%s\n' "$found"
-}

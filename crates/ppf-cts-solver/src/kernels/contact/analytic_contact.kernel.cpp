@@ -87,6 +87,103 @@ struct AnalyticShareInput {
     return stiffness > 0.0f;
 }
 
+// THE FLOOR'S PUSH AS A FUNCTION OF THE GAP ALONE. With the stiffness the
+// floor forms, `elastic + mass / gap^2`, the push's magnitude at gap `y` is
+// `f(y) = (mass / y^2 + elastic) (ghat - y)^2 / ghat` inside the band and zero
+// outside it. `elastic` is the lagged `up . H up`, held fixed over the step.
+// The helpers below average it over a step's sweep in closed form.
+
+// The logarithmic mean `L = (b - a) / ln(b / a)` of two positive gaps and its
+// derivative in `b`. Near `a = b` the logarithm's ratio is close to one, where
+// the device's single-precision log has an absolute error comparable to the
+// answer, so the series in `t = (b - a) / (b + a)` takes over:
+// `L = (a + b) / 2 * phi(t)`, `1 / phi = 1 + t^2/3 + t^4/5 + t^6/7 + ...`, cut
+// where the next term is below single precision for `|t| <= 0.1`.
+[[seam::device_fn]] inline float log_mean(float a, float b, float &slope) {
+    const float sum = a + b;
+    const float t = fmath::div(b - a, sum);
+    if (fmath::abs(t) <= 0.1f) {
+        const float t2 = t * t;
+        const float phi = fmath::div(
+            1.0f, 1.0f + t2 * (1.0f / 3.0f + t2 * (0.2f + t2 * (1.0f / 7.0f))));
+        const float phi_t =
+            -t * (2.0f / 3.0f + t2 * (0.8f + t2 * (6.0f / 7.0f))) * phi * phi;
+        slope = 0.5f * phi + 0.5f * sum * phi_t * fmath::div(2.0f * a, sum * sum);
+        return 0.5f * sum * phi;
+    }
+    const float log_ratio = fmath::log(fmath::div(b, a));
+    slope = fmath::div(log_ratio - fmath::div(b - a, b), log_ratio * log_ratio);
+    return fmath::div(b - a, log_ratio);
+}
+
+// The push's mean over the gaps `[a, b]`, both inside the band, and its
+// derivative in `b`. The mass term's mean is
+// `(mass / ghat) (ghat^2 / (a b) - 2 ghat / L + 1)`, written as
+// `(ghat / G - 1)^2 + 2 ghat (1 / G - 1 / L)` with `G` the geometric mean so
+// both parts are non-negative and neither cancels; its derivative in `b`
+// simplifies to `mass (2 L_b / L^2 - ghat / (a b^2))`, which at `a = b` is half
+// the push's own derivative there, as a mean's must be. The elastic term's
+// mean is a cubic's difference quotient.
+[[seam::device_fn]] inline float floor_push_mean(float a, float b, float ghat,
+                                                  float mass, float elastic,
+                                                  float &slope) {
+    float log_slope;
+    const float l = log_mean(a, b, log_slope);
+    const float g = fmath::sqrt(a * b);
+    const float ratio = fmath::div(ghat, g) - 1.0f;
+    const float spread = fmath::max(fmath::div(1.0f, g) - fmath::div(1.0f, l), 0.0f);
+    const float ra = ghat - a;
+    const float rb = ghat - b;
+    slope = mass * (fmath::div(2.0f * log_slope, l * l) - fmath::div(ghat, a * b * b)) -
+            fmath::div(elastic * (ra + 2.0f * rb), 3.0f * ghat);
+    return fmath::div(mass, ghat) * (ratio * ratio + 2.0f * ghat * spread) +
+           fmath::div(elastic, 3.0f * ghat) * (ra * ra + ra * rb + rb * rb);
+}
+
+// THE SECANT PUSH: the push averaged over the gaps the step swept, from the
+// committed gap `start` to the iterate's `end`, i.e. the barrier potential's
+// secant slope over the step. A force evaluated this way does no more and no
+// less work than the potential releases, so the contact cannot inject energy
+// whatever the barrier's shape.
+//
+// The push is zero outside the band, so the part of the sweep past `ghat`
+// contributes nothing and the mean is the in-band mean times the in-band share
+// of the sweep. `curvature` is the derivative of the mean in `end`, negated,
+// which is what the Newton step needs; it is exact in every case, so a step
+// whose sweep is vanishingly short needs no special form: there the mean is
+// the push itself and the curvature half its own.
+[[seam::device_fn]] inline float floor_secant_push(float start, float end,
+                                                    float ghat, float mass,
+                                                    float elastic,
+                                                    float &curvature) {
+    curvature = 0.0f;
+    if (start >= ghat && end >= ghat) {
+        return 0.0f;
+    }
+    float slope;
+    if (start < ghat && end < ghat) {
+        const float mean = floor_push_mean(start, end, ghat, mass, elastic, slope);
+        curvature = fmath::max(-slope, 0.0f);
+        return mean;
+    }
+    const float sweep = end - start;
+    if (end >= ghat) {
+        // Leaving the band: the in-band part `[start, ghat]` is fixed, and the
+        // mean falls as the sweep lengthens.
+        const float inside = floor_push_mean(start, ghat, ghat, mass, elastic, slope);
+        const float mean = fmath::div(ghat - start, sweep) * inside;
+        curvature = fmath::max(fmath::div(mean, sweep), 0.0f);
+        return mean;
+    }
+    // Entering the band: the in-band part is `[end, ghat]`, oriented from
+    // `ghat` to `end`, so it is the mean over `[ghat, end]` in the order swept.
+    const float inside = floor_push_mean(ghat, end, ghat, mass, elastic, slope);
+    const float mean = fmath::div(end - ghat, sweep) * inside;
+    curvature = fmath::max(
+        -fmath::div(inside + (end - ghat) * slope - mean, sweep), 0.0f);
+    return mean;
+}
+
 [[seam::device_fn]] inline AnalyticContactResult
 analytic_contact_evaluate(const Mat3x3f &local_hessian,
                               const Vec3f &slip,

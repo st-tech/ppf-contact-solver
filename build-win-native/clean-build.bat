@@ -31,7 +31,8 @@ echo Removing launcher scripts...
 if exist "%BUILD_WIN%\start.bat" del /Q "%BUILD_WIN%\start.bat"
 if exist "%BUILD_WIN%\start-jupyterlab.pyw" del /Q "%BUILD_WIN%\start-jupyterlab.pyw"
 
-echo Removing ffmpeg build output...
+REM Older builds made an ffmpeg here; the distribution no longer ships one.
+echo Removing ffmpeg build output left by older builds...
 if exist "%BUILD_WIN%\ffmpeg" rmdir /S /Q "%BUILD_WIN%\ffmpeg"
 if exist "%BUILD_WIN%\temp_ffmpeg" rmdir /S /Q "%BUILD_WIN%\temp_ffmpeg"
 

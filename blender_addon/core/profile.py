@@ -218,6 +218,8 @@ _MATERIAL_PARAM_FIELDS = {
     "contact_gap_rat": "contact_gap_rat",
     "contact_offset_rat": "contact_offset_rat",
     "contact_gap_limit_percent": "contact_gap_limit_percent",
+    "allow_rest_proximity": "allow_rest_proximity",
+    "rest_proximity_distance": "rest_proximity_distance",
     "bend": "bend",
     "shrink": "shrink",
     "shrink_x": "shrink_x",

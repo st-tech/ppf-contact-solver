@@ -861,7 +861,8 @@ class ParamDecoder:
                     elif key in ("allow-self-intersection",
                                  "allow-inter-object-intersection",
                                  "allow-inter-group-intersection",
-                                 "allow-existing-intersection"):
+                                 "allow-existing-intersection",
+                                 "allow-rest-proximity"):
                         # Intersection allowances (issue #138). Both are per
                         # OBJECT here and per VERTEX below (`_scene_.py`
                         # resolves each object's pair of values into one

@@ -9,7 +9,7 @@
 # ``release.yml`` zips the CONTENTS of ``build-win-native\dist`` (it passes
 # ``dist\*``), so the extracted root is the dist tree itself, with no wrapper
 # directory. ``bundle.bat`` copies the two Rust executables into
-# ``dist\target\release`` and puts only DLLs and ffmpeg in ``dist\bin``. So the
+# ``dist\target\release`` and puts only DLLs in ``dist\bin``. So the
 # binary a Windows artist has is at ``<extract root>\target\release\
 # ppf-cts-server.exe``, and ``bin\`` alone never makes a root valid.
 #
@@ -88,13 +88,12 @@ try:
 
     # ---- the layout release.yml actually publishes ----
     # bundle.bat: TARGET_DIR = dist\target\release holds the two .exe files,
-    # BIN_DIR = dist\bin holds the CUDA DLLs and ffmpeg.
+    # BIN_DIR = dist\bin holds the CUDA DLLs.
     dist = os.path.join(tmp, "ppf-contact-solver-2026-01-01-00-00-win64")
     _touch(os.path.join(dist, "target", "release", "ppf-cts-server.exe"))
     _touch(os.path.join(dist, "target", "release", "ppf-contact-solver.exe"))
     _touch(os.path.join(dist, "target", "release", "_ppf_cts_py.dll"))
     _touch(os.path.join(dist, "bin", "libsimbackend_cuda.dll"))
-    _touch(os.path.join(dist, "bin", "ffmpeg.exe"))
     _touch(os.path.join(dist, "python", "python.exe"))
     _touch(os.path.join(dist, "start.bat"))
 
@@ -112,7 +111,6 @@ try:
     # ---- bin\ alone carries no server ----
     dll_only = os.path.join(tmp, "dll-only")
     _touch(os.path.join(dll_only, "bin", "libsimbackend_cuda.dll"))
-    _touch(os.path.join(dll_only, "bin", "ffmpeg.exe"))
     record("bin_without_server_does_not_validate", probe(dll_only) is None,
            {"got": probe(dll_only)})
 

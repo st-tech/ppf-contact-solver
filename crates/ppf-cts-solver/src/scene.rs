@@ -69,6 +69,9 @@ pub struct Scene {
     /// One rotation-lock mode per displacement group. A disabled rotation axis
     /// ignores its mode.
     rotation_lock_mode: Vec<u32>,
+    /// Per displacement group, the representative of the lock group it belongs to (`decode_optional_lock_group`):
+    /// the objects one lock constrains together. The identity unless the scene grouped objects.
+    lock_group: Vec<u32>,
     vert: Matrix3xX<f32>,
     vel: Matrix3xX<f32>,
     uv: Option<Vec<Matrix2x3<f32>>>,
@@ -145,6 +148,9 @@ pub struct Scene {
     /// triangle, matching the static `tri_param` layout exactly so both go
     /// through the same assembly.
     tri_param_anim: Vec<(String, Vec<Vec<f32>>)>,
+    /// Keyframed PDRD restitution, `param_anim_times.len()` frames of one
+    /// value per body. Empty when no body's restitution is keyframed.
+    pdrd_restitution_anim: Vec<Vec<f32>>,
     /// Granular (SAND) scalar material params, one entry per `sand-*.bin`
     /// param file (each a single float, len 1). A faceless particle cloud
     /// has no elements, so these carry the grain mass / contact-offset /
@@ -286,6 +292,35 @@ fn decode_optional_translation_lock_modes(
             (TRANSLATION_LOCK_ALL, "all-axes"),
         ],
     )
+}
+
+/// The lock-group map (`bin/lock_group.bin`): one u32 per displacement group, the representative of the lock group
+/// it belongs to. Without the file every displacement group is its own lock group (the identity), as it was before the
+/// map existed. The map must be CANONICAL, each representative its group's smallest member and its own
+/// representative (`rep[d] <= d`, `rep[rep[d]] == rep[d]`), or the builder's one lock per representative would miss
+/// or split a group; a map that is not is refused by name.
+///
+fn decode_optional_lock_group(values: Option<Vec<u32>>, group_count: usize, filename: &str) -> Vec<u32> {
+    let Some(values) = values else {
+        return (0..group_count as u32).collect();
+    };
+    assert_eq!(
+        values.len(),
+        group_count,
+        "{filename} must contain one u32 lock-group representative per displacement group"
+    );
+    for (group, &rep) in values.iter().enumerate() {
+        assert!(
+            (rep as usize) <= group,
+            "lock_group_canonical: {filename} group {group} names representative {rep}, past itself; a lock group's \
+             representative is its smallest member"
+        );
+        assert_eq!(
+            values[rep as usize], rep,
+            "lock_group_canonical: {filename} group {group}'s representative {rep} is not its own representative"
+        );
+    }
+    values
 }
 
 fn decode_optional_rotation_lock_modes(
@@ -743,7 +778,10 @@ fn read_param_anim(
         let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !file_name.ends_with(".bin") || file_name == "times.bin" {
+        if !file_name.ends_with(".bin")
+            || file_name == "times.bin"
+            || file_name == PDRD_RESTITUTION_ANIM_FILE
+        {
             continue;
         }
         let Some(key) = file_name.strip_prefix("tri-") else {
@@ -780,6 +818,39 @@ fn read_param_anim(
         tri_keys.push((key, frames));
     }
     (times, tri_keys)
+}
+
+/// The per-body restitution schedule beside the material tables: one value
+/// per PDRD body (in `pdrd_body.bin` order) per keyframe of `times.bin`.
+const PDRD_RESTITUTION_ANIM_FILE: &str = "pdrd-restitution.bin";
+
+/// Load the keyframed PDRD restitution, `times.len()` frames of one value per
+/// body, or nothing when no body's restitution is keyframed.
+fn read_pdrd_restitution_anim(
+    session_path: &str,
+    times: &[f64],
+    n_bodies: usize,
+) -> Vec<Vec<f32>> {
+    let path = format!("{session_path}/bin/param_anim/{PDRD_RESTITUTION_ANIM_FILE}");
+    if !std::path::Path::new(&path).exists() {
+        return Vec::new();
+    }
+    assert!(
+        !times.is_empty() && n_bodies > 0,
+        "{path}: a restitution schedule needs keyframe times and PDRD bodies"
+    );
+    let flat: Vec<f32> = read_vec(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    assert_eq!(
+        flat.len(),
+        times.len() * n_bodies,
+        "{path}: expected {} keyframes x {n_bodies} bodies",
+        times.len(),
+    );
+    assert!(
+        flat.iter().all(|e| (0.0..=1.0).contains(e)),
+        "{path}: a restitution must lie in [0, 1]"
+    );
+    flat.chunks_exact(n_bodies).map(|c| c.to_vec()).collect()
 }
 
 /// Write one interpolated dynamic-parameter sample into `param`.
@@ -1038,6 +1109,17 @@ impl Scene {
             },
             displacement_mat.ncols(),
             "rotation_lock_mode.bin",
+        );
+        // The lock-group map, optional: without it every displacement group locks alone.
+        let lock_group_path = format!("{}/bin/lock_group.bin", args.path);
+        let lock_group = decode_optional_lock_group(
+            if std::path::Path::new(&lock_group_path).exists() {
+                Some(read_vec::<u32>(&lock_group_path).expect("Failed to read lock_group.bin"))
+            } else {
+                None
+            },
+            displacement_mat.ncols(),
+            "lock_group.bin",
         );
         // Lock Translation carries a mode table mirroring the rotation pair
         // beside it. It is optional, and its zero default is the single-axis
@@ -2085,6 +2167,12 @@ impl Scene {
             Vec::new()
         };
 
+        let pdrd_restitution_anim = read_pdrd_restitution_anim(
+            &args.path,
+            &param_anim_times,
+            pdrd_body_rows.len() / PDRD_BODY_ROW_LEN,
+        );
+
         Self {
             args: config.param,
             dyn_args,
@@ -2094,6 +2182,7 @@ impl Scene {
             translation_lock_mode,
             rotation_lock,
             rotation_lock_mode,
+            lock_group,
             vert: vert_mat,
             vel: vel_mat,
             uv: uv_mat,
@@ -2134,6 +2223,7 @@ impl Scene {
             tet_param,
             static_param,
             sand_param,
+            pdrd_restitution_anim,
             pdrd_body_rows,
             pdrd_vert_index,
             pdrd_vert_list,
@@ -2368,6 +2458,13 @@ impl Scene {
         &self.param_anim_times
     }
 
+    /// The keyframed PDRD restitution at `time`, one value per body, or
+    /// `None` when no body's restitution is keyframed.
+    pub fn pdrd_restitution_at(&self, time: f64) -> Option<Vec<f32>> {
+        (!self.pdrd_restitution_anim.is_empty())
+            .then(|| interp_frames(&self.param_anim_times, &self.pdrd_restitution_anim, time))
+    }
+
     /// True when this scene animates at least one material parameter.
     pub fn has_material_animation(&self) -> bool {
         !self.tri_param_anim.is_empty()
@@ -2492,8 +2589,22 @@ impl Scene {
                 let mut cosserat_end_twist_rate = None;
                 let mut cosserat_straight_rest = None;
                 let rod = mesh.mesh.mesh.edge.column(i);
-                let x0 = mesh.vertex.column(rod[0]);
-                let x1 = mesh.vertex.column(rod[1]);
+                // A COSSERAT ROD RESTS IN ITS BENDING REFERENCE WHOLE: its rest
+                // lengths (and the mass drawn from them) are the reference's as
+                // its rest curvature and twist are (`cosserat.rs`, the rest
+                // frames), so a rod authored bent (a garment bent over its form
+                // to start) carries the bend as strain in stretch too. The
+                // reference holds the initial pose wherever none was set, so a
+                // rod without one keeps its drawn lengths. A plain rod's stretch
+                // stays its drawn pose's, as its reference was only ever read
+                // for its hinge angles.
+                let cosserat = self.cosserat_edge.get(i).copied().unwrap_or(0) != 0;
+                let rest_v = match (cosserat, mesh.bend_rest_vertex.as_ref()) {
+                    (true, Some(reference)) => reference,
+                    _ => &mesh.vertex,
+                };
+                let x0 = rest_v.column(rod[0]);
+                let x1 = rest_v.column(rod[1]);
                 let mut length = (x1 - x0).map(f32::from).norm();
                 let initial_length = length;
                 let mut density = None;
@@ -3773,6 +3884,11 @@ impl Scene {
         &self.rotation_lock_mode
     }
 
+    /// Per displacement group, its lock group's representative (the identity unless objects were grouped).
+    pub fn lock_groups(&self) -> &[u32] {
+        &self.lock_group
+    }
+
     /// Per-vertex displacement-group membership, shared with aggregate locks.
     pub fn vert_dmap(&self) -> &[u32] {
         &self.vert_dmap
@@ -4266,5 +4382,31 @@ mod lock_axis_tests {
             decode_optional_rotation_lock_modes(Some(vec![0]), 2, "rotation_lock_mode.bin")
         })
         .is_err());
+    }
+
+    #[test]
+    fn lock_group_defaults_to_the_identity() {
+        assert_eq!(decode_optional_lock_group(None, 3, "lock_group.bin"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn lock_group_accepts_a_canonical_map() {
+        // groups {0, 2} and {1, 3}, 4 alone
+        assert_eq!(
+            decode_optional_lock_group(Some(vec![0, 1, 0, 1, 4]), 5, "lock_group.bin"),
+            vec![0, 1, 0, 1, 4]
+        );
+    }
+
+    #[test]
+    fn lock_group_rejects_a_map_that_is_not_canonical() {
+        // a representative past its member
+        assert!(std::panic::catch_unwind(|| decode_optional_lock_group(Some(vec![1, 1]), 2, "lock_group.bin")).is_err());
+        // a representative that is not its own (0 <- 1 <- 2 is a chain, not a partition)
+        assert!(
+            std::panic::catch_unwind(|| decode_optional_lock_group(Some(vec![0, 0, 1]), 3, "lock_group.bin")).is_err()
+        );
+        // one entry per displacement group
+        assert!(std::panic::catch_unwind(|| decode_optional_lock_group(Some(vec![0]), 2, "lock_group.bin")).is_err());
     }
 }

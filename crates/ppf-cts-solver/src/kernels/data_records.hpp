@@ -186,6 +186,11 @@ struct VertexProp {
     // the static collision mesh, which therefore counts as another group from
     // every object.
     unsigned group_index;
+    // The vertex's PDRD body's coefficient of restitution (0 off a body or for
+    // none) and the body's vertex count (0 off a body). Field order must
+    // mirror `VertexProp` in data.rs (repr(C) ABI).
+    float restitution;
+    unsigned body_vertex_count;
     // This vertex's object's intersection allowances, as
     // INTERSECT_ALLOW_SELF | INTERSECT_ALLOW_INTER_OBJECT |
     // INTERSECT_ALLOW_INTER_GROUP. Resolved per OBJECT
@@ -302,6 +307,9 @@ struct PdrdBodyProp {
     unsigned joint_mode;
     Vec3f joint_axis;
     Vec3f joint_pin;
+    // Coefficient of restitution against static floors; read on the host,
+    // which turns it into each vertex's restitution weight.
+    float restitution;
 };
 
 template <unsigned R, unsigned C> struct Svd {

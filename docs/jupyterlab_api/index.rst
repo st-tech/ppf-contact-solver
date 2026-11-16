@@ -250,9 +250,10 @@ Letting Objects Pass Through Each Other
 ---------------------------------------
 
 By default the solver keeps every pair of surfaces apart and refuses a
-scene whose geometry already overlaps. Four per-object parameters, set as
-float-encoded booleans with ``object.param.set(key, 1.0)``, let chosen
-pairs pass through each other instead. An allowed pair gets no contact
+scene whose geometry already overlaps. Five per-object parameters let
+chosen pairs pass through each other instead: the first four are
+float-encoded booleans set with ``object.param.set(key, 1.0)``, and the
+fifth is a distance. An allowed pair gets no contact
 force, is not held apart during a step, and is never reported as an
 intersection.
 
@@ -273,9 +274,20 @@ intersection.
   the :class:`frontend.FixedScene` that ``scene.build()`` returns,
   ``start_links`` holds the vertex links the build made and
   ``start_link_exemptions()`` describes the exempted pairs.
+- ``allow-rest-proximity``: a distance in the scene's length unit. The
+  pairs of elements that share no vertex and start closer than it pass
+  through each other for the whole run, together with the elements sharing
+  a vertex with them, exactly as ``allow-existing-intersection`` treats a
+  tangled pair; the pairs that start overlapping or closer than their
+  contact offsets are among them. For two objects with different values
+  the distance is the mean of the two. Every other pair keeps full
+  contact. It suits a dense fiber network whose fibers start nearly
+  touching, such as a felt, which can then keep an ordinary contact gap
+  between the fibers that are apart. ``0.0`` turns it off, and it is not
+  available on a points (sand) object.
 
-For the cross-object parameters and ``allow-existing-intersection``, one
-side of a pair is enough. A pin does the same for the elements it holds
+For the cross-object parameters, ``allow-existing-intersection`` and
+``allow-rest-proximity``, one side of a pair is enough. A pin does the same for the elements it holds
 completely when it is created with ``obj.pin(ind, allow_intersection=True)``,
 or later with ``holder.set_allow_intersection(True)``. None of these
 affects the invisible walls and spheres.
@@ -865,10 +877,13 @@ solver runs and otherwise prints *No animation frames available to export.*
   says otherwise; ``obj`` also works) and a rendered picture
   ``frame_<n>.<ext>.png`` beside it. ``include_static=False`` leaves static
   colliders out of both.
-- **Video.** When ffmpeg is available (the copy bundled with the solver, or
-  one on ``PATH``) and pictures were rendered, they are encoded as
-  ``frame.mp4`` in the same folder at 60 frames per second, and a notebook
-  shows it inline.
+- **Animation.** When pictures were rendered they also become one animation
+  in the same folder at 60 frames per second, which a notebook shows inline.
+  With an ``ffmpeg`` on ``PATH`` it is ``frame.mp4``. Without one it is an
+  animated ``frame.webp``, written with Pillow, which every current browser
+  plays as a looping image. The solver ships no ffmpeg; install one (for
+  example ``apt install ffmpeg``, ``brew install ffmpeg`` or
+  ``winget install ffmpeg``) to get the MP4.
 - **Archive.** ``.zip()`` writes ``<folder>.zip`` next to the folder, replaces
   an existing archive, and prints its path.
 - **Pictures.** The ``options`` dictionary picks the renderer.

@@ -1388,6 +1388,53 @@ mod tests {
     }
 
     #[test]
+    fn a_moving_floor_stops_a_clear_vertex_as_a_static_one_does() {
+        // A KEYFRAMED FLOOR IS A STATIC PLANE WITHIN A STEP: the driver places
+        // it at its end-of-step pose for every Newton iteration, so a vertex
+        // starting clear of it is cut at the same park a static floor gives.
+        // A sweep that skipped a moving floor granted the whole step here and
+        // let the vertex through (a sinking support under a resting cloth).
+        let ghat = 0.01f32;
+        let (above, below) = (0.01f32, -0.01f32);
+        let mut scene = diagonal_scene(1);
+        scene.place(0, 0.0, above, 0.0);
+        let end = vec![position(0.0, below, 0.0)];
+        let param = param();
+        let mut moving = ground_plane(ghat);
+        moving.kinematic = true;
+        let swept = sweep_one(&scene, &param, &end, &[], &[], &[moving]);
+        let fixed = sweep_one(&scene, &param, &end, &[], &[], &[ground_plane(ghat)]);
+        assert_eq!(
+            swept.time_of_impact, fixed.time_of_impact,
+            "a moving floor granted {} of the step where a static one at the same pose grants {}",
+            swept.time_of_impact, fixed.time_of_impact
+        );
+        let landed = above + swept.time_of_impact * (below - above);
+        assert!(landed > 0.0, "the vertex landed at {landed}, on or below the moving floor");
+    }
+
+    #[test]
+    fn a_moving_floor_that_crossed_a_vertex_does_not_hold_it_in() {
+        // A START ON OR PAST A MOVING FLOOR is the floor's crossing, made by its
+        // jump to the new pose, not the vertex's: the sweep leaves that step
+        // whole, so the assembly's push can lift the vertex out, whichever way
+        // the Newton step points.
+        let mut moving = ground_plane(0.01);
+        moving.kinematic = true;
+        for (start, finish) in [(-0.005f32, 0.02f32), (-0.005, -0.008), (0.0, -0.01)] {
+            let mut scene = diagonal_scene(1);
+            scene.place(0, 0.0, start, 0.0);
+            let end = vec![position(0.0, finish, 0.0)];
+            let sweep = sweep_one(&scene, &param(), &end, &[], &[], &[moving]);
+            assert_eq!(
+                sweep.time_of_impact, 1.0,
+                "a vertex starting at {start} on a moving floor was cut to {} on its way to {finish}",
+                sweep.time_of_impact
+            );
+        }
+    }
+
+    #[test]
     fn a_fix_pinned_vertex_driven_through_a_floor_is_reported_rather_than_clamped() {
         // A prescribed vertex has no freedom to yield, so a clamped time would
         // stall the solve without preventing the crossing. It is reported by

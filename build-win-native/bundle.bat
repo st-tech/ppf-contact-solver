@@ -186,7 +186,9 @@ if exist "%DIST_DIR%" (
     rmdir /s /q "%DIST_DIR%"
 )
 mkdir "%DIST_DIR%"
-mkdir "%BIN_DIR%"
+REM bin\ holds the GPU backends' libraries and what they load, and nothing else,
+REM so a CPU-only distribution has none.
+if defined PPF_WIN_GPU_BACKENDS mkdir "%BIN_DIR%"
 mkdir "%DIST_DIR%\target"
 for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
     mkdir "%DIST_DIR%\target\%%B"
@@ -370,22 +372,6 @@ if "!HAS_ROCM!"=="1" (
     )
 ) else (
     echo   [SKIP] no GPU backend ships in this distribution
-)
-
-REM Copy ffmpeg for video export
-echo.
-echo Copying ffmpeg for video export...
-if exist "%BUILD_WIN%\ffmpeg\ffmpeg.exe" (
-    echo   Source: %BUILD_WIN%\ffmpeg\ffmpeg.exe
-    echo   Target: %BIN_DIR%\ffmpeg.exe
-    copy "%BUILD_WIN%\ffmpeg\ffmpeg.exe" "%BIN_DIR%\" >nul
-    if errorlevel 1 (
-        echo   [FAILED] Could not copy ffmpeg.exe
-    ) else (
-        echo   [OK] Copied ffmpeg.exe to bin/
-    )
-) else (
-    echo   [SKIP] ffmpeg.exe not found at %BUILD_WIN%\ffmpeg\ffmpeg.exe
 )
 
 REM ============================================================
@@ -720,7 +706,6 @@ if "!PPF_WIN_ARCH!"=="arm64" (
         )
     )
 )
-
 REM Generate THIRD_PARTY_LICENSES.txt, one section per component that ships.
 > "%DIST_DIR%\THIRD_PARTY_LICENSES.txt" (
 echo ============================================================
@@ -887,7 +872,7 @@ if defined PPF_WIN_GPU_BACKENDS (
     echo.
     echo CONTENTS
     echo --------
-    echo bin/           - The backend library of each GPU backend, the runtime each loads, and ffmpeg
+    echo bin/           - The backend library of each GPU backend, and the runtime each loads
     )
 ) else (
     >> "%DIST_DIR%\README.txt" (
@@ -908,7 +893,6 @@ if defined PPF_WIN_GPU_BACKENDS (
     echo.
     echo CONTENTS
     echo --------
-    echo bin/           - ffmpeg
     )
 )
 >> "%DIST_DIR%\README.txt" (
@@ -1058,8 +1042,10 @@ for %%B in (!PPF_WIN_GPU_BACKENDS!) do (
 )
 echo   target/cpu/release/
 for %%F in ("%CPU_TARGET_DIR%\*") do echo     %%~nxF
-echo   bin/
-for %%F in ("%BIN_DIR%\*") do echo     %%~nxF
+if exist "%BIN_DIR%" (
+    echo   bin/
+    for %%F in ("%BIN_DIR%\*") do echo     %%~nxF
+)
 echo   licenses/
 for %%F in ("%LICENSES_DIR%\*") do echo     %%~nxF
 echo   python/

@@ -325,6 +325,17 @@ def _draw_intersection_allowances(param_box, group, actual_index):
             text="Only pairs tangled at the start pass through",
             icon="INFO",
         )
+    # Allow Rest Proximity, offered wherever Allow Existing Intersections is
+    # (every type but SAND) and reaching every object of the group: a
+    # checkbox, and its distance only while it is checked.
+    if allowance_offered(group, EXISTING_ALLOWANCE):
+        box.prop(group, "allow_rest_proximity")
+        if group.allow_rest_proximity:
+            box.prop(group, "rest_proximity_distance")
+            box.label(
+                text="Pairs this close at the start pass through",
+                icon="INFO",
+            )
     if ((group.allow_self_intersection
             or group.allow_inter_group_intersection)
             and not group.allow_inter_object_intersection
@@ -2411,6 +2422,7 @@ class DYNAMICS_PT_Groups(Panel):
                         # body. No internal elastic terms, no plasticity,
                         # no bending.
                         _material_prop(param_box, group, "pdrd_density")
+                        _material_prop(param_box, group, "pdrd_restitution")
                         _material_prop(param_box, group, "friction")
 
                         # Hinge is per object: expandable box with an object

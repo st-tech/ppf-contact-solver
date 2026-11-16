@@ -27,9 +27,9 @@
 #                        source with scripts/source-wheel.sh; empty on x86_64
 #
 # THE ARCHITECTURE IS THE HOST'S, NEVER A SETTING. Everything here builds for the
-# machine it runs on: the bundled interpreter, the wheels pip installs into it and
-# the slim ffmpeg are all the host's, so a build for another architecture would be
-# a distribution whose pieces do not run together. Nothing cross-compiles.
+# machine it runs on: the bundled interpreter and the wheels pip installs into it
+# are the host's, so a build for another architecture would be a distribution
+# whose pieces do not run together. Nothing cross-compiles.
 #
 # THE DEFAULT IS EVERY BACKEND THIS ARCHITECTURE CAN BUILD: `cuda rocm cpu` on
 # x86_64 and `cuda cpu` on aarch64. downloads.txt pins NVIDIA's x86_64

@@ -50,9 +50,9 @@
 #
 # WHAT IT SHIPS AND WHAT IT DOES NOT
 #   It ships an interpreter, so a machine running this needs no Python of its
-#   own. It does not ship ffmpeg, which nothing here builds and which the
-#   frontend degrades to skipping video export without, and it does not ship
-#   git.
+#   own. It does not ship ffmpeg, which no distribution builds: animation
+#   export uses one on the user's PATH for frame.mp4 and otherwise writes
+#   an animated frame.webp written with Pillow. It does not ship git either.
 #
 #   NOTHING THE LAUNCHER ITSELF DOES RUNS git, AND THAT IS LOAD BEARING RATHER
 #   THAN INCIDENTAL. On a Mac without the command line tools /usr/bin/git is
@@ -1174,7 +1174,7 @@ die() {
 # decide which SOLVER runs, but it does decide which `cp` this script gets, and
 # a shim earlier in a user's PATH should not be able to change that. Keeping
 # the user's entries after the system ones is what lets a NOTEBOOK still find
-# the git that four of them clone with, and the ffmpeg that video export needs,
+# the git that four of them clone with, and an ffmpeg for an MP4 animation,
 # both of which are the user's to supply.
 # ${PATH:+...} so that set -u is satisfied when PATH is unset.
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
@@ -1874,8 +1874,9 @@ its mesh, over https with urllib rather than with git, so it needs neither. Thos
 only thing here that can raise it; the launcher itself never runs git, and
 the other examples run offline.
 
-Video export in a notebook uses ffmpeg, which is not shipped here either.
-Without it the frontend skips the export and carries on.
+A session's animation export encodes frame.mp4 with an ffmpeg on your PATH
+(brew install ffmpeg), which is not shipped here. Without one it writes the
+frames as an animated frame.webp, which a notebook shows as well.
 
 BLENDER INTEGRATION
 -------------------

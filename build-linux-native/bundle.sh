@@ -45,8 +45,10 @@
 # THE LAYOUT, AND WHY THE DIRECTORY IS THE TREE ROOT
 #   ppf-contact-solver          the launcher, a bash script
 #   config.sh  README.txt  THIRD_PARTY_LICENSES.txt  licenses/
-#   bin/                        ffmpeg, and with a GPU backend libppfbe_<backend>.so
-#                               and whatever it loads
+#   bin/                        with a GPU backend only: libppfbe_<backend>.so and
+#                               whatever it loads. No ffmpeg ships: a session's
+#                               animation export uses one on the user's PATH for
+#                               frame.mp4, and otherwise writes frame.webp
 #   target/<backend>/release/   that backend's solver, server and Python
 #                               extension, one directory per backend shipped
 #                               (`cuda`, `rocm`, `cpu`), each with the
@@ -152,7 +154,6 @@ CPU_REL="$SRC_DIR/$(backend_target_dir cpu)/release"
 CUDA_ROOT="$BUILD_LINUX/cuda"
 PY_ROOT="$BUILD_LINUX/python"
 PATCHELF="$BUILD_LINUX/patchelf/bin/patchelf"
-FFMPEG_DIR="$BUILD_LINUX/ffmpeg"
 
 PPF_LINUX_DIST_NAME="${PPF_LINUX_DIST_NAME:-ppf-contact-solver}"
 case "$PPF_LINUX_DIST_NAME" in
@@ -292,11 +293,6 @@ done
 "$PY_ROOT/bin/python3" -c 'pass' >/dev/null 2>&1 || die \
     "$PY_ROOT/bin/python3 exists but does not run" "Remove $PY_ROOT and re-run warmup.sh."
 
-[ -x "$FFMPEG_DIR/ffmpeg" ] && [ -s "$FFMPEG_DIR/ffmpeg.sources.txt" ] && [ -d "$FFMPEG_DIR/licenses" ] || die \
-    "no complete slim ffmpeg at $FFMPEG_DIR" \
-    "Run warmup.sh without PPF_LINUX_FFMPEG=0. The binary ships with its source" \
-    "revisions and license texts, and all three are required."
-
 [ -x "$PATCHELF" ] || die "no patchelf at $PATCHELF" "Run warmup.sh."
 if has_backend cuda; then
     [ -f "$CUDA_ROOT/LICENSE" ] || die \
@@ -318,7 +314,12 @@ step "[2/11] Creating the distribution directory"
 # ---------------------------------------------------------------------------
 
 rm -rf "$DIST"
-mkdir -p "$PKG/bin" "$PKG/licenses"
+mkdir -p "$PKG/licenses"
+# bin/ holds the GPU backends' libraries and nothing else, so a CPU-only
+# distribution has none.
+if [ "${#GPU_BACKENDS[@]}" -gt 0 ]; then
+    mkdir -p "$PKG/bin"
+fi
 for entry in "${SHIPPED[@]}"; do
     mkdir -p "$PKG/${entry%:*}"
 done
@@ -345,14 +346,15 @@ done
 for runtime_lib in ${RUNTIME_LIBS[@]+"${RUNTIME_LIBS[@]}"}; do
     cp -L "$runtime_lib" "$PKG/bin/$(basename "$runtime_lib")"
 done
-cp "$FFMPEG_DIR/ffmpeg" "$PKG/bin/"
-chmod u+w "$PKG/bin/"*
+if [ -d "$PKG/bin" ]; then
+    chmod u+w "$PKG/bin/"*
+fi
 
 # The marker that roots every session and the asset cache inside this directory
 # (datamodel::app::is_selfcontained). A file rather than a variable, because the
 # launcher is not the only way to start this tree's server.
 printf '%s\n' "$APP_VERSION" > "$PKG/.ppf-selfcontained"
-printf '  [OK] %s, ffmpeg, the markers%s\n' "$DIST_BACKENDS" \
+printf '  [OK] %s, the markers%s\n' "$DIST_BACKENDS" \
     "${GPU_BACKENDS[*]:+, and the backend library of each of ${GPU_BACKENDS[*]}}"
 
 # ---------------------------------------------------------------------------
@@ -482,8 +484,8 @@ step "[6/11] Rewriting library search paths"
 # Every file this project built gets DT_RPATH naming bin/ when it needs a
 # library there, and no search path at all when it does not, so nothing points
 # back into the build tree and nothing carries a path it has no use for. The
-# interpreter's files and ffmpeg are not rewritten: they arrive relocatable or
-# static, and the gates walk them all the same.
+# interpreter's files are not rewritten: they arrive relocatable, and the gates
+# walk them all the same.
 set_search_path() {
     # $1 = file, $2 = the DT_RPATH to write when the file needs a library in bin
     local file="$1" rpath="$2" soname needs_bin=0 recorded
@@ -806,7 +808,6 @@ NEEDED_FILES=(
     "$ROOT/target/cpu/release/ppf-contact-solver"
     "$ROOT/target/cpu/release/ppf-cts-server"
     "$ROOT/target/cpu/release/lib_ppf_cts_py.so"
-    "$ROOT/bin/ffmpeg"
 )
 for backend in $GPU_BACKENDS; do
     NEEDED_FILES+=(
@@ -1319,8 +1320,6 @@ for pkg in $PPF_LINUX_SOURCE_WHEELS; do
     cp "$sources" "$PKG/licenses/$pkg-sources.txt"
 done
 cp "$STDLIB/LICENSE.txt" "$PKG/licenses/CPython-LICENSE.txt"
-cp "$FFMPEG_DIR/licenses/"* "$PKG/licenses/"
-cp "$FFMPEG_DIR/ffmpeg.sources.txt" "$PKG/licenses/ffmpeg-sources.txt"
 cp "$SRC_DIR/LICENSE" "$PKG/licenses/ZOZO-Contact-Solver-LICENSE.txt"
 printf '  [OK] licenses/\n'
 
@@ -1336,12 +1335,17 @@ README_GPU_REQUIREMENT=""
 # after `[OK] licenses/` with no message, while x86_64 passed the same line
 # because it ships ROCm and the printf ran. `if cond; then cmd; fi` is 0 either
 # way.
-README_BINARIES="bin/                 ffmpeg$(
-    for backend in ${GPU_BACKENDS[@]+"${GPU_BACKENDS[@]}"}; do
-        printf ', the %s backend library' "$backend"
-    done
-    if has_backend rocm; then printf ' and the HIP runtime it loads'; fi
-)"
+README_BINARIES=""
+if [ "${#GPU_BACKENDS[@]}" -gt 0 ]; then
+    README_BINARIES="bin/                 $(
+        sep=""
+        for backend in "${GPU_BACKENDS[@]}"; do
+            printf '%sthe %s backend library' "$sep" "$backend"
+            sep=", "
+        done
+        if has_backend rocm; then printf ' and the HIP runtime it loads'; fi
+    )"
+fi
 for entry in "${SHIPPED[@]}"; do
     README_BINARIES="$README_BINARIES
 $(printf '%-20s' "${entry%:*}/")the ${entry##*:} solver, the server, and the Python extension"
@@ -1438,7 +1442,9 @@ large-animals, fitting and trapped-919539a. Install git with your package
 manager to run those. The other examples need, at most, a network connection
 on their first run.
 
-Video export uses the ffmpeg in bin/.
+No ffmpeg ships here. A session's animation export encodes frame.mp4 with an
+ffmpeg on your PATH (install it with your package manager), and without one
+writes the frames as an animated frame.webp, which a notebook shows as well.
 
 WHAT IT WRITES, AND HOW TO REMOVE IT
 ------------------------------------
@@ -1548,14 +1554,6 @@ build taken unmodified from:
 
 See licenses/CPython-LICENSE.txt, and the interpreter tree's own license files
 for the libraries compiled into it.
-
-
-ffmpeg, x264 and zlib
----------------------
-bin/ffmpeg is built with --enable-gpl --enable-libx264, so it is distributed
-under the GNU General Public License, version 2 or later. It links x264 (GPL)
-and zlib (zlib license) statically. The exact source revisions are recorded in
-licenses/ffmpeg-sources.txt, and the license texts are in licenses/.
 
 
 ${THIRD_PARTY_SOURCE_WHEELS}Python packages
@@ -1799,8 +1797,6 @@ for entry in "${SHIPPED[@]}"; do
     env -u LD_LIBRARY_PATH "$server" --help >/dev/null || die "${server#"$PKG/"} --help failed"
 done
 printf '  servers    every shipped server answers --help\n'
-"$PKG/bin/ffmpeg" -hide_banner -version >/dev/null || die "bin/ffmpeg does not run"
-printf '  ffmpeg     runs\n'
 
 # NOTHING IS WRITTEN OUTSIDE THE FOLDER. The frontend is asked for the paths it
 # would use, under an empty HOME, and the HOME is then checked for anything that

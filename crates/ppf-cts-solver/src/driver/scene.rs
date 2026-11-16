@@ -176,7 +176,7 @@ impl SceneView {
 
     /// # Safety
     /// The `DataSet` must still be live.
-    unsafe fn get(&self) -> &DataSet {
+    pub(crate) unsafe fn get(&self) -> &DataSet {
         &*self.data
     }
 

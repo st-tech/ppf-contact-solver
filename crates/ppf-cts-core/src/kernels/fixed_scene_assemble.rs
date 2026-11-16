@@ -92,6 +92,14 @@ pub struct AssembleInput<'a> {
     /// LINKED rather than reported when either side opted in; see
     /// `start_links.rs`. The appended STATIC collision vertices never opt in.
     pub vert_allow_existing: Option<&'a [bool]>,
+    /// Allow Rest Proximity, per DYNAMIC vertex: the distance its object set
+    /// (`allow-rest-proximity`), zero where it set none; `None` when no object
+    /// did. Two elements that share no vertex and are closer in the starting
+    /// pose than the MEAN of their two distances are LINKED as Allow Existing
+    /// Intersections links a tangled pair (see `start_links.rs`), and a vertex
+    /// with a distance also opts into that option's linking of the pairs the
+    /// three scans find, since every such pair is closer still.
+    pub vert_rest_proximity: Option<&'a [f64]>,
     /// Static walls only. Kinematic walls are filtered upstream.
     pub walls: &'a [WallEntry],
     /// Static spheres only.
@@ -242,7 +250,124 @@ pub fn fixed_scene_assemble(input: AssembleInput<'_>) -> Result<AssembleOutput, 
         v.resize(n_verts + n_static_verts, false);
         v
     });
+    // Allow Rest Proximity opts a vertex into the same linking: a vertex whose
+    // object set a distance is covered as an Allow Existing vertex is.
+    let rest_proximity: Option<&[f64]> = input.vert_rest_proximity.map(|d| {
+        assert_eq!(
+            d.len(),
+            n_verts,
+            "vert_rest_proximity has {} entries but the scene has {} dynamic vertices",
+            d.len(),
+            n_verts
+        );
+        assert!(
+            d.iter().all(|x| x.is_finite() && *x >= 0.0),
+            "vert_rest_proximity holds a negative or non-finite distance"
+        );
+        d
+    });
+    let allow_existing: Option<Vec<bool>> = match (allow_existing, rest_proximity) {
+        (a, None) => a,
+        (a, Some(d)) => {
+            let mut v = a.unwrap_or_else(|| vec![false; n_verts + n_static_verts]);
+            for (i, &x) in d.iter().enumerate() {
+                v[i] |= x > 0.0;
+            }
+            Some(v)
+        }
+    };
     let mut links: Option<StartLinks<'_>> = allow_existing.as_deref().map(StartLinks::new);
+
+    // Step 1b. Allow Rest Proximity: every pair of elements that share no
+    // vertex and lie closer in the starting pose than the mean of their two
+    // distances is linked, whatever their contact offsets. The proximity scan
+    // is the contact-offset one, given each element half its first vertex's
+    // distance, so its threshold `offset_i + offset_j` is that mean; it already
+    // skips a pair sharing a vertex, a pair of two colliders, and a pair an
+    // intersection allowance covers. Run before the checks below, which then
+    // find those pairs linked.
+    //
+    // THE STATIC COLLISION MESH IS IN THE SCAN, in the combined namespace Step
+    // 3 uses (the dynamic vertices, then the static ones), each of its
+    // triangles a collider at distance zero. A static vertex never carries a
+    // distance, so a dynamic element alone covers a pair with a collider
+    // within half its own distance, exactly as it covers one with a dynamic
+    // element that set none. Without them a sheet started on a static support
+    // kept every contact the option was set to remove.
+    if let (Some(d), Some(links)) = (rest_proximity, links.as_mut()) {
+        let statics: &[i32] = match (input.static_verts, input.static_tris) {
+            (Some(_), Some(st)) => st,
+            _ => &[],
+        };
+        let n_static_tris = statics.len() / 3;
+        let n_all_tris = n_tris + n_static_tris;
+        let mut verts: Vec<f64> = dyn_verts.clone();
+        let mut tris: Vec<i32> = input.tri.to_vec();
+        if n_static_tris > 0 {
+            verts.extend_from_slice(input.static_verts.expect("static tris imply static verts"));
+            tris.extend(statics.iter().map(|&v| v + n_verts as i32));
+        }
+        let n_all_verts = verts.len() / 3;
+        let tris_opt: Option<&[i32]> = if n_all_tris > 0 { Some(&tris) } else { None };
+        let rods: Option<&[i32]> = if n_rods > 0 { Some(input.rod) } else { None };
+        let half = |first: i32| 0.5 * d[first as usize];
+        let mut reach: Vec<f64> = Vec::with_capacity(n_all_tris + n_rods);
+        reach.extend((0..n_tris).map(|t| half(input.tri[3 * t])));
+        reach.extend(std::iter::repeat_n(0.0, n_static_tris));
+        reach.extend((0..n_rods).map(|r| half(input.rod[2 * r])));
+        let mut is_collider: Vec<bool> = Vec::with_capacity(n_all_tris + n_rods);
+        is_collider.extend_from_slice(input.tri_is_collider);
+        is_collider.extend(std::iter::repeat_n(true, n_static_tris));
+        is_collider.extend_from_slice(input.rod_is_collider);
+        // The allowance arrays over the appended static vertices, as Step 3
+        // extends them.
+        let object_id = input.vert_object_id.map(|a| {
+            let mut v = a.to_vec();
+            v.resize(n_all_verts, isect::NO_OBJECT_ID);
+            v
+        });
+        let group_id = input.vert_group_id.map(|a| {
+            let mut v = a.to_vec();
+            v.resize(n_all_verts, isect::NO_GROUP_ID);
+            v
+        });
+        let policy = input.vert_policy.map(|a| {
+            let mut v = a.to_vec();
+            v.resize(n_all_verts, 0);
+            v
+        });
+        let pin_allow = input.vert_pin_allow.map(|a| {
+            let mut v = a.to_vec();
+            v.resize(n_all_verts, false);
+            v
+        });
+        let close = prox::check_contact_offset_violation(prox::ProximityInput {
+            verts: &verts,
+            tris: tris_opt,
+            edges: rods,
+            is_collider: Some(&is_collider),
+            contact_offset: Some(&reach),
+            vert_object_id: object_id.as_deref(),
+            vert_group_id: group_id.as_deref(),
+            vert_policy: policy.as_deref(),
+            vert_pin_allow: pin_allow.as_deref(),
+        });
+        // An element's vertices in the combined namespace, which is the one
+        // the link table is kept in.
+        let element_of = |e: i32| -> Vec<u32> {
+            let e = e as usize;
+            if e < n_all_tris {
+                tris[3 * e..3 * e + 3].iter().map(|&v| v as u32).collect()
+            } else {
+                let r = e - n_all_tris;
+                input.rod[2 * r..2 * r + 2].iter().map(|&v| v as u32).collect()
+            }
+        };
+        for (ei, ej) in close {
+            let linked = links.link_if_covered(&element_of(ei), &element_of(ej));
+            assert!(linked, "a rest-proximity pair has no side with a distance");
+        }
+    }
 
     // Step 2. Rod-tri offset pre-check (fatal; bubbles up as Err).
     let has_tri_offset = !input.tri_offset.is_empty() && input.tri_offset.iter().any(|&o| o > 0.0);
@@ -766,6 +891,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         }
     }
 
@@ -811,6 +937,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection);
@@ -850,6 +977,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         let w = out.face_to_vert_weights.as_ref().unwrap();
@@ -895,6 +1023,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -940,6 +1069,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_wall_violation);
@@ -980,6 +1110,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -1023,6 +1154,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_sphere_violation);
@@ -1072,6 +1204,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_self_intersection);
@@ -1116,6 +1249,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert_eq!(out.area.len(), 2);
@@ -1163,6 +1297,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(out.has_wall_violation);
@@ -1203,6 +1338,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection);
@@ -1252,6 +1388,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         })
     }
 
@@ -1321,6 +1458,7 @@ mod tests {
             vert_policy: None,
             vert_pin_allow: None,
             vert_allow_existing: None,
+            vert_rest_proximity: None,
         };
         let out = fixed_scene_assemble(input).unwrap();
         assert!(!out.has_self_intersection, "collider × collider must be skipped");
@@ -1444,5 +1582,93 @@ mod tests {
         assert!(!out.has_contact_offset_violation, "{}", out.combined_message);
         assert_eq!(out.n_start_link_pairs, 1);
         assert_eq!(out.start_links.len(), 2 * 9);
+    }
+
+    // Two parallel rod segments 0.5 apart along y, sharing no vertex, as the
+    // Allow Rest Proximity cases below vary.
+    const TWO_RODS: [f64; 12] = [
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 0.5, 0.0,
+        1.0, 0.5, 0.0,
+    ];
+
+    fn rods_input<'a>(distance: Option<&'a [f64]>) -> AssembleInput<'a> {
+        AssembleInput {
+            vert_dmap: &[0; 4],
+            vert_local: &TWO_RODS,
+            displacement: &[0.0; 3],
+            rod: &[0, 1, 2, 3],
+            rod_is_collider: &[false, false],
+            vert_rest_proximity: distance,
+            ..empty_input()
+        }
+    }
+
+    #[test]
+    fn a_pair_closer_than_the_rest_proximity_is_linked() {
+        // 0.5 apart, both sides at 1.0: the mean 1.0 exceeds the distance, so
+        // the pair is linked, every vertex of one with every vertex of the other.
+        let d = [1.0; 4];
+        let out = fixed_scene_assemble(rods_input(Some(&d))).unwrap();
+        assert_eq!(out.n_start_link_pairs, 1);
+        assert_eq!(out.start_links.len(), 2 * 4);
+        for (u, v) in [(0, 2), (0, 3), (1, 2), (1, 3)] {
+            assert!(out.start_links.chunks(2).any(|p| p == [u, v]), "link ({u}, {v}) missing");
+        }
+    }
+
+    #[test]
+    fn a_pair_farther_than_the_rest_proximity_keeps_its_contact() {
+        // Both at 0.2, and one side alone at 0.8 (mean 0.4): 0.5 apart is not
+        // within either, so nothing is linked.
+        for d in [[0.2; 4], [0.8, 0.8, 0.0, 0.0]] {
+            let out = fixed_scene_assemble(rods_input(Some(&d))).unwrap();
+            assert_eq!(out.n_start_link_pairs, 0, "{d:?} linked a pair 0.5 apart");
+            assert!(out.start_links.is_empty());
+        }
+        // One side at 1.2 and the other at 0 (mean 0.6) covers it: one side is enough.
+        let d = [1.2, 1.2, 0.0, 0.0];
+        let out = fixed_scene_assemble(rods_input(Some(&d))).unwrap();
+        assert_eq!(out.n_start_link_pairs, 1);
+    }
+
+    #[test]
+    fn a_dynamic_rod_close_to_a_static_collider_is_linked() {
+        // A rod segment 0.5 above a static triangle: a distance of 1.2 on the
+        // rod alone (mean 0.6 with the collider's zero) covers it and links
+        // the rod's two vertices to the collider's three, which sit after the
+        // two dynamic vertices in the combined namespace; 0.8 (mean 0.4) does
+        // not.
+        const ROD: [f64; 6] = [0.2, 0.2, 0.5, 0.8, 0.2, 0.5];
+        const TRI: [f64; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let input = |d: &'static [f64]| AssembleInput {
+            vert_dmap: &[0; 2],
+            vert_local: &ROD,
+            displacement: &[0.0; 3],
+            rod: &[0, 1],
+            rod_is_collider: &[false],
+            static_verts: Some(&TRI),
+            static_tris: Some(&[0, 1, 2]),
+            vert_rest_proximity: Some(d),
+            ..empty_input()
+        };
+        let out = fixed_scene_assemble(input(&[1.2, 1.2])).unwrap();
+        assert_eq!(out.n_start_link_pairs, 1);
+        for (u, v) in [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4)] {
+            assert!(out.start_links.chunks(2).any(|p| p == [u, v]), "link ({u}, {v}) missing");
+        }
+        let out = fixed_scene_assemble(input(&[0.8, 0.8])).unwrap();
+        assert_eq!(out.n_start_link_pairs, 0);
+    }
+
+    #[test]
+    fn no_rest_proximity_builds_the_scene_as_before() {
+        let out = fixed_scene_assemble(rods_input(None)).unwrap();
+        assert_eq!(out.n_start_link_pairs, 0);
+        assert!(out.start_links.is_empty());
+        let zero = [0.0; 4];
+        let out = fixed_scene_assemble(rods_input(Some(&zero))).unwrap();
+        assert_eq!(out.n_start_link_pairs, 0);
     }
 }

@@ -32,9 +32,10 @@
 #   - A relocatable CPython in build-linux-native/python carrying the same
 #     list, for bundle.sh to ship inside the distribution.
 #   - patchelf, which bundle.sh rewrites library search paths with.
-#   - nasm, only on x86_64 and only when the host has no nasm 2.13 or newer,
-#     for x264's x86 assembly.
-#   - The slim ffmpeg, into build-linux-native/ffmpeg.
+#
+# NO FFMPEG. The distribution ships none: a session's animation export
+# encodes frame.mp4 with an ffmpeg on the user's PATH, and without one writes
+# an animated frame.webp with Pillow (frontend/_session_inspect_.py).
 #
 # WHAT THE HOST PROVIDES: glibc, a C and C++ compiler (one CUDA 13.2 accepts
 # when CUDA is built), make, binutils, curl, tar, xz, git, rsync, pkg-config,
@@ -43,14 +44,12 @@
 #
 # A HOST WITH NO ROUTE TO THE DOWNLOAD HOSTS CAN STILL PROVISION. A file from
 # scripts/downloads.txt that is already in downloads/ and matches its checksum
-# is neither probed nor fetched; the ffmpeg sources are used from downloads/src
-# when they are there; and PPF_LINUX_WHEELHOUSE (config.sh) installs the Python
+# is neither probed nor fetched; and PPF_LINUX_WHEELHOUSE (config.sh) installs the Python
 # packages from a directory with no index. A run that needs nothing from the
 # network says so and opens no connection for its downloads.
 #
 # SWITCHES, each defaulting to on:
 #   PPF_LINUX_PYTHON=0  skips the bundled interpreter; bundle.sh then refuses.
-#   PPF_LINUX_FFMPEG=0  skips the slim ffmpeg; bundle.sh then refuses.
 
 set -euo pipefail
 
@@ -133,14 +132,6 @@ printf 'Build: %s, backends: %s\n' "$PPF_LINUX_ARCH" "$PPF_LINUX_BACKENDS"
 # shellcheck source=build-linux-native/scripts/load-downloads.sh
 . "$BUILD_LINUX/scripts/load-downloads.sh"
 
-# The ffmpeg entries, read one by one from the manifest the Windows build and
-# the slim ffmpeg script share. Loading that file whole would also bring its
-# Windows URL_PYTHON and URL_RUSTUP into this environment.
-WIN_MANIFEST="$SRC_DIR/build-win-native/scripts/downloads.txt"
-for key in URL_FFMPEG_GIT FFMPEG_TAG URL_X264_GIT X264_COMMIT URL_ZLIB FILE_ZLIB SHA256_ZLIB; do
-    value="$(manifest_value "$WIN_MANIFEST" "$key")" || die "could not read $key from $WIN_MANIFEST"
-    printf -v "$key" '%s' "$value"
-done
 load_downloads "$BUILD_LINUX/scripts/downloads.txt" || die \
     "could not read build-linux-native/scripts/downloads.txt"
 # The interpreter and patchelf are per-architecture entries. This makes the
@@ -250,9 +241,6 @@ CUDA_ROOT="$BUILD_LINUX/cuda"
 ROCM_ROOT="$BUILD_LINUX/rocm"
 PY_ROOT="$BUILD_LINUX/python"
 PATCHELF_DIR="$BUILD_LINUX/patchelf"
-NASM_DIR="$BUILD_LINUX/nasm"
-FFMPEG_DIR="$BUILD_LINUX/ffmpeg"
-FFMPEG_SOURCES="$DOWNLOADS/src"
 # scripts/source-wheel.sh keeps each package's repository under the same
 # downloads/src and writes the wheels here.
 SOURCE_WHEEL_SOURCES="$DOWNLOADS/src"
@@ -267,17 +255,6 @@ elif [ -x "$RUST_DIR/bin/cargo" ]; then
     CARGO="$RUST_DIR/bin/cargo"
 fi
 
-# A host nasm is used when it is new enough for x264, which needs 2.13.
-host_nasm_ok() {
-    local version major minor
-    command -v nasm >/dev/null 2>&1 || return 1
-    version="$(nasm -v 2>/dev/null | awk '{ print $3; exit }')"
-    major="${version%%.*}"
-    minor="$(printf '%s' "$version" | cut -d. -f2)"
-    case "$major$minor" in '' | *[!0-9]*) return 1 ;; esac
-    [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 13 ]; }
-}
-
 NEED_RUST=0; [ -n "$CARGO" ] || NEED_RUST=1
 NEED_CUDA=0
 if has_backend cuda && [ ! -e "$CUDA_ROOT" ]; then NEED_CUDA=1; fi
@@ -286,26 +263,11 @@ if has_backend rocm && [ ! -e "$ROCM_ROOT" ]; then NEED_ROCM=1; fi
 NEED_PYTHON=0
 [ "${PPF_LINUX_PYTHON:-1}" = "0" ] || [ -e "$PY_ROOT" ] || NEED_PYTHON=1
 NEED_PATCHELF=0; [ -e "$PATCHELF_DIR" ] || NEED_PATCHELF=1
-NEED_FFMPEG=0
-[ "${PPF_LINUX_FFMPEG:-1}" = "0" ] || [ -e "$FFMPEG_DIR/ffmpeg" ] || NEED_FFMPEG=1
-# nasm assembles x264's x86 code, so only an x86_64 build asks for it.
-NEED_NASM=0
-if [ "$PPF_LINUX_ARCH" = x86_64 ] && [ "$NEED_FFMPEG" -eq 1 ] && ! host_nasm_ok \
-    && [ ! -e "$NASM_DIR" ]; then
-    NEED_NASM=1
-fi
-
-zlib_cached_ok() {
-    [ -f "$FFMPEG_SOURCES/$FILE_ZLIB" ] &&
-        [ "$(sha256_of "$FFMPEG_SOURCES/$FILE_ZLIB")" = "$SHA256_ZLIB" ]
-}
-
 # ---------------------------------------------------------------------------
 step "Checking download pointers"
 # ---------------------------------------------------------------------------
 
 PROBE_LINUX=""
-PROBE_WIN=""
 if [ "$NEED_RUST" -eq 1 ] && ! cached_ok RUSTUP; then PROBE_LINUX="$PROBE_LINUX URL_RUSTUP"; fi
 # A per-architecture entry is probed under the key the manifest defines.
 if [ "$NEED_PYTHON" -eq 1 ] && ! cached_ok PYTHON; then
@@ -314,7 +276,6 @@ fi
 if [ "$NEED_PATCHELF" -eq 1 ] && ! cached_ok PATCHELF; then
     PROBE_LINUX="$PROBE_LINUX URL_PATCHELF_$PPF_LINUX_ARCH_KEY"
 fi
-if [ "$NEED_NASM" -eq 1 ] && ! cached_ok NASM; then PROBE_LINUX="$PROBE_LINUX URL_NASM"; fi
 if [ "$NEED_CUDA" -eq 1 ]; then
     for suffix in $CUDA_SUFFIXES; do
         cached_ok "$suffix" || PROBE_LINUX="$PROBE_LINUX URL_${suffix}_$PPF_LINUX_ARCH_KEY"
@@ -322,11 +283,6 @@ if [ "$NEED_CUDA" -eq 1 ]; then
 fi
 if [ "$NEED_ROCM" -eq 1 ] && ! cached_ok ROCM_SDK; then
     PROBE_LINUX="$PROBE_LINUX URL_ROCM_SDK_$PPF_LINUX_ARCH_KEY"
-fi
-if [ "$NEED_FFMPEG" -eq 1 ]; then
-    [ -d "$FFMPEG_SOURCES/x264/.git" ] || PROBE_WIN="$PROBE_WIN URL_X264_GIT"
-    [ -d "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG/.git" ] || PROBE_WIN="$PROBE_WIN URL_FFMPEG_GIT"
-    zlib_cached_ok || PROBE_WIN="$PROBE_WIN URL_ZLIB"
 fi
 # A source-built wheel's repositories, unless its sources are already under
 # downloads/src, which scripts/source-wheel.sh then uses with no network.
@@ -340,24 +296,15 @@ for pkg in $PPF_LINUX_SOURCE_WHEELS; do
     done
 done
 
-if [ -z "$PROBE_LINUX$PROBE_WIN" ]; then
+if [ -z "$PROBE_LINUX" ]; then
     printf 'Every download this run needs is already in downloads/ and verified,\n'
     printf 'so nothing is probed and nothing is fetched.\n'
 else
-    if [ -n "$PROBE_LINUX" ]; then
-        # shellcheck disable=SC2086
-        "$BUILD_LINUX/scripts/check-downloads.sh" $PROBE_LINUX || die \
-            "one or more download URLs are unreachable" \
-            "Fix the pointer in build-linux-native/scripts/downloads.txt, or place the" \
-            "file in $DOWNLOADS by hand; a verified cached file is not probed."
-    fi
-    if [ -n "$PROBE_WIN" ]; then
-        # shellcheck disable=SC2086
-        "$BUILD_LINUX/scripts/check-downloads.sh" --manifest "$WIN_MANIFEST" $PROBE_WIN || die \
-            "one or more ffmpeg source URLs are unreachable" \
-            "Fix the pointer in build-win-native/scripts/downloads.txt, or place the" \
-            "sources in $FFMPEG_SOURCES by hand (see make-slim-ffmpeg.sh)."
-    fi
+    # shellcheck disable=SC2086
+    "$BUILD_LINUX/scripts/check-downloads.sh" $PROBE_LINUX || die \
+        "one or more download URLs are unreachable" \
+        "Fix the pointer in build-linux-native/scripts/downloads.txt, or place the" \
+        "file in $DOWNLOADS by hand; a verified cached file is not probed."
 fi
 
 # ---------------------------------------------------------------------------
@@ -854,112 +801,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-step "ffmpeg"
-# ---------------------------------------------------------------------------
-
-# The slim ffmpeg's run-time dependencies, checked on the binary. The script
-# that builds it makes the same check; this repeats it for a tree built earlier.
-verify_ffmpeg() {
-    local lib
-    "$FFMPEG_DIR/ffmpeg" -hide_banner -version >/dev/null 2>&1 || {
-        printf '%s does not run\n' "$FFMPEG_DIR/ffmpeg" >&2
-        return 1
-    }
-    while IFS= read -r lib; do
-        [ -n "$lib" ] || continue
-        case "$lib" in
-            libc.so.* | libm.so.* | libpthread.so.* | libdl.so.* | librt.so.* | "${PPF_LINUX_LOADER%%.so.*}".so.*) ;;
-            *) printf 'ffmpeg needs %s at run time\n' "$lib" >&2; return 1 ;;
-        esac
-    done < <(readelf -d "$FFMPEG_DIR/ffmpeg" | awk '/\(NEEDED\)/ { sub(/.*\[/, ""); sub(/\].*/, ""); print }')
-    [ -s "$FFMPEG_DIR/ffmpeg.sources.txt" ] || {
-        printf 'no ffmpeg.sources.txt beside the binary\n' >&2
-        return 1
-    }
-    printf 'ffmpeg: %s\n' "$("$FFMPEG_DIR/ffmpeg" -hide_banner -version | head -1)"
-}
-
-FFMPEG_REPAIR="rm -rf $FFMPEG_DIR && $BUILD_LINUX/warmup.sh"
-if [ "${PPF_LINUX_FFMPEG:-1}" = "0" ]; then
-    FFMPEG_STATUS="skipped this run, PPF_LINUX_FFMPEG=0"
-    printf 'PPF_LINUX_FFMPEG=0, so no ffmpeg is built. bundle.sh refuses to\n'
-    printf 'package without one, and names this switch when it does.\n'
-elif [ "$NEED_FFMPEG" -eq 0 ]; then
-    verify_ffmpeg || die "the ffmpeg at $FFMPEG_DIR does not verify" "Repair with:  $FFMPEG_REPAIR"
-    FFMPEG_STATUS="verified at $FFMPEG_DIR"
-else
-    # nasm first, which x264 assembles its x86 code with. An aarch64 build needs
-    # none: x264's aarch64 assembly goes through the C compiler.
-    NASM_PATH=""
-    if [ "$PPF_LINUX_ARCH" != x86_64 ]; then
-        printf 'nasm: not needed on %s\n' "$PPF_LINUX_ARCH"
-    elif host_nasm_ok; then
-        printf 'nasm: %s (%s)\n' "$(command -v nasm)" "$(nasm -v)"
-    else
-        if [ ! -e "$NASM_DIR" ]; then
-            printf 'No nasm 2.13 or newer on this host. Building one into %s\n' "$NASM_DIR"
-            fetch NASM
-            NASM_BUILD="$BUILD_LINUX/.nasm-build"
-            rm -rf "$NASM_BUILD"
-            mkdir -p "$NASM_BUILD"
-            tar -xJf "$DOWNLOADS/$FILE_NASM" -C "$NASM_BUILD" --strip-components=1 || die \
-                "tar could not extract $DOWNLOADS/$FILE_NASM"
-            (
-                cd "$NASM_BUILD"
-                ./configure --prefix="$NASM_DIR.part"
-                make -j"$(nproc)"
-                make install
-            ) || { rm -rf "$NASM_DIR.part"; die "building nasm failed; its output is above"; }
-            mv "$NASM_DIR.part" "$NASM_DIR"
-            rm -rf "$NASM_BUILD"
-        fi
-        "$NASM_DIR/bin/nasm" -v || die "the nasm at $NASM_DIR does not run" \
-            "Repair with:  rm -rf $NASM_DIR && $BUILD_LINUX/warmup.sh"
-        NASM_PATH="$NASM_DIR/bin"
-    fi
-
-    # The sources, kept in downloads/src so a later run on this host, or on one
-    # the directory is relayed to, builds with no network. Each clone lands
-    # under a .part name first, so an interrupted clone is not taken for one.
-    mkdir -p "$FFMPEG_SOURCES"
-    if [ ! -d "$FFMPEG_SOURCES/x264/.git" ]; then
-        rm -rf "$FFMPEG_SOURCES/x264.part"
-        git clone -q "$URL_X264_GIT" "$FFMPEG_SOURCES/x264.part" || die "could not clone $URL_X264_GIT"
-        mv "$FFMPEG_SOURCES/x264.part" "$FFMPEG_SOURCES/x264"
-    fi
-    if [ ! -d "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG/.git" ]; then
-        rm -rf "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG.part"
-        git clone -q --depth 1 --branch "$FFMPEG_TAG" "$URL_FFMPEG_GIT" \
-            "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG.part" || die "could not clone $URL_FFMPEG_GIT at $FFMPEG_TAG"
-        mv "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG.part" "$FFMPEG_SOURCES/ffmpeg-$FFMPEG_TAG"
-    fi
-    if ! zlib_cached_ok; then
-        rm -f "$FFMPEG_SOURCES/$FILE_ZLIB"
-        curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 \
-            -o "$FFMPEG_SOURCES/$FILE_ZLIB.part" "$URL_ZLIB" || {
-            rm -f "$FFMPEG_SOURCES/$FILE_ZLIB.part"
-            die "could not download $URL_ZLIB"
-        }
-        mv "$FFMPEG_SOURCES/$FILE_ZLIB.part" "$FFMPEG_SOURCES/$FILE_ZLIB"
-        zlib_cached_ok || die "checksum mismatch on $FFMPEG_SOURCES/$FILE_ZLIB" \
-            "Delete it and re-run:  rm -f $FFMPEG_SOURCES/$FILE_ZLIB"
-    fi
-
-    rm -rf "$FFMPEG_DIR.part"
-    PATH="${NASM_PATH:+$NASM_PATH:}$PATH" \
-        FFMPEG_INSTALL_DIR="$FFMPEG_DIR.part" \
-        FFMPEG_WORK_DIR="$BUILD_LINUX/.ffmpeg-work" \
-        FFMPEG_SOURCE_DIR="$FFMPEG_SOURCES" \
-        "$SRC_DIR/.github/workflows/scripts/make-slim-ffmpeg.sh" || {
-        rm -rf "$FFMPEG_DIR.part"
-        die "building the slim ffmpeg failed; its output is above"
-    }
-    mv "$FFMPEG_DIR.part" "$FFMPEG_DIR"
-    verify_ffmpeg || die "the ffmpeg just built does not verify" "Repair with:  $FFMPEG_REPAIR"
-    FFMPEG_STATUS="built at $FFMPEG_DIR"
-fi
-
-# ---------------------------------------------------------------------------
 step "Setup complete"
 # ---------------------------------------------------------------------------
 printf 'Architecture:         %s, backends: %s\n' "$PPF_LINUX_ARCH" "$PPF_LINUX_BACKENDS"
@@ -968,5 +809,4 @@ printf 'ROCm SDK:             %s\n' "$ROCM_STATUS"
 printf 'Source-built wheels:  %s\n' "${PPF_LINUX_SOURCE_WHEELS:-none needed on $PPF_LINUX_ARCH}"
 printf 'Frontend environment: %s\n' "$PPF_CTS_VENV"
 printf 'Bundled interpreter:  %s\n' "$PY_BUNDLED_STATUS"
-printf 'ffmpeg:               %s\n' "$FFMPEG_STATUS"
 printf 'Next: %s/build.sh\n' "$BUILD_LINUX"

@@ -450,6 +450,21 @@ class ObjectGroup(PropertyGroup):
         description="Volume density of the PDRD body; mass is the density times the enclosed volume of the surface mesh",
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
+    pdrd_restitution: FloatProperty(
+        name="Restitution",
+        default=OBJECT_GROUP_DEFAULTS["pdrd_restitution"],
+        min=0.0,
+        max=1.0,
+        precision=2,
+        subtype="FACTOR",
+        description=(
+            "How much of its approach speed the body keeps when it bounces. 0 stops "
+            "it dead on impact; 1 asks for a perfectly elastic bounce. Approximate: "
+            "a value near 1 can occasionally gain a little energy, and a bounce off "
+            "another body may differ from one off an invisible wall. Keyframe it "
+            "down to 0 to let a bouncing body come to rest"
+        ),
+    )  # pyright: ignore
     sand_grain_radius: FloatProperty(
         name="Grain Radius (m)",
         default=OBJECT_GROUP_DEFAULTS["sand_grain_radius"],
@@ -966,6 +981,39 @@ class ObjectGroup(PropertyGroup):
     )  # pyright: ignore
     allow_existing_intersection_objects_index: IntProperty(
         default=-1, options=NOT_ANIMATABLE
+    )  # pyright: ignore
+    # Allow Rest Proximity: a checkbox and the DISTANCE it ships while on. The
+    # pairs of elements that share no vertex and start closer than the
+    # distance are linked at the scene-build check exactly as Allow Existing
+    # Intersections links a tangled pair, so they keep no contact for the
+    # whole run. For a dense fiber network (a felt) whose fibers start nearly
+    # touching. One value for the whole group; between two groups the mean of
+    # the two is the distance. Scaled by World Scale like the contact gap. Not
+    # on SAND. Off ships 0, and keeps the distance for when it is turned on.
+    allow_rest_proximity: BoolProperty(
+        name="Allow Rest Proximity",
+        default=OBJECT_GROUP_DEFAULTS["allow_rest_proximity"],
+        description=(
+            "Let the pairs that start closer than a distance pass through each "
+            "other for the whole simulation, with no contact; pairs farther "
+            "apart keep full contact. For dense fiber networks such as felt, "
+            "whose fibers start nearly touching"
+        ),
+        options=NOT_ANIMATABLE,
+    )  # pyright: ignore
+    rest_proximity_distance: FloatProperty(
+        name="Distance",
+        default=OBJECT_GROUP_DEFAULTS["rest_proximity_distance"],
+        min=0.0,
+        soft_max=0.01,
+        precision=4,
+        description=(
+            "Pairs that start closer than this pass through each other. "
+            "Between two groups the mean of their two distances is used, so "
+            "one side alone covers half its distance (scaled by World Scale "
+            "before use)"
+        ),
+        options=NOT_ANIMATABLE,
     )  # pyright: ignore
     bend_warp: FloatProperty(
         name="Bending Stiffness (Warp)",

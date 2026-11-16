@@ -122,6 +122,8 @@ class ReloadServer:
         self.socket = None
         self.running = False
         self.thread = None
+        # Why the last start() could not listen, for the caller to report.
+        self.start_error: Optional[str] = None
         # Track one-shot main-thread timers scheduled by _dispatch so
         # ``stop()`` can cancel any that haven't fired yet. If we don't,
         # a pending reload phase fires into a half-torn-down module.
@@ -178,6 +180,7 @@ class ReloadServer:
 
         except Exception as e:
             print(f"Failed to start reload server: {e}")
+            self.start_error = str(e)
             self.running = False
             if self.socket:
                 with contextlib.suppress(OSError):
@@ -600,6 +603,16 @@ def start_reload_server(port: int = DEFAULT_RELOAD_PORT):
         _reload_server_instance.stop()
     server = ReloadServer(port)
     server.start()
+    # A port another process holds (on some hosts a local service sits on the
+    # default one) leaves the server not listening. Raised, so the Start
+    # button reports the cause instead of a success the panel then
+    # contradicts by leaving Reload disabled.
+    if not server.running:
+        raise RuntimeError(
+            f"could not listen on localhost:{port} ({server.start_error}); "
+            "another program may hold the port, so set a different Port and "
+            "press Start again"
+        )
 
 
 def stop_reload_server():

@@ -653,17 +653,6 @@ pub fn rstrip_newlines(lines: Vec<String>) -> Vec<String> {
     core::rstrip_newlines(&lines)
 }
 
-/// Find a bundled `ffmpeg` binary under `project_root`. Mirrors the
-/// `ffmpeg_candidates` list in `SessionExport.animation`. The Python
-/// caller still does `shutil.which("ffmpeg")` when this returns
-/// `None`, since `which` walks `$PATH` (a Python concern).
-#[pyfunction]
-#[pyo3(signature = (project_root))]
-pub fn locate_bundled_ffmpeg(project_root: &str) -> Option<String> {
-    core::locate_bundled_ffmpeg(std::path::Path::new(project_root))
-        .map(|p| p.to_string_lossy().into_owned())
-}
-
 /// Build the ffmpeg command line `SessionExport.animation` runs via
 /// `subprocess.run(..., shell=True)`. Mirrors the inline format
 /// string.
@@ -851,7 +840,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prepare_zip_target, m)?)?;
     m.add_function(wrap_pyfunction!(session_violations_message, m)?)?;
     m.add_function(wrap_pyfunction!(rstrip_newlines, m)?)?;
-    m.add_function(wrap_pyfunction!(locate_bundled_ffmpeg, m)?)?;
     m.add_function(wrap_pyfunction!(ffmpeg_video_command, m)?)?;
     m.add_function(wrap_pyfunction!(project_root_from_frontend_file, m)?)?;
     m.add_function(wrap_pyfunction!(read_lines_with_newlines, m)?)?;

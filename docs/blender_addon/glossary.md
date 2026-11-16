@@ -277,7 +277,9 @@ explains the term in full.
   four (**Allow Self-Intersections**, **Allow Inter-Object Intersections**,
   **Allow Inter-Group Intersections**, **Allow Existing Intersections**; a
   **Sand** group has no **Allow Existing Intersections**), and a pin carries
-  one (**Allow Intersections Here**). Invisible walls and spheres are never
+  one (**Allow Intersections Here**). Below them, **Allow Rest Proximity**
+  takes the pairs that start closer than its **Distance** out of contact
+  the same way. Invisible walls and spheres are never
   affected. Some pages also call these settings intersection allowances. See
   [Allow Intersections](workflow/params/material.md#allow-intersections).
 

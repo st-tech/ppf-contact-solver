@@ -96,7 +96,7 @@ the panel shows for each case and the characters that are refused.
 
 | Field | Description |
 | ----- | ----------- |
-| **Solver Path** | The folder that holds `ppf-cts-server` under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`: the extracted Linux distribution, or a checkout you built. A subfolder is accepted and resolved upward to the root. The distribution's `bin/` is **not** a server directory (it holds the backend libraries and ffmpeg), so pointing at it resolves upward like any other subfolder. |
+| **Solver Path** | The folder that holds `ppf-cts-server` under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`: the extracted Linux distribution, or a checkout you built. A subfolder is accepted and resolved upward to the root. The distribution's `bin/` is **not** a server directory (it holds the backend libraries), so pointing at it resolves upward like any other subfolder. |
 | **GPU** / **CPU** toggle | Which build of the solver runs. It is named **Compute Device** in tooltips and refusals, and the rows below use that name. **GPU** is the CUDA or ROCm build. **CPU** is the portable build, which needs no GPU and is substantially slower. Default: **GPU**. Drawn whenever **Solver Path** holds no forbidden character, including while it is empty, so you can see which builds are present; disabled only when the folder holds just the build that is already selected. |
 | **GPU Backend** | **Automatic**, **CUDA**, or **ROCm**. Drawn only while **Compute Device** is **GPU**, and only when the folder holds more than one GPU build (the x86_64 distribution holds CUDA and ROCm) or a saved choice names a build the folder lacks. **Automatic** takes the only GPU build, or, with several, the first whose solver reports a usable device, CUDA before ROCm. |
 | **GPU** dropdown | Drawn only after **Connect**, and only while **Compute Device** is **GPU**. Lists the NVIDIA devices `nvidia-smi` reports and applies the choice at **Start Server on Remote**. See {ref}`Picking a GPU <gpu-picker>`. |
@@ -167,7 +167,7 @@ server, so it is not an accepted server location.
 
 ```text
 <root>/
-  bin/                     # backend libraries and ffmpeg (no server here)
+  bin/                     # backend libraries, with a GPU backend only (no server here)
   python/bin/python3       # the distribution's own interpreter
   target/cuda/release/     # ppf-cts-server, one directory per backend shipped
   target/rocm/release/

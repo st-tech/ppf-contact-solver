@@ -412,6 +412,12 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
         "Upper bound on per-element tensile strain (dimensionless, e.g. 0.05 = 5% stretch). 0.0 disables strain limiting. Supported on 'tri' and 'rod' elements only, and incompatible with non-unit shrink-x/shrink-y on the same face."));
     m.insert("friction".into(), entry(0.0f64, "Friction Coefficient",
         "Coulomb friction coefficient at contacts (dimensionless). When two elements touch, the solver uses the minimum of the two participants' coefficients, so the more slippery side wins. Must be non-negative."));
+    // Per OBJECT, like the allowances below: the frontend writes a PDRD body's
+    // value into its body record and drops it from every element's
+    // parameters. Registered for every kind so the key sets match; any other
+    // kind is refused a non-zero value.
+    m.insert("restitution".into(), entry(0.0f64, "Restitution",
+        "Coefficient of restitution of a PDRD rigid body, in [0, 1]: the fraction of its approach speed the body keeps when it bounces off an invisible wall or another PDRD body. 0.0 is the solver's ordinary implicit step, which stops the body dead on impact; 1.0 asks for a perfectly elastic bounce. Approximate: a value near 1.0 can occasionally gain a little energy, and a bounce off another body may differ from one off an invisible wall. PDRD bodies only."));
     m.insert("length-factor".into(), entry(1.0f64, "Rod Rest-Length Factor",
         "Multiplier applied to each rod edge's rest length (dimensionless). Values below 1.0 pre-tension the rod, above 1.0 pre-compress it. Must be positive. Used by 'rod' elements only."));
     m.insert("pressure".into(), entry(0.0f64, "Inflation Pressure",
@@ -437,6 +443,12 @@ pub fn object_param(kind: ObjectKind) -> ParamHolder {
     // boolean, same every-kind registration.
     m.insert("allow-existing-intersection".into(), entry(0.0f64, "Allow Existing Intersections",
         "If non-zero, the pairs of elements this object starts the simulation intersecting with, or closer than their contact offsets, are exempted from contact for the whole run instead of refusing the scene: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection, and neither is a pair of elements sharing a vertex with such a pair. Every other pair keeps full contact, and a new intersection anywhere else still stops the run. It tolerates a tangle and does not untangle it. Only one of the two objects has to set it; it covers self, inter-object and static collider pairs alike, but not the invisible walls and spheres. Treated as a boolean flag. Not supported on sand."));
+    // Allow Rest Proximity. A DISTANCE, not a flag: the pairs the scene starts
+    // closer than it are linked by the scene-build check exactly as Allow
+    // Existing Intersections links a tangled pair, so the solver reads the same
+    // link table. Same every-kind registration.
+    m.insert("allow-rest-proximity".into(), entry(0.0f64, "Allow Rest Proximity",
+        "A distance in the scene's length unit. Two elements that share no vertex and are closer than this in the starting pose are exempted from contact for the whole run, as Allow Existing Intersections exempts a tangled pair: the pair gets no contact force, is not held apart by the line search, and is not reported as an intersection, and neither is a pair of elements sharing a vertex with such a pair. Every other pair keeps full contact. For two objects with different values the mean of the two is the distance, so one side alone covers a pair within half its value. Pairs that start intersecting or closer than their contact offsets are exempted too. 0.0 disables it. Covers self, inter-object and static collider pairs, but not the invisible walls and spheres. Not supported on sand."));
     // The external force field's per-object scale. Per OBJECT like the
     // allowances above: the frontend resolves it into one weight per vertex
     // and drops it from every element's parameters.

@@ -76,3 +76,69 @@ template <unsigned N>
     }
     return result;
 }
+
+// A RESTITUTION PAIR'S STIFFNESS, KEPT IN ITS TWO PARTS: the elastic
+// `dir . H dir`, as `contact_stiffness` forms it, and an inertial mass to divide
+// by the squared gap. A restitution contact integrates the barrier over the
+// step's sweep of the gap (`floor_secant_push`), and the inertial part varies
+// with the gap along that sweep while the elastic part is held, so it needs
+// them apart. The inertial mass is the lighter side's (below), not the weighted
+// average `contact_stiffness` uses, so only restitution pairs see it.
+template <unsigned N>
+[[seam::device_fn]] inline void contact_stiffness_parts(
+    const SMatf<3 * N, 3 * N> &local_hessian,
+    const SVecf<N> &weight,
+    const SVecf<N> &mass,
+    const Vec3f &edge, float &elastic, float &inertial_mass) {
+    float maximum_mass = 0.0f;
+    for (unsigned i = 0; i < N; ++i) {
+        if (mass[i] > maximum_mass) {
+            maximum_mass = mass[i];
+        }
+    }
+    SVecf<3 * N> direction;
+    for (unsigned i = 0; i < N; ++i) {
+        for (unsigned dimension = 0; dimension < 3; ++dimension) {
+            direction[3 * i + dimension] = weight[i] * edge[dimension];
+        }
+    }
+    direction.normalize();
+    elastic = 0.0f;
+    for (unsigned row = 0; row < 3 * N; ++row) {
+        float product = 0.0f;
+        for (unsigned column = 0; column < 3 * N; ++column) {
+            product += local_hessian(row, column) * direction[column];
+        }
+        elastic += product * direction[row];
+    }
+    // THE LIGHTER SIDE'S MASS, over the pair's two SIDES (the vertices of each
+    // sign of `weight`; a restitution pair carries each body vertex's whole
+    // body mass, so a side's mass is its largest), a massless side being
+    // immovable and never the lighter. This is the mass the barrier must stop
+    // within the gap when the other
+    // side is held: at the floor or a static mesh it is the moving body's own
+    // mass, for a light body on a heavy one about its own, and for equal
+    // bodies the same as the vertex average used before. The average instead
+    // sizes a light ball's barrier by the heavy slab under it, hundreds of
+    // times too stiff, and the step no longer converges; the two-body reduced
+    // mass is half as stiff for equal bodies, too soft for one resting on the
+    // floor (measured: a cube stack gained 16% at dt 1e-2). It is per SIDE
+    // rather than per vertex weight so that it stays fixed while the closest
+    // point slides across a face: a stiffness that follows the weights
+    // changes the stored barrier energy between steps, which the secant then
+    // hands back as a gain.
+    float side_mass[2] = {0.0f, 0.0f};
+    for (unsigned i = 0; i < N; ++i) {
+        if (weight[i] != 0.0f) {
+            const unsigned side = weight[i] > 0.0f ? 0u : 1u;
+            side_mass[side] = fmath::max(side_mass[side], mass[i]);
+        }
+    }
+    if (side_mass[0] > 0.0f && side_mass[1] > 0.0f) {
+        inertial_mass = fmath::min(side_mass[0], side_mass[1]);
+    } else if (side_mass[0] > 0.0f || side_mass[1] > 0.0f) {
+        inertial_mass = fmath::max(side_mass[0], side_mass[1]);
+    } else {
+        inertial_mass = maximum_mass;
+    }
+}

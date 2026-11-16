@@ -3,7 +3,7 @@
 `build-linux-native/` builds ZOZO's Contact Solver on a Linux x86_64 or aarch64
 host and packages it as a self-contained distribution: one directory holding the
 solver backends, a relocatable Python interpreter with every frontend package,
-JupyterLab, a slim ffmpeg and a launcher. The person who runs it needs the GPU
+JupyterLab and a launcher. The person who runs it needs the GPU
 vendor's driver for the GPU backend, where the distribution carries one, and
 nothing else: no CUDA toolkit, no ROCm installation, no Python, no compiler, no
 root.
@@ -22,7 +22,7 @@ Every script builds for the host it runs on, and nothing cross-compiles.
 | Host | Backends by default | Other sets | What else differs |
 | --- | --- | --- | --- |
 | x86_64 | CUDA, ROCm and CPU | `cuda cpu`, `rocm cpu`, `cpu` | the CUDA toolkit (NVIDIA's linux-x86_64 archives) and the ROCm SDK (AMD's TheRock tarball) are provisioned for the GPU backends built |
-| aarch64 | CUDA and CPU | `cpu` | the CUDA toolkit is NVIDIA's linux-sbsa archives; `triangle`, which publishes no aarch64 wheel, is built from its pinned upstream source; no nasm |
+| aarch64 | CUDA and CPU | `cpu` | the CUDA toolkit is NVIDIA's linux-sbsa archives; `triangle`, which publishes no aarch64 wheel, is built from its pinned upstream source |
 
 A distribution carries every backend it was built with, each in its own
 `target/<backend>/release`, and which one a run uses is resolved when the run
@@ -78,15 +78,14 @@ It installs, each only when absent and each verified on every run:
 - A relocatable CPython into `python/` carrying the same packages and
   JupyterLab, for the distribution.
 - patchelf into `patchelf/`.
-- nasm into `nasm/`, only on x86_64 and only when the host has no nasm 2.13 or
-  newer.
-- The slim ffmpeg into `ffmpeg/`, built from source with x264 and zlib linked
-  statically, with its license texts and a record of the exact sources.
+
+No ffmpeg is built or shipped. A session's animation export encodes `frame.mp4`
+with an `ffmpeg` on the user's `PATH`, and without one writes the frames as an
+animated `frame.webp` with Pillow, which a notebook shows inline as well.
 
 A second run is a check rather than a reinstall. The whole run is logged to
-`warmup.log`. Two switches skip an optional part: `PPF_LINUX_PYTHON=0` skips the
-bundled interpreter and `PPF_LINUX_FFMPEG=0` skips ffmpeg; `bundle.sh` then
-refuses to package and names the switch.
+`warmup.log`. `PPF_LINUX_PYTHON=0` skips the bundled interpreter; `bundle.sh`
+then refuses to package and names the switch.
 
 ### 2. Build
 
@@ -259,12 +258,11 @@ ppf-contact-solver/
   config.sh                    PORT
   README.txt                   the user-facing instructions
   THIRD_PARTY_LICENSES.txt
-  licenses/                    CPython, ffmpeg, x264, zlib, this project, the GPU runtime's
+  licenses/                    CPython, this project, the GPU runtime's
                                terms (NVIDIA CUDA, or every text the ROCm SDK carries), and the
                                source record of each wheel built from source
   bin/libppfbe_<backend>.so    one per GPU backend shipped, and with ROCm the runtime
-                               libraries it loads
-  bin/ffmpeg
+                               libraries it loads; a CPU-only distribution has no bin/
   target/<backend>/release/    that backend's solver, server and Python extension, one
                                directory per backend shipped
   python/                      the interpreter and every package
@@ -384,7 +382,7 @@ payload:
 - **No broken symlink.**
 - **Smoke test.** The interpreter imports the frontend and JupyterLab under a
   poisoned environment; every setting the launcher passes to Jupyter exists;
-  every shipped solver and server, and ffmpeg, start; the frontend resolves its
+  every shipped solver and server starts; the frontend resolves its
   data and cache paths inside the distribution and writes nothing under an empty
   HOME; the launcher answers through symlinks whose names carry a space; and
   `python` mode runs the distribution's own interpreter, selects `target/cpu`
@@ -446,24 +444,21 @@ them. Both verification jobs upload their report directories.
 ## A build host with no egress
 
 A file from `scripts/downloads.txt` already in `downloads/` with a matching
-checksum is neither probed nor fetched. The ffmpeg sources are used from
-`downloads/src/` (`ffmpeg-<tag>`, `x264`, the zlib tarball) when present, and
-`PPF_LINUX_WHEELHOUSE` covers the Python packages. A run that needs nothing from
+checksum is neither probed nor fetched, and `PPF_LINUX_WHEELHOUSE` covers the
+Python packages. A run that needs nothing from
 the network says so and opens no connection for its downloads.
 `scripts/check-downloads.sh [KEY...]` probes only the URLs named, or all of them.
 
 ## Updating tool versions
 
 Change the entry in `scripts/downloads.txt`, with its `SHA256_*`, and remove the
-provisioned directory so `warmup.sh` installs the new one. The ffmpeg, x264 and
-zlib pins live in `build-win-native/scripts/downloads.txt`, which the Windows
-build and `.github/workflows/scripts/make-slim-ffmpeg.sh` share.
+provisioned directory so `warmup.sh` installs the new one.
 
 ## Script reference
 
 | File | Purpose |
 | --- | --- |
-| `warmup.sh` | Provisions the toolchain, both Python environments, patchelf, nasm (x86_64), ffmpeg, and the wheels built from source (aarch64) |
+| `warmup.sh` | Provisions the toolchain, both Python environments, patchelf, and the wheels built from source (aarch64) |
 | `build.sh` | Builds the backends `scripts/platform.sh` names and writes `start.sh` |
 | `bundle.sh` | Packages, audits and smoke-tests the distribution |
 | `config.sh` | `PORT`, `PPF_LINUX_BACKENDS`, `PPF_CTS_VENV`, `PPF_CTS_PYTHON`, `PPF_LINUX_WHEELHOUSE` |

@@ -155,10 +155,6 @@ if "%PPF_WIN_ARCH%"=="arm64" (
     if not exist "%WHEELS_DIR%\triangle-*.whl" if not exist "%DOWNLOADS%\src\triangle\.git" set "PROBE=!PROBE! URL_TRIANGLE_GIT URL_TRIANGLE_C_GIT"
     if not exist "%WHEELS_DIR%\tetgen-*.whl" if not exist "%DOWNLOADS%\src\tetgen\.git" set "PROBE=!PROBE! URL_TETGEN_GIT"
 )
-if not exist "%BUILD_WIN%\ffmpeg\ffmpeg.exe" (
-    if not exist "%BUILD_WIN%\msys64\usr\bin\bash.exe" if not exist "%DOWNLOADS%\%FILE_MSYS2%" set "PROBE=!PROBE! URL_MSYS2"
-    set "PROBE=!PROBE! URL_FFMPEG_GIT URL_X264_GIT"
-)
 if defined PROBE (
     call "%BUILD_WIN%\scripts\check-downloads.bat" /nopause !PROBE!
     if errorlevel 1 (
@@ -849,22 +845,6 @@ if errorlevel 1 (
     "%PYTHON%" -m pip list
 ) else (
     echo Python packages already installed
-)
-
-REM ============================================================
-REM Build slim FFmpeg (for video export)
-REM ============================================================
-set FFMPEG_DIR=%BUILD_WIN%\ffmpeg
-if not exist "%FFMPEG_DIR%\ffmpeg.exe" (
-    echo.
-    echo === Building slim FFmpeg ===
-    call "%BUILD_WIN%\make-slim-ffmpeg.bat"
-    if errorlevel 1 (
-        echo ERROR: the slim FFmpeg build failed ^(see above^). The distribution's video export needs it.
-        exit /b 1
-    )
-) else (
-    echo FFmpeg already installed
 )
 
 echo.

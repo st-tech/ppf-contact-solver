@@ -65,6 +65,10 @@ from ._scene_transform_ import (
 )
 from ._utils_ import Utils
 
+# Animated keys that belong to a whole PDRD body rather than to its triangles:
+# they reach the solver in a per-body schedule, not the per-triangle tables.
+_BODY_ANIM_KEYS = frozenset({"restitution"})
+
 # Aggregate rigid-mode lock modes, mirroring the solver's
 # `TranslationLockMode` / `RotationLockMode` in
 # `crates/ppf-cts-solver/src/kernels/data_records.hpp` and its Rust twin in
@@ -265,6 +269,11 @@ class FixedScene:
     # Class-scope defaults for the same unpickling reason.
     _rotation_lock: Optional[np.ndarray] = None
     _rotation_lock_mode: Optional[np.ndarray] = None
+    # Lock-group map, one uint32 per dmap entry: the smallest dmap index
+    # of the lock group the entry belongs to (the identity for an object
+    # not in a group). None when no object names a lock group. Class-scope
+    # default for the same unpickling reason.
+    _lock_group: Optional[np.ndarray] = None
     # Cosserat rods: one uint8 marker per rod edge, aligned with `_rod`, and
     # one float32 roll per dynamic vertex, aligned with `_vert[1]`. None when
     # the scene has no Cosserat rod, or no authored roll. Class-scope defaults
@@ -313,6 +322,7 @@ class FixedScene:
         bend_rest_vert_anim: Optional[np.ndarray] = None,
         bend_rest_vert_times: Optional[np.ndarray] = None,
         pdrd_body_rows: Optional[list[float]] = None,
+        pdrd_restitution_anim: Optional[list[list[float]]] = None,
         pdrd_vert_index: Optional[np.ndarray] = None,
         pdrd_vert_list: Optional[list[int]] = None,
         pdrd_rest_centered: Optional[np.ndarray] = None,
@@ -324,6 +334,7 @@ class FixedScene:
         translation_lock_mode: Optional[np.ndarray] = None,
         rotation_lock: Optional[np.ndarray] = None,
         rotation_lock_mode: Optional[np.ndarray] = None,
+        lock_group: Optional[np.ndarray] = None,
         statistics_objects: Optional[list[dict[str, Any]]] = None,
         collider_vert_mask: Optional[np.ndarray] = None,
         object_vert_index: Optional[np.ndarray] = None,
@@ -331,6 +342,7 @@ class FixedScene:
         group_vert_index: Optional[np.ndarray] = None,
         pin_allow_vertices: Optional[np.ndarray] = None,
         allow_existing_vertices: Optional[np.ndarray] = None,
+        rest_proximity_vertices: Optional[np.ndarray] = None,
         force_field: Optional[dict] = None,
         force_field_context: Optional[dict] = None,
         quiet: bool = False,
@@ -380,6 +392,7 @@ class FixedScene:
             rotation_lock (Optional[np.ndarray]): Per-dmap-entry (n_objects, 3) normalized Lock Rotation axis, aligned with ``concat_displacement``. A zero row means either that the object's rotation is not locked or that it is locked on all axes, which is decided by ``rotation_lock_mode``. None when no object in the scene has Lock Rotation enabled in any mode. Independent of ``translation_lock``.
             rotation_lock_mode (Optional[np.ndarray]): Per-dmap-entry (n_objects,) uint32, aligned with ``rotation_lock``: 0 means allow-only (rotation about that row's axis is the only freedom, or the row is disabled, its axis being zero); 1 means prohibit-axis (rotation about the axis is forbidden, the perpendicular plane stays free); 2 means all axes are locked, in which case the axis row carries no direction and is exactly zero. Read together with ``rotation_lock``, never alone. None under the same condition as ``rotation_lock``.
             allow_existing_vertices (Optional[np.ndarray]): Per-vertex bool mask marking dynamic vertices whose object set ``allow-existing-intersection``. The scene checks link a pair they find intersecting, or closer than its contact offsets, when either side is marked, instead of refusing it. None when no object set it.
+            rest_proximity_vertices (Optional[np.ndarray]): Per-vertex distance its object set with ``allow-rest-proximity``, 0 where none. The scene checks link every pair of elements sharing no vertex that start closer than the mean of their two distances, as an existing intersection is linked. None when no object set it.
             quiet (bool): When True, suppress the scene-check summary prints. Defaults to False, preserving the interactive diagnostic output.
         """
 
@@ -419,9 +432,11 @@ class FixedScene:
         self._bend_rest_vert_anim = bend_rest_vert_anim
         self._bend_rest_vert_times = bend_rest_vert_times
         # PDRD per-body data, written to bin files at export time.
-        # `pdrd_body_rows` is a flat list of 23 f32 per body (see the
+        # `pdrd_body_rows` is a flat list of 24 f32 per body (see the
         # PDRD body table builder); empty when the scene has no PDRD bodies.
         self._pdrd_body_rows = pdrd_body_rows or []
+        # Keyframed PDRD restitution: per keyframe time, one value per body.
+        self._pdrd_restitution_anim = pdrd_restitution_anim or []
         self._pdrd_vert_index = pdrd_vert_index
         self._pdrd_vert_list = pdrd_vert_list or []
         self._pdrd_rest_centered = pdrd_rest_centered
@@ -465,6 +480,9 @@ class FixedScene:
         # bin/rotation_lock_mode.bin at export time.
         self._rotation_lock = rotation_lock
         self._rotation_lock_mode = rotation_lock_mode
+        # Lock groups: per dmap entry, the smallest dmap index of its lock
+        # group. Written to bin/lock_group.bin at export time.
+        self._lock_group = lock_group
         self._statistics_objects = statistics_objects or []
         self._collider_vert_mask = collider_vert_mask
         self._object_vert_index = object_vert_index
@@ -472,6 +490,7 @@ class FixedScene:
         self._group_vert_index = group_vert_index
         self._pin_allow_vertices = pin_allow_vertices
         self._allow_existing_vertices = allow_existing_vertices
+        self._rest_proximity_vertices = rest_proximity_vertices
         # Allow Existing Intersections: the vertex links the scene checks
         # produced, (L, 2) uint32 in the combined namespace (the dynamic
         # vertices, then the static collision vertices). Filled below.
@@ -677,6 +696,11 @@ class FixedScene:
             vert_allow_existing=(
                 np.ascontiguousarray(self._allow_existing_vertices, dtype=bool)
                 if self._allow_existing_vertices is not None
+                else None
+            ),
+            vert_rest_proximity=(
+                np.ascontiguousarray(self._rest_proximity_vertices, dtype=np.float64)
+                if self._rest_proximity_vertices is not None
                 else None
             ),
         )
@@ -1429,6 +1453,10 @@ class FixedScene:
             np.ascontiguousarray(self._rotation_lock_mode, dtype=np.uint32).tofile(
                 os.path.join(bin_path, "rotation_lock_mode.bin")
             )
+        if self._lock_group is not None:
+            np.ascontiguousarray(self._lock_group, dtype=np.uint32).tofile(
+                os.path.join(bin_path, "lock_group.bin")
+            )
         self._color.astype(np.float32).tofile(os.path.join(bin_path, "color.bin"))
         self._vel.astype(np.float32).tofile(os.path.join(bin_path, "vel.bin"))
 
@@ -1513,7 +1541,7 @@ class FixedScene:
         # can tell "this scene animates nothing" from "this key is missing".
         # Layout matches the static files exactly, repeated once per keyframe,
         # so both go through the same assembly on the far side.
-        if self._tri_param_anim:
+        if self._tri_param_anim or self._pdrd_restitution_anim:
             assert self._param_anim_times, (
                 "an animated material schedule needs param_anim_times"
             )
@@ -1532,6 +1560,13 @@ class FixedScene:
                     [np.asarray(f, dtype=np.float32) for f in frames]
                 )
                 flat.tofile(os.path.join(anim_path, f"tri-{key}.bin"))
+            if self._pdrd_restitution_anim:
+                # One value per PDRD body per keyframe, frame-major, bodies in
+                # `pdrd_body.bin` order.
+                assert len(self._pdrd_restitution_anim) == n_frames
+                np.asarray(self._pdrd_restitution_anim, dtype=np.float32).tofile(
+                    os.path.join(anim_path, "pdrd-restitution.bin")
+                )
         pbar.update(1)
 
         # PDRD per-body and per-vertex tables. Absent files mean the
@@ -3785,6 +3820,40 @@ class Scene:
                 )
                 has_rotation_lock = True
 
+        # ----- Lock groups: one representative per dmap entry -----------
+        # Objects naming the same lock group are locked as one body: each
+        # entry maps to the group's smallest dmap index (the solver refuses
+        # any other spelling), the identity elsewhere. One lock means one
+        # setting, so the members' lock rows must agree. Written to
+        # bin/lock_group.bin at export time; omitted when no object names a
+        # group, which the solver reads as the identity.
+        lock_group = np.arange(concat_displacement.shape[0], dtype=np.uint32)
+        lock_group_members: dict[str, list[tuple[int, str, Any]]] = {}
+        for name, obj in dyn_objects:
+            group = getattr(obj, "_lock_group", None)
+            if group is not None:
+                lock_group_members.setdefault(group, []).append(
+                    (dmap[name], name, obj)
+                )
+        for group, members in lock_group_members.items():
+            members.sort(key=lambda m: m[0])
+            rep, rep_name, rep_obj = members[0]
+            for d, name, obj in members[1:]:
+                if not (
+                    np.array_equal(translation_lock[d], translation_lock[rep])
+                    and translation_lock_mode[d] == translation_lock_mode[rep]
+                    and np.array_equal(rotation_lock[d], rotation_lock[rep])
+                    and rotation_lock_mode[d] == rotation_lock_mode[rep]
+                ):
+                    raise ValueError(
+                        f"lock group {group!r}: object {self._label(name, obj)!r} "
+                        "states other Lock Translation or Lock Rotation "
+                        f"settings than {self._label(rep_name, rep_obj)!r}; "
+                        "a lock group carries one lock, so its members must "
+                        "state the same settings"
+                    )
+                lock_group[d] = np.uint32(rep)
+
         concat_vert = assembled["concat_vert"]
         concat_color = assembled["concat_color"]
         concat_vel = assembled["concat_vel"]
@@ -4052,7 +4121,7 @@ class Scene:
                 return
             for key in (
                 concat_tri_param_anim.keys()
-                | obj.param_anim.keys()
+                | (obj.param_anim.keys() - _BODY_ANIM_KEYS)
                 | set(obj.animated_spatial_keys)
             ):
                 frames = concat_tri_param_anim.setdefault(
@@ -4099,7 +4168,10 @@ class Scene:
             for name, obj in dyn_objects:
                 if not int(stats_by_name[name]["tri_added"]):
                     continue
-                for key in obj.param_anim.keys() | set(obj.animated_spatial_keys):
+                for key in (
+                    (obj.param_anim.keys() - _BODY_ANIM_KEYS)
+                    | set(obj.animated_spatial_keys)
+                ):
                     concat_tri_param_anim.setdefault(
                         key, [[] for _ in param_anim_times]
                     )
@@ -4386,6 +4458,43 @@ class Scene:
             _allow_existing[np.asarray(map_by_name[name], dtype=np.int64)] = True
         allow_existing_vertices = _allow_existing if _allow_existing.any() else None
 
+        # Allow Rest Proximity, per vertex, resolved per OBJECT: the distance
+        # the object set. Like Allow Existing it names no pair by itself: the
+        # scene-build check links the pairs it finds closer than the mean of
+        # the two sides' distances in the starting pose, and the links reach the
+        # solver in the same bin/start_link.bin. Refused on sand by name for the
+        # same reason.
+        _rest_proximity = np.zeros(len(concat_vert), dtype=np.float64)
+        for name, obj in dyn_objects:
+            distance = float(obj.param.get("allow-rest-proximity"))
+            if distance == 0.0:
+                continue
+            if not (np.isfinite(distance) and distance > 0.0):
+                raise ValueError(
+                    f"object '{name}' sets 'allow-rest-proximity' to {distance}; "
+                    "it is a distance, positive, or 0 for none"
+                )
+            if obj.obj_type == "points":
+                raise ValueError(
+                    f"object '{name}' sets 'allow-rest-proximity', which sand "
+                    "does not support: grains form no element the check could "
+                    "find. Clear it on this object."
+                )
+            _rest_proximity[np.asarray(map_by_name[name], dtype=np.int64)] = distance
+        rest_proximity_vertices = _rest_proximity if _rest_proximity.any() else None
+
+        # Restitution is a PDRD body's: it reaches the solver in the body's
+        # record (below), and only a rigid body's step is weighted by it.
+        for name, obj in dyn_objects:
+            if getattr(obj, "_is_pdrd", False):
+                continue
+            if float(obj.param.get("restitution")) != 0.0 or "restitution" in obj.param_anim:
+                raise ValueError(
+                    f"object '{name}' sets 'restitution', which only a PDRD "
+                    "rigid body supports. Clear it on this object, or make it "
+                    "a PDRD body."
+                )
+
         # Per-vertex group identity, read only by the inter-group allowance
         # and so resolved only for a scene that asks for it. Labels are
         # numbered from 1 in the order the objects appear; 0 is the default
@@ -4434,12 +4543,15 @@ class Scene:
         # contiguous in the global vertex array; the kernel reads
         # them through a flat index list (`pdrd_vert_list`).
         pdrd_body_rows: list[float] = []  # PDRD_BODY_ROW_LEN floats per body
+        # One restitution per keyframe time per body, in row order, filled only
+        # when some body keyframes it (a body that does not holds its value).
+        pdrd_restitution_series: list[list[float]] = []
         # Floats per PDRD body row; must match `PDRD_BODY_ROW_LEN` in
         # crates/ppf-cts-solver/src/data.rs. Layout: vertex_start,
         # vertex_count, volume, centroid[3], rest_gram_inv[9 row-major],
-        # mass_per_vertex, joint_mode, joint_axis[3], joint_pin[3]
-        # (16 base + 7 joint = 23 floats).
-        PDRD_BODY_ROW_LEN = 23
+        # mass_per_vertex, joint_mode, joint_axis[3], joint_pin[3], restitution
+        # (16 base + 7 joint + restitution = 24 floats).
+        PDRD_BODY_ROW_LEN = 24
         pdrd_body_densities: list[float] = []  # one float per body, used to fill mass_per_vertex after volume is known
         pdrd_body_centroids: list[np.ndarray] = []  # rest centroid per body (local frame), used in the inertia pass
         pdrd_body_gram_trace: list[float] = []  # trace(S̄) per body, used to compute I_uniform
@@ -4528,8 +4640,32 @@ class Scene:
             row.append(joint_mode)
             row.extend(joint_axis)
             row.extend(joint_pin)
+            restitution = float(obj.param.get("restitution"))
+            if not 0.0 <= restitution <= 1.0:
+                raise ValueError(
+                    f"PDRD body {self._label(name, obj)!r}: restitution must lie "
+                    f"in [0, 1] (got {restitution})"
+                )
+            row.append(restitution)
             assert len(row) == PDRD_BODY_ROW_LEN
             pdrd_body_rows.extend(row)
+            series = obj.param_anim.get("restitution")
+            if series is not None:
+                if len(series) != len(self._param_anim_times):
+                    raise ValueError(
+                        f"PDRD body {self._label(name, obj)!r}: animated "
+                        f"'restitution' has {len(series)} values but the scene "
+                        f"has {len(self._param_anim_times)} keyframe times"
+                    )
+                if not all(0.0 <= float(v) <= 1.0 for v in series):
+                    raise ValueError(
+                        f"PDRD body {self._label(name, obj)!r}: a keyframed "
+                        "restitution must lie in [0, 1]"
+                    )
+            pdrd_restitution_series.append(
+                [float(v) for v in series] if series is not None
+                else [restitution] * len(self._param_anim_times)
+            )
         pdrd_rest_centered = (
             np.vstack(pdrd_rest_centered_chunks)
             if pdrd_rest_centered_chunks
@@ -4906,7 +5042,8 @@ class Scene:
         # resolved into the per-element `contact-gap` values above.
         for key in ["allow-self-intersection", "allow-inter-object-intersection",
                     "allow-inter-group-intersection", "allow-existing-intersection",
-                    "force-field-weight", "contact-gap-limit"]:
+                    "allow-rest-proximity", "force-field-weight", "contact-gap-limit",
+                    "restitution"]:
             concat_tri_param[key] = []
             concat_rod_param[key] = []
             concat_tet_param[key] = []
@@ -4996,6 +5133,7 @@ class Scene:
             object_vert_index=object_vert_index,
             intersect_policy=intersect_policy,
             allow_existing_vertices=allow_existing_vertices,
+            rest_proximity_vertices=rest_proximity_vertices,
             group_vert_index=group_vert_index,
             pin_allow_vertices=(
                 pin_allow_vertices if pin_allow_vertices.any() else None
@@ -5003,6 +5141,14 @@ class Scene:
             force_field=force_field,
             force_field_context=force_field_context,
             pdrd_body_rows=pdrd_body_rows if pdrd_body_rows else None,
+            # Frame-major, only when some body keyframes its restitution.
+            pdrd_restitution_anim=(
+                [list(frame) for frame in zip(*pdrd_restitution_series)]
+                if any("restitution" in o.param_anim for _, o in dyn_objects
+                       if getattr(o, "_is_pdrd", False))
+                and pdrd_restitution_series
+                else None
+            ),
             pdrd_vert_index=pdrd_vert_index if next_body_id > 0 else None,
             pdrd_vert_list=pdrd_vert_list if next_body_id > 0 else None,
             pdrd_rest_centered=pdrd_rest_centered if next_body_id > 0 else None,
@@ -5016,6 +5162,7 @@ class Scene:
             ),
             rotation_lock=rotation_lock if has_rotation_lock else None,
             rotation_lock_mode=rotation_lock_mode if has_rotation_lock else None,
+            lock_group=lock_group if lock_group_members else None,
             statistics_objects=statistics_objects,
             quiet=quiet,
         )

@@ -228,21 +228,6 @@ pub fn solver_subprocess_command(cmd_path: &Path, load: i64, platform: Platform)
     }
 }
 
-/// Search for a bundled `ffmpeg` binary under `project_root`. Returns
-/// the first existing candidate or `None`. The caller falls back to
-/// `shutil.which("ffmpeg")` when this returns `None`.
-pub fn locate_bundled_ffmpeg(project_root: &Path) -> Option<PathBuf> {
-    let candidates = [
-        project_root.join("bin").join("ffmpeg"),
-        project_root.join("bin").join("ffmpeg.exe"),
-        project_root
-            .join("build-win-native")
-            .join("ffmpeg")
-            .join("ffmpeg.exe"),
-    ];
-    candidates.into_iter().find(|p| p.is_file())
-}
-
 /// Build the ffmpeg command line invoked via
 /// `subprocess.run(..., shell=True)`. Caller still drives the
 /// subprocess (we don't shell out from Rust). Both `ffmpeg_path` and

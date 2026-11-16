@@ -33,7 +33,7 @@
 #     one for everybody. The Xcode command line tools carry the macOS SDK,
 #     whose Metal.framework is the only thing the backend links.
 #   - A C++ toolchain, git or curl. The command line tools carry all three.
-#   - ffmpeg. See scripts/downloads.txt for why there is no pointer here.
+#   - ffmpeg, which no distribution ships; see scripts/downloads.txt.
 
 set -euo pipefail
 
@@ -571,12 +571,9 @@ step "ffmpeg (optional)"
 if command -v ffmpeg >/dev/null 2>&1; then
     printf 'ffmpeg on PATH: %s\n' "$(command -v ffmpeg)"
 else
-    printf 'No ffmpeg on PATH. Video export from a session is skipped without\n'
-    printf 'one (frontend/_session_inspect_.py falls back to shutil.which and\n'
-    printf 'returns early); everything else works. This directory provisions\n'
-    printf 'none, and if it ever does it takes the pinned pointers from\n'
-    printf 'build-win-native/scripts/downloads.txt rather than adding a second\n'
-    printf 'copy. See build-mac-native/scripts/downloads.txt.\n'
+    printf 'No ffmpeg on PATH. Animation export from a session then writes an\n'
+    printf 'animated frame.webp instead of frame.mp4\n'
+    printf '(frontend/_session_inspect_.py); everything else works.\n'
 fi
 
 # ---------------------------------------------------------------------------

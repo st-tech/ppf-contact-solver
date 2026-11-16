@@ -143,6 +143,7 @@ pub(crate) mod run_state;
 mod pdrd;
 pub(crate) mod pinch;
 mod rest_shape;
+mod restitution;
 /// The PDRD reduction's topology: which vertices a rigid body carries, and
 /// where every free vertex sits in the reduced vector.
 mod rigid_map;
@@ -922,7 +923,13 @@ pub extern "C" fn fetch() {
         state
             .positions
             .download(device)
-            .and_then(|()| state.positions_prev.download(device))
+            .and_then(|()| {
+                if state.restitution_active {
+                    state.positions_last.download(device)
+                } else {
+                    state.positions_prev.download(device)
+                }
+            })
             // THE STATISTICS COUNTER RIDES THE SAME READBACK: it is per-frame
             // telemetry, so it is read once at the frame boundary rather than
             // per Newton iteration, and it carries the count the LAST
@@ -949,8 +956,17 @@ pub extern "C" fn fetch() {
             (*dataset).vertex.curr.data as *mut f32,
             3 * vertices,
         );
+        // THE POSE THE BODY WAS AT, which the frame writer interpolates from.
+        // Under restitution `positions_prev` is a velocity carrier, not a pose
+        // (`SolverState::positions_last`), so a resumed run restarts that
+        // one step from the plain difference of the two poses.
+        let previous = if state.restitution_active {
+            &state.positions_last
+        } else {
+            &state.positions_prev
+        };
         std::ptr::copy_nonoverlapping(
-            state.positions_prev.host().as_ptr(),
+            previous.host().as_ptr(),
             (*dataset).vertex.prev.data as *mut f32,
             3 * vertices,
         );
@@ -1365,6 +1381,32 @@ pub unsafe extern "C" fn update_material_params(update: *const MaterialParamUpda
         if let Some(state) = guard.as_mut() {
             if let Err(fatal) = with_device(|device| {
                 state.restage_material_params(device, faces, vertices, edges, hinges)
+            }) {
+                drop(guard);
+                fatal_exit(fatal);
+            }
+        }
+    }
+}
+
+/// Apply a keyframed PDRD restitution before the next step: `count` values,
+/// one per PDRD body in the scene's table order.
+///
+/// # Safety
+/// `values` must address `count` floats.
+#[no_mangle]
+pub unsafe extern "C" fn update_pdrd_restitution(values: *const f32, count: u32) {
+    if values.is_null() {
+        fatal_exit(Fatal::invariant(
+            "solver driver: update_pdrd_restitution received a null table",
+        ));
+    }
+    let view = require_scene("update_pdrd_restitution");
+    let values = std::slice::from_raw_parts(values, count as usize);
+    if let Ok(mut guard) = SOLVER.lock() {
+        if let Some(state) = guard.as_mut() {
+            if let Err(fatal) = with_device(|device| {
+                state.set_pdrd_restitution(device, view.get(), values)
             }) {
                 drop(guard);
                 fatal_exit(fatal);

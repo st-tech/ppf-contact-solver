@@ -541,6 +541,8 @@ pub struct LockSceneData<'a> {
     pub translation_modes: &'a [u32],
     pub rotation_axes: &'a [Vec3f],
     pub rotation_modes: &'a [u32],
+    /// Per displacement group, its lock group's representative (scene.rs `decode_optional_lock_group`).
+    pub lock_group: &'a [u32],
     pub vert_dmap: &'a [u32],
 }
 
@@ -637,6 +639,25 @@ pub fn build(
         assert!(
             (group as usize) < lock_data.translation_axes.len(),
             "aggregate-lock vert_dmap[{vertex}] = {group} has no axis entry"
+        );
+    }
+    assert_eq!(
+        lock_data.lock_group.len(),
+        lock_data.translation_axes.len(),
+        "lock-group map size mismatch"
+    );
+    // A LOCK GROUP CARRIES ONE SETTING. The lock is formed from its representative's axes and modes, so a member
+    // stating others would be locked by settings it did not state; the frontend refuses that, and so does this.
+    //
+    for (dmap_index, &rep) in lock_data.lock_group.iter().enumerate() {
+        let rep = rep as usize;
+        assert!(
+            lock_data.translation_axes[dmap_index] == lock_data.translation_axes[rep]
+                && lock_data.translation_modes[dmap_index] == lock_data.translation_modes[rep]
+                && lock_data.rotation_axes[dmap_index] == lock_data.rotation_axes[rep]
+                && lock_data.rotation_modes[dmap_index] == lock_data.rotation_modes[rep],
+            "lock_group_settings: displacement group {dmap_index} is in the lock group of {rep} but states other \
+             lock axes or modes"
         );
     }
     let shell_face_count = mesh.mesh.mesh.shell_face_count;
@@ -1080,9 +1101,12 @@ pub fn build(
             let vertex_start = row[0] as usize;
             let vertex_count = row[1] as usize;
             let mass_per_vertex = row[15];
+            let restitution = row[23];
             for k in vertex_start..(vertex_start + vertex_count) {
                 let vidx = pdrd.vert_list[k] as usize;
                 vertex_prop[vidx].mass += mass_per_vertex;
+                vertex_prop[vidx].restitution = restitution;
+                vertex_prop[vidx].body_vertex_count = vertex_count as u32;
             }
         }
     }
@@ -1404,6 +1428,11 @@ pub fn build(
             let joint_mode = row[16] as u32;
             let joint_axis = Vec3f::new(row[17], row[18], row[19]);
             let joint_pin = Vec3f::new(row[20], row[21], row[22]);
+            let restitution = row[23];
+            assert!(
+                (0.0..=1.0).contains(&restitution),
+                "PDRD body {b} has restitution {restitution} outside [0, 1]"
+            );
             assert!(vertex_count > 0, "PDRD body {b} has empty vertex range");
             assert!(
                 volume > 0.0,
@@ -1423,6 +1452,7 @@ pub fn build(
                 joint_mode,
                 joint_axis,
                 joint_pin,
+                restitution,
             });
         }
     }
@@ -1437,7 +1467,14 @@ pub fn build(
     let mut translation_locks = Vec::<TranslationLock>::new();
     let mut translation_lock_index = vec![TRANSLATION_LOCK_UNSET; n_vert];
     let mut pdrd_lock_owner = vec![TRANSLATION_LOCK_UNSET; pdrd_body_props.len()];
+    // ONE LOCK PER LOCK GROUP, over the vertices of every displacement group in it (its members' `vert_dmap`
+    // mapped through `lock_group` to this representative); a member that is not its group's representative forms
+    // none of its own.
+    let in_lock = |group: u32, dmap_index: usize| lock_data.lock_group[group as usize] as usize == dmap_index;
     for dmap_index in 0..lock_data.translation_axes.len() {
+        if lock_data.lock_group[dmap_index] as usize != dmap_index {
+            continue;
+        }
         let translation_axis = lock_data.translation_axes[dmap_index];
         let translation_mode = lock_data.translation_modes[dmap_index];
         let rotation_axis = lock_data.rotation_axes[dmap_index];
@@ -1470,7 +1507,7 @@ pub fn build(
         let mut physical_vertex_count = 0usize;
         let mut anchor = None;
         for (vertex_index, &group) in lock_data.vert_dmap.iter().enumerate() {
-            if group as usize != dmap_index {
+            if !in_lock(group, dmap_index) {
                 continue;
             }
             let mass = vertex_prop[vertex_index].mass;
@@ -1512,7 +1549,7 @@ pub fn build(
         }
         let compact_index = translation_locks.len() as u32;
         for (vertex_index, &group) in lock_data.vert_dmap.iter().enumerate() {
-            if group as usize == dmap_index && vertex_prop[vertex_index].mass > 0.0 {
+            if in_lock(group, dmap_index) && vertex_prop[vertex_index].mass > 0.0 {
                 translation_lock_index[vertex_index] = compact_index;
             }
         }
@@ -1911,6 +1948,13 @@ pub fn build(
             let d = (mesh.vertex.column(v1) - mesh.vertex.column(v0)).map(f32::from);
             let length = d.norm();
             assert!(length > 0.0, "Cosserat edge {ei} has zero rest length");
+            // The REST director from the object's bending reference
+            // (`bend_rest_v`: the reference where the object set one, the
+            // initial pose elsewhere), so a rod's curvature at rest is the
+            // reference's as its hinge bending's is.
+            let r = (bend_rest_v.column(v1) - bend_rest_v.column(v0)).map(f32::from);
+            let rest_length = r.norm();
+            assert!(rest_length > 0.0, "Cosserat edge {ei} has zero length in its bending reference");
             let material = &props.edge_params[props.edge[ei].param_index as usize];
             // The frame sits at the edge's middle, so its authored roll is the
             // mean of its two endpoints' tilts; a difference between neighboring
@@ -1926,6 +1970,8 @@ pub fn build(
                 v1: v1 as u32,
                 tangent: d / length,
                 length,
+                rest_tangent: r / rest_length,
+                rest_length,
                 rest_twist: material.cosserat_rest_twist,
                 fix_ends: material.cosserat_fix_ends > 0.5,
                 twist_rate: material.cosserat_end_twist_rate,
@@ -2699,6 +2745,8 @@ pub fn make_collision_mesh(
             // every object, as the add-on builds it: a collider always sits
             // in a STATIC group of its own.
             group_index: crate::data::NO_GROUP_INDEX,
+            restitution: 0.0,
+            body_vertex_count: 0,
             intersect_policy: 0,
             pin_allow_intersection: false,
         });

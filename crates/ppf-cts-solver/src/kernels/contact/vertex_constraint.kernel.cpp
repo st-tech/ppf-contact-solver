@@ -612,7 +612,23 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
             const Vec3f ground =
                 plane.ground + float(ghat) * up;
             const Vec3f e = x - ground;
-            if (e.dot(up) < 0.0f) {
+            // A SECANT FLOOR ALSO PUSHES A VERTEX LEAVING THE BAND: the step
+            // started inside it, so the barrier's stored energy is released
+            // over the sweep even though the iterate is already outside.
+            // A VERTEX OF A BODY WITH A RESTITUTION pushes with the barrier's
+            // secant over the step, and forms the stiffness from its body's
+            // mass, the mass that actually moves
+            // (the vertex's own `M / N`
+            // would sink the step's solution toward the gap tolerance as
+            // `1 / sqrt(N)`). Every other vertex is exactly as before.
+            const bool secant = prop.restitution > 0.0f && !plane.kinematic;
+            const float start_gap =
+                secant ? (current[i] - plane.ground).dot(up) : ghat;
+            const float stiffness_mass =
+                secant && prop.body_vertex_count > 0u
+                    ? mass * static_cast<float>(prop.body_vertex_count)
+                    : mass;
+            if (e.dot(up) < 0.0f || start_gap < ghat) {
                 const float depth = -e.dot(up);
                 if (plane.thickness > 0.0f && depth > plane.thickness) {
                     continue;
@@ -635,7 +651,7 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                 const AnalyticContactResult contact =
                     analytic_contact_evaluate(
                         local_hess, dx, carried, slide, up, (-projected_x).dot(up), gap,
-                        ghat, friction, friction_eps, mass, residual_i, dt,
+                        ghat, friction, friction_eps, stiffness_mass, residual_i, dt,
                         // FALSE, NOT THE FLOOR'S OWN `kinematic` FLAG. In
                         // `contact.cu` the floor's stiffness is
                         // `up.dot(local_hess * up) + mass / gap^2`
@@ -648,6 +664,20 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                         // band, where `gap < ghat` makes `mass / gap^2` the
                         // larger of the two.
                         false, true);
+                Vec3f push_force = contact.force;
+                Mat3x3f push_hessian = contact.hessian;
+                if (secant) {
+                    const float elastic =
+                        fmath::max(up.dot(local_hess * up), 0.0f);
+                    float curvature;
+                    const float mean = floor_secant_push(
+                        start_gap, gap, ghat, stiffness_mass, elastic, curvature);
+                    // `force` is the energy's gradient: the push lowers the
+                    // energy upward, so it enters with a minus sign, as
+                    // `push_gradient` does.
+                    push_force = -mean * up;
+                    push_hessian = curvature * up * up.transpose();
+                }
                 if (contact.normal_force > 0.0f) {
                     const unsigned memory_index[1] = {i};
                     const float memory_weight[1] = {1.0f};
@@ -660,11 +690,11 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
                 }
                 // As the sphere's: only a grain applies its friction here.
                 if (is_grain) {
-                    f += contact.force;
-                    H += contact.hessian;
+                    f += push_force;
+                    H += push_hessian;
                 } else {
-                    f += contact.force - contact.friction_gradient;
-                    H += contact.hessian - contact.friction_hessian;
+                    f += push_force - contact.friction_gradient;
+                    H += push_hessian - contact.friction_hessian;
                 }
                 if (is_grain) {
                     analytic_grain_schur(
@@ -916,14 +946,25 @@ sphere_feature_moves(const VertexProp *vertex_prop, const unsigned *index,
         }
         for (uint32_t j = 0; j < floor_count; ++j) {
             const Floor plane = floor[j];
-            if (plane.kinematic) {
-                continue;
-            }
             const Vec3f up = plane.up;
             const Vec3f ground = plane.ground;
             const float h0 = up.dot((p0 - ground));
             const float h1 = up.dot((p1 - ground));
             if (plane.thickness > 0.0f && -h0 > plane.thickness) {
+                continue;
+            }
+            // A MOVING FLOOR IS SWEPT LIKE A STATIC ONE, from a clear start.
+            // The driver places it at its end-of-step pose and holds it there
+            // for every Newton iteration (`make_constraint(time + dt)`), so
+            // within the step it is a static plane, and its assembly is the
+            // same barrier (`mass / gap^2`), so this sweep keeps a vertex clear
+            // of it and a receding floor never lets one through. A start on or
+            // past the plane skips the sweep: the floor's jump between steps
+            // crossed the vertex, not the vertex's step, and cutting that step
+            // would leave the assembly's push no way to lift it out. A moving
+            // SPHERE is not swept: its assembly is a constant-stiffness penalty,
+            // whose minimizer can lie past any park, so a sweep would stall it.
+            if (plane.kinematic && !(h0 > 0.0f)) {
                 continue;
             }
             // `h` IS the gap the assembly divides by, so the sweep parks

@@ -32,14 +32,23 @@ WORKDIR /root/${PROJ_NAME}
 RUN mkdir -p .git && \
   (git branch --show-current > .git/branch_name.txt 2>/dev/null || echo "unknown" > .git/branch_name.txt)
 
-# Build slim ffmpeg (PNG to MP4 only, ~4MB vs ~28MB for full package). The
-# script installs nothing itself, so the tools it builds with are installed here.
-RUN apt-get update && \
-  apt-get install -y --no-install-recommends \
-  build-essential nasm pkg-config curl git ca-certificates && \
-  .github/workflows/scripts/make-slim-ffmpeg.sh
+# NO FFMPEG IN THE IMAGE. A session's animation export encodes frame.mp4 with
+# an ffmpeg on PATH, and without one writes an animated frame.webp with Pillow.
 
 RUN /root/.cargo/bin/cargo build --release
+
+# THE BACKEND LIBRARIES ARE GATHERED BY `find`, NOT BY A COPY GLOB, because
+# where they land depends on the Cargo release: older Cargo writes OUT_DIR as
+# `build/<pkg>-<hash>/out`, Rust 1.100 as `build/<pkg>/<hash>/out`. A glob
+# spelled for one layout matches nothing (or the wrong thing) under the other,
+# and the image then fails only at its first solve with "libppfbe_cuda.so:
+# cannot open shared object file". find's `*` crosses `/`, so the one pattern
+# serves both, and the test makes a missing library fail this build instead.
+RUN mkdir -p /root/backend-lib && \
+  find target/release/build -maxdepth 5 -path '*/build/ppf-cts-solver*/out/lib/*.so' \
+    -exec cp {} /root/backend-lib/ \; && \
+  ls -l /root/backend-lib && \
+  test -f /root/backend-lib/libppfbe_cuda.so
 
 # THE CPU BACKEND BESIDE THE CUDA ONE, because an image that ships one backend
 # is an image that runs on one kind of machine. This one's runtime stage is
@@ -82,7 +91,7 @@ RUN apt-get update && \
 # Copy only necessary files from builder
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-contact-solver /root/${PROJ_NAME}/target/release/ppf-contact-solver
 COPY --from=builder /root/${PROJ_NAME}/target/release/ppf-cts-server /root/${PROJ_NAME}/target/release/ppf-cts-server
-COPY --from=builder /root/${PROJ_NAME}/target/release/build/ppf-cts-solver-*/out/lib/*.so /usr/local/lib/
+COPY --from=builder /root/backend-lib/ /usr/local/lib/
 # The PyO3 cdylib (ppf-cts-py is a workspace default-member, so the release
 # build above produces it). frontend/__init__.py loads it directly by
 # absolute path from target/release and registers it as _ppf_cts_py, so the
@@ -139,7 +148,6 @@ COPY --from=builder /root/${PROJ_NAME}/crates/ppf-cts-compute/cuda /root/${PROJ_
 COPY --from=builder /root/${PROJ_NAME}/crates/ppf-cts-core/src /root/${PROJ_NAME}/crates/ppf-cts-core/src
 COPY --from=builder /root/${PROJ_NAME}/.git/branch_name.txt /root/${PROJ_NAME}/.git/branch_name.txt
 COPY --from=builder /root/${PROJ_NAME}/.github/workflows/scripts/examples.txt /root/${PROJ_NAME}/examples.txt
-COPY --from=builder /root/${PROJ_NAME}/bin/ffmpeg /root/${PROJ_NAME}/bin/ffmpeg
 
 # Copy virtual environment from base-image (which has the venv created).
 # The venv provides the pure-python deps (cbor2, psutil, jupyter); the PyO3

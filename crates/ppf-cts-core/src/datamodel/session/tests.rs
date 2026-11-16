@@ -979,17 +979,6 @@ fn rstrip_newlines_drops_trailing_newline_only() {
 }
 
 #[test]
-fn locate_bundled_ffmpeg_returns_first_match() {
-    let dir = tempfile::tempdir().unwrap();
-    // No candidates yet.
-    assert!(locate_bundled_ffmpeg(dir.path()).is_none());
-    // Drop a bundled ffmpeg.exe; should find it.
-    let exe = dir.path().join("bin").join("ffmpeg.exe");
-    write_text(&exe, "");
-    assert_eq!(locate_bundled_ffmpeg(dir.path()), Some(exe));
-}
-
-#[test]
 fn ffmpeg_video_command_matches_python_template() {
     let cmd = ffmpeg_video_command(
         std::path::Path::new("/usr/bin/ffmpeg"),

@@ -118,6 +118,7 @@ fn fsa_read_f64_2d_flat(
     vert_pin_allow=None,
     vert_group_id=None,
     vert_allow_existing=None,
+    vert_rest_proximity=None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn scene_fixed_scene_assemble<'py>(
@@ -153,6 +154,10 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
     // vertex's object opted in. A pair the checks find with either side opted
     // in is linked rather than reported.
     vert_allow_existing: Option<&Bound<'py, PyAny>>,
+    // Allow Rest Proximity, per DYNAMIC vertex: the distance its object set,
+    // zero where none. A pair of elements closer than the mean of their two
+    // distances in the starting pose is linked as an existing tangle is.
+    vert_rest_proximity: Option<Vec<f64>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let vl_shape = vert_local.shape();
     if vl_shape.len() != 2 || vl_shape[1] != 3 {
@@ -224,6 +229,21 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
         None => None,
     };
 
+    if let Some(d) = vert_rest_proximity.as_ref() {
+        if d.len() != dmap.len() {
+            return Err(PyValueError::new_err(format!(
+                "vert_rest_proximity has {} entries but the scene has {} dynamic vertices",
+                d.len(),
+                dmap.len()
+            )));
+        }
+        if !d.iter().all(|x| x.is_finite() && *x >= 0.0) {
+            return Err(PyValueError::new_err(
+                "vert_rest_proximity must hold finite, non-negative distances",
+            ));
+        }
+    }
+
     let walls_rs: Vec<fsa::WallEntry> = walls
         .into_iter()
         .map(|(pos, normal)| fsa::WallEntry { pos, normal })
@@ -261,6 +281,7 @@ pub(super) fn scene_fixed_scene_assemble<'py>(
             vert_policy: vert_policy_vec.as_deref(),
             vert_pin_allow: vert_pin_allow_vec.as_deref(),
             vert_allow_existing: vert_allow_existing_vec.as_deref(),
+            vert_rest_proximity: vert_rest_proximity.as_deref(),
         })
     });
 

@@ -661,6 +661,21 @@ pub(crate) fn position_block(
     buffer
 }
 
+/// The restitution weight `theta` a body with a coefficient integrates with:
+/// `1/2` for any coefficient above zero.
+///
+/// At `theta = 1/2` a converged step with the contacts' secant pushes neither
+/// gains nor loses energy, so an
+/// impact is elastic however it falls across steps, and the coefficient itself
+/// is applied once, when the impact ends (`driver/restitution.rs`). A weight
+/// above `1/2` would add a loss per contact STEP, `(theta - 1/2) h^2 |a|^2`,
+/// which follows how an impact happens to be split over steps rather than the
+/// coefficient. `momentum.kernel.cpp` forms the same weight from a vertex's
+/// `restitution`.
+pub(crate) fn restitution_weight(_restitution: f32) -> f32 {
+    0.5
+}
+
 /// The per-run state the driver owns.
 /// The fold's block width, the same 256 the float fold uses.
 pub(crate) const DOF_FOLD_WIDTH: usize = 256;
@@ -678,6 +693,30 @@ pub struct SolverState {
     /// contract and the reason it is not empty here.
     pub positions: ReadbackBuffer<f32>,
     pub positions_prev: ReadbackBuffer<f32>,
+    /// Each vertex's restitution weight `theta = restitution_weight(e)`, from
+    /// its PDRD body's coefficient `e`, and 1 for every other vertex. The step is
+    /// `x1 = x0 + h v0 + theta h^2 a`, `v1 = v0 + h a` per vertex
+    /// (`driver/step.rs`). Seeded at allocate and by `set_pdrd_restitution`;
+    /// read by the seed, the momentum row and the analytic floor.
+    pub theta: ReadbackBuffer<f32>,
+    /// Whether any vertex has `theta < 1`, and the smallest `theta`. A scene
+    /// with none runs exactly the implicit-Euler step.
+    pub restitution_active: bool,
+    pub theta_min: f32,
+    /// The per-body restitution last applied by a keyframed schedule
+    /// (`set_pdrd_restitution`); empty before the first.
+    pub pdrd_restitution_now: Vec<f32>,
+    /// The bodies with a coefficient of restitution, which take it once per
+    /// impact at the commit (`driver/restitution.rs`); `None` without one.
+    pub restitution: Option<super::restitution::Restitution>,
+    /// The committed pose one step back, kept only while restitution is
+    /// active. `positions_prev` then holds the point that carries the scheme's
+    /// velocity, which is not where the body was, so the frame writer, which
+    /// interpolates between the two poses, reads this instead.
+    pub positions_last: ReadbackBuffer<f32>,
+    /// The restitution convergence loop's iterate with the smallest increment
+    /// (`driver/step.rs`), sized on first use.
+    pub best_x: ReadbackBuffer<f32>,
 
     /// The Newton iterate, as flat position components (`3 * vertices` f32).
     ///
@@ -2554,6 +2593,38 @@ impl SolverState {
         self.positions.seed(device, curr_seed)?;
         self.positions_prev.seed(device, prev_seed)?;
         self.eval_x.seed(device, curr_seed)?;
+        // THE RESTITUTION WEIGHTS, from each vertex's PDRD body.
+        //
+        // Safety: both tables are live host allocations of their stated sizes.
+        let (vertex_props, bodies) = unsafe {
+            (
+                super::scene::slice(&data.prop.vertex),
+                super::scene::slice(&data.prop.pdrd_body),
+            )
+        };
+        let mut theta = vec![1.0f32; vertices];
+        self.restitution_active = false;
+        self.theta_min = 1.0;
+        for (weight, prop) in theta.iter_mut().zip(vertex_props) {
+            if prop.pdrd_body_index == 0 {
+                continue;
+            }
+            let restitution = bodies[(prop.pdrd_body_index - 1) as usize].restitution;
+            if restitution > 0.0 {
+                *weight = restitution_weight(restitution);
+                self.restitution_active = true;
+                self.theta_min = self.theta_min.min(*weight);
+            }
+        }
+        self.theta.size(device, vertices, AllocLabel("step.theta"))?;
+        self.theta.seed(device, &theta)?;
+        // Safety: `data` is the live scene this state is sized for.
+        self.restitution = unsafe { super::restitution::Restitution::build(data) };
+        if self.restitution_active {
+            self.positions_last
+                .size(device, 3 * vertices, AllocLabel("step.positions_last"))?;
+            self.positions_last.seed(device, prev_seed)?;
+        }
         self.velocity
             .size(device, 3 * vertices, AllocLabel("step.velocity"))?;
         self.field.allocate(device, vertices)?;
@@ -2969,6 +3040,89 @@ impl SolverState {
             };
             self.inv_rest3x3.seed(device, flat)?;
         }
+        Ok(())
+    }
+
+    /// Apply a keyframed PDRD restitution, one value per body in the scene's
+    /// table order, before a step.
+    ///
+    /// The coefficient decides more than the release: a body above zero
+    /// integrates with `theta = 1/2` and its contacts take the secant push
+    /// and the body-mass stiffness, all read off each vertex's `restitution`.
+    /// So every one of those follows the schedule, and a body whose value
+    /// reaches zero is back on the implicit-Euler step exactly, which is what
+    /// lets an artist fade a bounce out and have the body come to rest. The
+    /// switch is consistent at a step boundary because the history point the
+    /// commit stores is `x1 - h v1` under either weight (at `theta = 1` that
+    /// is the previous pose itself).
+    pub fn set_pdrd_restitution<D: Device>(
+        &mut self,
+        device: &mut D,
+        data: &crate::data::DataSet,
+        values: &[f32],
+    ) -> FatalResult<()> {
+        if values == self.pdrd_restitution_now.as_slice() {
+            return Ok(());
+        }
+        // Safety: both tables are live host allocations of their stated sizes.
+        let (bodies, list) = unsafe {
+            (
+                super::scene::slice(&data.prop.pdrd_body),
+                super::scene::slice(&data.pdrd_vert_list),
+            )
+        };
+        if values.len() != bodies.len() {
+            return Err(Fatal::invariant(format!(
+                "solver driver: a restitution schedule carries {} values for {} PDRD bodies",
+                values.len(),
+                bodies.len()
+            )));
+        }
+        {
+            let props = self.prop_vertex.at();
+            for (body, &value) in bodies.iter().zip(values) {
+                let start = body.vertex_start as usize;
+                for &v in &list[start..start + body.vertex_count as usize] {
+                    props[v as usize].restitution = value;
+                }
+            }
+        }
+        self.prop_vertex.upload(device).map_err(|fault| {
+            Fatal::device_assert(format!(
+                "solver driver: the keyframed restitution failed to reach the device: {fault:?}"
+            ))
+        })?;
+        let was_active = self.restitution_active;
+        let mut theta = vec![1.0f32; self.prop_vertex.len()];
+        self.restitution_active = false;
+        self.theta_min = 1.0;
+        for (weight, prop) in theta.iter_mut().zip(self.prop_vertex.host()) {
+            if prop.pdrd_body_index > 0 && prop.restitution > 0.0 {
+                *weight = restitution_weight(prop.restitution);
+                self.restitution_active = true;
+                self.theta_min = self.theta_min.min(*weight);
+            }
+        }
+        self.theta.seed(device, &theta)?;
+        if self.restitution_active && !was_active {
+            // Inactive, `positions_prev` was the previous pose, which is what
+            // `positions_last` holds while active.
+            let vertices = self.prop_vertex.len();
+            if self.positions_last.len() != 3 * vertices {
+                self.positions_last
+                    .size(device, 3 * vertices, AllocLabel("step.positions_last"))?;
+            }
+            self.positions_last.copy_from(device, &self.positions_prev)?;
+        }
+        // Safety: `data` is the live scene this state is sized for.
+        self.restitution = unsafe {
+            super::restitution::Restitution::with_coefficients(
+                self.restitution.take(),
+                data,
+                values,
+            )
+        };
+        self.pdrd_restitution_now = values.to_vec();
         Ok(())
     }
 

@@ -600,6 +600,11 @@ class Object:
         # THE FLAG CARRIES THE ENABLE BIT, exactly as for translation
         # above. See :meth:`lock_all_rotations`.
         self._rotation_lock_all: bool = False
+        # Lock group: None = this object's Lock Translation and Lock
+        # Rotation constrain it alone; a name = they constrain, as one
+        # body, every object of the scene carrying the same name. See
+        # :meth:`lock_group`.
+        self._lock_group: Optional[str] = None
         self._velocity_schedule = []
         # Principal-axis angular velocity overwrite keyframes:
         # list of (time, pca_index, speed_rad_per_s). The spin axis is the
@@ -1770,6 +1775,41 @@ class Object:
         self._rotation_lock_prohibit_axis = bool(prohibit)
         return self
 
+    def lock_group(self, name: str) -> "Object":
+        """Lock this object together with every object of the same group.
+
+        Lock Translation and Lock Rotation normally constrain each object's
+        own center of mass and its own best-fit rigid rotation. Objects that
+        share a group name are constrained as one body instead: the lock acts
+        on the combined center of mass and the combined mass-weighted best-fit
+        rotation of all their vertices, so each member can still move and turn
+        relative to the others. Every member must state the same Lock
+        Translation and Lock Rotation settings, since the group carries one
+        lock.
+
+        Args:
+            name: the group's name; objects with equal names form one group.
+
+        Returns:
+            Object: ``self``, for chaining.
+
+        Raises:
+            ValueError: if ``name`` is empty, or (at build time) if the members
+                of a group state different lock settings.
+
+        Example:
+            Hold the yarns of a woven sheet against turning about the vertical
+            axis as one sheet, while each yarn stays free to slide and twist::
+
+                for yarn in yarns:
+                    yarn.lock_rotation(0, 1, 0).lock_rotation_prohibit_axis(True)
+                    yarn.lock_group("sheet")
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("lock_group() takes a non-empty group name")
+        self._lock_group = name
+        return self
+
     def velocity_schedule(self, schedule: list) -> "Object":
         """Set a list of (time, [vx, vy, vz]) velocity overrides.
 
@@ -2096,7 +2136,10 @@ class Object:
         ``vert`` is an ``(N, 3)`` array in the SAME vertex order and world
         space as :meth:`vertex` ``(True)``; the solver uses it to compute
         this object's hinge rest angles from the reference shape instead of
-        the object's own initial pose.
+        the object's own initial pose, and for a Cosserat rod its rest
+        curvature and twist (the rest Darboux vector) too, so a rod authored
+        in a bent pose rests in the reference's shape and carries the pose's
+        bend as strain. The rod's stretch rest lengths stay the pose's.
         """
         self._bend_rest_vert = np.ascontiguousarray(vert, dtype=np.float64)
         return self

@@ -37,6 +37,54 @@ if TYPE_CHECKING:
     from ._session_param_ import ParamManager
 
 
+def _write_animated_webp(png_paths: list, out_path: str, fps: int) -> None:
+    """Write the PNGs at ``png_paths``, in order, as one looping animated WebP.
+
+    ONE FRAME IN MEMORY AT A TIME. Pillow's WebP writer seeks a multi-frame
+    image frame by frame, so the pictures are handed to it as one image whose
+    ``seek`` loads the PNG it names and drops the one before. A list of opened
+    images would keep every decoded frame alive until the end, about 0.9 MB a
+    frame at the default 640 by 480, which a long run does not have to spare.
+
+    A WebP frame lasts a whole number of milliseconds, so 60 frames per second
+    plays at 1000 / 17, about 59 frames per second.
+    """
+    from PIL import Image
+
+    class _PngSequence(Image.Image):
+        def __init__(self, paths: list):
+            super().__init__()
+            self._paths = paths
+            self._index = -1
+            self.n_frames = len(paths)
+            self.is_animated = len(paths) > 1
+            self.seek(0)
+
+        def seek(self, frame: int) -> None:
+            if frame == self._index:
+                return
+            with Image.open(self._paths[frame]) as picture:
+                if picture.mode not in ("RGB", "RGBA"):
+                    picture = picture.convert("RGB")
+                picture.load()
+                self.im = picture.im
+                self._mode = picture.mode
+                self._size = picture.size
+            self._index = frame
+
+        def tell(self) -> int:
+            return self._index
+
+    _PngSequence(png_paths).save(
+        out_path,
+        format="WEBP",
+        save_all=True,
+        duration=round(1000 / fps),
+        loop=0,
+        quality=80,
+    )
+
+
 CONSOLE_STYLE = """
     <style>
         .no-scroll {
@@ -140,9 +188,10 @@ class SessionExport:
         """Export the animation frames.
 
         If no frames are available yet, waits for the simulation if it is
-        running, otherwise returns early. When ``ffmpeg`` is available and
-        rendered PNGs are produced, also encodes an ``frame.mp4`` video in
-        the export directory.
+        running, otherwise returns early. The rendered PNGs also become one
+        animation in the export directory: ``frame.mp4`` when an ``ffmpeg``
+        is on ``PATH``, and otherwise an animated ``frame.webp`` written with
+        Pillow. A notebook shows either one inline.
 
         Args:
             path (str): The path to the export directory. If empty, a default
@@ -226,23 +275,36 @@ class SessionExport:
                 delete_exist=clear,
             )
 
-        # Check if any PNG images were rendered before attempting video creation
+        # The rendered pictures, in frame order, become one animation. An
+        # ffmpeg on PATH encodes them as frame.mp4, as it always has; without
+        # one, Pillow writes them as an animated frame.webp, which a notebook
+        # shows inline as well. Nothing is bundled for this: the
+        # distributions ship no ffmpeg.
         png_files = [f for f in os.listdir(path) if f.endswith(".png")]
-        # Look for a bundled ffmpeg first (Rust handles the path
-        # arithmetic + isfile check); fall back to PATH via
-        # `shutil.which` (Python only, walks `$PATH`).
-        project_root = _rust.project_root_from_frontend_file(os.path.abspath(__file__))
-        ffmpeg_path = _rust.locate_bundled_ffmpeg(project_root)
-        if ffmpeg_path is None:
-            ffmpeg_path = shutil.which("ffmpeg")
+        frame_pngs = [
+            os.path.join(path, f"frame_{i}.{ext}.png")
+            for i in range(latest_frame)
+            if os.path.isfile(os.path.join(path, f"frame_{i}.{ext}.png"))
+        ]
+        movie = None
+        ffmpeg_path = shutil.which("ffmpeg")
         if ffmpeg_path is not None and png_files:
             vid_name = "frame.mp4"
             command = _rust.ffmpeg_video_command(ffmpeg_path, ext, vid_name)
             subprocess.run(command, shell=True, cwd=path)
-            if Utils.in_jupyter_notebook():
-                from IPython.display import Video, display
+            movie = os.path.join(path, vid_name)
+        elif frame_pngs:
+            movie = os.path.join(path, "frame.webp")
+            _write_animated_webp(frame_pngs, movie, fps=60)
 
-                display(Video(os.path.join(path, vid_name), embed=True))
+        if movie is not None and os.path.isfile(movie):
+            if Utils.in_jupyter_notebook():
+                from IPython.display import Image, Video, display
+
+                if movie.endswith(".mp4"):
+                    display(Video(movie, embed=True))
+                else:
+                    display(Image(filename=movie))
 
             if ci_name is not None:
                 for file in png_files:

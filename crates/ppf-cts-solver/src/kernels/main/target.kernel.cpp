@@ -96,17 +96,49 @@ template <class Fix>
 [[seam::device_fn]] inline Vec3f
 compute_target_seed(const Vec3f &current,
                         const Vec3f &previous,
+                        const Vec3f &iterate,
                         unsigned fix_index,
                         const FixPair *fix, float dt,
                         float previous_dt, float gravity_x, float gravity_y,
                         float gravity_z, const Vec3f &external,
-                        int inactive_momentum) {
+                        int inactive_momentum, float theta, int commit) {
+    // THE COMMIT MODE. With restitution weight `theta` the step is
+    // `x1 = x0 + h v0 + theta h^2 a`, `v1 = v0 + h a`, so the carried velocity
+    // is not `(x1 - x0) / h`. It is stored where every reader of velocity looks
+    // for it, as the previous position `x1 - h v1`, which works out to
+    // `x0 - (1/theta - 1) (x1 - x0 - h v0)`; `h v0` is the usual
+    // `(x0 - previous) dt / previous_dt`. At `theta = 1` this is `x0`, the
+    // implicit-Euler commit. A pinned vertex keeps `x0`.
+    if (commit != 0) {
+        if (fix_index > 0 || inactive_momentum != 0) {
+            return current;
+        }
+        const float ratio = fmath::div(dt, previous_dt);
+        const float back = fmath::div(1.0f, theta) - 1.0f;
+        Vec3f out;
+        for (unsigned dimension = 0; dimension < 3; ++dimension) {
+            const float carried =
+                static_cast<float>(current[dimension] - previous[dimension]) *
+                ratio;
+            const float accelerated =
+                static_cast<float>(iterate[dimension] - current[dimension]) -
+                carried;
+            out[dimension] = current[dimension] - back * accelerated;
+        }
+        return out;
+    }
+    // The acceleration enters the seed scaled by `theta`: the solve weighs
+    // inertia by `1 / (theta h^2)`, which turns `theta h^2 g` back into `m g`.
     Vec3f gravity;
-    gravity[0] = gravity_x;
-    gravity[1] = gravity_y;
-    gravity[2] = gravity_z;
+    gravity[0] = theta * gravity_x;
+    gravity[1] = theta * gravity_y;
+    gravity[2] = theta * gravity_z;
+    Vec3f field;
+    for (unsigned dimension = 0; dimension < 3; ++dimension) {
+        field[dimension] = theta * external[dimension];
+    }
     return compute_target<FixPair>(fix_index, current, previous, fix, dt,
-                                       previous_dt, gravity, external,
+                                       previous_dt, gravity, field,
                                        inactive_momentum != 0);
 }
 
@@ -129,10 +161,11 @@ compute_target_seed(const Vec3f &current,
 [[seam::entry(count)]] void compute_target_seed(
     const Vec3f *current,
     const Vec3f *previous,
+    const Vec3f *iterate,
     const unsigned *fix_index,
     const FixPair *fix, float dt,
     float previous_dt, float gravity_x, float gravity_y, float gravity_z,
     const Vec3f *external,
-    int inactive_momentum,
+    int inactive_momentum, const float *theta, int commit,
     Vec3f *target,
     unsigned count);

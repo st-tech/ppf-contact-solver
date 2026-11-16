@@ -3,9 +3,8 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: Apache v2.0
 #
-# Single source of truth for every external download used by warmup.bat,
-# build.bat, make-slim-ffmpeg.bat/.sh, and the Linux/Docker
-# .github/workflows/scripts/make-slim-ffmpeg.sh. Format is plain KEY=VALUE so
+# Single source of truth for every external download used by warmup.bat and
+# build.bat. Format is plain KEY=VALUE so
 # that both cmd (via scripts\load-downloads.bat) and bash (via
 # `set -a; . scripts/downloads.txt; set +a`) can read it without a parser.
 #
@@ -127,12 +126,18 @@ SHA256_GET_PIP=f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424
 # Pinned to a specific gist revision: the raw pointer is mutable, and the
 # 2026-07-11 revision (1fd0e2a4) shipped a NameError in the msi-unpacking
 # loop that silently produced no MSVC toolchain (no setup_x64.bat), which
-# only surfaced two build steps later. ba48b0a3 (2026-04-14) is the last
-# good revision, verified end-to-end (setup_x64.bat produced, cl.exe usable).
-# Verify any new SHA on a Windows host before bumping. That revision accepts
-# --host and --target from x64, x86 and arm64 and names its environment script
+# only surfaced two build steps later. ba48b0a3 (2026-04-14) then stopped
+# working when Microsoft's manifest began spelling the Windows SDK payloads
+# `Installers/<name>.msi` with a forward slash: it matches only
+# `Installers\<name>.msi`, so it downloaded no SDK msi at all and died on an
+# empty `Windows Kits/10/bin` (release run 43424456310, both Windows jobs,
+# 2026-11-13). 49b58850 (2026-09-09) matches either separator and exits with
+# "No cab files found for Windows SDK" rather than continuing without one;
+# its other changes add a Linux path (msiextract) that warmup.bat never takes.
+# Verify any new SHA on a Windows host before bumping. Both revisions accept
+# --host and --target from x64, x86 and arm64 and name the environment script
 # setup_<target>.bat, which is what warmup.bat asks for on ARM64.
-URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/ba48b0a3d9ea05c6caa5e583eda60fa7510da4bc/portable-msvc.py
+URL_PORTABLE_MSVC=https://gist.github.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/49b58850aa5e5c1e65f090d4651ee76607883e11/portable-msvc.py
 FILE_PORTABLE_MSVC=portable-msvc.py
 
 # The compiler and SDK the Windows binary is built with. Pinned here for the
@@ -175,36 +180,9 @@ URL_ROCM_SDK=https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-
 FILE_ROCM_SDK=therock-dist-windows-multiarch-10.0.0.tar.gz
 SHA256_ROCM_SDK=ebe454fe9ad663655177462187a4c86c72fd0537638f6cbea34660ddebf40056
 
-URL_MSYS2=https://github.com/msys2/msys2-installer/releases/download/2024-12-08/msys2-base-x86_64-20241208.sfx.exe
-FILE_MSYS2=msys2-base-x86_64-20241208.sfx.exe
-
-# Cloned rather than fetched as a release tarball. ffmpeg.org is a single
-# self-hosted origin behind no CDN, and when it saturates it stops answering
-# SYN entirely rather than serving slowly: on 2026-08-05 it refused every
-# probe from a us-east-2 CI runner (six attempts, curl exit 28, ~52 s), which
-# is fatal here because check-downloads.bat gates warmup before the first
-# download. github.com/FFmpeg/FFmpeg is the project's own mirror. A tag also
-# resolves to one commit, so the source is pinned by content, which a tarball
-# URL with no checksum beside it is not.
-URL_FFMPEG_GIT=https://github.com/FFmpeg/FFmpeg.git
-FFMPEG_TAG=n7.1
-FFMPEG_VERSION=7.1
-
-# Git repository (cloned, not downloaded as archive)
-URL_X264_GIT=https://code.videolan.org/videolan/x264.git
-# The commit the Linux slim ffmpeg (.github/workflows/scripts/make-slim-ffmpeg.sh)
-# checks out. x264 publishes no release tags, and that ffmpeg is GPL through
-# x264, so a distribution shipping it has to name the exact source it was built
-# from. Taken from the default branch on 2026-09-14; the commit is dated
-# 2025-09-10.
-X264_COMMIT=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
-
-# zlib, linked STATICALLY into the Linux slim ffmpeg so the binary needs no
-# shared libz on the machine it lands on. The hash is the one GitHub publishes
-# for this release asset.
-URL_ZLIB=https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
-FILE_ZLIB=zlib-1.3.2.tar.gz
-SHA256_ZLIB=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+# NO FFMPEG, AND SO NO MSYS2, x264 OR zlib. The distribution ships no ffmpeg: a
+# session's animation export uses one on the user's PATH for frame.mp4 and
+# otherwise writes an animated frame.webp with Pillow.
 
 # FRONTEND PACKAGES BUILT FROM UPSTREAM SOURCE, on an architecture PyPI carries
 # no wheel for. scripts\source-wheel.py fetches each at the COMMIT below, never
