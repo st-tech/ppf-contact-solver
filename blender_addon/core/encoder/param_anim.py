@@ -52,6 +52,19 @@ ANIMATABLE_MATERIAL_KEYS = {
     "strain-limit": {
         "prop": {"SHELL": "strain_limit_percent", "ROD": "strain_limit_percent"},
     },
+    # Rest-shape scale. The solver rebuilds the inverse rest matrices from the
+    # keyed factor every step; a shell's pair rides in the face table, a
+    # solid's uniform factor in a per-tetrahedron schedule. Refused beside a
+    # strain limit or plasticity (see `refuse_shrink_conflicts`).
+    "shrink-x": {
+        "prop": {"SHELL": "shrink_x"},
+    },
+    "shrink-y": {
+        "prop": {"SHELL": "shrink_y"},
+    },
+    "shrink": {
+        "prop": {"SOLID": "shrink"},
+    },
     # The rest reach the hinge, edge and vertex tables too. The solver
     # re-derives those every frame from the animated faces, so they stay in
     # step instead of holding their build-time values.
@@ -202,12 +215,73 @@ def _track_at_frames(sample_frames, values, frames):
     return out
 
 
-# The keys a SOLID can animate. A SOLID's per-frame values reach only its
-# SURFACE triangles, which carry its contact material (the tetrahedra have no
-# contact fields), while its elastic material lives on its tetrahedra, which
+# The keys a SOLID can animate. A SOLID's per-frame material values reach only
+# its SURFACE triangles, which carry its contact material (the tetrahedra have
+# no contact fields), while its elastic material lives on its tetrahedra, which
 # have no per-frame table. So friction and the contact distances animate, and
-# every elastic key is refused rather than shipped to a table nothing reads.
-_SOLID_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset"})
+# so does `shrink`, which has a per-tetrahedron schedule of its own; every other
+# elastic key is refused rather than shipped to a table nothing reads.
+_SOLID_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset", "shrink"})
+
+# The group properties holding a keyframable shrink.
+_SHRINK_PROPS = ("shrink_x", "shrink_y", "shrink")
+
+
+def _keyed(by_path, slot, prop):
+    return f"zozo_contact_solver.object_group_{slot}.{prop}" in by_path
+
+
+def refuse_shrink_conflicts(scene, groups, by_path):
+    """Raise ``ValueError`` when a keyframed shrink is set together with what
+    it cannot coexist with.
+
+    A keyframed shrink rebuilds the rest shape every step. A strain limit is
+    measured against the unshrunk rest shape, so a group keyframing its shrink
+    may not enable one. Plasticity commits its creep into the rest shape, and a
+    pin tracking its captured deformation streams the rest shape too; the
+    solver rebuilds every element's rest shape at once, so either of those on
+    ANY group would be overwritten every step.
+    """
+    from ...models.material_maps import pin_tracks_rest_shape
+
+    shrinking = []
+    for group in groups:
+        slot = _slot_of(scene, group)
+        if slot is None:
+            continue
+        keyed = [p for p in _SHRINK_PROPS if _keyed(by_path, slot, p)]
+        if keyed:
+            shrinking.append((group, keyed[0]))
+    if not shrinking:
+        return
+    for group, prop in shrinking:
+        if group.object_type == "SHELL" and group.enable_strain_limit:
+            raise ValueError(
+                f"group '{group.name}' keyframes '{prop}' and also enables a "
+                "Strain Limit. A strain limit is measured against the unshrunk "
+                "rest shape, so a keyframed shrink and a strain limit cannot be "
+                "set together. Turn off Enable Strain Limit, or remove the "
+                "shrink keyframes."
+            )
+    first, first_prop = shrinking[0]
+    for group in groups:
+        if group.object_type in ("SHELL", "SOLID") and group.enable_plasticity:
+            raise ValueError(
+                f"group '{group.name}' enables Plasticity while group "
+                f"'{first.name}' keyframes '{first_prop}'. Plasticity creeps "
+                "the rest shape, and a keyframed shrink rebuilds every rest "
+                "shape in the scene each step, which would erase that creep, so "
+                "the two cannot be set together. Turn off Plasticity, or remove "
+                "the shrink keyframes."
+            )
+        if any(pin_tracks_rest_shape(group, pin) for pin in group.pin_vertex_groups):
+            raise ValueError(
+                f"group '{group.name}' has a pin tracking its rest shape while "
+                f"group '{first.name}' keyframes '{first_prop}'. Both rewrite "
+                "the rest shape every step, so they cannot be set together. "
+                "Turn off the pin's rest-shape tracking, or remove the shrink "
+                "keyframes."
+            )
 
 
 def encode_param_anim(
@@ -235,6 +309,8 @@ def encode_param_anim(
     if not curves and not map_schedules:
         return [], {}
     by_path = {fc.data_path: fc for fc in curves}
+
+    refuse_shrink_conflicts(scene, groups, by_path)
 
     frames = [start_frame + i for i in range(max(1, int(frame_count)))]
     per_group = {}

@@ -33,7 +33,7 @@
 #                                  0.8 to 0 before it lands rides the payload
 #                                  as a schedule and reaches the solver's
 #                                  per-body table (`param_anim/
-#                                  pdrd-restitution.bin`).
+#                                  body-restitution.bin`).
 #   H_keyframed_zero_stops_it      that ball lands after its value reached 0
 #                                  and stays down, although the value read at
 #                                  the start frame is 0.8: the solver follows
@@ -272,7 +272,7 @@ try:
               {"frame": frame, "rebound_over_drop": control})
     table = None
     if built:
-        path = os.path.join(session_dir(), "bin", "param_anim", "pdrd-restitution.bin")
+        path = os.path.join(session_dir(), "bin", "param_anim", "body-restitution.bin")
         if os.path.isfile(path):
             table = np.fromfile(path, dtype=np.float32)
     dh.record("G_keyframes_reach_solver",

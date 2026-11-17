@@ -246,13 +246,18 @@ class _Probe:
         self._write_event("state_sample", sample)
 
         triple = (phase, server, solver)
+        # The event is written AFTER the lock is released: `_write_event`
+        # takes `self.lock` itself, and it is a plain (non-reentrant) Lock, so
+        # writing it inside this block deadlocked Blender's main thread on the
+        # first phase change. That stayed hidden while every driver held the
+        # main thread for the whole scenario, which kept this sampler (a timer)
+        # from ever running mid-scenario.
+        phase_changed = False
         with self.lock:
             if triple != self.last_phase:
                 self.last_phase = triple
                 self.phase_changed_at = now
-                self._write_event("phase_change", {
-                    "phase": phase, "server": server, "solver": solver,
-                })
+                phase_changed = True
             if progress != self.last_progress:
                 self.last_progress = progress
                 self.last_progress_at = now
@@ -262,6 +267,10 @@ class _Probe:
             phase_dwell = now - self.phase_changed_at
             progress_dwell = now - self.last_progress_at
             frame_dwell = now - self.last_frame_field_at
+        if phase_changed:
+            self._write_event("phase_change", {
+                "phase": phase, "server": server, "solver": solver,
+            })
 
         # Stuck-state budgets.
         budgets = {

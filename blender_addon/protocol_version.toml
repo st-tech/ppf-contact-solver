@@ -79,6 +79,14 @@
 #         intersection is. A frontend that predates the key refuses it as an
 #         unknown parameter at build, so the bump stops a stale server at the
 #         handshake instead.
+#   0.29: keyframed shrink. A SHELL group's "param-anim" may carry `shrink-x`
+#         and `shrink-y`, and a SOLID group's `shrink`; the scene export may
+#         write bin/param_anim/tri-shrink-{x,y}.bin and tet-shrink.bin, and the
+#         solver rebuilds the inverse rest matrices from them every step. A
+#         stale frontend refuses `shrink` on a tetrahedral object and a stale
+#         solver refuses the schedules, so the bump stops it at the handshake.
+#         The keyed PDRD restitution schedule is renamed to
+#         bin/param_anim/body-restitution.bin.
 #   0.20: spatial material maps gain a time axis, a tetrahedral path, and one
 #         unit conversion shared with the values they blend against. A map row
 #         in "material-maps" carries either "weights" ({object UUID: [w per
@@ -228,4 +236,4 @@
 #         on shutdown(SHUT_WR) as the end-of-input signal. Windows tokio did not
 #         deliver that half-close to the server's AsyncRead, so the server hung
 #         in its read loop and connections piled up in FIN_WAIT_2.
-protocol = "0.28"
+protocol = "0.29"

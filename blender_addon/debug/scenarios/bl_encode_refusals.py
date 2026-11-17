@@ -27,6 +27,10 @@
 #   E. plasticity_with_tracked_rest_shape_refused: a SOLID group with
 #      Plasticity on and a pin tracking its captured rest shape is refused
 #      naming the pin, since both rewrite the rest shape.
+#   E2. plasticity_beside_another_groups_tracking_refused: Plasticity on the
+#      Shell group while the Solid's pin tracks its rest shape is refused
+#      too, naming both groups: the capture replaces every element's rest
+#      shape, not only the tracked object's.
 #   F. partial_tracking_pin_refused: Track Rest-Pose Deformation on a pin
 #      that holds only some vertices is refused naming the pin.
 #   G. sand_mixed_grain_radii_refused: a SAND group whose objects were
@@ -201,6 +205,18 @@ try:
         "Everything" in err_e and "Plasticity" in err_e
         and "Track Rest-Pose Deformation" in err_e,
         {"error": err_e[:300]},
+    )
+    # The tracked capture replaces the rest shape of EVERY element, so
+    # plasticity on another group is refused too, naming both groups.
+    shell = group_of(cloth)
+    shell.enable_plasticity = True
+    err_e2 = encode_error()
+    shell.enable_plasticity = False
+    dh.record(
+        "E2_plasticity_beside_another_groups_tracking_refused",
+        "Cloth" in err_e2 and "Solid" in err_e2 and "Everything" in err_e2
+        and "Plasticity" in err_e2,
+        {"error": err_e2[:400]},
     )
     tracked.track_rest_pose_deformation = False
     tracked.has_captured_anim = False

@@ -6,7 +6,7 @@
 use super::cvec::CVec;
 use super::data::{
     Constraint, EdgeParam, FaceParam, HingeParam, IntersectionRecord, Mat2x2f, Mat3x3f,
-    MaterialParamUpdate, RestShapeUpdate, StepResult, Vec3f, VertexParam,
+    MaterialParamUpdate, RestShapeUpdate, StepResult, TetParam, TetProp, Vec3f, VertexParam,
     MAX_INTERSECTION_RECORDS,
 };
 use super::plastic_state::{PlasticKinds, PlasticState};
@@ -203,6 +203,100 @@ fn interp_bend_rest(schedule: &BendRestSchedule, time: f64) -> Vec<f32> {
         .zip(keyframes[hi].1.iter())
         .map(|(&a, &b)| wrap_angle(a + alpha * wrap_angle(b - a)))
         .collect()
+}
+
+/// What rewrites every element's rest shape each step, for the refusals of
+/// what cannot be set beside it.
+#[derive(Clone, Copy)]
+enum RestShapeWriter {
+    /// A keyframed shrink (`builder::ShrinkRest`).
+    Shrink,
+    /// A pin tracking its captured deformation (`rest_vert_schedule`).
+    TrackedCapture,
+}
+
+impl RestShapeWriter {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Shrink => "keyframes a shrink",
+            Self::TrackedCapture => "streams a pin's tracked rest shape",
+        }
+    }
+    fn undo(self) -> &'static str {
+        match self {
+            Self::Shrink => "stop keyframing the shrink",
+            Self::TrackedCapture => "stop tracking the rest shape",
+        }
+    }
+}
+
+/// Plasticity on a tetrahedron beside a writer of every rest shape: the
+/// writer replaces every element's inverse rest matrix each step, which would
+/// erase the creep plasticity commits into it.
+fn check_tet_plasticity(tet_props: &[TetProp], tet_params: &[TetParam], writer: RestShapeWriter) {
+    if let Some(i) = tet_props
+        .iter()
+        .position(|p| tet_params[p.param_index as usize].plasticity > 0.0)
+    {
+        panic!(
+            "tetrahedron {i} has plasticity while the scene {}. Plasticity \
+             creeps the rest shape and the scene rewrites every element's rest \
+             shape each step, which would erase that creep, so the two cannot \
+             be set together in one scene. Set the plasticity to 0 or {}.",
+            writer.describe(),
+            writer.undo()
+        );
+    }
+}
+
+/// Refuse what cannot be set together with a writer of every rest shape, on
+/// the face tables the solve will actually stream: the build-time one and
+/// every material keyframe.
+///
+/// - Plasticity on ANY face: the writer rebuilds every element's rest shape
+///   each step, which would erase the creep plasticity commits into it.
+/// - For a keyframed shrink, a strain limit on a face whose shrink leaves 1:
+///   the strain limiter's bound assumes the rest shape it was authored on, and
+///   the static build already refuses the pair on the same predicate.
+fn check_rest_writer_face_conflicts(
+    static_faces: &[FaceParam],
+    keyframes: &[MaterialKeyframe],
+    writer: RestShapeWriter,
+) {
+    let tables = std::iter::once((None, static_faces))
+        .chain(keyframes.iter().map(|k| (Some(k.time), k.face.as_slice())));
+    for (time, faces) in tables {
+        let when = time.map_or("at build".to_string(), |t| format!("at t = {t} s"));
+        for (i, p) in faces.iter().enumerate() {
+            if matches!(writer, RestShapeWriter::Shrink)
+                && ppf_cts_core::kernels::scene_build::is_shell_shrink_strain_limit_conflict(
+                f64::from(p.shrink_x),
+                f64::from(p.shrink_y),
+                f64::from(p.strainlimit),
+            ) {
+                panic!(
+                    "face parameter {i} {when}: its keyframed shrink (x = {}, y = {}) \
+                     is set together with a strain limit ({}). A strain limit is \
+                     measured against the unshrunk rest shape, so the two cannot be \
+                     combined. Turn the strain limit off or stop keyframing the \
+                     shrink.",
+                    p.shrink_x, p.shrink_y, p.strainlimit
+                );
+            }
+            if p.plasticity > 0.0 {
+                panic!(
+                    "face parameter {i} {when} has plasticity ({}) while the scene \
+                     {}. Plasticity creeps the rest shape and the scene rewrites \
+                     every element's rest shape each step, which would erase that \
+                     creep, so the two cannot be set together in one scene. Set \
+                     the plasticity to 0 or {}.",
+                    p.plasticity,
+                    writer.describe(),
+                    writer.undo()
+                );
+            }
+        }
+    }
 }
 
 /// One precomputed material keyframe: `(time, face_params)`.
@@ -1303,6 +1397,15 @@ impl Backend {
         let mut material_keyframes: Option<Vec<MaterialKeyframe>> = None;
         let rest_shape_keyframes: Vec<RestShapeKeyframe> = match scene.rest_shape_schedule() {
             Some((times, frames)) => {
+                // The streamed capture replaces EVERY element's inverse rest
+                // matrix, not only the tracked object's, so plasticity on any
+                // tetrahedron would be erased; the faces are checked once the
+                // material keyframes exist (`check_rest_writer_face_conflicts`).
+                check_tet_plasticity(
+                    dataset.prop.tet.as_slice(),
+                    dataset.param_arrays.tet.as_slice(),
+                    RestShapeWriter::TrackedCapture,
+                );
                 let face_props = dataset.prop.face.as_slice();
                 let tet_props = dataset.prop.tet.as_slice();
                 let face_params = dataset.param_arrays.face.as_slice();
@@ -1332,6 +1435,29 @@ impl Backend {
             }
             None => Vec::new(),
         };
+        // A keyframed shrink rebuilds the inverse rest matrices every step from
+        // that step's factors (see `builder::ShrinkRest`). It replaces every
+        // element's inverse rest matrix, which is why the two other writers of
+        // those matrices are refused beside it: a pin tracking its captured
+        // deformation streams them too, and plasticity commits its creep into
+        // them, so either would be overwritten every step.
+        let shrink_rest: Option<super::builder::ShrinkRest> =
+            scene.has_shrink_animation().then(|| {
+                assert!(
+                    !scene.has_rest_shape_schedule(),
+                    "a keyframed shrink cannot be combined with a pin that tracks \
+                     its captured deformation as the rest shape: both rewrite the \
+                     rest shape every step. Stop keyframing the shrink or stop \
+                     tracking the rest shape."
+                );
+                check_tet_plasticity(
+                    dataset.prop.tet.as_slice(),
+                    dataset.param_arrays.tet.as_slice(),
+                    RestShapeWriter::Shrink,
+                );
+                let rest_v = self.mesh.rest_vertex.as_ref().unwrap_or(&self.mesh.vertex);
+                super::builder::ShrinkRest::new(rest_v, &self.mesh)
+            });
         // An animated bending rest shape (a shape-key mix that changes over
         // time): each keyframe's hinge rest angles, measured with the exact
         // build-time formula, for the hinges whose shared edge the bending
@@ -1491,6 +1617,20 @@ impl Backend {
                 } else {
                     Vec::new()
                 });
+                // A writer of every rest shape refuses what it would erase or
+                // invalidate, on the face tables the solve will stream.
+                for (active, writer) in [
+                    (shrink_rest.is_some(), RestShapeWriter::Shrink),
+                    (!rest_shape_keyframes.is_empty(), RestShapeWriter::TrackedCapture),
+                ] {
+                    if active {
+                        check_rest_writer_face_conflicts(
+                            dataset.param_arrays.face.as_slice(),
+                            material_keyframes.as_deref().unwrap_or(&[]),
+                            writer,
+                        );
+                    }
+                }
             }
 
             // Interpolate dynamic params (including a keyframed dt) for this
@@ -1546,6 +1686,7 @@ impl Backend {
             // the same reason as the rest shape: the energy kernels read the
             // param arrays fresh each Newton iteration, so overwriting them
             // here drives the material through the step.
+            let mut face_now: Option<Vec<FaceParam>> = None;
             if let Some(keyframes) = material_keyframes.as_ref() {
                 if !keyframes.is_empty() {
                     let (face, vertex, edge, hinge) =
@@ -1557,7 +1698,41 @@ impl Backend {
                         hinge: CVec::from(&hinge[..]),
                     };
                     unsafe { update_material_params(&update) };
+                    face_now = Some(face);
                 }
+            }
+            // A keyframed shrink: this step's inverse rest matrices, from the
+            // face table just streamed (a shell's shrink-x / shrink-y) and the
+            // per-tetrahedron schedule (a solid's shrink). An element that
+            // keys neither keeps its build-time factor, so its matrix is
+            // rebuilt to the same value it already holds.
+            if let Some(shrink_rest) = shrink_rest.as_ref() {
+                let face_props = dataset.prop.face.as_slice();
+                let faces = face_now
+                    .as_deref()
+                    .unwrap_or(dataset.param_arrays.face.as_slice());
+                let tet_props = dataset.prop.tet.as_slice();
+                let tet_params = dataset.param_arrays.tet.as_slice();
+                let tet_now = scene.tet_shrink_at(target_time);
+                let (inv2, inv3) = shrink_rest.inv_rest(
+                    &|i| {
+                        let p = &faces[face_props[i].param_index as usize];
+                        (p.shrink_x, p.shrink_y)
+                    },
+                    &|i| match tet_now.as_ref() {
+                        Some(values) => values[i],
+                        None => tet_params[tet_props[i].param_index as usize].shrink,
+                    },
+                );
+                // Empty exclusion masks leave `rest_excluded` as the build
+                // set it: a shrink scales a sound element, it never folds one.
+                let update = RestShapeUpdate {
+                    inv_rest2x2: CVec::from(&inv2[..]),
+                    inv_rest3x3: CVec::from(&inv3[..]),
+                    exclude_face: CVec::from(&[] as &[u8]),
+                    exclude_tet: CVec::from(&[] as &[u8]),
+                };
+                unsafe { update_rest_shape(&update) };
             }
             // A keyframed PDRD restitution, one value per body, sampled where
             // the material schedules are.

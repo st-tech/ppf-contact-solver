@@ -126,18 +126,22 @@ def pin_tracks_rest_shape(group, pin_item) -> bool:
     )
 
 
-def rest_shape_plasticity_conflict(group):
-    """The pin whose tracked rest shape collides with `group`'s plasticity, or None.
+def rest_shape_plasticity_conflict(group, groups=None):
+    """`(owner, pin)` for a tracked rest shape that collides with `group`'s
+    plasticity, or None.
 
     Plasticity creeps the rest shape each step and a tracked capture replaces
-    it each frame, so the two cannot both hold it: the solver overwrites the
-    rest shape wholesale on the assumption the frontend never ships both.
+    it each frame. The solver replaces the rest shape of EVERY element at once
+    when it streams a capture, not only the tracked object's, so a tracking pin
+    on any group erases the creep of every plastic group in the scene. `groups`
+    is the scene's groups; without it only `group`'s own pins are searched.
     """
     if not getattr(group, "enable_plasticity", False):
         return None
-    for pin_item in group.pin_vertex_groups:
-        if pin_tracks_rest_shape(group, pin_item):
-            return pin_item
+    for owner in (groups if groups is not None else [group]):
+        for pin_item in owner.pin_vertex_groups:
+            if pin_tracks_rest_shape(owner, pin_item):
+                return owner, pin_item
     return None
 
 

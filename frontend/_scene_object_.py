@@ -36,10 +36,12 @@ from ._scene_transform_ import (
 EPS = 1e-3
 
 # The parameters a tetrahedral object can animate with `set_param_anim`. Its
-# animated values reach only its surface triangles, which carry its contact
-# material; its elastic material lives on its tetrahedra, which have no
-# per-frame table, so an elastic key would be written where nothing reads it.
-_TET_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset"})
+# animated contact values reach its surface triangles, which carry its contact
+# material, and `shrink` has a per-tetrahedron schedule of its own, from which
+# the solver rebuilds the rest shape every step. Its other elastic material
+# lives on its tetrahedra, which have no per-frame table, so such a key would
+# be written where nothing reads it.
+_TET_ANIMATED_KEYS = frozenset({"friction", "contact-gap", "contact-offset", "shrink"})
 
 
 def _interp_samples(samples: list, times: list, time: float):
@@ -389,8 +391,9 @@ class Object:
         Raises:
             KeyError: If ``key`` is not a parameter of this object.
             ValueError: If ``values`` is empty, or this is a tetrahedral
-                object and ``key`` is not ``friction``, ``contact-gap`` or
-                ``contact-offset``, the only keys its surface carries.
+                object and ``key`` is not ``friction``, ``contact-gap``,
+                ``contact-offset`` or ``shrink``, or a shell and ``key`` is the
+                solid-only ``shrink``.
         """
         if key not in self._param.key_list():
             raise KeyError(
@@ -402,8 +405,18 @@ class Object:
                 f"'{key}' cannot be animated on a tetrahedral object: its "
                 "elastic material lives on its tetrahedra, which carry no "
                 "per-frame table. Only "
-                f"{', '.join(sorted(_TET_ANIMATED_KEYS))}, which it keeps on "
-                "its surface triangles, animate."
+                f"{', '.join(sorted(_TET_ANIMATED_KEYS))} animate."
+            )
+        if key == "shrink" and self.obj_type != "tet":
+            raise ValueError(
+                "'shrink' is a solid's uniform shrink and has no effect on a "
+                f"'{self.obj_type}' object; a shell keys 'shrink-x' and "
+                "'shrink-y' instead."
+            )
+        if key in ("shrink-x", "shrink-y") and self.obj_type != "tri":
+            raise ValueError(
+                f"'{key}' is a shell's per-axis shrink and has no effect on a "
+                f"'{self.obj_type}' object."
             )
         if not values:
             raise ValueError(f"Animated parameter '{key}' needs at least one value")

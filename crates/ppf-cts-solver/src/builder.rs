@@ -384,6 +384,156 @@ pub(crate) fn hinge_rest_angle(hinge: [usize; 4], rest_v: &Matrix3xX<f32>) -> f3
     signed_dihedral_angle(&v0, &v1, &v2, &v3)
 }
 
+/// One shell face's rest tangent matrix BEFORE shrink, and whether the
+/// shrink applies to it.
+///
+/// The rest pose comes from the 3D geometry projected into the tangent plane.
+/// When the face has a UV direction, the matrix is rotated to align with the
+/// UV first edge, which preserves UV orientation for the anisotropic terms
+/// while keeping F = I at rest; the per-axis shrink is read in that frame, so
+/// it applies only then. A face with no UV direction has no axis to shrink
+/// along and keeps its plain tangent matrix.
+pub(crate) fn shell_rest_frame(
+    rest_v: &Matrix3xX<f32>,
+    mesh: &MeshSet,
+    i: usize,
+) -> (Matrix2<f32>, bool) {
+    let f = mesh.mesh.mesh.face.column(i);
+    let (x0, x1, x2) = (
+        rest_v.column(f[0]),
+        rest_v.column(f[1]),
+        rest_v.column(f[2]),
+    );
+    let dx = Matrix3x2::<f32>::from_columns(&[
+        (x1 - x0).map(f32::from),
+        (x2 - x0).map(f32::from),
+    ]);
+    let d_mat = shell_rest_tangent_matrix(&dx);
+    if let Some(uv) = mesh.uv.as_ref() {
+        let uv_e0 = (uv[i].column(1) - uv[i].column(0)).map(f32::from);
+        let lu0 = uv_e0.norm();
+        if lu0 > 0.0 {
+            let uv_dir = uv_e0 / lu0;
+            // Rotation from (1,0) to uv_dir
+            let rot = Matrix2::<f32>::new(uv_dir[0], -uv_dir[1], uv_dir[1], uv_dir[0]);
+            return (rot * d_mat, true);
+        }
+    }
+    (d_mat, false)
+}
+
+/// The rest tangent matrix `shell_rest_frame` returned, with the per-axis
+/// shrink applied where the face has a UV frame to apply it in.
+fn shrunk_shell_rest(frame: (Matrix2<f32>, bool), shrink_x: f32, shrink_y: f32) -> Matrix2<f32> {
+    let (d_mat, shrinkable) = frame;
+    if shrinkable {
+        Matrix2::<f32>::new(shrink_x, 0.0, 0.0, shrink_y) * d_mat
+    } else {
+        d_mat
+    }
+}
+
+/// The inverse rest matrices of a scene whose shrink is keyframed, rebuilt
+/// every step from that step's shrink factors.
+///
+/// Shrink scales the rest shape, which the elastic kernels read only through
+/// `inv_rest2x2` / `inv_rest3x3`, so animating it means replacing those. The
+/// geometry part of each element never changes, so it is taken once here and
+/// each step only applies the factors. Rebuilding from the factors, rather
+/// than interpolating precomputed inverses between keyframes, keeps the rest
+/// shape linear in the factor the artist keyed: an inverse is linear in
+/// `1 / shrink`, not in `shrink`.
+///
+/// A shell face goes through the exact build-time formula
+/// (`shrunk_shell_rest` then `invert_rest_or_panic2`), so a step whose factors
+/// equal the build-time ones reproduces the build-time matrix exactly, and a
+/// per-axis ratio extreme enough to make the face unusable is refused naming
+/// the face. A tetrahedron's shrink is uniform, so its inverse is the unshrunk
+/// inverse divided by the factor, which leaves its conditioning unchanged.
+pub(crate) struct ShrinkRest {
+    face_frame: Vec<(Matrix2<f32>, bool)>,
+    face_vertices: Vec<[usize; 3]>,
+    tet_inv: Vec<Matrix3<f32>>,
+}
+
+impl ShrinkRest {
+    pub(crate) fn new(rest_v: &Matrix3xX<f32>, mesh: &MeshSet) -> Self {
+        let n_shell = mesh.mesh.mesh.shell_face_count;
+        let face_frame = (0..n_shell)
+            .into_par_iter()
+            .map(|i| shell_rest_frame(rest_v, mesh, i))
+            .collect();
+        let face_vertices = (0..n_shell)
+            .map(|i| {
+                let f = mesh.mesh.mesh.face.column(i);
+                [f[0], f[1], f[2]]
+            })
+            .collect();
+        let tet_columns: Vec<_> = mesh.mesh.mesh.tet.column_iter().collect();
+        let tet_inv = tet_columns
+            .into_par_iter()
+            .enumerate()
+            .map(|(i, tet)| {
+                let (x0, x1, x2, x3) = (
+                    rest_v.column(tet[0]),
+                    rest_v.column(tet[1]),
+                    rest_v.column(tet[2]),
+                    rest_v.column(tet[3]),
+                );
+                let mat = Matrix3::<f32>::from_columns(&[
+                    (x1 - x0).map(f32::from),
+                    (x2 - x0).map(f32::from),
+                    (x3 - x0).map(f32::from),
+                ]);
+                invert_rest_or_panic3(&mat, i, [tet[0], tet[1], tet[2], tet[3]])
+            })
+            .collect();
+        Self {
+            face_frame,
+            face_vertices,
+            tet_inv,
+        }
+    }
+
+    /// This step's inverse rest matrices. `face_shrink` gives each shell face
+    /// its `(shrink_x, shrink_y)`, and `tet_shrink` each tetrahedron its
+    /// factor.
+    pub(crate) fn inv_rest(
+        &self,
+        face_shrink: &(dyn Fn(usize) -> (f32, f32) + Sync),
+        tet_shrink: &(dyn Fn(usize) -> f32 + Sync),
+    ) -> (Vec<Matrix2<f32>>, Vec<Matrix3<f32>>) {
+        let inv2 = self
+            .face_frame
+            .par_iter()
+            .enumerate()
+            .map(|(i, &frame)| {
+                let (sx, sy) = face_shrink(i);
+                assert!(
+                    sx > 0.0 && sy > 0.0,
+                    "shell face {i}: a keyframed shrink must stay positive, got \
+                     shrink-x {sx}, shrink-y {sy}"
+                );
+                invert_rest_or_panic2(&shrunk_shell_rest(frame, sx, sy), i, self.face_vertices[i])
+            })
+            .collect();
+        let inv3 = self
+            .tet_inv
+            .par_iter()
+            .enumerate()
+            .map(|(i, inv)| {
+                let s = tet_shrink(i);
+                assert!(
+                    s > 0.0,
+                    "tetrahedron {i}: a keyframed shrink must stay positive, got {s}"
+                );
+                *inv / s
+            })
+            .collect();
+        (inv2, inv3)
+    }
+}
+
 pub(crate) fn compute_inv_rest(
     rest_v: &Matrix3xX<f32>,
     mesh: &MeshSet,
@@ -393,47 +543,21 @@ pub(crate) fn compute_inv_rest(
     tet_params: &[TetParam],
     exclude_singular: bool,
 ) -> (Vec<Matrix2<f32>>, Vec<Matrix3<f32>>, Vec<u8>, Vec<u8>) {
-    let uv = &mesh.uv;
     let (inv_rest2x2, exclude_face): (Vec<Matrix2<f32>>, Vec<u8>) =
         (0..mesh.mesh.mesh.shell_face_count)
             .into_par_iter()
             .map(|i| {
                 let f = mesh.mesh.mesh.face.column(i);
-                // Compute rest-pose from 3D geometry projected into tangent plane
-                let (x0, x1, x2) = (
-                    rest_v.column(f[0]),
-                    rest_v.column(f[1]),
-                    rest_v.column(f[2]),
+                let face_param = &face_params[face_props[i].param_index as usize];
+                debug_assert!(
+                    face_param.shrink_x > 0.0 && face_param.shrink_y > 0.0,
+                    "FaceParam::shrink_x/shrink_y uninitialized"
                 );
-                let dx = Matrix3x2::<f32>::from_columns(&[
-                    (x1 - x0).map(f32::from),
-                    (x2 - x0).map(f32::from),
-                ]);
-                let d_mat = shell_rest_tangent_matrix(&dx);
-                // When UV data exists, rotate d_mat to align with the UV first-edge
-                // direction and apply shrink. This preserves UV orientation for
-                // Baraff-Witkin anisotropy while keeping F ≈ I at rest.
-                let d_mat = if let Some(uv) = uv.as_ref() {
-                    let uv_e0 = (uv[i].column(1) - uv[i].column(0)).map(f32::from);
-                    let lu0 = uv_e0.norm();
-                    if lu0 > 0.0 {
-                        let uv_dir = uv_e0 / lu0;
-                        // Rotation from (1,0) to uv_dir
-                        let rot = Matrix2::<f32>::new(uv_dir[0], -uv_dir[1], uv_dir[1], uv_dir[0]);
-                        let face_param = &face_params[face_props[i].param_index as usize];
-                        debug_assert!(
-                            face_param.shrink_x > 0.0 && face_param.shrink_y > 0.0,
-                            "FaceParam::shrink_x/shrink_y uninitialized"
-                        );
-                        let shrink =
-                            Matrix2::<f32>::new(face_param.shrink_x, 0.0, 0.0, face_param.shrink_y);
-                        shrink * rot * d_mat
-                    } else {
-                        d_mat
-                    }
-                } else {
-                    d_mat
-                };
+                let d_mat = shrunk_shell_rest(
+                    shell_rest_frame(rest_v, mesh, i),
+                    face_param.shrink_x,
+                    face_param.shrink_y,
+                );
                 if exclude_singular {
                     let (inv, ex) = invert_or_exclude2(&d_mat);
                     (inv, ex as u8)

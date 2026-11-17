@@ -1055,8 +1055,12 @@ class ObjectGroup(PropertyGroup):
         min=0.1,
         soft_max=2.0,
         precision=2,
-        description="Scale factor along the UV X direction; <1 shrinks, >1 extends",
-        options=NOT_ANIMATABLE,
+        description=(
+            "Scale factor along the UV X direction; <1 shrinks, >1 extends. "
+            "Keyframe it to shrink gradually over the solve. A keyframed shrink "
+            "cannot be combined with a strain limit, nor with plasticity "
+            "anywhere in the scene"
+        ),
     )  # pyright: ignore
     shrink_y: FloatProperty(
         name="Shrink Y",
@@ -1064,8 +1068,12 @@ class ObjectGroup(PropertyGroup):
         min=0.1,
         soft_max=2.0,
         precision=2,
-        description="Scale factor along the UV Y direction; <1 shrinks, >1 extends",
-        options=NOT_ANIMATABLE,
+        description=(
+            "Scale factor along the UV Y direction; <1 shrinks, >1 extends. "
+            "Keyframe it to shrink gradually over the solve. A keyframed shrink "
+            "cannot be combined with a strain limit, nor with plasticity "
+            "anywhere in the scene"
+        ),
     )  # pyright: ignore
     shrink: FloatProperty(
         name="Shrink",
@@ -1073,8 +1081,11 @@ class ObjectGroup(PropertyGroup):
         min=0.1,
         soft_max=2.0,
         precision=2,
-        description="Uniform scale factor for solid material; <1 shrinks, >1 extends",
-        options=NOT_ANIMATABLE,
+        description=(
+            "Uniform scale factor for solid material; <1 shrinks, >1 extends. "
+            "Keyframe it to shrink gradually over the solve. A keyframed shrink "
+            "cannot be combined with plasticity anywhere in the scene"
+        ),
     )  # pyright: ignore
     length_factor: FloatProperty(
         name="Shrink",

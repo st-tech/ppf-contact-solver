@@ -751,16 +751,22 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             group, state.world_scaling,
         )
 
-        # A tracked captured deformation streams the rest shape every frame and
-        # plasticity creeps it every step, so a group cannot carry both:
-        # refused here by name rather than one of them dropped in silence.
-        conflict = rest_shape_plasticity_conflict(group)
+        # A tracked captured deformation streams the rest shape of every
+        # element every frame and plasticity creeps it every step, so no
+        # plastic group may sit beside a tracking pin, on its own group or on
+        # another: refused here by name rather than one of them dropped in
+        # silence.
+        conflict = rest_shape_plasticity_conflict(group, groups)
         if conflict is not None:
+            owner, pin = conflict
+            where = ("its" if owner is group
+                     else f"group '{owner.name}''s")
             raise ValueError(
-                f"Group '{group.name}': pin '{conflict.name}' tracks its "
-                "captured rest shape (Track Rest-Pose Deformation) and the "
-                "group has Plasticity on. Both rewrite the rest shape, so turn "
-                "one of them off."
+                f"Group '{group.name}' has Plasticity on, and pin "
+                f"'{pin.name}' tracks {where} captured rest shape (Track "
+                "Rest-Pose Deformation). The tracked rest shape replaces the "
+                "rest shape of every object each frame, which would erase the "
+                "plastic creep, so turn one of them off."
             )
 
         params = {

@@ -148,6 +148,9 @@ pub struct Scene {
     /// triangle, matching the static `tri_param` layout exactly so both go
     /// through the same assembly.
     tri_param_anim: Vec<(String, Vec<Vec<f32>>)>,
+    /// Keyframed solid shrink, `param_anim_times.len()` frames of one factor
+    /// per tetrahedron. Empty when no solid keyframes its shrink.
+    tet_shrink_anim: Vec<Vec<f32>>,
     /// Keyframed PDRD restitution, `param_anim_times.len()` frames of one
     /// value per body. Empty when no body's restitution is keyframed.
     pdrd_restitution_anim: Vec<Vec<f32>>,
@@ -688,11 +691,17 @@ where
 /// table by `rederive_animated_tables`, so they stay in step rather than
 /// holding their build-time values.
 ///
+/// `shrink-x` and `shrink-y` are face-only too, and also scale the rest shape:
+/// the face table carries them for the strain limiter and the stretch
+/// indicator, and the backend rebuilds `inv_rest2x2` from the interpolated
+/// pair every step (`builder::ShrinkRest`). A solid's `shrink` has no face
+/// table to ride in and is scheduled per tetrahedron instead
+/// (`ANIMATABLE_TET_KEYS`).
+///
 /// What is still absent, and why:
 ///
-/// - `shrink-x`, `shrink-y`, `length-factor` change the REST SHAPE, which is
-///   `inv_rest` and not a material table at all. They belong to the streamed
-///   rest-shape path.
+/// - `length-factor` sets a rod's rest LENGTH, which is an edge prop fixed at
+///   build with no per-step upload.
 /// - `model` and `bend-rest-from-geometry` are structural: one selects the
 ///   energy, the other how a rest angle is initialized, and neither is a value
 ///   to blend between two keyframes.
@@ -706,6 +715,8 @@ const ANIMATABLE_TRI_KEYS: &[&str] = &[
     "poiss-rat",
     "deformation-damping",
     "strain-limit",
+    "shrink-x",
+    "shrink-y",
     // Also re-derived into the hinge, edge and vertex tables.
     "bend",
     "bend-warp",
@@ -719,6 +730,12 @@ const ANIMATABLE_TRI_KEYS: &[&str] = &[
     "bend-plasticity",
     "bend-plasticity-threshold",
 ];
+
+/// Material keys a `tet-` schedule may animate, one value per tetrahedron per
+/// keyframe. Only the rest-shape scale: the tet param table itself is not
+/// streamed, and `shrink` is read nowhere but in `inv_rest3x3`, which the
+/// backend rebuilds from this schedule every step.
+const ANIMATABLE_TET_KEYS: &[&str] = &["shrink"];
 
 /// Linearly interpolate a per-element keyframe schedule to `time`.
 ///
@@ -750,15 +767,21 @@ fn interp_frames(times: &[f64], frames: &[Vec<f32>], time: f64) -> Vec<f32> {
 
 /// Load the animated material schedules from `bin/param_anim/`.
 ///
-/// Returns `(times, tri_keys)`, both empty when the directory is absent, which
-/// is every scene that animates no material.
+/// Returns `(times, tri_keys, tet_keys)`, all empty when the directory is
+/// absent, which is every scene that animates no material.
+#[allow(clippy::type_complexity)]
 fn read_param_anim(
     session_path: &str,
     n_tri: usize,
-) -> (Vec<f64>, Vec<(String, Vec<Vec<f32>>)>) {
+    n_tet: usize,
+) -> (
+    Vec<f64>,
+    Vec<(String, Vec<Vec<f32>>)>,
+    Vec<(String, Vec<Vec<f32>>)>,
+) {
     let dir = format!("{session_path}/bin/param_anim");
     if !std::path::Path::new(&dir).exists() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
     let times_path = format!("{dir}/times.bin");
     let times: Vec<f64> = read_vec(&times_path)
@@ -773,6 +796,7 @@ fn read_param_anim(
     );
 
     let mut tri_keys = Vec::new();
+    let mut tet_keys = Vec::new();
     for entry in fs::read_dir(&dir).expect("Failed to read param_anim directory") {
         let path = entry.expect("Failed to read entry").path();
         let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -784,10 +808,40 @@ fn read_param_anim(
         {
             continue;
         }
+        if let Some(key) = file_name.strip_prefix("tet-") {
+            let key = key[..key.len() - 4].to_string();
+            assert!(
+                ANIMATABLE_TET_KEYS.contains(&key.as_str()),
+                "{}: '{key}' is not an animatable tetrahedron key. A solid's \
+                 elastic material has no per-frame table; only {:?} is \
+                 scheduled per tetrahedron.",
+                path.display(),
+                ANIMATABLE_TET_KEYS,
+            );
+            let flat: Vec<f32> = read_vec(&path.to_string_lossy())
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert_eq!(
+                flat.len(),
+                times.len() * n_tet,
+                "{}: expected {} values ({} keyframes x {n_tet} tetrahedra), got {}",
+                path.display(),
+                times.len() * n_tet,
+                times.len(),
+                flat.len(),
+            );
+            assert!(
+                flat.iter().all(|s| s.is_finite() && *s > 0.0),
+                "{}: every keyframed shrink factor must be positive",
+                path.display()
+            );
+            let frames = flat.chunks_exact(n_tet).map(|c| c.to_vec()).collect();
+            tet_keys.push((key, frames));
+            continue;
+        }
         let Some(key) = file_name.strip_prefix("tri-") else {
             panic!(
-                "{}: only 'tri-' material schedules are supported; a schedule \
-                 for another element kind has no reader yet",
+                "{}: only 'tri-' and 'tet-' material schedules are supported; \
+                 a schedule for another element kind has no reader yet",
                 path.display()
             );
         };
@@ -817,12 +871,12 @@ fn read_param_anim(
         let frames = flat.chunks_exact(n_tri).map(|c| c.to_vec()).collect();
         tri_keys.push((key, frames));
     }
-    (times, tri_keys)
+    (times, tri_keys, tet_keys)
 }
 
 /// The per-body restitution schedule beside the material tables: one value
 /// per PDRD body (in `pdrd_body.bin` order) per keyframe of `times.bin`.
-const PDRD_RESTITUTION_ANIM_FILE: &str = "pdrd-restitution.bin";
+const PDRD_RESTITUTION_ANIM_FILE: &str = "body-restitution.bin";
 
 /// Load the keyframed PDRD restitution, `times.len()` frames of one value per
 /// body, or nothing when no body's restitution is keyframed.
@@ -1970,7 +2024,13 @@ impl Scene {
         // keyframe. Reusing the static layout is deliberate: the per-frame
         // values then go through the identical assembly, so an animated
         // material cannot mean something different from a static one.
-        let (param_anim_times, tri_param_anim) = read_param_anim(&args.path, n_tri);
+        let (param_anim_times, tri_param_anim, tet_param_anim) =
+            read_param_anim(&args.path, n_tri, n_tet);
+        let tet_shrink_anim = tet_param_anim
+            .into_iter()
+            .find(|(key, _)| key == "shrink")
+            .map(|(_, frames)| frames)
+            .unwrap_or_default();
         let mut rod_param = Vec::new();
         let mut tri_param = Vec::new();
         let mut tet_param = Vec::new();
@@ -2220,6 +2280,7 @@ impl Scene {
             tri_param,
             param_anim_times,
             tri_param_anim,
+            tet_shrink_anim,
             tet_param,
             static_param,
             sand_param,
@@ -2463,6 +2524,29 @@ impl Scene {
     pub fn pdrd_restitution_at(&self, time: f64) -> Option<Vec<f32>> {
         (!self.pdrd_restitution_anim.is_empty())
             .then(|| interp_frames(&self.param_anim_times, &self.pdrd_restitution_anim, time))
+    }
+
+    /// True when a shell's `shrink-x` / `shrink-y` or a solid's `shrink` is
+    /// keyframed, so the rest shape has to be rebuilt every step.
+    pub fn has_shrink_animation(&self) -> bool {
+        !self.tet_shrink_anim.is_empty()
+            || self
+                .tri_param_anim
+                .iter()
+                .any(|(key, _)| key == "shrink-x" || key == "shrink-y")
+    }
+
+    /// The keyframed solid shrink at `time`, one factor per tetrahedron, or
+    /// `None` when no solid keyframes its shrink.
+    pub fn tet_shrink_at(&self, time: f64) -> Option<Vec<f32>> {
+        (!self.tet_shrink_anim.is_empty())
+            .then(|| interp_frames(&self.param_anim_times, &self.tet_shrink_anim, time))
+    }
+
+    /// Whether a streamed rest-shape schedule (a pin tracking its captured
+    /// deformation) is present.
+    pub fn has_rest_shape_schedule(&self) -> bool {
+        self.rest_vert_schedule.is_some()
     }
 
     /// True when this scene animates at least one material parameter.

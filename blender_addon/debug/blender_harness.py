@@ -541,19 +541,57 @@ def _start():
             "RESULT_PATH": RESULT_PATH,
         }}
         exec(driver_src, exec_globals)
-        result["scenario_done"] = True
 
-        if PROBE_DIR:
-            try:
-                probe = __import__(pkg + ".debug.probe", fromlist=["stop"])
-                summary = probe.stop()
-                result["probe_summary"] = summary
-            except Exception as exc:
-                result["errors"].append(f"probe.stop: {{exc}}")
+        # A driver that has to be answered FROM OUTSIDE Blender (another
+        # process calling one of the add-on's servers) cannot finish inside
+        # this tick: those servers hand each request to a main-thread timer,
+        # and no timer fires while the driver holds the main thread. Such a
+        # driver defines DEFERRED, a callable the bootstrap runs as a timer
+        # until it returns None (any other return is the seconds to the next
+        # call), and only then is the result written. Without an event loop
+        # (`--background`) no timer fires at all, so the scenario fails by
+        # name there rather than hanging.
+        deferred = exec_globals.get("DEFERRED")
+        if deferred is not None:
+            if bpy.app.background:
+                result["errors"].append(
+                    "the driver defines DEFERRED, which needs Blender's event "
+                    "loop; it cannot run under PPF_BLENDER_HEADLESS=1")
+            else:
+                def _deferred_tick():
+                    try:
+                        again = deferred()
+                    except Exception as exc:
+                        result["errors"].append(
+                            f"DEFERRED: {{type(exc).__name__}}: {{exc}}")
+                        result["errors"].append(traceback.format_exc())
+                        again = None
+                    if again is not None:
+                        return float(again)
+                    result["scenario_done"] = True
+                    _finish(result, pkg)
+                    return None
+
+                bpy.app.timers.register(_deferred_tick, first_interval=0.1)
+                return None
+        result["scenario_done"] = True
 
     except Exception as exc:
         result["errors"].append(f"{{type(exc).__name__}}: {{exc}}")
         result["errors"].append(traceback.format_exc())
+
+    _finish(result, locals().get("pkg"))
+    return None
+
+
+def _finish(result, pkg):
+    if PROBE_DIR and pkg:
+        try:
+            probe = __import__(pkg + ".debug.probe", fromlist=["stop"])
+            summary = probe.stop()
+            result["probe_summary"] = summary
+        except Exception as exc:
+            result["errors"].append(f"probe.stop: {{exc}}")
 
     _write_result(result)
 

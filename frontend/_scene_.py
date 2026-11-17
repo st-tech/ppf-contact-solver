@@ -69,6 +69,15 @@ from ._utils_ import Utils
 # they reach the solver in a per-body schedule, not the per-triangle tables.
 _BODY_ANIM_KEYS = frozenset({"restitution"})
 
+# The shrink keys. A shell keys `shrink-x` / `shrink-y` on its triangles; a
+# solid keys the uniform `shrink` per tetrahedron, which never reaches the
+# triangle tables. Either way the solver rebuilds the rest shape from the
+# keyed factor every step.
+_SHRINK_ANIM_KEYS = frozenset({"shrink", "shrink-x", "shrink-y"})
+
+# Animated keys that never go to the per-triangle tables.
+_NON_TRI_ANIM_KEYS = _BODY_ANIM_KEYS | {"shrink"}
+
 # Aggregate rigid-mode lock modes, mirroring the solver's
 # `TranslationLockMode` / `RotationLockMode` in
 # `crates/ppf-cts-solver/src/kernels/data_records.hpp` and its Rust twin in
@@ -316,6 +325,7 @@ class FixedScene:
         rest_vert_anim: Optional[np.ndarray] = None,
         rest_vert_times: Optional[np.ndarray] = None,
         tri_param_anim: Optional[dict[str, list[list[float]]]] = None,
+        tet_param_anim: Optional[dict[str, list[list[float]]]] = None,
         param_anim_times: Optional[list[float]] = None,
         bend_rest_vert: Optional[np.ndarray] = None,
         bend_rest_vert_mask: Optional[np.ndarray] = None,
@@ -418,6 +428,8 @@ class FixedScene:
         # no animated material, which writes no bin/param_anim directory and
         # leaves the solver on its build-time tables.
         self._tri_param_anim = tri_param_anim or {}
+        # The same per tetrahedron; only a solid's `shrink` is scheduled here.
+        self._tet_param_anim = tet_param_anim or {}
         self._param_anim_times = param_anim_times or []
         self._tet_param = tet_param
         # Scalar SAND (faceless point cloud) params. None for a scene with no
@@ -1541,7 +1553,11 @@ class FixedScene:
         # can tell "this scene animates nothing" from "this key is missing".
         # Layout matches the static files exactly, repeated once per keyframe,
         # so both go through the same assembly on the far side.
-        if self._tri_param_anim or self._pdrd_restitution_anim:
+        if (
+            self._tri_param_anim
+            or self._tet_param_anim
+            or self._pdrd_restitution_anim
+        ):
             assert self._param_anim_times, (
                 "an animated material schedule needs param_anim_times"
             )
@@ -1560,12 +1576,21 @@ class FixedScene:
                     [np.asarray(f, dtype=np.float32) for f in frames]
                 )
                 flat.tofile(os.path.join(anim_path, f"tri-{key}.bin"))
+            for key, frames in self._tet_param_anim.items():
+                assert len(frames) == n_frames, (
+                    f"animated 'tet-{key}' has {len(frames)} frames but "
+                    f"param_anim_times has {n_frames}"
+                )
+                flat = np.concatenate(
+                    [np.asarray(f, dtype=np.float32) for f in frames]
+                )
+                flat.tofile(os.path.join(anim_path, f"tet-{key}.bin"))
             if self._pdrd_restitution_anim:
                 # One value per PDRD body per keyframe, frame-major, bodies in
                 # `pdrd_body.bin` order.
                 assert len(self._pdrd_restitution_anim) == n_frames
                 np.asarray(self._pdrd_restitution_anim, dtype=np.float32).tofile(
-                    os.path.join(anim_path, "pdrd-restitution.bin")
+                    os.path.join(anim_path, "body-restitution.bin")
                 )
         pbar.update(1)
 
@@ -3419,6 +3444,97 @@ class Scene:
                 "plasticity to 0 or stop tracking"
             )
 
+    def _check_tracking_beside_plasticity(self) -> None:
+        """Refuse plasticity anywhere in a scene where a pin tracks a rest shape.
+
+        `_check_rest_shape_tracking` refuses plasticity on the tracked object
+        itself. The solver streams the tracked rest shape by replacing the
+        inverse rest matrices of EVERY element at once, so plasticity on any
+        other object would have its creep erased every step as well.
+        """
+        tracking = next(
+            (
+                (name, obj)
+                for name, obj in self._object.items()
+                if not obj.static
+                and any(p.rest_shape_track for p in obj.pin_list)
+            ),
+            None,
+        )
+        if tracking is None:
+            return
+        for name, obj in self._object.items():
+            if obj.static or obj is tracking[1]:
+                continue
+            keys = obj.param.key_list()
+            if "plasticity" in keys and (
+                float(obj.param.get("plasticity") or 0.0) > 0.0
+                or "plasticity" in obj.param_anim
+                or "plasticity" in obj.param_spatial
+            ):
+                raise ValueError(
+                    f"'{self._label(name, obj)}' carries plasticity while a pin "
+                    f"of '{self._label(*tracking)}' tracks its rest shape; the "
+                    "tracked rest shape replaces every object's rest shape each "
+                    "step, which would erase the plastic creep, so set the "
+                    "plasticity to 0 or stop tracking"
+                )
+
+    def _check_shrink_anim(self) -> None:
+        """Refuse what cannot be set together with a keyframed shrink.
+
+        A keyframed shrink rebuilds the rest shape every step. A strain limit
+        is measured against the unshrunk rest shape, so an object may carry one
+        or the other. Plasticity commits its creep into the rest shape and a
+        pin tracking its captured deformation streams the rest shape too; the
+        solver replaces every element's rest shape at once, so either of those
+        anywhere in the scene would be overwritten every step.
+        """
+        shrinking = [
+            (name, obj)
+            for name, obj in self._object.items()
+            if not obj.static and _SHRINK_ANIM_KEYS & obj.param_anim.keys()
+        ]
+        if not shrinking:
+            return
+
+        def carries(obj, key):
+            return key in obj.param.key_list() and (
+                float(obj.param.get(key) or 0.0) > 0.0
+                or key in obj.param_anim
+                or key in obj.param_spatial
+            )
+
+        for name, obj in shrinking:
+            if obj.obj_type == "tri" and carries(obj, "strain-limit"):
+                raise ValueError(
+                    f"'{self._label(name, obj)}': its shrink is keyframed and "
+                    "it carries a strain limit; a strain limit is measured "
+                    "against the unshrunk rest shape, so the two cannot be set "
+                    "together. Set the strain limit to 0 or stop keyframing the "
+                    "shrink"
+                )
+        first = self._label(*shrinking[0])
+        for name, obj in self._object.items():
+            if obj.static:
+                continue
+            if carries(obj, "plasticity"):
+                raise ValueError(
+                    f"'{self._label(name, obj)}' carries plasticity while "
+                    f"'{first}' keyframes its shrink; plasticity creeps the rest "
+                    "shape and a keyframed shrink rebuilds every rest shape in "
+                    "the scene each step, so the two cannot be set together. "
+                    "Set the plasticity to 0 or stop keyframing the shrink"
+                )
+            if any(p.rest_shape_track for p in obj.pin_list):
+                raise ValueError(
+                    f"'{self._label(name, obj)}' has a pin tracking its rest "
+                    f"shape while '{first}' keyframes its shrink; both rewrite "
+                    "the rest shape every step, so the two cannot be set "
+                    "together. Stop tracking the rest shape or stop keyframing "
+                    "the shrink"
+                )
+
     @staticmethod
     def _check_bend_rest_anim(name: str, obj: "Object") -> None:
         """Refuse an animated bending rest shape that cannot be honored.
@@ -3502,6 +3618,8 @@ class Scene:
             self._check_static_material(name, obj)
             self._check_rest_shape_tracking(name, obj)
             self._check_bend_rest_anim(name, obj)
+        self._check_shrink_anim()
+        self._check_tracking_beside_plasticity()
         pbar.update(1)
         advance("Building scene: preparing objects...")
 
@@ -4073,6 +4191,8 @@ class Scene:
         # edge in that order is checked against `concat_rod` below.
         cosserat_edge_runs: list[np.ndarray] = []
         rod_owner_runs: list[np.ndarray] = []
+        # (name, object, its static per-tetrahedron shrink), in tet order.
+        tet_shrink_runs: list[tuple[str, Any, list[float]]] = []
 
         # Param replication must mirror the Rust kernel's element
         # layout in `concat_tri`: rods first, then pure shells, then
@@ -4096,9 +4216,45 @@ class Scene:
                     np.full(rod_added, dmap[name], dtype=np.int64)
                 )
             if tet_added:
+                start = len(concat_tet_param.get("shrink", []))
                 _extend_param(
                     obj.param, concat_tet_param, tet_added, obj, element_key="T"
                 )
+                tet_shrink_runs.append(
+                    (name, obj, list(concat_tet_param["shrink"][start:]))
+                )
+        # A solid's keyframed shrink, one factor per tetrahedron per keyframe,
+        # in the same order as the static `shrink` above. A solid that keys
+        # nothing contributes its static factors (its map's, if it has one) to
+        # every frame, because the solver rebuilds every tetrahedron's rest
+        # shape from this table each step.
+        concat_tet_param_anim: dict[str, list[list[float]]] = {}
+        if self._param_anim_times and any(
+            "shrink" in obj.param_anim for _, obj, _ in tet_shrink_runs
+        ):
+            n_frames = len(self._param_anim_times)
+            frames = [[] for _ in range(n_frames)]
+            for name, obj, static in tet_shrink_runs:
+                values = obj.param_anim.get("shrink")
+                if values is None:
+                    for frame in frames:
+                        frame.extend(static)
+                    continue
+                if "shrink" in obj.param_spatial:
+                    raise ValueError(
+                        f"'{self._label(name, obj)}' keyframes its shrink and "
+                        "also maps it spatially; a keyframed solid shrink is "
+                        "one factor for the whole solid, so remove the map or "
+                        "the keyframes"
+                    )
+                if len(values) != n_frames:
+                    raise ValueError(
+                        f"animated 'shrink' has {len(values)} values but the "
+                        f"scene has {n_frames} keyframe times"
+                    )
+                for frame, v in zip(frames, values):
+                    frame.extend([float(v)] * len(static))
+            concat_tet_param_anim["shrink"] = frames
         # Animated material values replicate across an object's triangles in
         # the SAME order as the static ones below, because the solver reads
         # both as prefix-aligned per-triangle slots. Building them in a
@@ -4121,7 +4277,7 @@ class Scene:
                 return
             for key in (
                 concat_tri_param_anim.keys()
-                | (obj.param_anim.keys() - _BODY_ANIM_KEYS)
+                | (obj.param_anim.keys() - _NON_TRI_ANIM_KEYS)
                 | set(obj.animated_spatial_keys)
             ):
                 frames = concat_tri_param_anim.setdefault(
@@ -4169,7 +4325,7 @@ class Scene:
                 if not int(stats_by_name[name]["tri_added"]):
                     continue
                 for key in (
-                    (obj.param_anim.keys() - _BODY_ANIM_KEYS)
+                    (obj.param_anim.keys() - _NON_TRI_ANIM_KEYS)
                     | set(obj.animated_spatial_keys)
                 ):
                     concat_tri_param_anim.setdefault(
@@ -5124,6 +5280,7 @@ class Scene:
             rest_vert_anim=rest_vert_anim if has_rest_vert_anim else None,
             rest_vert_times=rest_vert_times if has_rest_vert_anim else None,
             tri_param_anim=concat_tri_param_anim or None,
+            tet_param_anim=concat_tet_param_anim or None,
             param_anim_times=param_anim_times or None,
             bend_rest_vert=concat_bend_rest_vert if has_bend_rest_vert else None,
             bend_rest_vert_mask=bend_rest_vert_mask if has_bend_rest_vert else None,

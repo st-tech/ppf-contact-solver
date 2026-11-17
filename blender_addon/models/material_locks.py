@@ -68,9 +68,9 @@ LOCKABLE_MATERIAL_PROPS = (
 #   density (rod/shell/solid/pdrd) and sand_particle_mass change MASS, which is
 #     fixed at build and feeds the inertia term plus the PDRD and grain
 #     inertia. Animating it needs a decision about momentum first.
-#   shrink, shrink_x, shrink_y, length_factor change the REST SHAPE, which is
-#     inv_rest and belongs to the streamed rest-shape path, not a material
-#     table.
+#   length_factor sets a rod's rest LENGTH, an edge prop fixed at build with
+#     no per-step upload. (shrink, shrink_x and shrink_y animate: the solver
+#     rebuilds the inverse rest matrices from them every step.)
 #   sand_friction is a SAND material and the schedules are per-triangle, so a
 #     faceless grain cloud has nothing to carry it.
 #   stitch_stiffness is resolved per object and applied per stitch ROW, not
@@ -103,6 +103,9 @@ ANIMATABLE_MATERIAL_PROPS = (
     "rod_young_modulus",
     "shell_poisson_ratio",
     "shell_young_modulus",
+    "shrink",
+    "shrink_x",
+    "shrink_y",
     "solid_poisson_ratio",
     "solid_young_modulus",
     "strain_limit_percent",

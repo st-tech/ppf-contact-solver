@@ -62,6 +62,11 @@ from . import bl_existing_intersection_draws
 from . import rig_rest_proximity
 from . import bl_allow_rest_proximity
 from . import bl_pdrd_restitution
+from . import bl_shrink_keyframes
+from . import bl_shrink_keyframe_refusals
+from . import bl_protocol_handshake
+from . import bl_servers_answer_outside_calls
+from . import bl_probe_sampler_phase_change
 from . import rig_friction_record_overflow
 from . import bl_local_servers_start
 from . import bl_server_stop_is_real
@@ -465,6 +470,11 @@ REGISTRY = {
     "rig_rest_proximity": rig_rest_proximity,
     "bl_allow_rest_proximity": bl_allow_rest_proximity,
     "bl_pdrd_restitution": bl_pdrd_restitution,
+    "bl_shrink_keyframes": bl_shrink_keyframes,
+    "bl_shrink_keyframe_refusals": bl_shrink_keyframe_refusals,
+    "bl_protocol_handshake": bl_protocol_handshake,
+    "bl_servers_answer_outside_calls": bl_servers_answer_outside_calls,
+    "bl_probe_sampler_phase_change": bl_probe_sampler_phase_change,
     "rig_friction_record_overflow": rig_friction_record_overflow,
     "bl_local_servers_start": bl_local_servers_start,
 

@@ -143,6 +143,7 @@ end of the row), whatever the group's **Type**:
 - **Deformation Damping** and **Bending Damping**.
 - **Contact Gap** and **Contact Offset**, and their ratio rows.
 - **Strain Limit** and **Pressure (Pa)**.
+- **Shrink X** and **Shrink Y** on a **Shell**, and **Shrink** on a **Solid**.
 - **Theta** and **Threshold** in the **Plasticity** box, and **Bend Theta**
   and **Bend Threshold** in the **Bend Plasticity** box.
 - **Restitution**, which only a **PDRD** group shows.
@@ -152,8 +153,9 @@ refuses every other keyframe and names the property. The accepted ones are:
 
 - **Shell**: every row in the list above.
 - **Solid**: **Friction**, **Contact Gap** and **Contact Offset** (or their
-  ratio rows), which belong to the solid's surface. The elastic values of a
-  solid are fixed for the whole solve, so a keyframe on **Young's Modulus**,
+  ratio rows), which belong to the solid's surface, and **Shrink**. The other
+  elastic values of a solid are fixed for the whole solve, so a keyframe on
+  **Young's Modulus**,
   **Poisson's Ratio**, the **Plasticity** **Theta** and **Threshold**, or
   **Deformation Damping** is refused.
 - **PDRD**: **Friction**, **Restitution**, **Contact Gap** and **Contact
@@ -167,7 +169,7 @@ refuses every other keyframe and names the property. The accepted ones are:
 
 Remove a refused keyframe, or split the change into separate solves.
 
-The densities, the shrink factors, **Particle Mass**, **Friction** on a
+The densities, a **Rod**'s **Shrink**, **Particle Mass**, **Friction** on a
 **Sand** group and **Stitch Stiffness** have a padlock and no keyframe
 control. Every group setting outside the list above is read once, at the
 solve's **Starting Frame**, and offers no keyframe. **Transfer** stops with a
@@ -988,6 +990,22 @@ because the pins hold it larger than its rest shape.
 While either value is not `1`, the group's strain limit has no effect. See
 [Strain Limit](#strain-limit).
 
+Both values take keyframes, so the cloth can shrink or extend gradually over
+the solve, or start to only after some frames, instead of taking the whole
+change at the first frame. A large change applied at once (`0.5`, say) yanks
+the cloth toward its new size; spreading it over a few dozen frames lets it
+follow. The solver rebuilds the rest shape from the keyed value every step.
+**Transfer** refuses two combinations with a message naming the groups:
+
+- a keyframed **Shrink X** or **Shrink Y** together with **Enable Strain Limit**
+  on the same group, because the strain limit is measured against the
+  unshrunk rest shape;
+- any keyframed shrink together with **Plasticity** on any group of the scene,
+  because plasticity creeps the rest shape the shrink rebuilds every step. The
+  same goes for a pin with **Track Rest-Pose Deformation**.
+
+Turn the other setting off, or remove the shrink keyframes.
+
 ```{figure} ../../images/material_params/shrink_shell.png
 :alt: Part of a Shell group's Material Params box. The Shrink X and Shrink Y fields share one row, both reading 1.00, outlined in red. The Collision Active Duration Windows checkbox and the Bend Stiffness row are above, and the Enable Strain Limit and Inflate checkboxes are below.
 :width: 500px
@@ -1050,6 +1068,11 @@ pinned or not.
 makes the rest shape smaller, and a value above `1` makes it larger. The
 solver treats the scaled shape as the relaxed one and drives the mesh toward
 it under the usual stiffness. At `1.0` the solid rests at its modeled size.
+
+**Shrink** takes keyframes, so a solid can shrink or swell gradually over the
+solve. As on a **Shell**, a keyframed shrink cannot be set together with
+**Plasticity** on any group, or with a pin that tracks its rest-pose
+deformation; see [Shrink X / Shrink Y](#shrink-x--shrink-y).
 
 ```{figure} ../../images/material_params/shrink_solid.png
 :alt: Part of a Solid group's Material Params box. The Density, Young's Modulus (Pa/ρ) and Poisson's Ratio rows are above a Shrink row reading 1.00, which is outlined in red. The Friction row and the contact box follow.
