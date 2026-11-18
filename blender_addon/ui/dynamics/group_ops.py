@@ -360,10 +360,10 @@ class OBJECT_OT_AddObjectsToGroup(Operator):
                         group, obj, item.uuid, is_first_object,
                     ):
                         self.report({"INFO"}, line)
-                if obj.type == "MESH":
-                    obj.show_wire = True
-                    obj.show_all_edges = True
-                    if group.object_type == "ROD" and not any(
+                # The Wireframe and All Edges viewport overlays belong to
+                # the user: assignment and removal leave them as they are.
+                if obj.type == "MESH" and group.object_type == "ROD":
+                    if not any(
                         m.type == "WIREFRAME" for m in obj.modifiers
                     ):
                         wire = obj.modifiers.new(name="Wireframe", type="WIREFRAME")

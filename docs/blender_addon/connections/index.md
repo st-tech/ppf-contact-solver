@@ -22,6 +22,10 @@ is the machine or container that runs `ppf-cts-server`: this machine for a
 native type, the remote host for **SSH** and **SSH Command**, and the
 container for the Docker types.
 
+A new scene starts on the native type for the platform Blender is running
+on: **Windows Native** on Windows, **macOS Native** on macOS and
+**Linux Native** on Linux.
+
 Every type uses the same flow in the panel: **Connect** ->
 **Start Server on Remote** -> **Transfer** -> **Run** ->
 **Fetch All Animation**.

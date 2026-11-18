@@ -1467,6 +1467,46 @@ mod tests {
         }
     }
 
+    /// A fixed off-diagonal block far below one is bounded, not refused.
+    ///
+    /// The fixed matrix is accumulated with float atomics, so a block whose
+    /// terms cancel lands on exactly zero in one run and on a residue of any
+    /// size in the next. The one planted here is the shape that stopped Blender
+    /// CI's multigrid cloth: 2^-118 at (0, 1) and nothing else. Its bound's lift
+    /// is the norm of the eigensolve's residual, near 2^-142, whose largest
+    /// entry's reciprocal overflowed: the norm was NaN, so were both rows'
+    /// smoother blocks, and the refresh refused a valid operator. Every level's
+    /// smoother is required finite.
+    ///
+    #[test]
+    fn a_tiny_off_diagonal_block_is_bounded_not_refused() {
+        let mut tiny = sheet(9, 1.0e3, 1.0, 0, &[]);
+        let (row, slot) = (0..tiny.vertices)
+            .find_map(|row| {
+                (tiny.offset[row] as usize..tiny.offset[row + 1] as usize)
+                    .find(|&slot| tiny.index[slot] as usize != row)
+                    .map(|slot| (row, slot))
+            })
+            .expect("a sheet has an off-diagonal block");
+        for entry in 0..9 {
+            tiny.value[9 * slot + entry] = 0.0;
+        }
+        // column-major: (0, 1) is entry 3
+        tiny.value[9 * slot + 3] = f32::from_bits(0x0480_0000);
+        let mut device = host_device();
+        let mut resident = on_device(&mut device, &tiny);
+        let (state, _) = ready(&mut device, &tiny, &mut resident);
+        let fine = read_f32(&mut device, &state.inverse, 9 * tiny.vertices);
+        assert!(
+            fine.iter().all(|x| x.is_finite()),
+            "a fine smoother block is not finite, the tiny block sitting in row {row}"
+        );
+        for (depth, level) in state.levels.iter().enumerate() {
+            let inverse = read_f32(&mut device, &level.inverse, 9 * level.nodes as usize);
+            assert!(inverse.iter().all(|x| x.is_finite()), "level {depth}'s smoother is not finite");
+        }
+    }
+
     /// Pieces of different depth, stitched: the small one's grid ends levels
     /// above the large one's, and the operator still couples its last node to
     /// nodes that go on.

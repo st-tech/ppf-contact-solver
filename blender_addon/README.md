@@ -567,7 +567,7 @@ All parameters shown directly (no outer collapsible box):
 #### `ui/dynamics/utils.py` - Shared Dynamics Helpers
 
 - `get_group_from_index(scene, group_index) -> ObjectGroup | None` - returns active group at slot index, or None
-- `reset_object_display(obj)` - resets object color to white and disables wireframe overlays
+- `reset_object_display(obj)` - resets object color to white (the wireframe overlays are left alone)
 - `cleanup_pin_vertex_groups_for_object(group, object_uuid)` - removes pin references for a specific object (by UUID)
 
 #### `ui/dynamics/group_ops.py` - Group Operators

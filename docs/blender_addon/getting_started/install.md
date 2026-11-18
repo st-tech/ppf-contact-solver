@@ -202,9 +202,9 @@ interpreter (`PPF_BUILD_PYTHON` on Windows) before running the script.
 
 <figure style="text-align: center; margin: 1.5rem 0;">
 
-[![Video by CGMatter: setup and workflow walkthrough](https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg)](https://www.youtube.com/watch?v=D0k6evTvJDg){target="_blank" rel="noopener"}
+[![Video by Faebe Tutorials: setup and workflow walkthrough](https://img.youtube.com/vi/FfCDo5dDYro/maxresdefault.jpg)](https://www.youtube.com/watch?v=FfCDo5dDYro){target="_blank" rel="noopener"}
 
-<figcaption>Video tutorial by <a href="https://www.youtube.com/@CGMatter" target="_blank" rel="noopener">CGMatter</a>: a full setup and workflow walkthrough.</figcaption>
+<figcaption>Watch this first to learn. Video tutorial by <a href="https://www.youtube.com/@faebetutorials" target="_blank" rel="noopener">Faebe Tutorials</a>: a full setup and workflow walkthrough.</figcaption>
 </figure>
 
 More recordings are on the [Video Tutorials](../tutorial.md) page.

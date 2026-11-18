@@ -263,7 +263,16 @@ static LA_HD void symm3x3(SM_THREAD const M3 &A, SM_THREAD V3 &val,
         vec = M3::Identity();
         return;
     }
+    // A MATRIX BELOW 2^-126 IS LIFTED BY 2^100 BEFORE ITS SCALE IS INVERTED.
+    // Below 2^-128 `1 / scale` overflows to infinity and every zero entry of D
+    // becomes `0 * inf = NaN`. Lifting both factors by a power of two is exact
+    // and leaves D = A / scale as it was meant, so the eigenvalues below are
+    // still `scale * D(k, k)`. A matrix at 2^-126 or above keeps the old D, bit
+    // for bit.
     M3 D = (1.0f / scale) * A;
+    if (scale < 1.17549435e-38f) {
+        D = (1.0f / (scale * 1.26765060e30f)) * (1.26765060e30f * A);
+    }
     // Assembly promises symmetry, but averaging the mirrored entries makes the
     // promise structural at the eigensolver boundary and matches the proven
     // shared_math implementation.

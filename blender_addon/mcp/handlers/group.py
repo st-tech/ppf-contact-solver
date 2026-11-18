@@ -9,7 +9,10 @@ import bpy  # pyright: ignore
 from ...models.collection_utils import safe_update_index
 from ...models.intersection_allowances import (
     INTERSECTION_ALLOWANCES,
+    SELF_ALLOWANCE,
+    STATIC_SELF_ALWAYS_ALLOWED,
     allowance_by_key,
+    allowance_fixed_on,
     allowance_offered,
     allowance_objects,
     allowed_object_uuids,
@@ -592,7 +595,7 @@ def remove_object_from_group(group_uuid: str, object_name: str):
     # Clear the display state the add-on put on this object while it is
     # still a member. Once the assignment is gone the object is the
     # user's again and nothing may write to it, so this is the last
-    # point at which the tint and wireframe can be taken back.
+    # point at which the tint can be taken back.
     reset_object_display(obj)
 
     # Remove the object from the group
@@ -886,6 +889,11 @@ def set_intersection_allowance_objects(
     if not allowance_offered(group, spec):
         raise ValidationError(
             f"{spec.label} is not supported on a {group.object_type} group"
+        )
+    if allowance_fixed_on(group, spec):
+        raise ValidationError(
+            f"{spec.label} cannot be narrowed on a {group.object_type} group: "
+            f"{STATIC_SELF_ALWAYS_ALLOWED}."
         )
 
     if not isinstance(object_names, list):
@@ -1840,8 +1848,8 @@ _MATERIAL_PROPERTIES_BY_TYPE: dict[str, set[str]] = {
         "friction",
         "enable_soft_constraint",
         "soft_constraint_stiffness",
+        # Reported as fixed on and refused as a write; see allowance_fixed_on.
         "allow_self_intersection",
-        "allow_self_intersection_all_objects",
         "allow_inter_object_intersection",
         "allow_inter_object_intersection_all_objects",
         "allow_inter_group_intersection",
@@ -2112,6 +2120,13 @@ def get_group_material_properties(group_uuid: str):
     properties = {
         name: _material_property_report(group, name) for name in sorted(names)
     }
+    for spec in INTERSECTION_ALLOWANCES:
+        if allowance_fixed_on(group, spec) and spec.enable_prop in properties:
+            report = properties[spec.enable_prop]
+            report["value"] = True
+            report["default"] = True
+            report["fixed"] = True
+            report["description"] = f"{STATIC_SELF_ALWAYS_ALLOWED}."
     return {
         "group_uuid": group_uuid,
         "group_name": group.name,
@@ -2211,7 +2226,11 @@ def set_group_material_properties(group_uuid: str, properties: dict):
       touching. A STATIC collider that is only a collision mesh counts as 0.0
       whatever its own group sets, so set it on the dynamic side.
 
-    On a STATIC group all four keys reach the solver whenever the collider is
+    On a STATIC group allow_self_intersection is fixed on and refused as a
+    write: no pair between two static elements is ever checked or contacted,
+    so a static object's self-intersections, and its intersections with other
+    static objects, are always allowed. The other three keys reach the solver
+    for pairs with dynamic objects whenever the collider is
     part of the solved scene, which covers an animated collider, a
     soft-constrained one, and one named as a cross-stitch endpoint: each of
     those decodes to a pin shell whose vertices carry the policy. A collider
@@ -2271,6 +2290,11 @@ def set_group_material_properties(group_uuid: str, properties: dict):
     def validate_properties_for_group_type(props: dict, object_type: str):
         """Validate that properties are appropriate for the group type."""
         valid_props = _MATERIAL_PROPERTIES_BY_TYPE.get(object_type, set())
+        if object_type == "STATIC" and SELF_ALLOWANCE.enable_prop in props:
+            raise ValidationError(
+                f"{SELF_ALLOWANCE.enable_prop} cannot be set on a STATIC "
+                f"group: {STATIC_SELF_ALWAYS_ALLOWED}."
+            )
         invalid_props = set(props.keys()) - valid_props
 
         if invalid_props:

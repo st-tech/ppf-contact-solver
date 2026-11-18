@@ -109,6 +109,27 @@ def allowance_offered(group, spec: AllowanceSpec) -> bool:
     """
     return not (spec is EXISTING_ALLOWANCE and group.object_type == "SAND")
 
+
+# What the panel and the MCP surface say about an allowance that is fixed on.
+STATIC_SELF_ALWAYS_ALLOWED = (
+    "A static object's self-intersections, and its intersections with other "
+    "static objects, are always allowed"
+)
+
+
+def allowance_fixed_on(group, spec: AllowanceSpec) -> bool:
+    """Whether *spec* is always in force on *group*, whatever is stored.
+
+    True for Allow Self-Intersections on a STATIC group. Every static vertex
+    is a collider, at build and in the solver alike, and a pair whose two
+    sides are both colliders is never checked or contacted. So a static
+    object's own intersections, and those between two static objects, are
+    allowed unconditionally. The panel draws the checkbox ticked and grayed
+    out, and the MCP surface reports it on and refuses a write, so nothing
+    suggests the setting has to be turned on.
+    """
+    return spec is SELF_ALLOWANCE and group.object_type == "STATIC"
+
 # Operator / MCP enum items, in panel order.
 INTERSECTION_ALLOWANCE_ITEMS = [
     (

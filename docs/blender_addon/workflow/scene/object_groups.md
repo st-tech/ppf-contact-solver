@@ -118,10 +118,9 @@ objects.
   of filled faces. **Fetch All Animation** switches **Even Thickness** off
   again on every **Wireframe** modifier of a **Rod** mesh, including one you
   added yourself, because even thickness makes a folding strand jump from
-  frame to frame. **Remove Object** and **Delete Group** switch the
-  **Wireframe** and **All Edges** viewport overlays off but leave the
-  modifier on the object. Delete it in the **Modifiers** tab to stop drawing
-  the strand as a wireframe.
+  frame to frame. **Remove Object** and **Delete Group** leave the modifier
+  on the object. Delete it in the **Modifiers** tab to stop drawing the
+  strand as a wireframe.
 - A **Bezier** curve contributes one rod vertex per control point, so the
   edge length equals the control-point spacing and you set the simulation
   resolution by adding or removing control points.
@@ -206,10 +205,10 @@ selection is still processed:
   re-assigning. An object already in *this* group is skipped silently
   instead.
 
-When an assignment succeeds, the add-on enables the object's
-**Wireframe** and **All Edges** viewport overlays and, if the group has
-**Overlay Color** ticked, tints the object's viewport color to the group's
-color.
+When an assignment succeeds and the group has **Overlay Color** ticked,
+the add-on tints the object's viewport color to the group's color. The
+object's **Wireframe** and **All Edges** viewport overlays are never
+changed, neither on assignment nor on removal.
 
 :::{important}
 **The solver simulates the mesh's own vertices and faces.** A
@@ -247,8 +246,7 @@ the add-on removes such rows on its own.
 To remove an object from a group, select its row and click **Remove
 Object**. Removing an object:
 
-- resets its viewport color to white and switches its **Wireframe** and
-  **All Edges** overlays off;
+- resets its viewport color to white;
 - discards its fetched animation, so fetch again to get the frames back;
 - removes the pins registered on it, its entries in the group's **Allow
   Intersections** object lists, and every

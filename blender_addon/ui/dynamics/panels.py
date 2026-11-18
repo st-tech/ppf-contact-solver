@@ -216,7 +216,21 @@ def _draw_intersection_allowance(box, group, spec, actual_index):
     already draws the enable / disable of a feature's own sub-settings that
     way (strain limiting, inflation, plasticity, soft constraints).
     """
-    from ...models.intersection_allowances import allowed_object_uuids
+    from ...models.intersection_allowances import (
+        allowance_fixed_on,
+        allowed_object_uuids,
+    )
+
+    if allowance_fixed_on(group, spec):
+        # Drawn ticked and grayed out rather than hidden, so the panel says
+        # the allowance is always in force instead of leaving it absent.
+        row = box.row()
+        row.enabled = False
+        row.label(text=spec.label, icon="CHECKBOX_HLT")
+        col = box.column(align=True)
+        col.label(text="Always allowed: self-intersections and", icon="INFO")
+        col.label(text="intersections with other static objects", icon="BLANK1")
+        return
 
     box.prop(group, spec.enable_prop)
     if not getattr(group, spec.enable_prop):
@@ -280,9 +294,9 @@ def _draw_intersection_allowances(param_box, group, actual_index):
     the scene arrives with (issue #138).
 
     Drawn for EVERY group type, after the type-specific material block: an
-    intersection is a property of a pair of elements, not of a material model,
-    and a STATIC collider is as likely to be shipped self-tangled as a garment
-    is to be fitted through one.
+    intersection is a property of a pair of elements, not of a material
+    model, and a garment is as likely to be fitted through a STATIC collider
+    as through another garment.
 
     On a STATIC group the control reaches the solver only when the collider is
     part of the solved scene, which means animated, soft-constrained, or named
@@ -292,6 +306,11 @@ def _draw_intersection_allowances(param_box, group, actual_index):
     is drawn anyway rather than hidden, per the panel rule that a conditional
     control stays visible; deciding which of the three conditions holds would
     mean inspecting the group's ops and stitches on every redraw.
+
+    Allow Self-Intersections on a STATIC group is the exception: it is always
+    in force (``allowance_fixed_on``), because no pair between two static
+    elements is ever checked or contacted, so it is drawn ticked and grayed
+    out with a note saying so.
 
     Every setting reaches every object the group holds until the user
     narrows it, and self versus inter-object is decided per OBJECT whichever

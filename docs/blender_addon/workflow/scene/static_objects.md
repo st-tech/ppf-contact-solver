@@ -339,7 +339,10 @@ a minimal collider material.
 
 The **Allow Intersections** box below these rows is the same on every group
 type. See [Allow Intersections](../params/material.md#allow-intersections).
-What is specific to Static is when the boxes take effect: a collider's own
+A static object's self-intersections, and its intersections with other static
+objects, are always allowed: no pair of static surfaces is ever checked or
+kept apart, so **Allow Self-Intersections** is drawn ticked and grayed out.
+What is specific to Static about the other boxes is when they take effect: a collider's own
 boxes reach the solver only while it is animated, soft-constrained, or named
 as one end of a cross-stitch. A collider that is none of those is a collision
 surface only and ignores the boxes on its group, though they are still drawn.
@@ -432,7 +435,7 @@ has a key. The table shows where each key can be set.
 | **Contact Offset Ratio**             | `contact_offset_rat`              | `group.param`, a material profile, MCP                   |
 | **Apply Soft Constraints**           | `enable_soft_constraint`          | A material profile, MCP (not a `group.param` attribute)  |
 | **Stiffness**                        | `soft_constraint_stiffness`       | A material profile, MCP (not a `group.param` attribute)  |
-| **Allow Self-Intersections**         | `allow_self_intersection`         | MCP only                                                 |
+| **Allow Self-Intersections**         | `allow_self_intersection`         | Always on; MCP reports it and refuses a write            |
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | MCP only                                                 |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | MCP only                                                 |
 | **Allow Existing Intersections**     | `allow_existing_intersection`     | MCP only                                                 |

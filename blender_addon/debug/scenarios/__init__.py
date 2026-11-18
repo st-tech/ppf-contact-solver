@@ -104,6 +104,7 @@ from . import bl_connect_cancel_releases
 from . import bl_remote_device_select
 from . import bl_cbor2_missing_reported
 from . import bl_docker_connect_gate
+from . import bl_connection_default_native
 from . import bl_ssh_proxy_jump
 from . import bl_win_native_root_resolve
 from . import bl_win_native_bundle_layout
@@ -565,6 +566,9 @@ REGISTRY = {
     "bl_connect_cancel_releases": bl_connect_cancel_releases,
     "bl_cbor2_missing_reported": bl_cbor2_missing_reported,
     "bl_docker_connect_gate": bl_docker_connect_gate,
+    # A new scene's connection Type is this platform's native type; CI runs
+    # it on Windows, macOS and Linux, where the answer differs.
+    "bl_connection_default_native": bl_connection_default_native,
     "bl_ssh_proxy_jump": bl_ssh_proxy_jump,
     "bl_win_native_root_resolve": bl_win_native_root_resolve,
     "bl_win_native_bundle_layout": bl_win_native_bundle_layout,

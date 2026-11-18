@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📌 TL;DR
 
-To use this through Blender, watch the [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
+To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www.youtube.com/watch?v=FfCDo5dDYro). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
 
 ⚠️ When not in use, disable or uninstall our add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed). We do our best to remove bugs.
 
@@ -310,9 +310,9 @@ Follow this page [How to Install](https://st-tech.github.io/ppf-contact-solver/b
 
 > ⚠️ When not in use, disable or uninstall the add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
 
-🎬 Prefer video? [CGMatter](https://www.youtube.com/@CGMatter) walks through the full setup in this video tutorial:
+🎬 Prefer video? Watch this first to learn. [Faebe Tutorials](https://www.youtube.com/@faebetutorials) walks through the full setup in this video tutorial:
 
-<p align="center"><a href="https://www.youtube.com/watch?v=D0k6evTvJDg"><img src="https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg" alt="ZoZos Contact Solver - The ultimate Blender cloth simulator"></a></p>
+<p align="center"><a href="https://www.youtube.com/watch?v=FfCDo5dDYro"><img src="https://img.youtube.com/vi/FfCDo5dDYro/maxresdefault.jpg" alt="ZOZOs CLOTH SIMULATION TUTORIAL BLENDER!"></a></p>
 
 Here are some highlights:
 
@@ -837,6 +837,14 @@ We describe how to deploy the solver on vast.ai, Scaleway, Amazon Web Services a
 <td valign="top"><a href="https://www.youtube.com/watch?v=7BzCCpbpgKY&t=282s"><em>These Blender Simulation Solvers Are Changing Everything</em></a> by <a href="https://www.youtube.com/@InspirationTuts">InspirationTuts</a>.</td>
 <td valign="top"><a href="https://www.youtube.com/watch?v=eeYQ2qM3KPw"><em>I Tested "Next-Gen" Cloth Physics in Blender... Then It Stopped.</em></a> by <a href="https://www.youtube.com/@BracerJack">Bracer Jack</a>.</td>
 </tr>
+<tr>
+<td width="50%" valign="top"><a href="https://www.youtube.com/watch?v=FfCDo5dDYro"><img src="https://img.youtube.com/vi/FfCDo5dDYro/maxresdefault.jpg" alt="ZOZOs CLOTH SIMULATION TUTORIAL BLENDER!"></a></td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td valign="top"><a href="https://www.youtube.com/watch?v=FfCDo5dDYro"><em>ZOZOs CLOTH SIMULATION TUTORIAL BLENDER!</em></a> by <a href="https://www.youtube.com/@faebetutorials">Faebe Tutorials</a>.</td>
+<td valign="top"></td>
+</tr>
 </table>
 
 - [*Visual Components - ZOZO's Contact Solver Handshanking*](https://www.youtube.com/watch?v=k000SaPXK4Q) by [idkfa](https://www.youtube.com/@idkfa3).
@@ -935,7 +943,7 @@ Why no intersections remain after a successful step, and why an intersection err
 | Is this better than &lt;Your Favorite Product&gt;? | Partly yes, partly no. ZOZO's Contact Solver is not a drop-in replacement for any commercial product. |
 | So what is it good for? | See the [Catalogue](#️-catalogue) and the community [YouTube](#-youtube) videos. They show what we can do. |
 | Why did you separate the backend communicator and the solver engine? I would prefer an all-in-one, single-click setup. | Our main target is cloud use, such as AWS, rather than running on a desktop computer. |
-| Why did you make the setup this complicated? | For internal use reasons. For now, see the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg) and our [video tutorials](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). They are much cleaner. |
+| Why did you make the setup this complicated? | For internal use reasons. For now, see the [Faebe Tutorials YouTube video](https://www.youtube.com/watch?v=FfCDo5dDYro) and our [video tutorials](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). They are much cleaner. |
 | The UI is not very user friendly, either. | True. We designed it that way to make debugging easier for us. At least we are aware. |
 | I don't have GPUs. Can I use this? | Yes, all the features run on the CPU backend (or Metal on Apple silicon), but it does not scale to large-scale scenes. See [Requirements](#️-requirements). |
 | Does it run on AMD and Apple silicon (Metal) GPUs? | Yes. See [Requirements](#️-requirements). |
@@ -949,7 +957,7 @@ Why no intersections remain after a successful step, and why an intersection err
 | Is this really free? | Yes. |
 | How large is your team? | A single person (Ryoichi Ando). Security reviews and legal checks are done by responsible teams at ZOZO, Inc. |
 | Is this really made by a single person? | The author is a single person backed by the support of the company. |
-| This README is TL;DR. | Just watch the [CGMatter YouTube video](https://www.youtube.com/watch?v=D0k6evTvJDg). That's the best starting point. |
+| This README is TL;DR. | Just watch the [Faebe Tutorials YouTube video](https://www.youtube.com/watch?v=FfCDo5dDYro). That's the best starting point. |
 | I can make this better! | Please do so. As long as you adhere to the [Apache License 2.0](./LICENSE) (and, for the Blender add-on, the [GPL-3.0-or-later](./blender_addon/LICENSE)), you are free to distribute and commercialize your own. |
 
 ## ⭐ Star History

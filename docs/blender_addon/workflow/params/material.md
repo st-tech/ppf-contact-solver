@@ -300,7 +300,7 @@ types that show each row.
 | **Contact Gap Ratio**                | `contact_gap_rat`                 | 0.001   | Solid, Shell, PDRD, Static                 | Contact gap as a fraction of each object's own bounding-box diagonal (0.00001 – 1). Drawn while the checkbox above is on.                           |
 | **Contact Offset Ratio**             | `contact_offset_rat`              | 0.0     | Solid, Shell, PDRD, Static                 | Contact offset as a fraction of each object's own bounding-box diagonal (0 – 1). Drawn while the checkbox above is on.                              |
 | **Local Gap Limit**                  | `contact_gap_limit_percent`       | 25      | Solid, Shell, Rod, PDRD, Static            | Largest share of the room between mesh neighbors the contact gap may take, in percent (1 – 50). It has no keyframe and no padlock.                  |
-| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | All types                                  | Let an object pass through itself, with no contact between its parts.                                                                               |
+| **Allow Self-Intersections**         | `allow_self_intersection`         | `False` | All types                                  | Let an object pass through itself, with no contact between its parts. Always on, and not editable, on **Static**.                                   |
 | **Allow Inter-Object Intersections** | `allow_inter_object_intersection` | `False` | All types                                  | Let an object pass through every other object, with no contact.                                                                                     |
 | **Allow Inter-Group Intersections**  | `allow_inter_group_intersection`  | `False` | All types                                  | Let an object pass through objects of other groups, with no contact.                                                                                |
 | **Allow Existing Intersections**     | `allow_existing_intersection`     | `False` | All types except Sand                      | Let the pairs that already overlap at the start pass through, with no contact.                                                                      |
@@ -1856,7 +1856,12 @@ below.
 
 Each is drawn for every group type, **Static** included, except that a
 **Sand** group has no **Allow Existing Intersections** or **Allow Rest
-Proximity** checkbox. A group that
+Proximity** checkbox. On a **Static** group, **Allow Self-Intersections** is
+drawn ticked and grayed out, with the note *Always allowed: self-intersections
+and intersections with other static objects*. A static object's own surfaces,
+and the surfaces of two static objects, are never checked against each other
+or kept apart, so this cannot be turned off. The other three checkboxes on a
+**Static** group still decide how it meets simulated objects. A group that
 still has the checkbox on after its **Type** was changed to **Sand** is
 refused at **Transfer** with a message naming the group. Change the **Type**
 back, turn the checkbox off, and change it to **Sand** again.

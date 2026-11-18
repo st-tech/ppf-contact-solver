@@ -4,6 +4,7 @@
 # License: GPL-3.0-or-later
 import json
 import os
+import sys
 
 import bpy  # pyright: ignore
 
@@ -207,6 +208,14 @@ def _on_ping_interval(self, _context):
     runner.ping_interval_s = float(self.ping_interval)
 
 
+# The connection a new scene starts on: the native type of the platform Blender
+# is running on, the one native type that can work here.
+_THIS_PLATFORM_NATIVE = {
+    "win32": "WIN_NATIVE",
+    "darwin": "MAC_NATIVE",
+}.get(sys.platform, "LINUX_NATIVE")
+
+
 class SSHState(PropertyGroup):
     profile_path: StringProperty(
         name="Profile",
@@ -301,6 +310,9 @@ class SSHState(PropertyGroup):
     # still carries it; `core.migrate_renames.migrate_retired_connection`
     # moves such a file onto this platform's native type and carries its path
     # across, which is why no item is offered for it here.
+    #
+    # THE DEFAULT IS THIS PLATFORM'S NATIVE TYPE (`_THIS_PLATFORM_NATIVE`),
+    # chosen when the add-on loads.
     server_type: EnumProperty(  # pyright: ignore
         name="Type",
         items=[
@@ -337,7 +349,7 @@ class SSHState(PropertyGroup):
                 8,
             ),
         ],
-        default="CUSTOM",
+        default=_THIS_PLATFORM_NATIVE,
         options=NOT_ANIMATABLE,
     )
     command: StringProperty(name="SSH Command", default="ssh -p xxx root@zzz")  # pyright: ignore

@@ -32,10 +32,11 @@ def get_assigned_by_selection_uuid(group: ObjectGroup, selection_attr: str):
 
 
 def reset_object_display(obj):
-    """Reset an object's display color and wireframe overlays to defaults."""
+    """Reset an object's viewport display color to the default white.
+
+    The Wireframe and All Edges overlays are the user's and are not touched.
+    """
     obj.color = (1.0, 1.0, 1.0, 1.0)
-    obj.show_wire = False
-    obj.show_all_edges = False
 
 
 def cleanup_group_references_for_object(group: ObjectGroup, object_uuid: str):

@@ -88,10 +88,12 @@ on:
           - ap-northeast-2
       # A RE-RUN AFTER A FIX SHOULD NOT COST THE WHOLE SET. Naming the scenarios
       # that failed runs only those on linux-gpu and windows-gpu (the rig
-      # takes names on its command line); macos-ssh always runs its two SSH
-      # scenarios, which are the only ones that leg exists for. Empty is the
-      # whole set, which stays the default and the only thing a merge is
-      # judged by.
+      # takes names on its command line); macos-ssh always runs its fixed list:
+      # its two SSH scenarios, which are what that leg exists for, and
+      # bl_connection_default_native, the macOS answer to a check whose answer
+      # differs per platform (the other two legs run it in their whole set).
+      # Empty is the whole set, which stays the default and the only thing a
+      # merge is judged by.
       scenarios:
         description: 'Scenario names to run, space-separated (empty: the whole set)'
         required: false
@@ -500,7 +502,10 @@ jobs:
           role-duration-seconds: 21600
 
       # ------------------------------------------------------------------
-      # Drive the SSH scenario: macOS Blender -> remote GPU server. Keep an
+      # Drive the SSH scenarios: macOS Blender -> remote GPU server. Also run
+      # bl_connection_default_native, which needs no server: it checks that a
+      # new scene's connection Type is macOS Native, and this is the only leg
+      # whose Blender runs on macOS. Keep an
       # ec2-instance-connect tunnel (localhost:2222 -> instance:22) alive
       # for the whole run; the addon's paramiko connects to localhost:2222
       # and opens a direct-tcpip channel to the remote server on :9090.
@@ -516,6 +521,7 @@ jobs:
           set +e
           .venv/bin/python blender_addon/debug/main.py runtests \
             bl_ssh_remote_solve bl_ssh_remote_solid \
+            bl_connection_default_native \
             --backend real \
             --timeout 600 \
             --report report.json \

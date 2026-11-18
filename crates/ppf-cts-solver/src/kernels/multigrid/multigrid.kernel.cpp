@@ -99,6 +99,17 @@ multigrid_read_block(const float *value, unsigned slot) {
 
 // The Frobenius norm of a block, scaled by its largest entry so the squares
 // stay in range.
+//
+// A BLOCK BELOW 2^-126 IS LIFTED BY 2^100 BEFORE ITS SCALE IS INVERTED. Below
+// 2^-128 the reciprocal overflows to infinity, and every entry that is exactly
+// zero then scales to `0 * inf = NaN`. Such blocks are not rare: the residual
+// `Q Lambda Q^T - S` of a block near 2^-118 is near 2^-142, and a fixed-matrix
+// block whose float-atomic terms cancel lands on a residue of any size. Its
+// norm is the lift of `multigrid_block_bound`, so a NaN here was a NaN on the
+// whole bound's diagonal, and the smoother refused a valid operator. A power
+// of two scales exactly, the lifted scale is at least 2^-49 and its reciprocal
+// at most 2^49; the norm is brought back by 2^-100. A block at 2^-126 or above
+// takes the old path, every operation as before, so its bits are unchanged.
 [[seam::device_fn]] inline float multigrid_frobenius(const Mat3x3f &block) {
     float scale = 0.0f;
     for (int entry = 0; entry < 9; ++entry) {
@@ -106,6 +117,16 @@ multigrid_read_block(const float *value, unsigned slot) {
     }
     if (!(scale > 0.0f)) {
         return 0.0f;
+    }
+    if (scale < 1.17549435e-38f) {
+        const float lift = 1.26765060e30f;
+        const float inverse_scale = fmath::div(1.0f, scale * lift);
+        float sum = 0.0f;
+        for (int entry = 0; entry < 9; ++entry) {
+            const float x = (block.m[entry] * lift) * inverse_scale;
+            sum += x * x;
+        }
+        return ((scale * lift) * fmath::sqrt(sum)) * 7.88860905e-31f;
     }
     const float inverse_scale = fmath::div(1.0f, scale);
     float sum = 0.0f;

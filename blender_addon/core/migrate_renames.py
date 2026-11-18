@@ -94,10 +94,9 @@ def migrate_retired_connection(scene=None) -> str:
 
     WHAT IS BROKEN WITHOUT IT. The `.blend` carries `server_type` as the ITEM
     NUMBER Local occupied, and no item carries that number any more, so the
-    field reads its default (SSH) and the saved directory has no field left to
-    live in. The artist opens a scene that was connecting to a solver on this
-    machine and finds it pointed at a host it was never given, with the path
-    they chose gone from the file.
+    field reads its default and the saved directory has no field left to live
+    in. The artist opens a scene that was connecting to a solver on this
+    machine and finds the path they chose gone from the file.
 
     The native connection is where Local's case went: it reaches a server on
     THIS machine on the same port, and also knows how to start it, which build
