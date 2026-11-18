@@ -15,9 +15,7 @@
 # ran for the whole lifetime of a server connection.
 #
 # Neither may be resident. This scenario pins the predicates that decide
-# it, which is what the event loop consults; the loop itself is invisible
-# to the rig, so a scenario that waited for a real auto-save would certify
-# nothing.
+# it, which is what the event loop consults.
 #
 #   A. idle_scene_has_no_work: on an idle scene with no solve and no
 #      queued frames, work_pending() is False. This is the state the
@@ -48,12 +46,39 @@
 #      Blender cancels every modal operator on file load, and a
 #      non-resident pump is not there to notice.
 #
-# Assertion-only: no server connection or solve.
+# A to H pin the predicates. I to L then watch Blender itself write an
+# auto-save while the add-on is CONNECTED to the backend, since that is the
+# state an artist spends a session in and the one the predicates reach only
+# through a faked connection. The driver hands the main thread back to the
+# event loop (DEFERRED in blender_harness), which is what runs both the
+# add-on's ticks and Blender's auto-save timer.
+#
+#   I. connect_button_reaches_online: the Connect button's own operator
+#      (ssh.run_command) attaches to the rig's server and the connection
+#      reaches ONLINE with the server RUNNING, driven by the event loop
+#      alone.
+#   J. blocker_defers_autosave: THE CONTROL. With the scene edited and the
+#      auto-save interval at one minute, a modal operator the rig holds open
+#      on purpose keeps any auto-save from being written for a full interval
+#      plus margin. Without it a harness that never auto-saves at all would
+#      pass K as easily as a fixed add-on.
+#   K. autosave_written_while_connected: once that blocker is released, the
+#      overdue auto-save, which Blender retries every 10 ms, is on disk
+#      within seconds. Any modal the add-on itself held open while connected
+#      would keep deferring it, and K would time out.
+#   L. still_connected_when_written: the connection was ONLINE at every
+#      poll from I to the end of K, so K was measured connected. It judges
+#      the connection alone and passes or fails independently of K.
+#
+# Headless Blender (the Windows leg) has no event loop and never auto-saves,
+# so I to L do not run there, and a phase says so. No solve is run.
 
 from __future__ import annotations
 
 
+from . import _driver_lib as dl
 from . import _runner as r
+from . import REPO_ROOT_POSIX
 
 
 NEEDS_BLENDER = True
@@ -64,8 +89,10 @@ NEEDS_BLENDER = True
 BACKENDS = ("real",)
 
 
-_DRIVER_TEMPLATE = r"""
-import bpy, time, types, traceback
+_DRIVER_BODY = r"""
+import bpy, glob, os, time, types, traceback
+LOCAL_PATH = "<<LOCAL_PATH>>"
+SERVER_PORT = <<SERVER_PORT>>
 result.setdefault("phases", [])
 result.setdefault("errors", [])
 result.setdefault("checks", {})
@@ -216,18 +243,156 @@ try:
 
     result["phases"].append((round(time.time(), 3),
                              "checks=" + str(len(result["checks"]))))
+
+    if bpy.app.background:
+        result["phases"].append((round(time.time(), 3),
+                                 "I-L not run: headless Blender has no event "
+                                 "loop and never auto-saves"))
+    else:
+        DEFERRED = connected_autosave_watch()
 except Exception as exc:
     result["errors"].append(type(exc).__name__ + ": " + str(exc))
     result["errors"].append(traceback.format_exc())
 """
 
 
+# I to L, as one DEFERRED callable. Each call is one poll from a timer, so
+# the event loop runs between them. Phases: connect, then hold the blocker
+# for BLOCK_S, then release it and wait for the auto-save file.
+_WATCH = r"""
+class PPF_RIG_OT_hold_modal(bpy.types.Operator):
+    # A modal that does nothing but stay attached to the window, which is
+    # exactly what defers Blender's auto-save. release ends it.
+    bl_idname = "ppf_rig.hold_modal"
+    bl_label = "Rig auto-save blocker"
+    bl_options = {"INTERNAL"}
+    release = False
+
+    def invoke(self, context, event):
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if type(self).release:
+            context.window_manager.event_timer_remove(self._timer)
+            return {"FINISHED"}
+        return {"PASS_THROUGH"}
+
+
+def connected_autosave_watch():
+    CONNECT_TIMEOUT = 60.0
+    # Blender's interval is in whole minutes, one at least. The blocker has
+    # to outlast one interval for J to mean anything.
+    BLOCK_S = 70.0
+    WRITE_TIMEOUT = 20.0
+    autosave_dir = os.path.join(os.path.dirname(RESULT_PATH), "autosave")
+    os.makedirs(autosave_dir, exist_ok=True)
+    facade = __import__(pkg + ".core.facade", fromlist=["engine"])
+    groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
+    com = __import__(pkg + ".ui.connection_ops", fromlist=["com"]).com
+    window = bpy.context.window_manager.windows[0]
+    st = {"phase": "connect", "t": time.monotonic(), "offline_polls": []}
+
+    def autosaves():
+        return sorted(os.path.basename(f)
+                      for f in glob.glob(os.path.join(autosave_dir, "*.blend"))
+                      if os.path.basename(f) != "quit.blend")
+
+    def online():
+        s = facade.engine.state
+        return s.phase.name == "ONLINE" and s.server.name == "RUNNING"
+
+    def snapshot():
+        s = facade.engine.state
+        return {"phase": s.phase.name, "server": s.server.name,
+                "activity": s.activity.name, "solver": s.solver.name,
+                "work_pending": fp.work_pending(),
+                "live_pumps": len(live_pumps()),
+                "autosaves": autosaves()}
+
+    def note(msg):
+        result["phases"].append((round(time.time(), 3), msg))
+
+    root_data = groups.get_addon_data(bpy.context.scene)
+    select_platform_native(pkg, root_data.ssh_state, LOCAL_PATH, SERVER_PORT)
+    root_data.state.project_name = "autosave_while_connected"
+    with bpy.context.temp_override(window=window):
+        verdict = bpy.ops.ssh.run_command()
+    note("connect button: " + str(sorted(verdict)))
+
+    def tick():
+        now = time.monotonic()
+        elapsed = now - st["t"]
+        if st["phase"] == "connect":
+            if online():
+                record("I_connect_button_reaches_online", True,
+                       {"seconds": round(elapsed, 1), **snapshot()})
+                # Edit the scene so an auto-save is owed, then set the
+                # interval, whose update restarts Blender's auto-save timer
+                # from now. 2 then 1 forces that update whatever it was.
+                prefs = bpy.context.preferences.filepaths
+                prefs.temporary_directory = autosave_dir
+                prefs.use_auto_save_temporary_files = True
+                prefs.auto_save_time = 2
+                prefs.auto_save_time = 1
+                bpy.ops.mesh.primitive_cube_add()
+                bpy.ops.ed.undo_push(message="owe an auto-save")
+                with bpy.context.temp_override(window=window):
+                    bpy.ops.ppf_rig.hold_modal("INVOKE_DEFAULT")
+                note("blocker held, dirty=" + str(bpy.data.is_dirty))
+                st.update(phase="blocked", t=now)
+                return 1.0
+            if elapsed > CONNECT_TIMEOUT:
+                record("I_connect_button_reaches_online", False,
+                       {"seconds": round(elapsed, 1), **snapshot()})
+                return None
+            return 0.5
+        if not online():
+            st["offline_polls"].append((st["phase"], round(elapsed, 1)))
+        if st["phase"] == "blocked":
+            early = autosaves()
+            if early or elapsed >= BLOCK_S:
+                record("J_blocker_defers_autosave", not early,
+                       {"held_s": round(elapsed, 1), **snapshot()})
+                PPF_RIG_OT_hold_modal.release = True
+                note("blocker released")
+                st.update(phase="released", t=now)
+            return 0.25
+        written = autosaves()
+        if written or elapsed > WRITE_TIMEOUT:
+            snap = snapshot()
+            record("K_autosave_written_while_connected", bool(written),
+                   {"seconds_after_release": round(elapsed, 2), **snap})
+            record("L_still_connected_when_written",
+                   online() and not st["offline_polls"],
+                   {"offline_polls": st["offline_polls"], **snap})
+            try:
+                com.disconnect()
+            except Exception as exc:
+                note("disconnect: " + str(exc))
+            return None
+        return 0.25
+
+    bpy.utils.register_class(PPF_RIG_OT_hold_modal)
+    return tick
+"""
+
+
+_DRIVER_TEMPLATE = dl.DRIVER_LIB + _WATCH + _DRIVER_BODY
+
+
 def build_driver(ctx: r.ScenarioContext) -> str:
-    return _DRIVER_TEMPLATE
+    return (
+        _DRIVER_TEMPLATE
+        .replace("<<LOCAL_PATH>>", REPO_ROOT_POSIX)
+        .replace("<<SERVER_PORT>>", str(ctx.server_port))
+    )
 
 
 def run(ctx: r.ScenarioContext) -> dict:
-    result, err = r.wait_blender_result(ctx)
+    result, err = r.wait_blender_result(ctx, timeout=max(ctx.timeout, 300.0))
     if err is not None:
         return err
     return r.report_named_checks(result.get("checks", {}))
