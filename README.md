@@ -18,7 +18,7 @@ involving 👚 shells, 🪵 solids, 🪢 rods, 🧱 rigid bodies and ⏳ sand. S
 
 ## 📌 TL;DR
 
-To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www.youtube.com/watch?v=FfCDo5dDYro). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
+To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www.youtube.com/watch?v=FfCDo5dDYro) (the earlier [CGMatter walkthrough](https://www.youtube.com/watch?v=D0k6evTvJDg) is also good, though some of it is now outdated). Release download is [here](https://github.com/st-tech/ppf-contact-solver/releases) and the video tutorials are [here](https://st-tech.github.io/ppf-contact-solver/blender_addon/tutorial.html). Read public criticism [(Markdown)](./articles/criticism.md) and [Disclaimer and Limitations](#-disclaimer-and-limitations) before use.
 
 ⚠️ When not in use, disable or uninstall our add-on. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed). We do our best to remove bugs.
 
@@ -313,6 +313,10 @@ Follow this page [How to Install](https://st-tech.github.io/ppf-contact-solver/b
 🎬 Prefer video? Watch this first to learn. [Faebe Tutorials](https://www.youtube.com/@faebetutorials) walks through the full setup in this video tutorial:
 
 <p align="center"><a href="https://www.youtube.com/watch?v=FfCDo5dDYro"><img src="https://img.youtube.com/vi/FfCDo5dDYro/maxresdefault.jpg" alt="ZOZOs CLOTH SIMULATION TUTORIAL BLENDER!"></a></p>
+
+An earlier walkthrough by [CGMatter](https://www.youtube.com/@CGMatter), [*ZoZos Contact Solver - The ultimate Blender cloth simulator*](https://www.youtube.com/watch?v=D0k6evTvJDg), is also good, though parts of it are now outdated. Thank you, CGMatter.
+
+<p align="center"><a href="https://www.youtube.com/watch?v=D0k6evTvJDg"><img src="https://img.youtube.com/vi/D0k6evTvJDg/maxresdefault.jpg" alt="ZoZos Contact Solver - The ultimate Blender cloth simulator"></a></p>
 
 Here are some highlights:
 
