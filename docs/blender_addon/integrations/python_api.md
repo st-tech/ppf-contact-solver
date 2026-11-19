@@ -62,6 +62,10 @@ solver.param.air_density  = 0.001225
 - `frame_rate` keeps its value while **Take FPS from Scene**
   (`use_scene_fps`) is on, and the simulation then runs at the scene's
   frame rate.
+- Likewise `gravity_3d` keeps its value while **Take Gravity from Scene**
+  (`use_scene_gravity`) is on, and `world_scaling` while **Take Unit Scale
+  from Scene** (`use_scene_unit_scale`) is on; the simulation then uses the
+  scene's Gravity and Unit Scale.
 - A name that no scene or connection property has raises `AttributeError`
   on a read and `RuntimeError` on a write.
 

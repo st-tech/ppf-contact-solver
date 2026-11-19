@@ -305,7 +305,7 @@ try:
         no_module = call("connect_ssh", ssh_args)
     finally:
         conn_ops.module_exists = real_module_exists
-    bad_path = call("connect_ssh", dict(ssh_args, remote_path="/tmp/a b"))
+    bad_path = call("connect_ssh", dict(ssh_args, remote_path="/tmp/a\tb"))
     offline_after = connection_status()
     mcp_check(result, "L_connect_refusal_names_the_reason",
               is_offline(offline_before)
@@ -314,7 +314,7 @@ try:
               and "ssh.install_paramiko" in no_module.get("message", "")
               and "context is incorrect" not in no_module.get("message", "")
               and bad_path.get("status") == "error"
-              and "' '" in bad_path.get("message", "")
+              and "'\\t'" in bad_path.get("message", "")
               and is_offline(offline_after),
               {"no_module": no_module.get("message"),
                "bad_path": bad_path.get("message"),

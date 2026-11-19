@@ -8,7 +8,9 @@ import bpy  # pyright: ignore
 from ...core import services
 from ...core.animation import sync_scene_timeline_to_sim
 from ...core.client import communicator as com
-from ...core.encoder import resolve_fps, resolve_start_frame
+from ...core.encoder import (
+    resolve_fps, resolve_gravity_3d, resolve_start_frame, resolve_world_scaling,
+)
 from ...models.groups import get_addon_data
 from ..decorators import (
     MCPError,
@@ -86,6 +88,8 @@ def set_scene_parameters(
     precond: Optional[str] = None,
     schwarz_levels: Optional[int] = None,
     use_scene_fps: Optional[bool] = None,
+    use_scene_gravity: Optional[bool] = None,
+    use_scene_unit_scale: Optional[bool] = None,
     time_scale: Optional[float] = None,
     post_snap_exactly: Optional[bool] = None,
     project_name: Optional[str] = None,
@@ -151,6 +155,10 @@ def set_scene_parameters(
             when precond is "SCHWARZ".
         use_scene_fps: Run the simulation at the Blender scene's frame
             rate instead of the frame_rate field
+        use_scene_gravity: Use Blender's Scene > Gravity (its vector, or
+            none while its checkbox is off) instead of the gravity field
+        use_scene_unit_scale: Use the Blender scene's Unit Scale as World
+            Scaling instead of the world_scaling field
         time_scale: Playback speed of the Blender animation in simulated
             time (1.0 real time, 0.5 half speed); the solver's time
             mapping runs at effective_fps * time_scale
@@ -244,6 +252,8 @@ def set_scene_parameters(
             f"LEVEL_{schwarz_levels}" if schwarz_levels is not None else None
         ),
         "use_scene_fps": use_scene_fps,
+        "use_scene_gravity": use_scene_gravity,
+        "use_scene_unit_scale": use_scene_unit_scale,
         "time_scale": time_scale,
         "post_snap_exactly": post_snap_exactly,
         "project_name": project_name,
@@ -310,6 +320,8 @@ def get_scene_parameters():
             "precond": state.precond,
             "schwarz_levels": int(state.schwarz_levels.split("_")[1]),
             "use_scene_fps": state.use_scene_fps,
+            "use_scene_gravity": state.use_scene_gravity,
+            "use_scene_unit_scale": state.use_scene_unit_scale,
             "time_scale": state.time_scale,
             "frame_start": state.frame_start,
             "use_scene_frame_start": state.use_scene_frame_start,
@@ -321,6 +333,12 @@ def get_scene_parameters():
             # knob on top: the solver's time mapping runs at
             # effective_fps * time_scale (see resolve_solver_fps).
             "effective_fps": resolve_fps(state),
+            # The gravity in use: `gravity` above keeps its last value while
+            # `use_scene_gravity` takes Blender's Scene > Gravity instead.
+            "effective_gravity": list(resolve_gravity_3d(state)),
+            # Likewise `world_scaling` keeps its last value while
+            # `use_scene_unit_scale` takes the scene's Unit Scale.
+            "effective_world_scaling": resolve_world_scaling(state),
             # Same reasoning for the timeline origin: `frame_start` above keeps
             # its last value while `use_scene_frame_start` is on.
             "effective_start_frame": resolve_start_frame(state),

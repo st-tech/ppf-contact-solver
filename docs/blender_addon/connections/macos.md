@@ -67,9 +67,9 @@ and the range.
 
 **Connect** stays unavailable while **Project Name** is empty or holds
 anything other than letters, digits, `.`, `-`, and `_`, and while **Solver
-Path** is empty or contains a shell special character. Spaces are allowed,
-but parentheses are not, so a download folder named
-`ppf-contact-solver (1)` is refused. Rename it.
+Path** is empty or contains a character no file name can hold. Spaces,
+parentheses and other punctuation are fine, so a download folder named
+`ppf-contact-solver (1)` works.
 {ref}`When Connect is unavailable <connect-unavailable>` lists the message
 the panel shows for each case and the characters that are refused.
 

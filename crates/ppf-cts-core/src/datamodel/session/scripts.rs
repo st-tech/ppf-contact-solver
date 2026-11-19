@@ -29,6 +29,27 @@ pub fn windows_library_dirs(proj_root: &Path) -> [PathBuf; 2] {
     ]
 }
 
+/// A path as a literal inside a double-quoted cmd.exe batch string. Inside
+/// the quotes `&`, `|`, `<`, `>`, `(`, `)` and `^` are already literal; the
+/// one character a batch file still expands there is `%`, which is written
+/// as `%%`. `"` cannot occur, being illegal in a Windows filename.
+fn bat_quoted(path: &std::path::Path) -> String {
+    format!("\"{}\"", path.display().to_string().replace('%', "%%"))
+}
+
+/// A path as one POSIX shell word: single-quoted, with each `'` closed,
+/// escaped and reopened. Nothing inside single quotes is special, so `$`,
+/// a backtick, `"`, `\\` and `!` all reach the solver as written.
+fn sh_quoted(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+/// `"NAME=<path>"` for a batch `set`: the quoted-assignment form, which keeps
+/// the whole assignment literal and leaves no quotes in the value.
+fn bat_quoted_assign(name: &str, path: &std::path::Path) -> String {
+    format!("\"{name}={}\"", path.display().to_string().replace('%', "%%"))
+}
+
 /// Produce the body of the solver-launcher script.
 ///
 /// Caller persists the returned string to `<session.path>/<filename>`
@@ -39,8 +60,8 @@ pub fn shell_command_script(
     platform: Platform,
     solver_dir: &Path,
 ) -> String {
-    let session_path = fixed_session.info.path.display();
-    let output_path = fixed_session.output.path.display();
+    let session_path = &fixed_session.info.path;
+    let output_path = &fixed_session.output.path;
     match platform {
         Platform::Windows => {
             // THE SOLVER IS THE CALLER'S TO NAME, AND USED TO BE GUESSED HERE.
@@ -78,31 +99,34 @@ pub fn shell_command_script(
             // solve died at startup. A path that only matters once something
             // else is fixed is exactly the kind that rots unnoticed.
             let [lib_dev, lib_bundle] = windows_library_dirs(&session.proj_root);
-            // Path interpolations are wrapped in double quotes so a
-            // project root containing spaces (e.g. ``C:\New Folder\proj``)
-            // reaches the solver as a single argument instead of being
-            // word-split by clap. ``set FOO=...`` does not need quoting
-            // (cmd reads the value to end-of-line literally), and use
-            // sites already quote ``%SOLVER_PATH%`` / the run line.
+            // EVERY PATH IS A QUOTED LITERAL, assignments included. A bare
+            // `set FOO=C:\Sim & FX\...` ends at the `&` and runs the rest as
+            // a command, and a `)` inside the `if` block below closes the
+            // block early once `%SOLVER_PATH%` expands to
+            // `C:\Program Files (x86)\...`. `set "FOO=..."` and quoted use
+            // sites keep both literal, and `bat_quoted` doubles the `%` a
+            // batch file would otherwise expand.
             format!(
                 r#"@echo off
-set SOLVER_PATH={program}
-set LIB_PATH_DEV={lib_dev}
-set LIB_PATH_BUNDLE={lib_bundle}
+set {solver}
+set {lib_dev}
+set {lib_bundle}
 
 REM CUDA_PATH should be set by start.bat or the environment
-set PATH=%LIB_PATH_DEV%;%LIB_PATH_BUNDLE%;%CUDA_PATH%\bin;%PATH%
+set "PATH=%LIB_PATH_DEV%;%LIB_PATH_BUNDLE%;%CUDA_PATH%\bin;%PATH%"
 
 if not exist "%SOLVER_PATH%" (
-    echo Error: Solver does not exist at %SOLVER_PATH% >&2
+    echo Error: Solver does not exist at "%SOLVER_PATH%" >&2
     exit /b 1
 )
 
-"%SOLVER_PATH%" --path "{session_path}" --output "{output_path}" %*
+"%SOLVER_PATH%" --path {session} --output {output} %*
 "#,
-                program = program.display(),
-                lib_dev = lib_dev.display(),
-                lib_bundle = lib_bundle.display(),
+                solver = bat_quoted_assign("SOLVER_PATH", &program),
+                lib_dev = bat_quoted_assign("LIB_PATH_DEV", &lib_dev),
+                lib_bundle = bat_quoted_assign("LIB_PATH_BUNDLE", &lib_bundle),
+                session = bat_quoted(session_path),
+                output = bat_quoted(output_path),
             )
         }
         Platform::Unix => {
@@ -128,27 +152,32 @@ if not exist "%SOLVER_PATH%" (
                 ]
                 .iter()
                 .map(|(name, dir)| {
-                    format!("export {name}=\"${{{name}:-{}}}\"\n", cache.join(dir).display())
+                    format!(
+                        "[ -n \"${{{name}:-}}\" ] || {name}={}\nexport {name}\n",
+                        sh_quoted(&cache.join(dir))
+                    )
                 })
                 .collect::<String>()
             } else {
                 String::new()
             };
-            // Same spaces-in-path concern as the Windows branch: quote
-            // ``{session_path}`` / ``{output_path}`` so the POSIX shell
-            // doesn't word-split them before exec hands them to clap.
+            // Every path is one single-quoted word (`sh_quoted`), so a
+            // `$`, backtick or `"` in a folder name reaches the solver as
+            // written instead of being expanded by bash.
             format!(
                 r#"#!/bin/bash
-SOLVER_PATH="{program}"
+SOLVER_PATH={program}
 {cache_exports}
 if [ ! -f "$SOLVER_PATH" ]; then
     echo "Error: Solver does not exist at $SOLVER_PATH" >&2
     exit 1
 fi
 
-"$SOLVER_PATH" --path "{session_path}" --output "{output_path}" "$@"
+"$SOLVER_PATH" --path {session} --output {output} "$@"
 "#,
-                program = program.display(),
+                program = sh_quoted(&program),
+                session = sh_quoted(session_path),
+                output = sh_quoted(output_path),
             )
         }
     }
@@ -218,25 +247,31 @@ pub fn write_shell_command_script(
 ///     win: `"{cmd_path}" --load {load}`
 ///     unix: `bash "{cmd_path}" --load {load}`
 ///
-/// Both branches double-quote `cmd_path` so a project root containing
-/// spaces (e.g. `~/My Project/...`) doesn't get word-split by the
-/// shell before exec.
+/// `cmd_path` is one shell word on each platform: single-quoted for the
+/// POSIX shell, so a `$`, backtick or `"` in a folder name is not expanded,
+/// and double-quoted for cmd.exe, which Python's `shell=True` runs as
+/// `cmd /c "<this>"`, keeping the inner quotes around a path holding `&` or
+/// `(`.
 pub fn solver_subprocess_command(cmd_path: &Path, load: i64, platform: Platform) -> String {
     match platform {
         Platform::Windows => format!(r#""{}" --load {}"#, cmd_path.display(), load),
-        Platform::Unix => format!(r#"bash "{}" --load {}"#, cmd_path.display(), load),
+        Platform::Unix => format!("bash {} --load {}", sh_quoted(cmd_path), load),
     }
 }
 
 /// Build the ffmpeg command line invoked via
 /// `subprocess.run(..., shell=True)`. Caller still drives the
-/// subprocess (we don't shell out from Rust). Both `ffmpeg_path` and
-/// `vid_name` are double-quoted so paths or file names with spaces
-/// reach ffmpeg as single arguments.
+/// subprocess (we don't shell out from Rust). `ffmpeg_path` and `vid_name`
+/// are each one shell word for the shell this platform runs, quoted as
+/// `solver_subprocess_command` quotes its path.
 pub fn ffmpeg_video_command(ffmpeg_path: &Path, ext: &str, vid_name: &str) -> String {
+    let (ffmpeg, video) = if cfg!(windows) {
+        (format!("\"{}\"", ffmpeg_path.display()), format!("\"{vid_name}\""))
+    } else {
+        (sh_quoted(ffmpeg_path), sh_quoted(Path::new(vid_name)))
+    };
     format!(
-        "\"{ffmpeg}\" -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png \
-         -pix_fmt yuv420p -c:v libx264 \"{vid_name}\"",
-        ffmpeg = ffmpeg_path.display(),
+        "{ffmpeg} -hide_banner -loglevel error -y -r 60 -i frame_%d.{ext}.png \
+         -pix_fmt yuv420p -c:v libx264 {video}"
     )
 }

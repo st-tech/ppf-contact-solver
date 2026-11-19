@@ -5,6 +5,7 @@
 #
 # SSH/Docker/Local connection operators.
 
+import sys
 import time
 
 import bpy  # pyright: ignore
@@ -18,8 +19,7 @@ from ..core.module import module_exists
 from ..core.ssh_command import parse_ssh_command
 from ..core.utils import (
     find_invalid_name_char,
-    find_invalid_path_char,
-    find_shell_unsafe_path_char,
+    find_unusable_path_char,
     get_timer_wait_time,
     redraw_all_areas,
     resolve_local_path,
@@ -27,9 +27,11 @@ from ..core.utils import (
 from ..models.groups import get_addon_data
 
 # WHAT EACH REMOTE CONNECTION TYPE NEEDS BEFORE CONNECT CAN START IT, in the
-# order a refusal names them: a field that must not be empty, a path that is
-# interpolated into a shell command and so must hold no space or
-# metacharacter, and a module the transport imports.
+# order a refusal names them: a field that must not be empty, a path that must
+# hold only what its filesystem allows (a directory on the POSIX solver host,
+# or the SSH key on this machine), and a module the transport imports. Every
+# remote command quotes the path (`core.remote_shell`), so a space or a shell
+# metacharacter in it is carried rather than refused.
 #
 # DOCKER takes no SSH key. Local Docker reaches the daemon over the Docker
 # socket, so no key takes part in the connection and the panel does not draw
@@ -40,28 +42,42 @@ from ..models.groups import get_addon_data
 # value the user could neither see nor edit here.
 _CONNECT_REQUIREMENTS = {
     "COMMAND": (
-        ("nonempty", "command"), ("path", "ssh_remote_path"), ("module", "paramiko"),
+        ("nonempty", "command"), ("remote_path", "ssh_remote_path"), ("module", "paramiko"),
     ),
     "CUSTOM": (
-        ("nonempty", "host"), ("path", "key_path"), ("path", "ssh_remote_path"),
+        ("nonempty", "host"), ("local_path", "key_path"), ("remote_path", "ssh_remote_path"),
         ("module", "paramiko"),
     ),
     "DOCKER": (
-        ("nonempty", "container"), ("path", "docker_path"), ("module", "docker"),
+        ("nonempty", "container"), ("remote_path", "docker_path"), ("module", "docker"),
     ),
     "DOCKER_SSH": (
-        ("nonempty", "host"), ("nonempty", "container"), ("path", "key_path"),
-        ("path", "docker_path"), ("module", "paramiko"),
+        ("nonempty", "host"), ("nonempty", "container"), ("local_path", "key_path"),
+        ("remote_path", "docker_path"), ("module", "paramiko"),
     ),
     "DOCKER_SSH_COMMAND": (
         ("nonempty", "command"), ("nonempty", "container"),
-        ("path", "docker_path"), ("module", "paramiko"),
+        ("remote_path", "docker_path"), ("module", "paramiko"),
     ),
 }
 
 # The operator in the connection panel that installs each module a transport
 # imports, which is what a refusal for a missing one tells the caller to run.
 _MODULE_INSTALLERS = {"paramiko": "ssh.install_paramiko", "docker": "ssh.install_docker"}
+
+
+def _names_windows_path(rule: str, kind: str) -> bool:
+    """Whether a path checked under *rule* names a Windows directory.
+
+    A remote path is on the solver host, which is POSIX. The SSH key and a
+    native root are on this machine, and only the Windows Native root and a
+    key on a Windows client are Windows paths.
+    """
+    if rule == "remote_path":
+        return False
+    if rule == "native_path":
+        return kind == "WIN_NATIVE"
+    return sys.platform == "win32"
 
 
 def connect_refusal(context) -> str | None:
@@ -94,12 +110,11 @@ def connect_refusal(context) -> str | None:
         )
     kind = props.server_type
     if kind in NATIVE_PATH_FIELDS:
-        # A NATIVE ROOT NEVER REACHES A SHELL (it is an os.path.join base, a
-        # Popen argv element, and that Popen's cwd), so it is held to the
-        # metacharacter rule only. A space is ordinary in a path on all three
-        # platforms, and this button is the only place the user could act on
-        # a refusal of one, with no field on screen to change and nothing
-        # wrong with what they picked.
+        # A NATIVE ROOT IS A DIRECTORY ON THIS MACHINE, held to what its
+        # filesystem allows and nothing more. It is an os.path.join base and a
+        # Popen argv element here, and the session launcher the server writes
+        # for each solve quotes it (`scripts.rs`), so a space, `(`, `&` or `%`
+        # in it is ordinary.
         field = NATIVE_PATH_FIELDS[kind]
         checks = (("nonempty", field), ("native_path", field))
     else:
@@ -122,11 +137,7 @@ def connect_refusal(context) -> str | None:
             if value.strip() == "":
                 return f"{label} is empty"
             continue
-        finder = (
-            find_shell_unsafe_path_char if rule == "native_path"
-            else find_invalid_path_char
-        )
-        ch = finder(value)
+        ch = find_unusable_path_char(value, windows=_names_windows_path(rule, kind))
         if ch is not None:
             return f"{label} contains {ch!r}, which a path here cannot hold"
     return None

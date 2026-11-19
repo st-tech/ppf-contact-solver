@@ -37,6 +37,7 @@ from .protocol import (
 )
 from .connection import DEVICE_GPU
 from .gpu_devices import AUTOMATIC
+from . import remote_shell
 from .server_kill import KillReport, kill_local_server
 from .status import BytesPerSecondCalculator
 from ..models.console import console
@@ -737,9 +738,9 @@ class SSHBackend:
         if timeout is not None:
             command = bounded_command(command, timeout)
         if self._container and not command.startswith("docker"):
-            command = f"docker exec -w {cwd} {self._container} {command}"
+            command = remote_shell.docker_exec(cwd, self._container, command)
         elif not self._container:
-            command = f"cd {cwd} && {command}"
+            command = remote_shell.in_directory(cwd, command)
         try:
             _stdin, stdout, stderr = self._instance.exec_command(
                 command,

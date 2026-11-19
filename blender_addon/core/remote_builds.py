@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import posixpath
 
+from . import remote_shell
+
 # How long the listing command may take on the solver host. The GPU probe is
 # bounded at 5 s for the same reason and says why: a wedged host must not stall
 # Connect. This one is a handful of `test -f` and `cat` calls, so it is bounded
@@ -102,11 +104,10 @@ def probe_command(root: str) -> str:
     server prints nothing, which is the answer "there is no build here". The
     field order is load-bearing; `_FIELD_SEP` says why.
 
-    THE ROOT IS INTERPOLATED INTO A SHELL COMMAND, so it is quoted here. Every
-    path that reaches this point has already been through the add-on's
-    metacharacter gate (`core.utils.find_invalid_path_char`, which the Connect
-    button applies to a remote path), and this quoting is the second of the two
-    rather than the only one.
+    THE ROOT IS INTERPOLATED INTO A SHELL COMMAND, so it is quoted here, as
+    every remote command quotes its paths (`core.remote_shell`). The Connect
+    gate refuses only what no filename can hold, so a space, a quote or a `$`
+    in the root reaches this point and has to arrive intact.
 
     `2>/dev/null` on the marker read, not on the whole command: a directory
     holding a server and no marker is the normal shape of a downloaded
@@ -148,16 +149,12 @@ def _tested(path: str) -> str:
     Printing the expanded path would key the listing by something no lookup
     computes.
     """
-    if path == "~":
-        return '"$HOME"'
-    if path.startswith("~/"):
-        return '"$HOME"' + _shell_quote(path[1:])
-    return _shell_quote(path)
+    return remote_shell.path_word(path)
 
 
 def _shell_quote(value: str) -> str:
     """*value* as one single-quoted shell word."""
-    return "'" + value.replace("'", "'\\''") + "'"
+    return remote_shell.shell_word(value)
 
 
 def parse_listing(lines) -> dict[str, str]:

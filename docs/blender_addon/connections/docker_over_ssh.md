@@ -53,10 +53,7 @@ every Docker command there.
    [SSH Custom mode](ssh.md#setup---custom-mode). They locate the remote
    host that runs the Docker daemon. Fill **Proxy Jump** as well if that
    host is only reachable through a bastion (see
-   {ref}`Jump Hosts <jump-hosts>`). **SSH Key** must hold no spaces or shell
-   special characters. On Windows the default path starts in your user
-   folder, which contains a space when your account name does, so point the
-   field at a copy of the key in a path without one.
+   {ref}`Jump Hosts <jump-hosts>`).
 3. Set **Container** to the container name on the *remote* daemon (default
    `ppf-contact-solver`). The add-on runs `docker exec` against this name
    over the SSH session.

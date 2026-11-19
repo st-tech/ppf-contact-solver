@@ -138,6 +138,7 @@ def _contact_resolution(group, state, which):
     """
     from ..uuid_registry import resolve_assigned
     from .mesh import compute_object_bounding_box_diagonal
+    from . import resolve_world_scaling
     from .params import contact_lengths_follow_object_size
 
     if group.object_type == "SAND":
@@ -145,11 +146,11 @@ def _contact_resolution(group, state, which):
     if contact_lengths_follow_object_size(group):
         return f"contact_{which}_rat", {
             assigned.uuid: compute_object_bounding_box_diagonal(
-                resolve_assigned(assigned)) * float(state.world_scaling)
+                resolve_assigned(assigned)) * resolve_world_scaling(state)
             for assigned in group.assigned_objects
             if assigned.included
         }
-    return f"contact_{which}", float(state.world_scaling)
+    return f"contact_{which}", resolve_world_scaling(state)
 
 
 def _slot_of(scene, group):

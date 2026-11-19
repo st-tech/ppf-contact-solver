@@ -68,6 +68,7 @@ _FRAME_COUNT = 24
 
 _DRIVER_BODY = r"""
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -128,11 +129,14 @@ def read_launcher(project_root):
     solver_path = ""
     with open(launcher, encoding="utf-8", errors="replace") as handle:
         for line in handle:
+            # The launcher quotes the path (`scripts.rs`): Windows as
+            # `set "SOLVER_PATH=<path>"` with `%` doubled, POSIX as one
+            # single-quoted shell word.
             line = line.strip()
-            if windows and line.startswith("set SOLVER_PATH="):
-                solver_path = line[len("set SOLVER_PATH="):]
+            if windows and line.startswith('set "SOLVER_PATH=') and line.endswith('"'):
+                solver_path = line[len('set "SOLVER_PATH='):-1].replace("%%", "%")
             elif not windows and line.startswith("SOLVER_PATH="):
-                solver_path = line[len("SOLVER_PATH="):].strip('"')
+                solver_path = (shlex.split(line[len("SOLVER_PATH="):]) or [""])[0]
     command = (["cmd", "/c", launcher, "--backend"] if windows
                else ["bash", launcher, "--backend"])
     done = subprocess.run(command, capture_output=True, text=True, timeout=120)

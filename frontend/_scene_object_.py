@@ -723,6 +723,12 @@ class Object:
         - ``cosserat-straight-rest`` (default 0): 1 takes a straight,
           untwisted rest state instead of the authored shape.
 
+        The rest curvature and twist come from the authored shape, or from
+        the bending reference when :meth:`set_bend_rest_vert` gives one, so a
+        rod authored bent over a form can rest straight or in another shape
+        and carry the pose's bend as strain. The stretch rest lengths stay the
+        pose's either way.
+
         The stiffnesses are density normalized, like ``young-mod``, and
         resolution independent: refining a rod's segments leaves its
         rigidities unchanged. The rod

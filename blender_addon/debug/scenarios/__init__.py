@@ -98,6 +98,10 @@ from . import upload_id_changes
 from . import bl_connect_linux_native
 from . import bl_connect_win_native
 from . import bl_connection_path_validation
+from . import bl_special_character_paths
+from . import bl_remote_paths_quoted
+from . import bl_scene_gravity_checkbox
+from . import bl_scene_unit_scale
 from . import bl_connection_path_relative
 from . import bl_connection_failure_reporting
 from . import bl_connect_cancel_releases
@@ -558,6 +562,16 @@ REGISTRY = {
     "bl_connect_linux_native": bl_connect_linux_native,
     "bl_connect_win_native": bl_connect_win_native,
     "bl_connection_path_validation": bl_connection_path_validation,
+    # A solver path holding a space or a shell metacharacter connects, and a
+    # solve whose session sits under such a folder runs.
+    "bl_special_character_paths": bl_special_character_paths,
+    # The commands sent to a remote solver host carry such a path intact.
+    "bl_remote_paths_quoted": bl_remote_paths_quoted,
+    # Take Gravity from Scene uses Blender's Scene > Gravity, and none while its
+    # checkbox is off.
+    "bl_scene_gravity_checkbox": bl_scene_gravity_checkbox,
+    # Take Unit Scale from Scene uses the scene's Unit Scale as World Scaling.
+    "bl_scene_unit_scale": bl_scene_unit_scale,
     "bl_connection_path_relative": bl_connection_path_relative,
     "bl_remote_device_select": bl_remote_device_select,
     "bl_connection_failure_reporting": bl_connection_failure_reporting,

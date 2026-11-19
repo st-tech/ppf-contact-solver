@@ -103,6 +103,10 @@ def encode_scene_param_anim(state, fps, start_frame, frame_count):
         watched = spec["props"]
         if not any((p, i) in by_prop for p in watched for i in range(4)):
             continue
+        # Under Take Gravity from Scene the add-on's Gravity field is not in
+        # use, so neither are its keyframes (`resolve_gravity_3d`).
+        if spec["kind"] == "gravity" and state.use_scene_gravity:
+            continue
         values = []
         for frame in frames:
             read = {p: _sample(by_prop, state, p, frame, lengths[p]) for p in watched}

@@ -3,13 +3,15 @@
 # Review: Ryoichi Ando (ryoichi.ando@zozo.com)
 # License: GPL-3.0-or-later
 #
-# Backend Connection path validation. A connection path that holds a space
-# or a shell-unsafe character (& | ; ... ) breaks once it is interpolated
-# into a launch/ssh command, so the panel warns and the Connect button is
-# disabled. This scenario exercises that behavior inside real Blender:
+# Backend Connection path validation. A connection path may hold anything its
+# filesystem allows, since every command that carries it quotes it; what no
+# filename can hold (a control character, and on Windows the characters NTFS
+# forbids) makes the panel warn and disables the Connect button. This scenario
+# exercises that behavior inside real Blender:
 #
-#   * core.utils.find_invalid_path_char flags spaces / metacharacters and
-#     passes clean paths (including Windows drive letters and ``~/``).
+#   * core.utils.find_unusable_path_char passes spaces, shell metacharacters,
+#     Windows drive letters and ``~/``, flags control characters everywhere,
+#     and flags ``<>"|?*`` only for a Windows path.
 #   * ui.main_panel._draw_path_warning emits a single ERROR line for a bad
 #     path and stays silent for a good one (a fake layout records the
 #     label() calls, since a real UILayout can't be built outside draw).
@@ -108,10 +110,15 @@ class _FakeLayout:
 
 
 try:
-    utils = __import__(pkg + ".core.utils", fromlist=["find_invalid_path_char"])
+    utils = __import__(pkg + ".core.utils", fromlist=["find_unusable_path_char"])
     main_panel = __import__(pkg + ".ui.main_panel", fromlist=["_draw_path_warning"])
     groups = __import__(pkg + ".models.groups", fromlist=["get_addon_data"])
-    fic = utils.find_invalid_path_char
+
+    def fic(path):
+        return utils.find_unusable_path_char(path, windows=False)
+
+    def fic_win(path):
+        return utils.find_unusable_path_char(path, windows=True)
 
     bs = chr(92)  # backslash, kept out of the source to dodge escaping
     win_backslash = "C:" + bs + "ppf-contact-solver" + bs + "build"
@@ -121,18 +128,28 @@ try:
            {"v": fic("/home/user/work")})
     record("validator_clean_win_fwd", fic("C:/ppf-contact-solver/build") is None,
            {"v": fic("C:/ppf-contact-solver/build")})
-    record("validator_clean_win_backslash", fic(win_backslash) is None,
-           {"v": fic(win_backslash)})
+    record("validator_clean_win_backslash", fic_win(win_backslash) is None,
+           {"v": fic_win(win_backslash)})
     record("validator_tilde_ok", fic("~/work/project") is None,
            {"v": fic("~/work/project")})
-    record("validator_space", fic("/home/user/my work") == " ",
+    record("validator_space_ok", fic("/home/user/my work") is None,
            {"v": fic("/home/user/my work")})
-    record("validator_ampersand", fic("/data&run") == "&",
-           {"v": fic("/data&run")})
+    awkward = "/data/ppf (1) & O'Brien 100% [x] {y} ^ #! $z ;"
+    record("validator_shell_metacharacters_ok",
+           fic(awkward) is None and fic_win(awkward) is None,
+           {"posix": fic(awkward), "windows": fic_win(awkward)})
+    record("validator_control_character_flagged",
+           fic("/data\nrun") == "\n" and fic_win("C:/data\trun") == "\t",
+           {"posix": fic("/data\nrun"), "windows": fic_win("C:/data\trun")})
+    record("validator_windows_forbidden_only_on_windows",
+           fic_win("C:/a|b") == "|" and fic_win("C:/a?b") == "?"
+           and fic("/a|b") is None,
+           {"win_pipe": fic_win("C:/a|b"), "win_q": fic_win("C:/a?b"),
+            "posix_pipe": fic("/a|b")})
 
     # ---- draw helper: warning + hint on bad, silent on good ----
     fl_bad = _FakeLayout()
-    bad_ret = main_panel._draw_path_warning(fl_bad, "/data&run")
+    bad_ret = main_panel._draw_path_warning(fl_bad, "C:/a|b", windows=True)
     icons_bad = [ic for _, ic in fl_bad.labels]
     record(
         "warning_drawn_on_bad_path",
@@ -141,7 +158,8 @@ try:
     )
 
     fl_good = _FakeLayout()
-    good_ret = main_panel._draw_path_warning(fl_good, "/home/user/work")
+    good_ret = main_panel._draw_path_warning(
+        fl_good, "/home/user/my work (1) & co", windows=False)
     record(
         "warning_silent_on_good_path",
         good_ret is False and len(fl_good.labels) == 0,
@@ -158,13 +176,10 @@ try:
     def connect_enabled():
         return bool(bpy.ops.ssh.run_command.poll())
 
-    # A NATIVE PATH NEVER REACHES A SHELL: it is an os.path.join base, a
-    # subprocess.Popen argv element, and that Popen's cwd. So it is held to the
-    # metacharacter rule alone. A space is ordinary in a path on every platform
-    # ("C:/Program Files/...", "/Users/me/My Work"), and refusing it greyed the
-    # Connect button out with nothing the user could act on. The remote types
-    # keep the whitespace rule, because their launch writes the directory into
-    # a generated shell script; they are covered by the predicate checks below
+    # A NATIVE PATH IS HELD TO WHAT ITS FILESYSTEM ALLOWS. A space or a shell
+    # metacharacter is ordinary in a path ("C:/Program Files (x86)/...",
+    # "/Users/me/My Work"), and every place it reaches a shell quotes it. The
+    # remote types follow the same rule through the predicate checks below
     # rather than through poll(), which needs paramiko for them.
     props.server_type = "LINUX_NATIVE"
     props.linux_native_path = "/home/user/work"
@@ -173,8 +188,11 @@ try:
     props.linux_native_path = "/home/user/my work"
     record("poll_linux_native_space_enabled", connect_enabled() is True,
            {"path": props.linux_native_path})
-    props.linux_native_path = "/data&run"
-    record("poll_linux_native_ampersand_disabled", connect_enabled() is False,
+    props.linux_native_path = "/data&run (1)"
+    record("poll_linux_native_ampersand_enabled", connect_enabled() is True,
+           {"path": props.linux_native_path})
+    props.linux_native_path = "/data\nrun"
+    record("poll_linux_native_newline_disabled", connect_enabled() is False,
            {"path": props.linux_native_path})
     props.linux_native_path = ""
     record("poll_linux_native_empty_disabled", connect_enabled() is False,
@@ -187,20 +205,13 @@ try:
     props.win_native_path = "C:/Program Files/ppf"
     record("poll_win_space_enabled", connect_enabled() is True,
            {"path": props.win_native_path})
-    props.win_native_path = "C:/ppf&run"
-    record("poll_win_ampersand_disabled", connect_enabled() is False,
+    props.win_native_path = "C:/Program Files (x86)/ppf&run"
+    record("poll_win_ampersand_enabled", connect_enabled() is True,
+           {"path": props.win_native_path})
+    props.win_native_path = "C:/ppf|run"
+    record("poll_win_forbidden_char_disabled", connect_enabled() is False,
            {"path": props.win_native_path})
 
-    # ---- the two path predicates, and what separates them ----
-    fsu = utils.find_shell_unsafe_path_char
-    fip = utils.find_invalid_path_char
-    record("shell_unsafe_allows_a_space", fsu("C:/Program Files/ppf") is None,
-           {"v": fsu("C:/Program Files/ppf")})
-    record("invalid_path_still_flags_a_space", fip("C:/Program Files/ppf") == " ",
-           {"v": fip("C:/Program Files/ppf")})
-    record("both_flag_a_metacharacter",
-           fsu("/data&run") == "&" and fip("/data&run") == "&",
-           {"shell": fsu("/data&run"), "invalid": fip("/data&run")})
 
     # ---- project name validator (stricter: no path separators either) ----
     fin = utils.find_invalid_name_char

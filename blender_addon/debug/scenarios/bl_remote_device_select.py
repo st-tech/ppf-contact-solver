@@ -221,7 +221,7 @@ try:
         backend = _Recorder("ssh", device, "AUTO")
         script, error = launch(runner, backend, both)
         want_bin = f"{ROOT}/target/{backend_name}/release/ppf-cts-server"
-        want_dir = f'export CARGO_TARGET_DIR="{ROOT}/target/{backend_name}"'
+        want_dir = f"export CARGO_TARGET_DIR='{ROOT}/target/{backend_name}'"
         record(
             f"C_ssh_{device.lower()}_launch_names_the_build",
             want_bin in script and want_dir in script,
@@ -235,7 +235,7 @@ try:
     record(
         "D_docker_cpu_launch_names_the_build",
         f"{ROOT}/target/cpu/release/ppf-cts-server" in script
-        and f'export CARGO_TARGET_DIR="{ROOT}/target/cpu"' in script,
+        and f"export CARGO_TARGET_DIR='{ROOT}/target/cpu'" in script,
         {"script": script[:400], "error": error},
     )
 
@@ -327,7 +327,7 @@ try:
     record(
         "H_the_device_given_at_start_server_wins_over_the_one_from_connect",
         f"{ROOT}/target/cpu/release/ppf-cts-server" in script
-        and f'export CARGO_TARGET_DIR="{ROOT}/target/cpu"' in script,
+        and f"export CARGO_TARGET_DIR='{ROOT}/target/cpu'" in script,
         {"script": script[:400], "error": error},
     )
     # And the same for the accelerator.

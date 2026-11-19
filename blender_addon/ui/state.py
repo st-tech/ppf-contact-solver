@@ -599,6 +599,18 @@ def _on_hide_overlay_colors_changed(self, context):
     apply_object_overlays()
 
 
+def _scene_gravity(self):
+    """Blender's Scene > Gravity vector, or zero while its checkbox is off.
+
+    The getter of ``State.scene_gravity_display``. The state lives on the
+    scene (``scene.zozo_contact_solver.state``), so ``id_data`` is that scene.
+    """
+    scene = self.id_data
+    if not scene.use_gravity:
+        return (0.0, 0.0, 0.0)
+    return tuple(scene.gravity)
+
+
 class State(PropertyGroup):
     uuid_migration_result: StringProperty(
         name="UUID Migration Result",
@@ -657,6 +669,30 @@ class State(PropertyGroup):
         description="Gravity acceleration vector (m/s\u00b2)",
         update=_on_direction_preview_changed,
     )  # pyright: ignore
+    use_scene_gravity: BoolProperty(  # pyright: ignore
+        name="Take Gravity from Scene",
+        default=False,
+        description=(
+            "Use Blender's Scene > Gravity for the simulation: its X, Y and Z, "
+            "and none while its checkbox is off. The Gravity field keeps its "
+            "value for when this is turned off"
+        ),
+        options=NOT_ANIMATABLE,
+    )
+    # READ-ONLY: what Take Gravity from Scene uses, shown in place of the field
+    # and read by the encoder (`encoder.resolve_gravity_3d`), so the panel and
+    # the solve cannot disagree.
+    scene_gravity_display: FloatVectorProperty(  # pyright: ignore
+        name="Gravity (m/s\u00b2)",
+        subtype="XYZ",
+        size=3,
+        precision=2,
+        get=_scene_gravity,
+        description=(
+            "Blender's Scene > Gravity, zero while its checkbox is off"
+        ),
+        options=NOT_ANIMATABLE,
+    )
     preview_gravity_direction: BoolProperty(
         name="Preview Direction",
         default=False,
@@ -777,10 +813,21 @@ class State(PropertyGroup):
             "scaled back so the scene stays at its authored size (e.g. 0.1 "
             "simulates a 15 m mesh at 1.5 m, under the same gravity). Positions, "
             "contact gaps, velocities and the constraint gap scale with it; "
-            "gravity, wind, material parameters and torques do not"
+            "gravity, wind, material parameters and torques do not. Ignored "
+            "while Take Unit Scale from Scene is on"
         ),
         options=NOT_ANIMATABLE,
     )  # pyright: ignore
+    use_scene_unit_scale: BoolProperty(  # pyright: ignore
+        name="Take Unit Scale from Scene",
+        default=False,
+        description=(
+            "Use the Blender scene's Unit Scale (Scene > Units) as World "
+            "Scaling instead of the World Scaling field: one scene unit is "
+            "simulated as that many meters"
+        ),
+        options=NOT_ANIMATABLE,
+    )
     friction_mode: EnumProperty(
         name="Friction Mode",
         items=[

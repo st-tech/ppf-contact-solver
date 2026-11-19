@@ -167,6 +167,7 @@ _SCENE_PARAM_FIELDS = {
     "air_density": "air_density",
     "air_friction": "air_friction",
     "gravity": "gravity_3d",
+    "use_scene_gravity": "use_scene_gravity",
     "frame_count": "frame_count",
     "frame_start": "frame_start",
     "use_scene_frame_start": "use_scene_frame_start",

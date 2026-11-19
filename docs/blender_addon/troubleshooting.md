@@ -74,9 +74,10 @@ for the full table:
   Name** also disables **Connect**, and the panel draws no message for it.
 - An empty required field (**Host**, **SSH Command**, **Container** or
   **Solver Path**, depending on the type): fill it in.
-- *Path should not contain spaces or special characters* under **SSH Key**,
-  **Remote Path** or **Container Path**, and *Path should not contain special
-  characters* under **Solver Path**: remove the character.
+- *Path cannot contain* followed by a character, under **SSH Key**,
+  **Remote Path**, **Container Path** or **Solver Path**: the path holds a
+  character no file name can (a control character, or on Windows one of
+  `< > " | ? *`). Remove it.
 - An install button for Paramiko or Docker-Py: see
   [Installation](#installation).
 - **Connecting...** on the button, or an open connection: wait, press

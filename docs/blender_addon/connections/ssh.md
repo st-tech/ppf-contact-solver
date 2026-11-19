@@ -141,10 +141,8 @@ or no host.
   Command**).
 - **Project Name** is empty, or contains anything other than letters,
   digits, `.`, `-`, and `_`.
-- **SSH Key** (**SSH** only) or **Remote Path** contains a space or a
-  shell special character. The default key path comes from your home
-  directory, so an account name with a space makes it unusable: point
-  **SSH Key** at a copy of the key in a path without spaces.
+- **SSH Key** (**SSH** only) or **Remote Path** contains a character no
+  file name can hold. Spaces and punctuation are fine.
 
 {ref}`When Connect is unavailable <connect-unavailable>` lists the message
 the panel shows for each case and the characters that are refused.

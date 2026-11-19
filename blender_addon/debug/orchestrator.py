@@ -25,6 +25,7 @@ import json
 import multiprocessing as mp
 import os
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -157,7 +158,23 @@ def _solver_backend_answer(directory: str) -> str:
 
 
 _LAUNCHER_NAMES = ("command.bat", "command.sh")
-_LAUNCHER_SOLVER_PREFIXES = ("set SOLVER_PATH=", 'SOLVER_PATH="')
+
+
+def launcher_solver_path(line: str) -> str | None:
+    """The solver path a session launcher line assigns, or ``None``.
+
+    The launcher quotes every path (`scripts.rs`): the Windows one as
+    ``set "SOLVER_PATH=<path>"`` with ``%`` doubled, the POSIX one as
+    ``SOLVER_PATH=<one single-quoted shell word>``. Undoing exactly that is
+    what gives back the path the solve executed.
+    """
+    stripped = line.strip()
+    if stripped.startswith('set "SOLVER_PATH=') and stripped.endswith('"'):
+        return stripped[len('set "SOLVER_PATH='):-1].replace("%%", "%")
+    if stripped.startswith("SOLVER_PATH="):
+        words = shlex.split(stripped[len("SOLVER_PATH="):])
+        return words[0] if words else ""
+    return None
 
 
 def _session_solvers(project_dir: str) -> list[str]:
@@ -173,12 +190,9 @@ def _session_solvers(project_dir: str) -> list[str]:
             if name not in _LAUNCHER_NAMES:
                 continue
             for line in _read_text(os.path.join(root, name)).splitlines():
-                stripped = line.strip()
-                for prefix in _LAUNCHER_SOLVER_PREFIXES:
-                    if stripped.startswith(prefix):
-                        path = stripped[len(prefix):].rstrip('"')
-                        if path not in found:
-                            found.append(path)
+                path = launcher_solver_path(line)
+                if path is not None and path not in found:
+                    found.append(path)
     return found
 
 
@@ -497,10 +511,15 @@ class WorkerResult:
     session_solvers: list[str] = field(default_factory=list)
 
 
-def _provision_worker(run_root: str, slot: int) -> WorkerSpec:
+def _provision_worker(run_root: str, slot: int, *,
+                      project_dir_name: str = "project") -> WorkerSpec:
+    # *project_dir_name* is the server's data root under the worker, which
+    # every session of the run lives under. A scenario names it
+    # (`PROJECT_DIR_NAME`) to put a session, and so the launch script the
+    # server writes for it, under a folder whose name a shell would misread.
     workspace = os.path.join(run_root, f"worker-{slot:02d}")
     server_dir = os.path.join(workspace, "server")
-    project_dir = os.path.join(workspace, "project")
+    project_dir = os.path.join(workspace, project_dir_name)
     probe_dir = os.path.join(workspace, "probe")
     for d in (server_dir, project_dir, probe_dir):
         os.makedirs(d, exist_ok=True)
@@ -734,7 +753,10 @@ def run_one(scenario_name: str, *, slot: int, run_root: str,
         **scenario_knobs,
         **(knobs or {}),
     }
-    spec = _provision_worker(run_root, slot)
+    spec = _provision_worker(
+        run_root, slot,
+        project_dir_name=getattr(scenario, "PROJECT_DIR_NAME", "project"),
+    )
     proc = _spawn_server(spec, python=python, knobs=effective_knobs)
     started_at = time.monotonic()
     blender_proc = None

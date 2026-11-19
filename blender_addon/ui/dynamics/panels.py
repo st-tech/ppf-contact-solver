@@ -1357,8 +1357,41 @@ class MAIN_PT_SceneConfiguration(Panel):
         layout.prop(params, "min_newton_steps")
         layout.prop(params, "air_density")
         layout.prop(params, "air_friction")
-        layout.prop(params, "world_scaling")
-        layout.prop(params, "gravity_3d")
+        # Same shape as the FPS box: name the factor the solve uses
+        # (`encoder.resolve_world_scaling`); the field keeps its last value
+        # while the scene's Unit Scale is taken.
+        scale_box = layout.box()
+        scale_box.prop(params, "use_scene_unit_scale")
+        if params.use_scene_unit_scale:
+            # Unit Scale is the one factor between a scene unit and a meter;
+            # Blender's Length unit only picks how lengths are displayed, so it
+            # is not part of the factor. Naming the length one unit stands for
+            # makes that visible: Unit Scale 1000 reads "1 unit = 1 km".
+            units = context.scene.unit_settings
+            scale = units.scale_length
+            system = units.system if units.system != "NONE" else "METRIC"
+            one_unit = bpy.utils.units.to_string(
+                system, "LENGTH", scale, precision=4, split_unit=False)
+            row = scale_box.row()
+            row.label(text="World Scaling (from Scene):")
+            row.label(text=f"{scale:.4g} (1 unit = {one_unit})")
+        else:
+            scale_box.prop(params, "world_scaling")
+        # Same shape as the FPS box: under Take Gravity from Scene, show the
+        # vector the solve actually uses (`encoder.resolve_gravity_3d`), read
+        # only, in place of the field, which keeps its value meanwhile.
+        gravity_box = layout.box()
+        gravity_box.prop(params, "use_scene_gravity")
+        if params.use_scene_gravity:
+            col = gravity_box.column()
+            col.enabled = False
+            col.prop(params, "scene_gravity_display")
+            if not context.scene.use_gravity:
+                gravity_box.label(
+                    text="Gravity is turned off in the Scene Settings",
+                    icon="INFO")
+        else:
+            gravity_box.prop(params, "gravity_3d")
         layout.prop(params, "preview_gravity_direction")
 
         has_shell_type = any(

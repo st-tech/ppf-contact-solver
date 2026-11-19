@@ -254,6 +254,13 @@ try:
     props.solver_gpu_uuid = ""
     original_connected = client.communicator.__class__.is_connected
     offline, online = [], []
+    # A connection type that HAS a picker. A new scene starts on this
+    # platform's native type, and on macOS that is macOS Native, whose
+    # section is empty by design (its solver runs on the default Metal
+    # device), so leaving the default in place makes this check
+    # platform-dependent.
+    saved_type = props.server_type
+    props.server_type = "CUSTOM"
     try:
         client.communicator.__class__.is_connected = lambda _self: False
         panel._draw_gpu_section(_Layout(offline), props)
@@ -261,6 +268,7 @@ try:
         panel._draw_gpu_section(_Layout(online), props)
     finally:
         client.communicator.__class__.is_connected = original_connected
+        props.server_type = saved_type
     record("F_panel_draws_only_the_picker",
            drew_prop and drew_refresh and no_prose and says_failure
            and offline == []
@@ -487,7 +495,12 @@ try:
     script = launched_script.get("script", "")
     record("L_shell_launch_carries_the_device",
            prefixes == ("", f"CUDA_VISIBLE_DEVICES={devices[1].uuid} ")
-           and f"CUDA_VISIBLE_DEVICES={devices[1].uuid} /home/u/ppf-contact-solver/target/release/ppf-cts-server" in script,
+           # The binary is a quoted word after the assignment, inside the
+           # quoted command the detached shell runs (`remote_shell`).
+           and f"CUDA_VISIBLE_DEVICES={devices[1].uuid} " in script
+           and "/home/u/ppf-contact-solver/target/release/ppf-cts-server" in script
+           and script.index(f"CUDA_VISIBLE_DEVICES={devices[1].uuid} ")
+           < script.index("/home/u/ppf-contact-solver/target/release/ppf-cts-server"),
            {"prefixes": prefixes, "script": script[:400]})
 
     # ----- M: connecting does not start the server ----------------------

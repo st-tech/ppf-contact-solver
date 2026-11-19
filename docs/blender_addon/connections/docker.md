@@ -81,7 +81,7 @@ red) stays grayed out until the install finishes.
 | Field | Default | Description |
 | ----- | ------- | ----------- |
 | Container | `ppf-contact-solver` | Docker container name. Must already exist on the daemon. |
-| Container Path | `/root/ppf-contact-solver` | Solver root **inside** the container: the directory that holds `ppf-cts-server` under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`. Not a path on this machine, and not the `target/release` folder itself. Holds no spaces or shell special characters. |
+| Container Path | `/root/ppf-contact-solver` | Solver root **inside** the container: the directory that holds `ppf-cts-server` under `target/release/`, `target/cuda/release/`, `target/rocm/release/`, or `target/cpu/release/`. Not a path on this machine, and not the `target/release` folder itself. |
 | Project Name | `unnamed` | Letters, digits, `.`, `-` and `_` only. The same field on every connection type. |
 | Docker Port | `9090` | TCP port inside the container where `ppf-cts-server` listens, 1024-65535. The container must publish it; see {ref}`Publishing the port for Docker <docker-port-publishing>`. The connection reads it at **Connect**. |
 

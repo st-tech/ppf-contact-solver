@@ -34,15 +34,18 @@ def _resolve_scene_dyn_params(state, current_frame):
 
     Returns (gravity_vec, wind_direction_vec, wind_strength).
     """
-    from ....core.encoder import resolve_start_frame
+    from ....core.encoder import resolve_gravity_3d, resolve_start_frame
 
-    gravity = list(state.gravity_3d)
+    gravity = list(resolve_gravity_3d(state))
     wind_dir = list(state.wind_direction)
     wind_strength = state.wind_strength
     start_frame = resolve_start_frame(state)
 
     for dyn_item in state.dyn_params:
         if len(dyn_item.keyframes) < 2:
+            continue
+        # Under Take Gravity from Scene the field's keyframes are not in use.
+        if dyn_item.param_type == "GRAVITY" and state.use_scene_gravity:
             continue
 
         # Build resolved keyframe list

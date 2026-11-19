@@ -73,7 +73,7 @@ box* is the unlabeled box that holds the contact gap and offset rows, with
 | **Inflate** and **Pressure (Pa)**                                | Shell                                 | See [Inflate](#inflate).                                                                                                                                                                       |
 | **Spatial Material Maps**                                        | Solid, Shell, Rod                     | See [Spatial Material Maps](#spatial-material-maps).                                                                                                                                           |
 | **Plasticity**                                                   | Solid, Shell                          | See [Plasticity](#plasticity).                                                                                                                                                                 |
-| **Rest Angle**, **From Reference Geometry** and **Bend Plasticity** | Shell, Rod                         | Shell: one box below **Plasticity**. Rod: **Rest Angle** and **From Reference Geometry** sit in the **Bend** box, and **Bend Plasticity** has its own box.                                     |
+| **Rest Angle** and **Bend Plasticity**                           | Shell, Rod                            | Shell: one box below **Plasticity**. Rod: **Rest Angle** sits in the **Bend** box, and **Bend Plasticity** has its own box. See [Rest Angle and Bend Plasticity](#rest-angle-and-bend-plasticity). |
 | **Velocity Overwrite**                                           | Solid, Shell, Rod, PDRD               | Titled **Velocity (free launch)** on PDRD. Rod has no spin controls. See [Velocity Overwrite](#velocity-overwrite).                                                                            |
 | **Lock Translation** box                                         | Solid, Shell, Rod, PDRD, Sand         | See [Lock Translation and Lock Rotation](#lock-translation-and-lock-rotation).                                                                                                                 |
 | **Tetrahedralizer**                                              | Solid                                 | See [Tetrahedralizer (per object)](#tetrahedralizer-per-object).                                                                                                                               |
@@ -280,7 +280,7 @@ same Blender session, and its result lists the rows a closed padlock kept under
 
 Several boxes edit one object at a time through a pulldown: **Velocity
 Overwrite**, **Collision Active Duration Windows**, **Lock Translation**,
-**Hinge**, **Reference Rest Angle** and **Tetrahedralizer**. A pulldown lists
+**Hinge**, **Reference (per object)** and **Tetrahedralizer**. A pulldown lists
 only the objects whose **Include** checkbox is on, the checkbox at the left of
 the object's row in the group's object list (see
 [Object Groups](../scene/object_groups.md)). It reads **None** while no object
@@ -780,63 +780,97 @@ for the rows that sit with the second pair.
 
 ### Rest Angle and Bend Plasticity
 
-Drawn on **Shell** and **Rod** groups. **Rest Angle** and **From Reference
-Geometry** set the angle at which each shell hinge or rod joint is relaxed.
-**Bend Plasticity** lets that angle drift.
+Drawn on **Shell** and **Rod** groups. **Rest Angle** sets the angle at which
+each shell hinge or rod joint is relaxed. **Bend Plasticity** lets that angle
+drift.
 
-| UI label                     | Property key                | Default | Description                                                                                                                                                                  |
-| ---------------------------- | --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Rest Angle**               | `bend_rest_angle_source`    | `FLAT`  | **Flat / Straight** (`FLAT`) relaxes a shell hinge flat and a rod joint straight. **From Initial Geometry** (`FROM_GEOMETRY`) takes the angle from the input pose. |
-| **From Reference Geometry**  | `bend_rest_from_reference`  | `False` | Takes the rest angle of chosen objects from a reference object. See below.                                                                                                   |
-| **Bend Plasticity**          | `enable_bend_plasticity`    | `False` | Turns on the drift of the rest angle.                                                                                                                                        |
-| **Bend Theta**               | `bend_plasticity`           | 0.5     | Creep rate per second. Range 0 and up (the slider stops at 10). Shown only while **Bend Plasticity** is on.                                                                  |
-| **Bend Threshold**           | `bend_plasticity_threshold` | 0       | An angle: the dead zone around the rest angle. Range 0 and up (the slider stops at 180°). Shown only while **Bend Plasticity** is on.                                        |
+| UI label            | Property key                | Default | Description                                                                                                                                                                                                       |
+| ------------------- | --------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rest Angle**      | `bend_rest_angle_source`    | `FLAT`  | **Flat / Straight** (`FLAT`) relaxes a shell hinge flat and a rod joint straight. **From Initial Geometry** (`FROM_GEOMETRY`) takes the angle from the input pose. **From Reference Geometry** (`FROM_REFERENCE`) takes it from each object's own reference. See below. |
+| **Bend Plasticity** | `enable_bend_plasticity`    | `False` | Turns on the drift of the rest angle. Not drawn while **Rest Angle** is **From Reference Geometry**.                                                                                                              |
+| **Bend Theta**      | `bend_plasticity`           | 0.5     | Creep rate per second. Range 0 and up (the slider stops at 10). Shown only while **Bend Plasticity** is on.                                                                                                       |
+| **Bend Threshold**  | `bend_plasticity_threshold` | 0       | An angle: the dead zone around the rest angle. Range 0 and up (the slider stops at 180°). Shown only while **Bend Plasticity** is on.                                                                             |
 
 With **Bend Plasticity** on, the rest angle drifts toward the current angle at
 the rate **Bend Theta** once the angle differs from the rest angle by more than
-**Bend Threshold**. **Rest Angle** and **From Reference Geometry** apply
-whether or not **Bend Plasticity** is on.
+**Bend Threshold**. Under **From Reference Geometry** the reference owns the
+rest angle, so the **Bend Plasticity** box is not drawn and a value it still
+holds is not sent to the solver.
 
 The rows are laid out per type:
 
-- **Shell**: one unlabeled box, below **Plasticity**, holds **Rest Angle**
-  as its first row, then **From Reference Geometry** and **Bend Plasticity**.
-- **Rod**: **Rest Angle** and **From Reference Geometry** sit in the **Bend**
-  box, under **Bend Stiffness**. **Bend Plasticity** has its own box, below
-  **Strain Limit**.
+- **Shell**: one unlabeled box, below **Plasticity**, holds **Rest Angle**,
+  then either the **Reference (per object)** box (under **From Reference
+  Geometry**) or **Bend Plasticity**.
+- **Rod**: **Rest Angle** and, under **From Reference Geometry**, the
+  **Reference (per object)** box sit in the **Bend** box, under **Bend
+  Stiffness**. **Bend Plasticity** has its own box, below **Strain Limit**.
 
 #### Reference Rest Angle
 
-**From Reference Geometry** takes a bending rest angle from a second mesh. A
-reference has to be a topological copy of the object whose vertices were moved
-by a modifier, by geometry nodes or by hand.
+**From Reference Geometry** takes each object's bending rest angle from a
+reference of its own. Every object of the group reads its reference, and
+**Transfer** refuses, by name, an object that has none.
 
-1. Tick **From Reference Geometry**. A **Reference Rest Angle (per object)**
-   box opens under it.
+1. Set **Rest Angle** to **From Reference Geometry**. A **Reference (per
+   object)** box opens under it.
 2. Pick one of the group's objects in the box's pulldown.
-3. Tick **Enable Reference Rest Angle**.
-4. Make the reference mesh the active object, then click the eyedropper. The
-   row shows the reference's name, or *No reference set*, or *Missing:* and
-   the name when the reference has gone. The **X** button clears it.
+3. Pick its **Source**:
+   - **Reference Object** (the default) takes the rest angle from another
+     mesh, a topological copy of this one whose vertices were moved by a
+     modifier, by geometry nodes or by hand. Make the reference mesh the
+     active object, then click the eyedropper. The row shows the reference's
+     name, *No reference set: Transfer refuses this object*, or *Missing:*
+     and the name when the reference has gone. The **X** button clears it.
+   - **Shape Key** takes the rest angle from one of the object's own shape
+     keys, read as the key's stored shape: its **Value** slider and the other
+     keys do not change it, and no modifier is applied. Any key qualifies,
+     **Basis** included, so a mesh whose deformed pose is a shape key can
+     rest in its undeformed **Basis**. Pick the key in the search field. Only
+     a mesh has usable shape keys, and the row says so on a curve or **Hair
+     Curves** object.
+   - **Shape Key Mix (Animated)** takes the rest angle from the object's
+     whole shape-key mix as Blender plays it, before modifiers. When the
+     keys' values are animated, by keyframes, drivers or the NLA, the rest
+     angle follows the mix through the simulation; the row reads *Mix is
+     animated: the rest angle follows it* or *Mix is not animated: the rest
+     angle is the current mix*. Only shell hinges animate, so an animated mix
+     on a **Rod** group reads *An animated mix needs a Shell group* and is
+     refused at **Transfer**. Absolute shape keys (**Relative** off) are
+     refused.
 
-The reference is checked against the object's topology when you pick it and
-again at **Transfer**, so a mesh that has drifted, or a reference that has gone
-missing, is refused with a message. An object with an enabled reference takes
-its bending rest angle from it, which overrides the group's **Rest Angle** for
-that object alone. The rest of the group keeps its **Rest Angle**.
+A reference object is checked against the object's topology when you pick it
+and again at **Transfer**, so a mesh that has drifted, or a reference that has
+gone missing, is refused with a message. A shape key is stored by name, so
+renaming or removing it makes **Transfer** refuse the object until you pick
+it again. Each object keeps one reference of each kind, and **Source** says
+which one is read.
 
-Over MCP, turn on **From Reference Geometry** first with
-`set_group_material_properties` (`bend_rest_from_reference` set to `true`).
-Then call `set_bend_reference(group_uuid, object_name, reference_object_name,
-enable)` for each object. The reference must be a topological copy: the same
-vertex count and connectivity (faces for a **Shell**, edges for a **Rod**),
-with its modifiers and geometry nodes evaluated first. A curve rod is compared
-at its control points. A mismatch is refused and named. An empty
-`reference_object_name` clears the reference, and that is always accepted.
-`enable` is **Enable Reference Rest Angle**. It defaults to true when a
-reference is given and to false when one is cleared, and `enable` set to true
-with no reference is refused. `get_group_objects` reports each object's
-reference under `bend_reference`.
+A scene saved while **From Reference Geometry** was a checkbox beside **Rest
+Angle** opens with **Rest Angle** set to **From Reference Geometry**. Every
+object of such a group now reads its reference, including one whose own
+**Enable Reference Rest Angle** box was unchecked.
+
+Over MCP, set `bend_rest_angle_source` to `FROM_REFERENCE` first with
+`set_group_material_properties`. Then give each object a reference with one
+of three tools:
+
+- `set_bend_reference(group_uuid, object_name, reference_object_name)` picks
+  a reference object. The reference must be a topological copy: the same
+  vertex count and connectivity (faces for a **Shell**, edges for a **Rod**),
+  with its modifiers and geometry nodes evaluated first. A curve rod is
+  compared at its control points. A mismatch is refused and named.
+- `set_bend_reference_shape_key(group_uuid, object_name, shape_key_name)`
+  picks one of the object's shape keys.
+- `set_bend_reference_shape_key_mix(group_uuid, object_name)` takes the
+  object's shape-key mix.
+
+Each call makes its kind the object's **Source**. An empty
+`reference_object_name` or `shape_key_name` clears that reference, which is
+always accepted; any other call on a group whose **Rest Angle** is not
+**From Reference Geometry** is refused. `get_group_objects` reports each
+object's reference under `bend_reference`, with `source` set to `OBJECT`,
+`SHAPE_KEY` or `SHAPE_KEY_MIX`.
 
 ### Velocity Overwrite
 
@@ -1195,7 +1229,7 @@ to `1.0`, while a new **Shell** group starts at `10.0`.
 
 A **Rod** group also draws [Strain Limit](#strain-limit),
 [Rest Angle and Bend Plasticity](#rest-angle-and-bend-plasticity) (**Rest
-Angle** and **From Reference Geometry** are in the **Bend** box),
+Angle** is in the **Bend** box),
 [Spatial Material Maps](#spatial-material-maps), which vary a parameter along
 the strands, and [Velocity Overwrite](#velocity-overwrite) without spin
 controls.

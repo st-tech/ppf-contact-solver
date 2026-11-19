@@ -266,17 +266,20 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
         return;
     }
 
-    // Build the command. On Windows the run script is a .bat file
-    // invoked directly; on Unix we hand it to bash so the script
-    // doesn't need its execute bit set.
+    // Build the command. On Windows the run script is a .bat file run
+    // DIRECTLY, never through `cmd /C <path>`: cmd re-parses that command
+    // line and, by its quote-stripping rule, drops the quotes around a path
+    // holding `&`, `(`, `)` or `^`, so `C:\Program Files (x86)\...` or a
+    // folder named `ppf (1)` never launched. Handing the .bat to
+    // `Command::new` lets the standard library start cmd.exe itself with
+    // the batch-file escaping it applies to exactly this case. On Unix the
+    // script goes to bash, so it doesn't need its execute bit set.
     #[cfg(target_os = "windows")]
-    let (program, args, cmd_path): (&str, Vec<String>, PathBuf) = {
+    let (program, args, cmd_path): (std::ffi::OsString, Vec<String>, PathBuf) = {
         let cmd_path = session_dir.join(ppf_cts_formats::files::COMMAND_BAT);
         (
-            "cmd",
+            cmd_path.clone().into_os_string(),
             vec![
-                "/C".into(),
-                cmd_path.to_string_lossy().to_string(),
                 // Use ``--load=N`` (single token) instead of two
                 // separate args: the solver's clap parser treats a
                 // bare ``-1`` as a flag and rejects it ("Found
@@ -287,10 +290,10 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
         )
     };
     #[cfg(not(target_os = "windows"))]
-    let (program, args, cmd_path): (&str, Vec<String>, PathBuf) = {
+    let (program, args, cmd_path): (std::ffi::OsString, Vec<String>, PathBuf) = {
         let cmd_path = session_dir.join(ppf_cts_formats::files::COMMAND_SH);
         (
-            "bash",
+            "bash".into(),
             vec![
                 cmd_path.to_string_lossy().to_string(),
                 // Use ``--load=N`` (single token) instead of two
@@ -339,7 +342,7 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
         }
     };
 
-    let mut cmd = tokio::process::Command::new(program);
+    let mut cmd = tokio::process::Command::new(&program);
     cmd.args(&args)
         .current_dir(&root)
         .stdin(std::process::Stdio::null())
@@ -359,7 +362,8 @@ pub(super) async fn launch_solver(engine: &ServerEngine, resume_from: Option<i32
 
     log::info!(
         target: "ppf::solver",
-        "DoLaunchSolver: spawning {program} {args:?} (cwd={root}, load={load})"
+        "DoLaunchSolver: spawning {} {args:?} (cwd={root}, load={load})",
+        program.to_string_lossy()
     );
     let launch = exit_watch::arm(&root);
     match cmd.spawn() {

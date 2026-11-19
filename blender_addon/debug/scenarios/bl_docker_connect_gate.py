@@ -151,10 +151,15 @@ try:
            {"container": repr(props.container)})
     props.container = "ppf-contact-solver"
 
-    # The container path is interpolated into the commands the add-on runs
-    # inside the container, so a shell metacharacter there stays refused.
-    props.docker_path = "/root/ppf;rm -rf /"
-    record("docker_refuses_shell_unsafe_container_path",
+    # Every command the add-on runs inside the container quotes the container
+    # path (`core.remote_shell`), so a shell metacharacter there is an
+    # ordinary character, and only what no file name can hold is refused.
+    props.docker_path = "/root/ppf (1);x"
+    record("docker_accepts_a_metacharacter_in_container_path",
+           bool(bpy.ops.ssh.run_command.poll()) is True,
+           {"docker_path": props.docker_path})
+    props.docker_path = "/root/ppf\nx"
+    record("docker_refuses_a_control_character_in_container_path",
            bool(bpy.ops.ssh.run_command.poll()) is False,
            {"docker_path": props.docker_path})
     props.docker_path = "/root/ppf-contact-solver"

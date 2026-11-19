@@ -7,6 +7,7 @@
 # operator registration.  Extracted from ui/client.py.
 
 import os
+import sys
 import textwrap
 from dataclasses import dataclass
 
@@ -27,8 +28,7 @@ from ..core.reload_server import get_reload_server_status
 from ..core.utils import (
     WINDOWS_MAX_PATH,
     find_invalid_name_char,
-    find_invalid_path_char,
-    find_shell_unsafe_path_char,
+    find_unusable_path_char,
     get_category_name,
     resolve_local_path,
     windows_long_paths_enabled,
@@ -203,27 +203,20 @@ def _crash_detail_line(server_error: str, crash_kind: str) -> str:
     return detail
 
 
-def _draw_path_warning(layout, path, *, shell_bound: bool = True) -> bool:
-    """Draw a one-line warning when *path* holds a character its backend
-    cannot carry, and return ``True`` so the caller can skip any follow-up
-    status line.  Draws nothing and returns ``False`` for a valid (or blank)
-    path.
+def _draw_path_warning(layout, path, *, windows: bool) -> bool:
+    """Draw a one-line warning when *path* holds a character no filename can,
+    and return ``True`` so the caller can skip any follow-up status line.
+    Draws nothing and returns ``False`` for a valid (or blank) path.
 
-    ``shell_bound`` is what the path's backend does with it. A REMOTE path is
-    interpolated into a shell command on the solver host, so it refuses
-    whitespace as well as metacharacters. A native solver root, Windows or
-    macOS, is only ever an ``os.path.join`` base and a ``subprocess.Popen``
-    ``cwd``, so it refuses metacharacters alone; each caller passes what is true of its own
-    backend, and the Connect gate reads the matching predicate.
+    *windows* says whether the path names a Windows directory. The rule is
+    the Connect gate's (`find_unusable_path_char`), so the warning and the
+    button never disagree.
     """
-    bad = (find_invalid_path_char(path) if shell_bound
-           else find_shell_unsafe_path_char(path))
+    bad = find_unusable_path_char(path, windows=windows)
     if bad is None:
         return False
     layout.label(
-        text=("Path should not contain spaces or special characters"
-              if shell_bound else "Path should not contain special characters"),
-        icon="ERROR",
+        text=f"Path cannot contain {bad!r}", icon="ERROR",
     )
     return True
 
@@ -865,7 +858,8 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "port")
                 col.prop(props, "username")
                 col.prop(props, "key_path")
-                _draw_path_warning(col, props.key_path)
+                _draw_path_warning(
+                    col, props.key_path, windows=sys.platform == "win32")
                 col.prop(props, "proxy_jump")
             elif props.server_type == "DOCKER":
                 col.prop(props, "container")
@@ -874,7 +868,8 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, "port")
                 col.prop(props, "username")
                 col.prop(props, "key_path")
-                _draw_path_warning(col, props.key_path)
+                _draw_path_warning(
+                    col, props.key_path, windows=sys.platform == "win32")
                 col.prop(props, "proxy_jump")
                 col.prop(props, "container")
             elif props.server_type == "DOCKER_SSH_COMMAND":
@@ -886,7 +881,8 @@ class MAIN_PT_RemotePanel(Panel):
                 col.prop(props, field)
                 # Held to the same rule the Connect gate uses for this
                 # backend, so the warning and the button never disagree.
-                if not _draw_path_warning(col, path, shell_bound=False):
+                if not _draw_path_warning(
+                        col, path, windows=props.server_type == "WIN_NATIVE"):
                     _draw_native_status(col, props.server_type, path)
                     from ..core.connection import native_resolvers
                     resolver, _, builds, resolve_root = native_resolvers(
@@ -903,10 +899,10 @@ class MAIN_PT_RemotePanel(Panel):
                         _draw_long_path_warning(col, path, state.project_name)
             elif props.server_type in ["CUSTOM", "COMMAND"]:
                 col.prop(props, "ssh_remote_path")
-                _draw_path_warning(col, props.ssh_remote_path)
+                _draw_path_warning(col, props.ssh_remote_path, windows=False)
             else:
                 col.prop(props, "docker_path")
-                _draw_path_warning(col, props.docker_path)
+                _draw_path_warning(col, props.docker_path, windows=False)
 
             # Drawn on the box rather than inside col, which is disabled while
             # connected: these are reachable exactly then, since both the

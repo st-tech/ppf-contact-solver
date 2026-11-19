@@ -6,6 +6,7 @@ from . import (
     _swap_axes,
     _to_solver,
     frame_to_time,
+    resolve_world_scaling,
     solver_gravity,
     solver_wind,
 )
@@ -123,6 +124,10 @@ def _encode_dyn_params(state, fps, start_frame):
         solver_key = _DYN_PARAM_SOLVER_KEYS.get(dyn_item.param_type)
         if solver_key is None or len(dyn_item.keyframes) < 2:
             continue
+        # Under Take Gravity from Scene the add-on's Gravity and its keyframe
+        # list are not in use (`resolve_gravity_3d`).
+        if dyn_item.param_type == "GRAVITY" and state.use_scene_gravity:
+            continue
 
         times = _keyframe_times(
             f"Dynamic parameter {dyn_item.param_type}", dyn_item.keyframes,
@@ -184,7 +189,7 @@ def _encode_invisible_colliders(state, fps, start_frame):
     # collider's position, radius and thickness by world_scaling on ingest and
     # never scales a gap, so the gap is scaled here and only here, or a wall
     # at World Scaling 0.1 holds cloth ten times its authored gap away.
-    gap_scale = float(state.world_scaling)
+    gap_scale = resolve_world_scaling(state)
     for item in state.invisible_colliders:
         if item.collider_type == "WALL":
             wall = {

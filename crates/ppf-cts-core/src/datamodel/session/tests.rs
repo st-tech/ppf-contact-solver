@@ -88,10 +88,10 @@ fn unix_script_has_shebang_and_path_args() {
     let script = shell_command_script(&s, &fs, Platform::Unix, Path::new("/tmp/proj/target/release"));
     assert!(script.starts_with("#!/bin/bash"));
     assert!(script.contains("/tmp/proj/target/release/ppf-contact-solver"));
-    // Path values are double-quoted so spaces in project root don't
-    // get word-split by the shell before reaching clap.
-    assert!(script.contains(r#"--path "/tmp/app/demo""#));
-    assert!(script.contains(r#"--output "/tmp/app/demo/output""#));
+    // Path values are single-quoted shell words, so neither a space nor a
+    // `$` in the project root is touched by the shell before reaching clap.
+    assert!(script.contains(r#"--path '/tmp/app/demo'"#));
+    assert!(script.contains(r#"--output '/tmp/app/demo/output'"#));
     // Variadic forwarding for extra solver args.
     assert!(script.contains("\"$@\""));
 }
@@ -103,8 +103,8 @@ fn unix_script_quotes_paths_with_spaces() {
     let fs = FixedSession::from_session(&s);
     let script = shell_command_script(&s, &fs, Platform::Unix, Path::new("/tmp/proj/target/release"));
     // Both path args must reach the solver as a single argv entry.
-    assert!(script.contains(r#"--path "/tmp/has space/demo""#));
-    assert!(script.contains(r#"--output "/tmp/has space/demo/output""#));
+    assert!(script.contains(r#"--path '/tmp/has space/demo'"#));
+    assert!(script.contains(r#"--output '/tmp/has space/demo/output'"#));
 }
 
 // A distribution writes nothing under the user's home. The Metal pipeline
@@ -133,7 +133,10 @@ fn unix_script_keeps_the_gpu_caches_inside_a_selfcontained_tree() {
         ("PPF_METAL_ARCHIVE_DIR", "metal-pipeline-archive"),
         ("CUDA_CACHE_PATH", "nv-compute-cache"),
     ] {
-        let line = format!("export {name}=\"${{{name}:-{}}}\"", cache.join(dir).display());
+        let line = format!(
+            "[ -n \"${{{name}:-}}\" ] || {name}='{}'\nexport {name}",
+            cache.join(dir).display()
+        );
         let at = packaged
             .find(&line)
             .unwrap_or_else(|| panic!("no {name} export in:\n{packaged}"));
@@ -191,11 +194,11 @@ fn windows_script_takes_its_library_dirs_from_the_shared_list() {
     let script = shell_command_script(&s, &fs, Platform::Windows, Path::new("/tmp/proj/target/release"));
     let [dev, bundle] = scripts::windows_library_dirs(&s.proj_root);
     assert!(
-        script.contains(&format!("set LIB_PATH_DEV={}", dev.display())),
+        script.contains(&format!("set \"LIB_PATH_DEV={}\"", dev.display())),
         "{script}"
     );
     assert!(
-        script.contains(&format!("set LIB_PATH_BUNDLE={}", bundle.display())),
+        script.contains(&format!("set \"LIB_PATH_BUNDLE={}\"", bundle.display())),
         "{script}"
     );
     // The checkout's directory is the compute crate's build output, which is
@@ -858,7 +861,7 @@ fn solver_subprocess_command_per_platform() {
     let p = std::path::Path::new("/tmp/session/command.sh");
     assert_eq!(
         solver_subprocess_command(p, 0, Platform::Unix),
-        r#"bash "/tmp/session/command.sh" --load 0"#
+        r#"bash '/tmp/session/command.sh' --load 0"#
     );
     let p = std::path::Path::new("C:\\session\\command.bat");
     assert_eq!(
@@ -872,7 +875,7 @@ fn solver_subprocess_command_handles_spaces_in_path() {
     let p = std::path::Path::new("/home/user/My Project/session/command.sh");
     assert_eq!(
         solver_subprocess_command(p, 0, Platform::Unix),
-        r#"bash "/home/user/My Project/session/command.sh" --load 0"#
+        r#"bash '/home/user/My Project/session/command.sh' --load 0"#
     );
     let p = std::path::Path::new("C:\\New Folder\\session\\command.bat");
     assert_eq!(
@@ -985,22 +988,28 @@ fn ffmpeg_video_command_matches_python_template() {
         "ply",
         "frame.mp4",
     );
-    assert!(cmd.contains("\"/usr/bin/ffmpeg\""));
     assert!(cmd.contains("frame_%d.ply.png"));
     assert!(cmd.contains("-c:v libx264"));
-    // vid_name is double-quoted, not bare, so spaces survive the shell.
-    assert!(cmd.contains("\"frame.mp4\""));
+    // Both paths are quoted words, not bare, so spaces survive the shell.
+    if cfg!(windows) {
+        assert!(cmd.contains("\"/usr/bin/ffmpeg\""), "{cmd}");
+        assert!(cmd.contains("\"frame.mp4\""), "{cmd}");
+    } else {
+        assert!(cmd.contains("'/usr/bin/ffmpeg'"), "{cmd}");
+        assert!(cmd.contains("'frame.mp4'"), "{cmd}");
+    }
 }
 
+#[cfg(unix)]
 #[test]
-fn ffmpeg_video_command_handles_spaces_in_paths() {
+fn ffmpeg_video_command_handles_spaces_and_dollars_in_paths() {
     let cmd = ffmpeg_video_command(
         std::path::Path::new("/My Apps/bin/ffmpeg"),
         "ply",
-        "out frame.mp4",
+        "out $HOME frame's.mp4",
     );
-    assert!(cmd.contains("\"/My Apps/bin/ffmpeg\""));
-    assert!(cmd.contains("\"out frame.mp4\""));
+    assert!(cmd.contains("'/My Apps/bin/ffmpeg'"), "{cmd}");
+    assert!(cmd.contains(r#"'out $HOME frame'\''s.mp4'"#), "{cmd}");
 }
 
 /// The root must be absolute ON THE HOST PLATFORM. A Windows path is
@@ -1053,5 +1062,123 @@ fn solver_failed_to_start_message_handles_rc() {
     assert_eq!(
         solver_failed_to_start_message(None),
         "Solver failed to start (rc=None)"
+    );
+}
+
+
+// A FOLDER NAME IS WHATEVER THE USER'S FILESYSTEM ALLOWS, and the launcher has
+// to hand it to the solver unchanged. These run the generated script for
+// real, against a stand-in solver that records its argv, from a root named
+// with every character a shell or cmd.exe treats specially and the platform
+// still allows in a filename: `ppf (1)` is a browser's duplicate download,
+// `Program Files (x86)` and `O'Brien` are ordinary Windows paths.
+#[cfg(unix)]
+#[test]
+fn unix_script_passes_a_special_character_root_verbatim() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp
+        .path()
+        .join("ppf (1) & O'Brien's 100% [x] {y} ^ #! $HOME `id` \"q\" \\b ;");
+    let solver_dir = root.join("target").join("release");
+    std::fs::create_dir_all(&solver_dir).unwrap();
+    let argv = tmp.path().join("argv.txt");
+    let fake = solver_dir.join("ppf-contact-solver");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\n",
+            argv.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let s = Session::new("app", "demo", root.clone(), root.join("proj"), root.join("data"));
+    let fs = FixedSession::from_session(&s);
+    std::fs::create_dir_all(&fs.info.path).unwrap();
+    let script = shell_command_script(&s, &fs, Platform::Unix, &solver_dir);
+    let cmd = fs.info.path.join("command.sh");
+    std::fs::write(&cmd, &script).unwrap();
+    let status = std::process::Command::new("bash")
+        .arg(&cmd)
+        .arg("--load=0")
+        .status()
+        .unwrap();
+    assert!(status.success(), "{script}");
+    let got: Vec<String> = std::fs::read_to_string(&argv)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            "--path".to_owned(),
+            fs.info.path.display().to_string(),
+            "--output".to_owned(),
+            fs.output.path.display().to_string(),
+            "--load=0".to_owned(),
+        ],
+        "{script}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_script_passes_a_special_character_root_verbatim() {
+    // The stand-in solver has to be a real executable, since the script runs
+    // `ppf-contact-solver.exe`, so it is compiled here: it writes each
+    // argument on its own line to the file PPF_ARGV_OUT names.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp
+        .path()
+        .join("ppf (1) & O'Brien's 100% [x] {y} ^ #! $z ;");
+    let solver_dir = root.join("target").join("release");
+    std::fs::create_dir_all(&solver_dir).unwrap();
+    let src = tmp.path().join("echo.rs");
+    std::fs::write(
+        &src,
+        "fn main() { let a: Vec<String> = std::env::args().skip(1).collect(); \
+         std::fs::write(std::env::var(\"PPF_ARGV_OUT\").unwrap(), a.join(\"\\n\")).unwrap(); }",
+    )
+    .unwrap();
+    let fake = solver_dir.join("ppf-contact-solver.exe");
+    let built = std::process::Command::new("rustc")
+        .arg(&src)
+        .arg("-o")
+        .arg(&fake)
+        .status()
+        .unwrap();
+    assert!(built.success(), "could not build the stand-in solver");
+    let argv = tmp.path().join("argv.txt");
+    let s = Session::new("app", "demo", root.clone(), root.join("proj"), root.join("data"));
+    let fs = FixedSession::from_session(&s);
+    std::fs::create_dir_all(&fs.info.path).unwrap();
+    let script = shell_command_script(&s, &fs, Platform::Windows, &solver_dir);
+    let cmd = fs.info.path.join("command.bat");
+    std::fs::write(&cmd, &script).unwrap();
+    // Launched exactly as the server launches it (`executor/solver.rs`): the
+    // .bat itself is the program.
+    let status = std::process::Command::new(&cmd)
+        .arg("--load=0")
+        .env("PPF_ARGV_OUT", &argv)
+        .status()
+        .unwrap();
+    assert!(status.success(), "{script}");
+    let got: Vec<String> = std::fs::read_to_string(&argv)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            "--path".to_owned(),
+            fs.info.path.display().to_string(),
+            "--output".to_owned(),
+            fs.output.path.display().to_string(),
+            "--load=0".to_owned(),
+        ],
+        "{script}"
     );
 }

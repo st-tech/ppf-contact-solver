@@ -15,56 +15,34 @@ def get_category_name():
     return "ZOZO's Contact Solver"
 
 
-# Characters a shell would reinterpret in a connection path that is
-# interpolated into a command (``cd {path} && ...``,
-# ``docker exec -w {path} ...``).  ``~`` is intentionally NOT included:
-# ``~/work`` is a common, safe remote path and the shell expands it fine.  The
-# usual path components (``/``, ``\``, ``:``, ``.``, ``-``, ``_``) are also
-# allowed so Windows drive letters and separators pass.
-_SHELL_UNSAFE_PATH_CHARS = frozenset(
-    "&|;<>()$`\"'"     # shell metacharacters
-    "*?[]{}#"          # glob, brace expansion, comment
-    "!%^"              # history expansion, env, caret
-)
+# WHAT A CONNECTION PATH MAY HOLD: anything its filesystem allows. Every place
+# a path reaches a shell quotes it (`remote_shell` for the remote types, the
+# session launcher `scripts.rs` for every solve), so the refusals here are only
+# the characters no filename can carry: control characters on every platform,
+# and on Windows the ones the filesystem itself forbids. `:` is left to the
+# filesystem, since it is the drive separator.
+#
+# This list used to refuse shell metacharacters as well, on the stated grounds
+# that they are illegal in a Windows filename anyway. Most are not: `(`, `)`,
+# `'`, `&`, `%`, `!`, `#`, `[`, `]`, `{`, `}`, `^`, `$` and `;` are all
+# ordinary there, and `C:\Program Files (x86)\...` or a second download
+# unpacked as `ppf-contact-solver (1)` greyed the Connect button out with
+# nothing wrong in the path.
+_CONTROL_CHARS = frozenset(chr(c) for c in range(32)) | frozenset("\x7f")
+_WINDOWS_FORBIDDEN_CHARS = frozenset('<>"|?*')
 
-# Whitespace on top of the above. A path that IS interpolated into a remote
-# shell command has to refuse both; one that never reaches a shell is held to
-# ``find_shell_unsafe_path_char`` instead.
-_INVALID_PATH_CHARS = _SHELL_UNSAFE_PATH_CHARS | frozenset(" \t\n\r")
 
+def find_unusable_path_char(path: str, *, windows: bool) -> str | None:
+    """Return the first character *path* cannot hold, else ``None``.
 
-def find_shell_unsafe_path_char(path: str) -> str | None:
-    """Return the first shell or glob metacharacter in *path*, else ``None``.
-
-    The same set as :func:`find_invalid_path_char` MINUS whitespace. It is
-    what a path is held to when it never reaches a shell: the Windows Native
-    root is only ever an ``os.path.join`` base, a ``subprocess.Popen`` argv
-    element, and that Popen's ``cwd``, none of which parse it. Whitespace is
-    therefore harmless there, and it is ordinary: ``C:\\Users\\First
-    Last\\Downloads\\...`` is what a Windows account with a two-word name
-    gives, and holding it to the whitespace rule refuses that path.
-
-    The metacharacters stay refused even here. They are illegal in a Windows
-    filename anyway, so nothing legitimate is rejected, and the check keeps
-    holding if this path is ever handed to something that does parse it.
+    *windows* says whether the path names a Windows directory, which adds
+    the characters NTFS forbids in a name. Leading and trailing whitespace
+    is not judged, since the path is stripped before use, and an empty path
+    returns ``None`` so callers can validate emptiness separately per
+    connection type.
     """
     for ch in path.strip():
-        if ch in _SHELL_UNSAFE_PATH_CHARS:
-            return ch
-    return None
-
-
-def find_invalid_path_char(path: str) -> str | None:
-    """Return the first space or shell-unsafe character in *path*, else ``None``.
-
-    Used to warn about, and refuse, connection paths that would break (or be
-    misinterpreted) when interpolated into a shell command.  Returns ``None``
-    for an empty or whitespace-only path, so callers can chain
-    ``find_invalid_path_char(p) is None`` without rejecting an intentionally
-    blank optional path; emptiness is validated separately per connection type.
-    """
-    for ch in path.strip():
-        if ch in _INVALID_PATH_CHARS:
+        if ch in _CONTROL_CHARS or (windows and ch in _WINDOWS_FORBIDDEN_CHARS):
             return ch
     return None
 
@@ -165,7 +143,7 @@ def windows_path_too_long(base_path: str, project_name: str) -> int | None:
 
     Returns ``None`` for an empty/whitespace-only path so callers can chain
     ``windows_path_too_long(p, n) is None`` next to
-    :func:`find_invalid_path_char` without rejecting a blank field.
+    :func:`find_unusable_path_char` without rejecting a blank field.
     """
     if not base_path.strip():
         return None

@@ -438,6 +438,47 @@ mod tests {
         assert_eq!(engine.state().error, "");
     }
 
+    // THE WINDOWS LAUNCH, FROM A FOLDER CMD.EXE WOULD MISREAD. The session
+    // launcher is a .bat, and the server used to run it as `cmd /C <path>`,
+    // whose quote stripping split a path holding `(` or `&`, so a project
+    // under `ppf (1)` or `C:\Program Files (x86)` never started its solver.
+    // The .bat is now the program itself (`executor/solver.rs`).
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn launch_solver_runs_the_bat_from_a_special_character_folder() {
+        let _slot = super::solver::exit_watch::TEST_LOCK.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("p (1)&O'B 100%^#!$;");
+        let session = project.join("session");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(
+            session.join("command.bat"),
+            "@echo off\r\necho args=%*\r\necho err sample 1>&2\r\nexit /b 0\r\n",
+        )
+        .unwrap();
+
+        let engine = ServerEngine::new(EngineConfig::default());
+        engine.set_project_context("p", &project.to_string_lossy());
+        let exec = DefaultExecutor::new();
+        exec.execute(
+            Effect::DoLaunchSolver {
+                resume_from: Some(-1),
+            },
+            &engine,
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        let log = std::fs::read_to_string(session.join("stdout.log")).unwrap_or_default();
+        let err = std::fs::read_to_string(session.join("error.log")).unwrap_or_default();
+        // The standard library quotes the argument it hands a batch file
+        // (`"--load=-1"`), and the solver's own argument parsing removes the
+        // quotes, so only the token is required.
+        assert!(log.contains("--load=-1"), "stdout log: {log:?}, stderr: {err:?}");
+        assert!(err.contains("err sample"), "stderr log: {err:?}");
+        assert_eq!(engine.state().error, "");
+    }
+
     // ----- DoSpawnBuild -----
 
     #[tokio::test]

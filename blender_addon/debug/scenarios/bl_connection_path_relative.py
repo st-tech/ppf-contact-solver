@@ -213,20 +213,17 @@ try:
            op.get_remote_path(op, props) == "/root/ppf-contact-solver",
            {"got": op.get_remote_path(op, props)})
 
-    # ---- a Windows path with a space is not a shell problem ----
-    # The Windows Native root is an os.path.join base and a Popen cwd; it is
-    # never interpolated into a shell command, so the space rule that a
-    # REMOTE path needs would only cost the user an unpressable button.
+    # ---- a Windows path with a space is an ordinary path ----
+    # The Windows Native root is held to what NTFS allows in a name, and the
+    # session launcher quotes it, so a space costs nothing.
     spaced = os.path.join(tmp, "First Last", "ppf-contact-solver-win64")
     _touch(os.path.join(spaced, "target", "release", "ppf-cts-server.exe"))
-    record("space_is_not_shell_unsafe",
-           utils.find_shell_unsafe_path_char(spaced) is None
-           and utils.find_invalid_path_char(spaced) == " ",
-           {"shell_unsafe": utils.find_shell_unsafe_path_char(spaced),
-            "invalid": utils.find_invalid_path_char(spaced)})
-    record("metacharacter_still_refused_on_both",
-           utils.find_shell_unsafe_path_char("/root/a;rm -rf /") == ";",
-           {"got": utils.find_shell_unsafe_path_char("/root/a;rm -rf /")})
+    record("space_is_usable",
+           utils.find_unusable_path_char(spaced, windows=True) is None,
+           {"got": utils.find_unusable_path_char(spaced, windows=True)})
+    record("forbidden_name_character_still_refused",
+           utils.find_unusable_path_char("C:/a<b", windows=True) == "<",
+           {"got": utils.find_unusable_path_char("C:/a<b", windows=True)})
 
     props.server_type = "WIN_NATIVE"
     props.win_native_path = spaced
@@ -235,7 +232,7 @@ try:
            {"path": spaced})
 
     fl_spaced = _FakeLayout()
-    main_panel._draw_path_warning(fl_spaced, spaced, shell_bound=False)
+    main_panel._draw_path_warning(fl_spaced, spaced, windows=True)
     record("panel_does_not_warn_about_the_space", fl_spaced.labels == [],
            {"labels": fl_spaced.labels})
 

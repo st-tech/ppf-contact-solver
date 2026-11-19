@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 import numpy
 
 from ..models.console import console
+from . import remote_shell
 from .backends import ConnectionBackend, create_backend
 from .connection import NATIVE_BACKENDS, remote_target_dir
 from .derived import is_sim_running_from_response
@@ -1113,7 +1114,7 @@ class EffectRunner:
         script_path = "/tmp/start_server.sh"
 
         # Clear progress.log
-        backend.exec_command(f"rm -f {progress_file}", shell=True)
+        backend.exec_command(remote_shell.remove_file(progress_file), shell=True)
 
         # ppf-cts-server defaults to binding 127.0.0.1. That is what we want
         # for SSH (Direct): paramiko's direct-tcpip channel terminates at the
@@ -1122,7 +1123,6 @@ class EffectRunner:
         # external interface (eth0), not loopback, so we must bind
         # 0.0.0.0 there.
         in_container = bool(getattr(backend, "_container", ""))
-        host_flag = "--host 0.0.0.0 " if in_container else ""
 
         # The Rust ppf-cts-server binary writes ``progress.log`` markers
         # (SERVER_STARTING / SERVER_READY) and serves the same wire
@@ -1153,8 +1153,9 @@ class EffectRunner:
         gpu_uuid = "" if on_cpu else cuda_device_uuid
         from .connection import idle_timeout_args
 
-        server_cmd = " ".join(
-            [f"{shell_prefix(gpu_index, gpu_uuid)}{rust_bin} {host_flag}--port {port}"]
+        server_args = (
+            (["--host", "0.0.0.0"] if in_container else [])
+            + ["--port", str(port)]
             + idle_timeout_args(idle_timeout)
         )
 
@@ -1168,7 +1169,7 @@ class EffectRunner:
         # Convention: $HOME/.local/share/ppf-cts/venv.
         # Falls through silently when the venv is absent (Docker /
         # win-native paths use embedded Python set up differently).
-        venv_activate = '$HOME/.local/share/ppf-cts/venv/bin/activate'
+        venv_activate = '"$HOME/.local/share/ppf-cts/venv/bin/activate"'
         activate_clause = (
             f'[ -f {venv_activate} ] && source {venv_activate}; '
         )
@@ -1184,25 +1185,17 @@ class EffectRunner:
         # reporting the split, because each binary answers `--backend` honestly
         # about itself and neither is asked about the other.
         #
-        # It is exported on its own line rather than inlined into the
-        # `bash -c "..."` below, where a `$` or a backtick would be expanded by
-        # the remote shell before the server ever saw it.
-        target_dir = remote_target_dir(rust_bin)
-        target_clause = (
-            f'export CARGO_TARGET_DIR="{target_dir}"\n' if target_dir else ""
-        )
-        # DETACHED WITHOUT `nohup`, which refuses to run on macOS under a
-        # session with no terminal ("nohup: can't detach from console:
-        # Inappropriate ioctl for device") and starts nothing, so a Mac solver
-        # host would get no server. What `nohup` is for is done by hand: the
-        # hangup signal is ignored (an ignored signal stays ignored across
-        # `exec`), standard input is /dev/null and the output goes to the log,
-        # in a background subshell the launching shell does not wait for.
-        script = (
-            f'#!/bin/bash\ncd "{directory}"\n'
-            f'{target_clause}'
-            f'( trap "" HUP; exec bash -c "{activate_clause}{server_cmd}" ) '
-            f'> "{server_log}" 2>&1 < /dev/null &\n'
+        # Every path in the script is one quoted shell word
+        # (`remote_shell.server_launch_script`), so a solver root holding a
+        # space, a `$` or a quote reaches the server as typed.
+        script = remote_shell.server_launch_script(
+            directory=directory,
+            server_binary=rust_bin,
+            server_args=server_args,
+            target_dir=remote_target_dir(rust_bin),
+            env_prefix=shell_prefix(gpu_index, gpu_uuid),
+            activate_clause=activate_clause,
+            server_log=server_log,
         )
         backend.exec_command(f"cat <<'EOF' > {script_path}\n{script}EOF\n", shell=True)
         backend.exec_command(f"chmod +x {script_path}", shell=True)
@@ -1229,7 +1222,7 @@ class EffectRunner:
         while True:
             elapsed = time.time() - start
             result = backend.exec_command(
-                f"cat {progress_file} 2>/dev/null", shell=True,
+                remote_shell.read_file(progress_file), shell=True,
             )
             lines = result.get("stdout", [])
             if len(lines) > last_lines:
@@ -1250,7 +1243,7 @@ class EffectRunner:
             # binds the host port even with nothing live inside).
             if not ready_marker_seen:
                 log_tail = backend.exec_command(
-                    f"tail -20 {server_log} 2>/dev/null", shell=True,
+                    remote_shell.tail_file(server_log), shell=True,
                 )
                 tail_text = "\n".join(log_tail.get("stdout", []))
                 if "Address already in use" in tail_text or "os error 98" in tail_text:
@@ -1265,7 +1258,7 @@ class EffectRunner:
 
             if elapsed > max_wait:
                 log_result = backend.exec_command(
-                    f"tail -20 {server_log}", shell=True,
+                    remote_shell.tail_file(server_log, quiet=False), shell=True,
                 )
                 details = "\n".join(log_result.get("stdout", []))
                 if ready_marker_seen:
@@ -1562,7 +1555,7 @@ class EffectRunner:
             else:
                 output_dir = posixpath.join(root, "session", "output")
                 result = self._backend.exec_command(
-                    f"ls -1 {output_dir}/vert_*.bin 2>/dev/null",
+                    remote_shell.list_frames(output_dir),
                     shell=True,
                 )
                 if result.get("exit_code", 1) != 0 or not result.get("stdout"):

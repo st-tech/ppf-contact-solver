@@ -33,9 +33,10 @@ From top to bottom the panel holds:
 - A **Take FPS from Scene** box with **FPS** and **Time Scale**, and a
   **Take Starting Frame from Scene** box with **Starting Frame**.
 - The basic settings, one per row: **Frame Count**, **Step Size**, **Min
-  Newton Steps**, **Air Density (kg/m³)**, **Air Friction**, **World
-  Scaling**, **Gravity (m/s²)**, **Preview Direction** and **Inactive
-  Momentum Frames**. See [Basic](#basic).
+  Newton Steps**, **Air Density (kg/m³)** and **Air Friction**; then a
+  **Take Unit Scale from Scene** box with **World Scaling**, a **Take
+  Gravity from Scene** box with **Gravity (m/s²)**, and **Preview
+  Direction** and **Inactive Momentum Frames**. See [Basic](#basic).
 - Six collapsible boxes, in this order. Each has a disclosure triangle on
   its header row, opens and closes on its own, and starts closed.
   - **Save and Checkpoints**: resumable states. See
@@ -126,7 +127,8 @@ there (**Gravity** is stored as `gravity`). It also stores **Auto Save**,
 **Auto Save Interval** and the scene's invisible colliders. It does not
 store:
 
-- **World Scaling**, **Friction Mode**, `fix_xz`, **Save State on Finish**,
+- **World Scaling** and **Take Unit Scale from Scene**, **Friction Mode**,
+  `fix_xz`, **Save State on Finish**,
   **Keep Saved States** and the **Save Checkpoints** list.
 - The **Preview Direction** toggles and whether a box is open.
 - The **Force Fields** settings.
@@ -214,11 +216,13 @@ add-on ships):
 | **Take Starting Frame from Scene** | `use_scene_frame_start`     | `False`       | Start at the scene's start frame instead of the **Starting Frame** field. A **Starting Frame (from Scene)** readout replaces the field while it is on. |
 | **Starting Frame**                 | `frame_start`               | 1             | Blender frame that holds the first output frame; simulated time zero. Minimum 0.                                                |
 | **Frame Count**                    | `frame_count`               | 180           | Simulation length in frames. Minimum 10.                                                                                        |
-| **Step Size**                      | `step_size`                 | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.01.                                                                             |
+| **Step Size**                      | `step_size`                 | 0.01          | Solver sub-step Δt, in seconds. Range 0.001 – 0.02. The solver takes no larger step, and **Transfer** refuses a keyframed Step Size that exceeds 0.02 at any frame. |
 | **Min Newton Steps**               | `min_newton_steps`          | 1             | Minimum Newton iterations per step. Range 1 – 64.                                                                               |
 | **Air Density (kg/m³)**            | `air_density`               | 0.001         | Air density. Range 0 – 0.01.                                                                                                    |
 | **Air Friction**                   | `air_friction`              | 0.2           | Ratio of sideways to head-on air drag. Range 0 – 1. See [Air Friction](#air-friction).                                          |
+| **Take Unit Scale from Scene**     | `use_scene_unit_scale`      | `False`       | Use the scene's **Unit Scale** (Scene properties, Units) as **World Scaling** instead of the field. A **World Scaling (from Scene)** readout replaces the field while it is on. |
 | **World Scaling**                  | `world_scaling`             | 1.0           | Physical size the scene is simulated at, as a uniform scale; the result is scaled back, so the scene keeps its authored size. Range 0.001 – 1000. See [World Scaling](#world-scaling). |
+| **Take Gravity from Scene**        | `use_scene_gravity`         | `False`       | Use the scene's own **Gravity** (Scene properties) instead of the field: its X, Y and Z, and none while its checkbox is off. The vector in use replaces the field, grayed out, while it is on. |
 | **Gravity (m/s²)**                 | `gravity_3d` (or `gravity`) | (0, 0, -9.8)  | Gravity vector in Blender's Z-up frame.                                                                                         |
 | **Preview Direction** (gravity)    | `preview_gravity_direction` | `False`       | Draw the gravity arrow in the viewport. Viewport only. See [Previewing Direction](#previewing-direction).                       |
 | **Inactive Momentum Frames**       | `inactive_momentum_frames`  | 0             | Number of frames at the start of the solve without velocity, gravity, wind or force fields. Range 0 – 600.                      |
@@ -229,6 +233,21 @@ A 23.98 fps scene, which is 24 with a **Base** of 1.001, runs at 24.
 
 When **Time Scale** is not `1.0`, the panel adds an **Animation at N%
 speed** label under it.
+
+**Take Unit Scale from Scene** reads the scene's **Unit Scale**, which says
+how many meters one Blender unit is, and uses it as **World Scaling**. The
+readout names that length: a **Unit Scale** of `1000` reads *1000 (1 unit
+= 1 km)*. The scene's **Length** unit is not part of it: it only chooses how
+Blender displays lengths, so setting **Length** to kilometers with a **Unit
+Scale** of `1` still simulates one unit as 1 m, as Blender's own physics do.
+The **World Scaling** field keeps its value while the toggle is on.
+
+**Take Gravity from Scene** uses the **Gravity** settings in Blender's
+Scene properties, the same ones Blender's own physics use. While the scene's
+**Gravity** checkbox is off, the vector reads `(0, 0, 0)`, no gravity is
+sent, and the panel says *Gravity is turned off in the Scene Settings*.
+Keyframes on the add-on's **Gravity** are not used while the toggle is on,
+and the **Gravity** field keeps its value for when it is turned off.
 
 Changing **Frame Count**, **Starting Frame** or **Take Starting Frame from
 Scene** raises the scene's **End** frame to the last frame of the solve (the
@@ -406,14 +425,14 @@ solve.
 | ---------------------- | ---------------- | -------------- | -------------------------------------------------------------------------------------------------------------- |
 | **PCG Max Iterations** | `cg_max_iter`    | 10 000         | Maximum number of PCG iterations per solve. Range 100 – 100 000.                                               |
 | **PCG Tolerance**      | `cg_tol`         | 0.001          | Relative tolerance at which PCG stops. Range 0.00001 – 0.1.                                                    |
-| **Preconditioner**     | `precond`        | `BLOCK_JACOBI` | Preconditioner of the PCG solve. Choices: **Block Jacobi** (`BLOCK_JACOBI`, default), **Schwarz** (`SCHWARZ`). See [Preconditioner](#preconditioner). |
+| **Preconditioner**     | `precond`        | `BLOCK_JACOBI` | Preconditioner of the PCG solve. Choices: **Block Jacobi** (`BLOCK_JACOBI`, default), **Schwarz** (`SCHWARZ`), **Multigrid** (`MULTIGRID`). See [Preconditioner](#preconditioner). |
 | **Schwarz Levels**     | `schwarz_levels` | `LEVEL_2`      | Levels of the Schwarz preconditioner. Drawn only while **Preconditioner** is **Schwarz**. Choices: **Level 1** (`LEVEL_1`), **Level 2** (`LEVEL_2`, default). See [Schwarz Levels](#schwarz-levels). |
 
 ### Preconditioner
 
-The **Preconditioner** selects how the PCG solve is accelerated. Both
-choices reach the same **PCG Tolerance**. They differ in the number of
-iterations per solve, the time per iteration and the memory used.
+The **Preconditioner** selects how the PCG solve is accelerated. All
+three choices reach the same **PCG Tolerance**. They differ in the number
+of iterations per solve, the time per iteration and the memory used.
 
 - **Block Jacobi** (the default) treats each vertex on its own. Each
   iteration is cheap, so it is fast in practice. It stores one 3 x 3
@@ -423,10 +442,25 @@ iterations per solve, the time per iteration and the memory used.
   scenes that mix stiff and soft materials it can converge in fewer
   iterations, but each iteration costs more and it uses more memory, which
   on scenes with very heavy contact can be enough to run out of memory.
+- **Multigrid** first solves a coarse version of each connected piece of
+  mesh and refines the answer from there. It needs far fewer iterations
+  than the other two, and each iteration costs several times more. It is
+  faster on large cloth and soft-body scenes, and slower on small scenes
+  and on stacks or piles of solid objects.
 
-If you are unsure, leave it on **Block Jacobi**. Switch to **Schwarz**
-only if a scene that mixes stiff and soft materials is slow to converge
-and you have memory to spare.
+If you are unsure, leave it on **Block Jacobi**. Try **Multigrid** when a
+large cloth or soft-body scene is slow to simulate: in our measurements it
+paid off on cloth scenes from about 65,000 vertices on an NVIDIA GPU, and
+from about 10,000 on Apple silicon. Switch to **Schwarz** only if a scene
+that mixes stiff and soft materials is slow to converge and you have
+memory to spare.
+
+**Multigrid** cannot be used in a scene that has a **PDRD** group. While
+**Multigrid** is selected and a **PDRD** group holds an object whose
+**Include** box is checked, the box shows *Multigrid does not solve PDRD
+groups; Transfer will refuse*, and **Transfer** stops with a message that
+names the group. Choose **Block Jacobi** or **Schwarz**, delete the
+**PDRD** group, or uncheck **Include** on its objects.
 
 ### Schwarz Levels
 
@@ -520,9 +554,10 @@ list has its own tools, `set_save_checkpoint_frames`,
 `solver.param` cannot set it. See [Dynamic Parameters](dynamic.md) for
 keyframing the other settings from Python.
 
-Over MCP, `schwarz_levels` is the number `1` or `2`, where
-`solver.param.schwarz_levels` and a scene profile use `LEVEL_1` and
-`LEVEL_2`. `get_scene_parameters` also reports `effective_fps`, the frame
+Over MCP, `precond` is `BLOCK_JACOBI`, `SCHWARZ` or `MULTIGRID` in either
+case, and any other name is refused. `schwarz_levels` is the number `1`
+or `2`, where `solver.param.schwarz_levels` and a scene profile use
+`LEVEL_1` and `LEVEL_2`. `get_scene_parameters` also reports `effective_fps`, the frame
 rate before **Time Scale** is applied, and `effective_start_frame`, the
 starting frame, each after **Take FPS from Scene** and **Take Starting Frame
 from Scene** have been applied. See **Under the hood** below, **FPS and

@@ -33,6 +33,7 @@ from . import (
     resolve_start_frame,
     resolve_time_scale,
     resolve_world_scaling,
+    resolve_gravity_3d,
     solver_gravity,
     solver_wind,
 )
@@ -174,7 +175,7 @@ def _encode_scene_params(context, state, fps):
         "friction-mode": str(state.friction_mode).lower(),
         "precond": PRECOND_SOLVER_NAMES[str(state.precond)],
         "schwarz-levels": 1 if state.schwarz_levels == "LEVEL_1" else 2,
-        "gravity": solver_gravity(state.gravity_3d),
+        "gravity": solver_gravity(resolve_gravity_3d(state)),
         "wind": solver_wind(
             state.wind_direction, state.wind_strength, "Wind",
         ),
@@ -186,7 +187,7 @@ def _encode_scene_params(context, state, fps):
         "csrmat-max-nnz": int(state.contact_nnz),
         "isotropic-air-friction": np.float32(state.vertex_air_damp),
         "fix-xz": np.float32(state.fix_xz),
-        "world-scaling": np.float32(state.world_scaling),
+        "world-scaling": np.float32(world_scaling),
         "auto-save": auto_save,
         "keep-states": keep_states,
         "checkpoints": checkpoints,
@@ -748,7 +749,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
         # A float each, or a per-uuid dict when the lengths follow each
         # object size. See `_encode_contact_lengths`.
         contact_gap_value, contact_offset_value = _encode_contact_lengths(
-            group, state.world_scaling,
+            group, resolve_world_scaling(state),
         )
 
         # A tracked captured deformation streams the rest shape of every
@@ -827,7 +828,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
             # than the mean of the two sides' values are linked at the
             # scene-build check as an existing intersection is. 0 links nothing.
             "allow-rest-proximity": np.float32(
-                group.rest_proximity_distance * state.world_scaling
+                group.rest_proximity_distance * resolve_world_scaling(state)
                 if group.allow_rest_proximity else 0.0),
             # The scene force field's scale on this group's objects (issues
             # #151 and #114): 1.0 applies it as authored, 0.0 opts out.
@@ -863,7 +864,7 @@ def _encode_group_params(context, groups, state, fps, start_frame):
                         _swap_axes(_normalize_and_scale(
                             kf.direction,
                             # Animation m/s -> physical (see resolve_time_scale).
-                            kf.speed * state.world_scaling * resolve_time_scale(state),
+                            kf.speed * resolve_world_scaling(state) * resolve_time_scale(state),
                             f"The velocity keyframe at frame {kf.frame} of "
                             f"'{assigned.name}'",
                         )),

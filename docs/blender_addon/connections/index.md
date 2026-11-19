@@ -124,13 +124,12 @@ without its extension.
 | ----------- | --------------------------------------- | --- |
 | **Project Name** is not empty and holds only letters, digits, `.`, `-` and `_` | *Project name should not contain spaces or special characters* for a bad character; nothing for an empty name | Edit the name |
 | The required field is filled: **Host** (types **SSH** and **Docker over SSH**), the **SSH Command** field (types **SSH Command** and **Docker over SSH Command**), **Container** (the three Docker types), **Solver Path** (the native types) | The empty field | Fill it in |
-| **SSH Key** (**SSH**, **Docker over SSH**), **Remote Path** (**SSH**, **SSH Command**) and **Container Path** (the three Docker types) hold no space and no shell special character | *Path should not contain spaces or special characters* | Remove the character. On Windows the default **SSH Key** path starts in your user folder, which contains a space when your account name does: point the field at a copy of the key in a path without one |
-| **Solver Path** on a native type holds no shell special character (spaces are allowed) | *Path should not contain special characters* | Remove the character |
+| **SSH Key** (**SSH**, **Docker over SSH**), **Remote Path** (**SSH**, **SSH Command**), **Container Path** (the three Docker types) and **Solver Path** (the native types) hold only characters a file name can: no control character, and on Windows none of `< > " \| ? *` | *Path cannot contain* and the character | Remove the character |
 | The Python module the type needs is installed: `paramiko` for the four SSH-based types, `docker` for **Docker** | A banner above the profile row and an install button | Click **Install Paramiko to Add-on Directory** or **Install Docker-Py to Add-on Directory** and wait for the install to finish |
 | No connection attempt is running and you are not connected | While connecting, the button reads **Connecting...**; once connected, it is grayed out | Wait, press **Cancel**, or press **Disconnect** |
 
-Shell special characters are `& | ; < > ( ) $ * ? [ ] { } # ! % ^`, the
-double and single quote, and the backtick. The add-on does not expand a
+Spaces, parentheses, quotes and other punctuation are all allowed; every
+command that carries a path quotes it. The add-on does not expand a
 leading `~` in **SSH Key**, **Remote Path**, **Container Path**, or
 **Solver Path**, so write the full path in each. A `~` in **Remote Path** on
 **SSH** and **SSH Command** can pass **Connect** and still make **Start

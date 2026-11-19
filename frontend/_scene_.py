@@ -2931,6 +2931,13 @@ class Scene:
             stiffness (float, optional): Force factor of every stitch in this
                 set, applied as is with no mass or time-step scaling. Zero
                 keeps the stitches and applies no force. Defaults to 1.0.
+            rest_length (optional): The length each stitch's spring holds its
+                two points at, in the forms :meth:`Object.stitch` takes:
+                ``None`` (the default) derives it from the contact gaps of the
+                six vertices, ``"initial"`` measures it at :meth:`Scene.build`
+                from the two points' positions, a positive number applies to
+                every stitch of this set, and a ``(K,)`` array gives one per
+                row.
 
         Returns:
             Scene: This scene, for chaining.

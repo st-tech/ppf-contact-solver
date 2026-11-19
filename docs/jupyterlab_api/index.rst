@@ -246,6 +246,51 @@ which the add-on sets when it launches a server, counts as an explicit
 choice for the same reason. See :doc:`module_reference` for the full
 signatures, and :ref:`choosing-the-build` for the add-on's side of it.
 
+Choosing the Linear Solver's Preconditioner
+-------------------------------------------
+
+Every Newton step solves one linear system with a preconditioned conjugate
+gradient, and the session parameter ``precond`` names its preconditioner.
+All three reach the same ``cg-tol``; they differ in how many iterations a
+solve takes and in what each iteration costs.
+
+.. code-block:: python
+
+   session.param.set("precond", "multigrid")
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``precond``
+     - What it is
+     - When it pays
+   * - ``"block-jacobi"``
+     - Each vertex's own 3 x 3 block. The default.
+     - An iteration is as cheap as one can be, so it is the fastest choice on small scenes and on scenes dominated by contact between solids.
+   * - ``"schwarz"``
+     - Additive Schwarz over groups of nearby vertices, with ``schwarz-levels`` levels.
+     - Fewer iterations on scenes that mix stiff and soft materials, at more cost per iteration and more memory.
+   * - ``"multigrid"``
+     - A geometric multigrid cycle over grids laid on each connected piece of mesh.
+     - Far fewer iterations at several times the cost of each. Faster on large cloth and soft bodies: in our measurements it paid off on cloth scenes from about 65,000 vertices on an NVIDIA GPU and from about 10,000 on Apple silicon. Slower on small scenes and on stacked or piled solids.
+
+``session.build()`` checks the choice against the scene before it writes
+anything and raises ``ValueError`` in three cases:
+
+- ``precond`` is not one of the three names. A misspelled name is refused
+  with the list of choices and is never run as another preconditioner.
+- ``precond`` is ``"multigrid"`` and the scene holds a rigid body
+  (``obj.as_pdrd()``). The message names the bodies. Use
+  ``"block-jacobi"`` or ``"schwarz"`` there.
+- The scene holds a Cosserat rod (``obj.as_cosserat()``) and ``precond`` is
+  not ``"block-jacobi"``, which is the only choice such a scene takes.
+
+The environment variable ``PPF_PRECOND`` overrides the parameter for one
+run of the solver, and takes the same three names; any other value stops
+the run. A run under the multigrid records the time it spent laying its
+grids once, before the first step, in the ``multigrid_build`` log channel
+(see :doc:`log_channels`).
+
 Letting Objects Pass Through Each Other
 ---------------------------------------
 
@@ -397,10 +442,27 @@ weights ``[1, 0, 0]``.
    w = [[1, 0, 0, *bary] for bary in shirt_barys]
    scene.cross_stitch("sleeve", "shirt", ind, w, stiffness=10.0)
 
-A stitch is soft, not a weld: it pulls the two points to contact distance
-and contact still applies. An object a stitch names is always simulated,
-so a fully pinned one stays held at rest by its pins rather than becoming a
-static collision mesh.
+A stitch is soft, not a weld: by default it pulls the two points to
+contact distance and contact still applies. An object a stitch names is
+always simulated, so a fully pinned one stays held at rest by its pins
+rather than becoming a static collision mesh.
+
+``rest_length``, on both :meth:`frontend.Scene.cross_stitch` and
+:meth:`frontend.Object.stitch`, sets the length each stitch's spring holds
+its two points at:
+
+- ``None`` (the default) takes half the weighted mean of the contact gaps
+  of the stitch's vertices, which closes the seam to contact distance.
+- ``"initial"`` measures each stitch at :meth:`frontend.Scene.build` from
+  the two points' positions, so points that start apart are held there with
+  no preload. The build refuses a stitch whose two points start at the same
+  position, since it has no length to rest at.
+- A positive number applies to every stitch of the call, and an array gives
+  one length per row.
+
+The spring's energy is in strain units, ``l / l0 - 1``, so the same
+``stiffness`` is a softer spring on a longer rest length: the force at an
+extension ``d`` is ``stiffness * d / l0``.
 
 Each call is checked when it is made, and a violation raises
 ``ValueError`` naming it:
@@ -427,6 +489,75 @@ two barycentric points, ``Ind[:, 0:3]`` / ``W[:, 0:3]`` and
 ``Ind[:, 3:6]`` / ``W[:, 3:6]``, for a seam where neither end is a vertex.
 ``Ind`` and ``W`` must have the same shape.
 
+Cosserat Rods
+-------------
+
+``obj.as_cosserat()`` turns a rod asset into a Cosserat rod. Each segment
+then carries an orientation frame, so the rod resists shear, bending and
+twist, where a plain rod has stretch and a bending term on positions only.
+The call swaps the object's parameters for the Cosserat set:
+
+.. code-block:: python
+
+   rope = scene.add("rope").as_cosserat()
+   rope.param.set("cosserat-rest-twist", 10.0)  # radians per unit length
+   rope.param.set("cosserat-fix-ends", 1.0)     # hold both end frames
+   rope.tilt(np.linspace(0.0, np.pi, len(rope.get("V"))))  # roll per vertex
+
+The keys are ``cosserat-shear``, ``cosserat-bend``, ``cosserat-twist``,
+``cosserat-rest-twist``, ``cosserat-fix-ends``, ``cosserat-end-twist-rate``
+and ``cosserat-straight-rest``, described under ``Object.as_cosserat`` on
+:doc:`module_reference`. The stiffnesses are density normalized and do not
+change when the rod is refined.
+
+The rod rests in its authored shape, curvature and twist included. When
+``obj.set_bend_rest_vert(vert)`` gives a bending reference, the rest
+curvature and twist come from the reference instead, so a rod authored bent
+over a form can rest straight and carry the bend as strain. The stretch rest
+lengths stay those of the authored shape. A scene with a Cosserat rod runs
+only on the ``"block-jacobi"`` preconditioner.
+
+Holding a Vertex on Other Vertices
+----------------------------------
+
+:meth:`frontend.Scene.tie` holds vertices of one object exactly at an
+affine combination of vertices of others. Where a stitch pulls two points
+together with a stiffness, a tie has none: the held vertex owns no degree
+of freedom of its own, moves exactly with its controllers, and passes its
+mass and the forces on it to them. Contact stays on for the held vertex,
+against its controllers too.
+
+.. code-block:: python
+
+   from frontend import tie_weights
+
+   # Hold every floss vertex on its eight nearest ground vertices.
+   ind, w = tie_weights(floss_vertices, ground_vertices)
+   scene.tie("floss", range(len(floss_vertices)), "ground", ind, w)
+
+Each row of ``w`` sums to one, and a weight may lie outside ``[0, 1]``,
+which is how a point above a surface is reached. ``ind`` and ``w`` are
+``(N, K)`` with at most 8 controllers per held vertex, and ``target_of``,
+also ``(N, K)``, picks a controller object per slot when ``targets`` names
+more than one. :func:`frontend.tie_weights` returns the least-norm weights
+over each point's ``k`` nearest candidates (8 by default, at least 4) and
+refuses a point whose candidates lie flat, since they cannot reach a point
+off their plane, or one that needs a weight larger than ``max_weight``
+(4 by default).
+
+The call raises ``ValueError`` on a malformed row, an index out of range,
+a row whose weights do not sum to one, or a vertex held twice, and the
+objects it names must each be a surface, a tetrahedral mesh or a rod.
+:meth:`frontend.Scene.build` also refuses a held vertex that does not sit
+on its combination at the positions the scene is built at, rather than
+let the solver snap it there, and a tie that names a PDRD body. A held
+vertex may not be pinned and may not control another tie.
+
+A scene with ties runs only on the ``"block-jacobi"`` preconditioner, and
+takes no PDRD body and no **Lock Translation** or **Lock Rotation**. The
+solver refuses those combinations when it starts, with a message that
+names the feature.
+
 .. _simulated-time-and-units:
 
 Simulated Time and Units
@@ -436,6 +567,9 @@ The solver writes output frame ``n`` at ``n / fps`` seconds of simulated time,
 so a run of ``frames`` frames covers ``frames / fps`` seconds. The defaults of
 300 frames at 60 fps cover 5 seconds. ``dt`` is the step between solver
 updates, and a ``dt`` longer than ``0.9999 / fps`` is lowered to that value.
+The solver takes no step longer than 0.02 s: ``session.param.set`` refuses a
+``dt`` outside ``(0, 0.02]``, as does an animated ``dt`` set through
+``session.param.dyn``, and the solver refuses a scene that carries one.
 Every time argument, namely pin ``t_start``, ``t_end`` and ``unpin``,
 ``dyn().time()``, ``Object.move``, ``velocity(..., t=...)``, collider
 keyframes, ``set_param_anim_times``, force field ``times`` and the ``t`` a
@@ -670,6 +804,22 @@ sets per group. The time arguments are in seconds, as under
      - ``obj.as_pdrd()`` on a triangle asset. ``obj.hinge(pca_axis=2)`` fixes the body's position and lets it turn only about one principal axis.
    * - **Static** group, moving
      - ``obj.pin()`` pins every vertex. ``obj.move(delta, t_start=0.0, t_end=1.0)`` and ``obj.animate_rotate(axis, angle, center=None, t_start=0.0, t_end=1.0)`` then keyframe its translation and its rotation in degrees, and the pin operations of :ref:`jupyterlab-pin-settings` move it as well.
+
+A lock normally holds each object's own center of mass and its own best-fit
+rotation. ``obj.lock_group(name)`` puts every object carrying the same name
+into one lock instead: **Lock Translation** and **Lock Rotation** then hold
+the members' combined center of mass and their combined mass-weighted
+best-fit rotation, and each member stays free to move and turn relative to
+the others. The group carries one lock, so ``Scene.build()`` raises
+``ValueError`` when its members state different lock settings.
+
+.. code-block:: python
+
+   # The yarns of a sheet may not turn about the vertical axis as a whole,
+   # while each yarn slides and twists on its own.
+   for yarn in yarns:
+       yarn.lock_rotation(0, 1, 0).lock_rotation_prohibit_axis(True)
+       yarn.lock_group("sheet")
 
 External Force Fields
 ---------------------

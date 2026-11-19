@@ -2155,12 +2155,23 @@ def set_group_material_properties(group_uuid: str, properties: dict):
 
     Supported properties by group type:
 
-    - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness
-    - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness
-    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent
+    - SHELL: enable_strain_limit, strain_limit_percent, shell_density, shell_young_modulus, shell_poisson_ratio, shell_model, bend, bend_warp, bend_weft, shrink_x, shrink_y, deformation_damping, bending_damping, young_mod_density_normalized, friction, enable_inflate, inflate_pressure, stitch_stiffness, enable_plasticity, plasticity, plasticity_threshold, bend_rest_angle_source, enable_bend_plasticity, bend_plasticity, bend_plasticity_threshold
+    - SOLID: solid_density, solid_young_modulus, solid_poisson_ratio, solid_model, shrink, deformation_damping, young_mod_density_normalized, friction, stitch_stiffness, enable_plasticity, plasticity, plasticity_threshold
+    - ROD: rod_density, rod_young_modulus, rod_model, deformation_damping, bending_damping, young_mod_density_normalized, friction, bend, length_factor, enable_strain_limit, strain_limit_percent, bend_rest_angle_source, enable_bend_plasticity, bend_plasticity, bend_plasticity_threshold
     - PDRD: pdrd_density, pdrd_restitution, friction (the hinge joint is per-object; use the set_pdrd_hinge tool)
     - SAND: sand_grain_radius, sand_particle_mass, sand_friction (faceless granular body of loose grain-center vertices)
     - STATIC: friction, enable_soft_constraint, soft_constraint_stiffness (a collider tracks its animation exactly unless soft constraints are on, which holds it with springs of that stiffness so contact can push it off its path)
+
+    bend_rest_angle_source (Shell and Rod) is FLAT (a shell hinge rests flat,
+    a rod joint straight), FROM_GEOMETRY (the starting pose) or
+    FROM_REFERENCE. Under FROM_REFERENCE every object of the group reads its
+    own reference, set with set_bend_reference, set_bend_reference_shape_key
+    or set_bend_reference_shape_key_mix, and the scene build refuses an
+    object that has none; Bend Plasticity does not apply there.
+    enable_plasticity / plasticity / plasticity_threshold (Solid and Shell)
+    let the rest shape creep toward the current one, and
+    enable_bend_plasticity / bend_plasticity / bend_plasticity_threshold
+    (Shell and Rod) do the same for the bending rest angle.
 
     force_field_weight (every type but STATIC) scales the scene's force fields
     and force-field script on the group's objects: 1.0 as authored, 0.0 leaves

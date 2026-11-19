@@ -90,11 +90,36 @@ def resolve_world_scaling(state) -> float:
     velocity), material parameters (air density included) and a pin's
     torque. Quantities with no length in them (angular velocity, friction,
     time) are not scaled either.
+
+    Take Unit Scale from Scene (``use_scene_unit_scale``) takes the factor
+    from Blender's Scene > Units > Unit Scale, which says the same thing (one
+    scene unit is that many meters); the field keeps its own value meanwhile,
+    as the FPS field does under Take FPS from Scene. Every reader goes
+    through here, so the two sources cannot be mixed in one encode.
     """
-    scale = float(state.world_scaling)
+    if state.use_scene_unit_scale:
+        scale = float(state.id_data.unit_settings.scale_length)
+    else:
+        scale = float(state.world_scaling)
     if not scale > 0.0:
         raise ValueError(f"World Scaling must be positive, got {scale}")
     return scale
+
+
+def resolve_gravity_3d(state):
+    """The gravity the simulation uses, in Blender axes, in one place.
+
+    Take Gravity from Scene (``use_scene_gravity``) takes the vector from
+    Blender's own Scene > Gravity settings, zero while its checkbox is
+    unticked; this is ``scene_gravity_display``, the read-only vector the
+    panel shows in place of the field, so the panel and the solve cannot
+    disagree. Otherwise it is the add-on's Gravity field, which keeps its
+    value while the scene's is in use, as the FPS field does under Take FPS
+    from Scene.
+    """
+    if state.use_scene_gravity:
+        return tuple(state.scene_gravity_display)
+    return tuple(state.gravity_3d)
 
 
 def solver_gravity(gravity_3d) -> list[float]:
@@ -266,6 +291,7 @@ __all__ = [
     "resolve_solver_fps",
     "resolve_time_scale",
     "resolve_world_scaling",
+    "resolve_gravity_3d",
     "solver_gravity",
     "solver_wind",
     "resolve_start_frame",
