@@ -509,41 +509,60 @@ if defined PPF_WIN_GPU_BACKENDS (
     set "DIST_TARGET_LINE=REM the frontend searches target\^<backend^> and resolves which backend a run uses"
     set "PYW_TARGET_LINE=# the frontend searches target\<backend> and resolves which backend a run uses"
 ) else (
-    set "DIST_TARGET_LINE=set CARGO_TARGET_DIR=%%DIST%%\target\cpu"
+    set "DIST_TARGET_LINE=set "CARGO_TARGET_DIR=%%DIST%%\target\cpu""
     set "PYW_TARGET_LINE=os.environ['CARGO_TARGET_DIR'] = os.path.join(script_dir, 'target', 'cpu')"
 )
 
 REM Generate start.bat (self-contained launcher)
 (
 echo @echo off
-echo setlocal
+echo setlocal DisableDelayedExpansion
 echo.
-echo REM Get the directory where this script is located
-echo set DIST=%%~dp0
-echo set DIST=%%DIST:~0,-1%%
+echo REM Get the directory where this script is located. The folder may be named
+echo REM with a space, parentheses, an ampersand, an apostrophe, a percent sign or
+echo REM a caret, so every path is assigned in the quoted form and used in quotes,
+echo REM where cmd takes all of those literally.
+echo set "DIST=%%~dp0"
+echo set "DIST=%%DIST:~0,-1%%"
+echo.
+echo REM A SEMICOLON IN THIS FOLDER'S PATH CANNOT WORK: Windows separates PATH
+echo REM entries with it, and the bundled Python does not start from such a
+echo REM folder. Every other character a folder name can hold is fine.
+echo if not "%%DIST:;=%%"=="%%DIST%%" ^(
+echo     echo ERROR: this folder's path contains a semicolon, which Windows cannot run from:
+echo     echo   "%%DIST%%"
+echo     echo Rename or move the folder so its path has no semicolon, then run this again.
+echo     pause
+echo     exit /b 1
+echo ^)
 echo.
 echo REM Load configuration
-echo call "%%DIST%%\config.bat"
+echo REM CALL expands its line a second time, which would mangle a percent sign
+echo REM or a caret in the path, so it is given the bare file name from inside
+echo REM the folder instead.
+echo pushd "%%DIST%%"
+echo call config.bat
+echo popd
 echo.
 echo REM Set PATH to include bundled binaries and MinGit
-echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
-echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
+echo set "PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%"
+echo set "PYTHONPATH=%%DIST%%;%%PYTHONPATH%%"
 echo !DIST_TARGET_LINE!
 echo.
 echo REM Point Python at certifi's CA bundle so HTTPS works in the
 echo REM bundled embedded distribution. The unparenthesized phrasing
 echo REM here is deliberate: parens inside this generator's outer
 echo REM redirect block confuse cmd.exe's parser.
-echo set SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
-echo set REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
+echo set "SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem"
+echo set "REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem"
 echo.
 echo REM Set Jupyter/IPython config to dist-relative paths
-echo set JUPYTER_CONFIG_DIR=%%DIST%%\jupyter\config
-echo set JUPYTER_DATA_DIR=%%DIST%%\jupyter\data
-echo set IPYTHONDIR=%%DIST%%\jupyter\ipython
+echo set "JUPYTER_CONFIG_DIR=%%DIST%%\jupyter\config"
+echo set "JUPYTER_DATA_DIR=%%DIST%%\jupyter\data"
+echo set "IPYTHONDIR=%%DIST%%\jupyter\ipython"
 echo.
 echo REM Set dark theme if not already configured
-echo set THEME_DIR=%%JUPYTER_CONFIG_DIR%%\lab\user-settings\@jupyterlab\apputils-extension
+echo set "THEME_DIR=%%JUPYTER_CONFIG_DIR%%\lab\user-settings\@jupyterlab\apputils-extension"
 echo if not exist "%%THEME_DIR%%" mkdir "%%THEME_DIR%%"
 echo if not exist "%%THEME_DIR%%\themes.jupyterlab-settings" ^(
 echo     echo {"theme": "JupyterLab Dark"} ^> "%%THEME_DIR%%\themes.jupyterlab-settings"
@@ -595,25 +614,39 @@ echo   Created start-jupyterlab.pyw
 REM Generate headless.bat (run headless example without JupyterLab)
 (
 echo @echo off
-echo setlocal
+echo setlocal DisableDelayedExpansion
 echo.
 echo REM Check for /nopause argument
 echo set NOPAUSE=0
 echo echo %%* ^| find /i "/nopause" ^>nul
 echo if not errorlevel 1 set NOPAUSE=1
 echo.
-echo REM Get the directory where this script is located
-echo set DIST=%%~dp0
-echo set DIST=%%DIST:~0,-1%%
+echo REM Get the directory where this script is located. The folder may be named
+echo REM with a space, parentheses, an ampersand, an apostrophe, a percent sign or
+echo REM a caret, so every path is assigned in the quoted form and used in quotes,
+echo REM where cmd takes all of those literally.
+echo set "DIST=%%~dp0"
+echo set "DIST=%%DIST:~0,-1%%"
+echo.
+echo REM A SEMICOLON IN THIS FOLDER'S PATH CANNOT WORK: Windows separates PATH
+echo REM entries with it, and the bundled Python does not start from such a
+echo REM folder. Every other character a folder name can hold is fine.
+echo if not "%%DIST:;=%%"=="%%DIST%%" ^(
+echo     echo ERROR: this folder's path contains a semicolon, which Windows cannot run from:
+echo     echo   "%%DIST%%"
+echo     echo Rename or move the folder so its path has no semicolon, then run this again.
+echo     if "%%NOPAUSE%%"=="0" pause
+echo     exit /b 1
+echo ^)
 echo.
 echo REM Set PATH to include bundled binaries and MinGit
-echo set PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%
-echo set PYTHONPATH=%%DIST%%;%%PYTHONPATH%%
+echo set "PATH=%%DIST%%\python;%%DIST%%\python\Scripts;%%DIST%%\bin;%%DIST%%\mingit\cmd;%%PATH%%"
+echo set "PYTHONPATH=%%DIST%%;%%PYTHONPATH%%"
 echo !DIST_TARGET_LINE!
 echo.
 echo REM Point Python at certifi's CA bundle - see start.bat for context.
-echo set SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
-echo set REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem
+echo set "SSL_CERT_FILE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem"
+echo set "REQUESTS_CA_BUNDLE=%%DIST%%\python\Lib\site-packages\certifi\cacert.pem"
 echo.
 echo REM Run headless.py
 echo "%%DIST%%\python\python.exe" "%%DIST%%\examples\headless.py"
@@ -924,6 +957,7 @@ echo   Copied config.bat
 
 REM Copy fast-check and utility files
 copy "%BUILD_WIN%\fast-check-all.bat" "%DIST_DIR%\fast-check-all.bat" >nul
+copy "%BUILD_WIN%\fast_check_all.py" "%DIST_DIR%\fast_check_all.py" >nul
 copy "%BUILD_WIN%\inject_fast_check.py" "%DIST_DIR%\inject_fast_check.py" >nul
 copy "%BUILD_WIN%\clear-cache.bat" "%DIST_DIR%\clear-cache.bat" >nul
 copy "%BUILD_WIN%\clear-all.bat" "%DIST_DIR%\clear-all.bat" >nul

@@ -20,6 +20,7 @@ from ..core.ssh_command import parse_ssh_command
 from ..core.utils import (
     find_invalid_name_char,
     find_unusable_path_char,
+    find_unusable_solver_root_char,
     get_timer_wait_time,
     redraw_all_areas,
     resolve_local_path,
@@ -137,7 +138,9 @@ def connect_refusal(context) -> str | None:
             if value.strip() == "":
                 return f"{label} is empty"
             continue
-        ch = find_unusable_path_char(value, windows=_names_windows_path(rule, kind))
+        check = (find_unusable_solver_root_char if rule == "native_path"
+                 else find_unusable_path_char)
+        ch = check(value, windows=_names_windows_path(rule, kind))
         if ch is not None:
             return f"{label} contains {ch!r}, which a path here cannot hold"
     return None

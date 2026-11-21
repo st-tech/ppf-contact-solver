@@ -29,6 +29,7 @@ from ..core.utils import (
     WINDOWS_MAX_PATH,
     find_invalid_name_char,
     find_unusable_path_char,
+    find_unusable_solver_root_char,
     get_category_name,
     resolve_local_path,
     windows_long_paths_enabled,
@@ -203,16 +204,20 @@ def _crash_detail_line(server_error: str, crash_kind: str) -> str:
     return detail
 
 
-def _draw_path_warning(layout, path, *, windows: bool) -> bool:
+def _draw_path_warning(layout, path, *, windows: bool,
+                       solver_root: bool = False) -> bool:
     """Draw a one-line warning when *path* holds a character no filename can,
     and return ``True`` so the caller can skip any follow-up status line.
     Draws nothing and returns ``False`` for a valid (or blank) path.
 
-    *windows* says whether the path names a Windows directory. The rule is
-    the Connect gate's (`find_unusable_path_char`), so the warning and the
-    button never disagree.
+    *windows* says whether the path names a Windows directory, and
+    *solver_root* whether it is the folder a native solver runs from. The
+    rule is the Connect gate's (`find_unusable_path_char`, or
+    `find_unusable_solver_root_char` for a solver root), so the warning and
+    the button never disagree.
     """
-    bad = find_unusable_path_char(path, windows=windows)
+    check = find_unusable_solver_root_char if solver_root else find_unusable_path_char
+    bad = check(path, windows=windows)
     if bad is None:
         return False
     layout.label(
@@ -882,7 +887,8 @@ class MAIN_PT_RemotePanel(Panel):
                 # Held to the same rule the Connect gate uses for this
                 # backend, so the warning and the button never disagree.
                 if not _draw_path_warning(
-                        col, path, windows=props.server_type == "WIN_NATIVE"):
+                        col, path, windows=props.server_type == "WIN_NATIVE",
+                        solver_root=True):
                     _draw_native_status(col, props.server_type, path)
                     from ..core.connection import native_resolvers
                     resolver, _, builds, resolve_root = native_resolvers(

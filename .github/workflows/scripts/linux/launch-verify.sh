@@ -35,6 +35,14 @@ rm -f "$HOME/$ARCHIVE"
     echo "ERROR: the archive did not unpack to $WORK/$DIST_NAME with its launcher" >&2
     exit 1
 }
+# THE DISTRIBUTION IS VERIFIED FROM A FOLDER NAMED THE WAY A USER'S MAY BE:
+# a space, parentheses, an ampersand, an apostrophe, a percent sign, a caret, a
+# hash, an exclamation mark, a dollar sign and a semicolon, which a Linux folder
+# name can all hold. Every path the launcher, the frontend and the solver's
+# session script build from it has to survive that.
+UNPACKED="p (1)&O'B 100%^#!\$x; $DIST_NAME"
+mv "$WORK/$DIST_NAME" "$WORK/$UNPACKED"
+DIST_NAME="$UNPACKED"
 mv "$HOME/verify-distribution.sh" "$WORK/verify-distribution.sh"
 # run_suite.py IS NOT IN THE ARCHIVE, so it arrives beside the verifier and has
 # to stay beside it: verify-distribution.sh resolves the harness from its own

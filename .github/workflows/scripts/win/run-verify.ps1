@@ -26,9 +26,21 @@
 # `exit /b 1` fired inside a parenthesized block, which is exactly how
 # `fast-check-all.bat` reports a failed example.
 
+# THE ARCHIVE IS UNPACKED INTO A FOLDER NAMED THE WAY A USER'S MAY BE: with a
+# space, parentheses, an ampersand, an apostrophe, a percent sign, a caret, a
+# hash, an exclamation mark and a dollar sign, every character a Windows folder
+# name can hold that the batch files once mishandled. A distribution unpacked as
+# "ppf-contact-solver (1)" or under "D:\Sim & FX" has to work, and this is the
+# one run that starts the batch files from the archive as shipped. A semicolon
+# is the one character left out: no Windows solver folder can hold it, because
+# its DLL folders go on PATH, and the launchers refuse it with a message.
+#
+# `fast-check-results.log` is copied to C:\bundle afterwards, where the
+# workflow fetches it, so nothing outside this script names the folder.
+
 param(
     [string]$Zip = "C:\bundle.zip",
-    [string]$Dir = "C:\bundle"
+    [string]$Dir = 'C:\ppf (1)&O''B 100%^#!$x dir'
 )
 
 $ErrorActionPreference = "Continue"
@@ -45,10 +57,10 @@ function Log([string]$line) {
 $code = 1
 try {
     Log "verification starting: $Zip -> $Dir"
-    if (-not (Test-Path $Zip)) { throw "the archive $Zip is not here" }
-    if (Test-Path $Dir) { Remove-Item -Recurse -Force $Dir }
+    if (-not (Test-Path -LiteralPath $Zip)) { throw "the archive $Zip is not here" }
+    if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Recurse -Force }
     New-Item -ItemType Directory -Path $Dir -Force | Out-Null
-    Expand-Archive -Path $Zip -DestinationPath $Dir -Force
+    Expand-Archive -LiteralPath $Zip -DestinationPath $Dir -Force
     Log "unpacked"
 
     # PPF_DIAG_SELFTEST makes every backend open prove, on this GPU, that a
@@ -63,7 +75,7 @@ try {
     $env:PPF_DIAG_SELFTEST = "1"
 
     foreach ($bat in @("headless.bat", "fast-check-all.bat")) {
-        if (-not (Test-Path "$Dir\$bat")) { throw "$bat is not in the archive" }
+        if (-not (Test-Path -LiteralPath "$Dir\$bat")) { throw "$bat is not in the archive" }
         Log "=== $bat ==="
         # `>>` inside the cmd string, so the batch's own stdout and stderr
         # land in the log as they are produced and the poll can read the
@@ -82,5 +94,10 @@ try {
     Log "ERROR: $_"
     if ($code -eq 0) { $code = 1 }
 } finally {
+    $results = Join-Path $Dir "fast-check-results.log"
+    if (Test-Path -LiteralPath $results) {
+        New-Item -ItemType Directory -Path "C:\bundle" -Force | Out-Null
+        Copy-Item -LiteralPath $results -Destination "C:\bundle\fast-check-results.log" -Force
+    }
     Set-Content -Path $ExitFile -Value $code
 }

@@ -363,7 +363,11 @@ for name in sorted(built):
     # so a name the frontend does not know would pass `binaries` and then be
     # invisible to every run. Only asking the frontend itself sees that.
     for backend in $BACKENDS; do
-        directory="$(printf '%s\n' "$out" | awk -v want="$backend" '$1 == want { print $2 }')"
+        # The directory is everything after the first space: the distribution's
+        # folder may itself hold spaces, which a whitespace split would cut.
+        directory="$(printf '%s\n' "$out" | while IFS= read -r line; do
+            [ "${line%% *}" = "$backend" ] && printf '%s\n' "${line#* }"
+        done)"
         if [ -z "$directory" ]; then
             printf 'the frontend does not list the %s build this distribution stamps\n' "$backend"
             bad=1
@@ -445,7 +449,11 @@ start_sampler() {
         while [ ! -e "$REPORT_DIR/.sampler-stop" ]; do
             for proc in /proc/[0-9]*; do
                 [ "$(readlink "$proc/exe" 2>/dev/null)" = "$DIST/target/$SUITE_BACKEND/release/ppf-contact-solver" ] || continue
-                awk '$6 ~ /\.so/ && $6 != "/etc/ld.so.cache" { print $6 }' "$proc/maps" 2>/dev/null
+                # The path is the rest of the line after five fields, not $6:
+                # the distribution's own folder may hold a space, and $6 would
+                # cut its libraries short and drop them from the list.
+                awk '{ p = $0; sub(/^([^ ]+ +){5}/, "", p) }
+                     p ~ /\.so/ && p != "/etc/ld.so.cache" { print p }' "$proc/maps" 2>/dev/null
             done >> "$MAPPED"
             sleep 1
         done
@@ -468,7 +476,14 @@ mapped_libraries() {
         printf 'the sampler saw no running CUDA solver, so nothing was checked\n'
         return 1
     fi
-    outside="$(grep -vE "^($DIST/|/lib/|/lib64/|/usr/lib/|/usr/lib64/)" "$MAPPED" || true)"
+    # A literal prefix match, not a regular expression: the distribution's
+    # folder may hold ( ) ^ $ or ., which a pattern would read as syntax.
+    outside="$(while IFS= read -r lib; do
+        case "$lib" in
+            "$DIST"/* | /lib/* | /lib64/* | /usr/lib/* | /usr/lib64/*) ;;
+            *) printf '%s\n' "$lib" ;;
+        esac
+    done < "$MAPPED")"
     if [ -n "$outside" ]; then
         printf 'mapped from outside the distribution and the system library directories:\n%s\n' "$outside"
         return 1

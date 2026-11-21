@@ -15,10 +15,13 @@
 #
 #   A_connect_accepts_legal_paths: Connect's gate (`connect_refusal`) has no
 #      objection to any of those paths, on each native type and on the remote
-#      directory fields, which every remote command now quotes.
+#      directory fields, which every remote command now quotes. The one
+#      exception is ';' in a Windows Native root, below.
 #   B_connect_refuses_unusable_paths: what no filename can hold is still
 #      refused, by name: a control character anywhere, and on the Windows
-#      Native root the characters NTFS forbids.
+#      Native root the characters NTFS forbids. A Windows Native root is also
+#      refused for ';': the released distribution's Python cannot start from
+#      a folder whose path holds one.
 #   C_solve_under_special_folder: a real solve whose session lives under a
 #      folder named with `(`, `)`, `&`, `'`, `%`, `^`, `#`, `!`, `$` and `;`
 #      (`PROJECT_DIR_NAME`, the server's data root here). The server writes
@@ -80,10 +83,13 @@ try:
         r"D:\Sim & FX\100% done\[v2] {final} ^ #! $x ;",
         "/home/me/My Work/ppf-contact-solver (1)",
     ]
-    # A, natives: no refusal at all is expected.
+    # A, natives: no refusal at all is expected, except that a Windows Native
+    # root may not hold ';' (B checks that refusal).
     native_refusals = {}
     for kind, field in native:
         for path in legal:
+            if kind == "WIN_NATIVE" and ";" in path:
+                continue
             why = refusal(kind, field, path)
             if why is not None:
                 native_refusals[f"{kind} {path}"] = why
@@ -108,6 +114,7 @@ try:
         ("WIN_NATIVE", "win_native_path", "C:\\a|b", "|"),
         ("WIN_NATIVE", "win_native_path", "C:\\a?b", "?"),
         ("WIN_NATIVE", "win_native_path", 'C:\\a"b', '"'),
+        ("WIN_NATIVE", "win_native_path", r"D:\Sim & FX\100% done\[v2] {final} ^ #! $x ;", ";"),
         ("LINUX_NATIVE", "linux_native_path", "/a\nb", "\n"),
         ("CUSTOM", "ssh_remote_path", "/a\tb", "\t"),
     ]

@@ -31,6 +31,15 @@ def get_category_name():
 _CONTROL_CHARS = frozenset(chr(c) for c in range(32)) | frozenset("\x7f")
 _WINDOWS_FORBIDDEN_CHARS = frozenset('<>"|?*')
 
+# A WINDOWS SOLVER FOLDER CANNOT HOLD `;` EITHER, though any other Windows path
+# may. The solver's backend DLL folders are put on PATH for every solve, and
+# PATH is `;`-separated, so a `;` cuts them in two. The distribution's
+# embedded Python does not start from such a folder at all: it no longer finds
+# the `._pth` file beside it, and every bundle script dies before running a
+# line. Measured on Windows Server 2022 with a released distribution, where
+# a space, `(`, `)`, `&`, `'`, `%`, `^`, `#`, `!` and `$` all worked.
+_WINDOWS_SOLVER_ROOT_FORBIDDEN_CHARS = frozenset(";")
+
 
 def find_unusable_path_char(path: str, *, windows: bool) -> str | None:
     """Return the first character *path* cannot hold, else ``None``.
@@ -45,6 +54,18 @@ def find_unusable_path_char(path: str, *, windows: bool) -> str | None:
         if ch in _CONTROL_CHARS or (windows and ch in _WINDOWS_FORBIDDEN_CHARS):
             return ch
     return None
+
+
+def find_unusable_solver_root_char(path: str, *, windows: bool) -> str | None:
+    """:func:`find_unusable_path_char` for the folder a native solver runs
+    from, which on Windows also cannot hold ``;``
+    (``_WINDOWS_SOLVER_ROOT_FORBIDDEN_CHARS``)."""
+    bad = find_unusable_path_char(path, windows=windows)
+    if bad is None and windows:
+        for ch in path.strip():
+            if ch in _WINDOWS_SOLVER_ROOT_FORBIDDEN_CHARS:
+                return ch
+    return bad
 
 
 def resolve_local_path(path: str) -> str:

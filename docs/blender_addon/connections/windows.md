@@ -89,6 +89,8 @@ of this capture.
 anything other than letters, digits, `.`, `-`, and `_`, and while **Solver
 Path** is empty or contains a character no file name can hold. Spaces,
 parentheses and other punctuation are fine, so `C:\Program Files (x86)\ppf` works.
+A semicolon is the one exception: Windows separates the folders on `PATH`
+with it, so a solver folder whose path holds `;` is refused.
 {ref}`When Connect is unavailable <connect-unavailable>` lists the message
 the panel shows for each case and the characters that are refused.
 

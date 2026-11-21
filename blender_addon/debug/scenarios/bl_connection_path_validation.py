@@ -11,7 +11,9 @@
 #
 #   * core.utils.find_unusable_path_char passes spaces, shell metacharacters,
 #     Windows drive letters and ``~/``, flags control characters everywhere,
-#     and flags ``<>"|?*`` only for a Windows path.
+#     and flags ``<>"|?*`` only for a Windows path;
+#     core.utils.find_unusable_solver_root_char also flags ``;`` in a Windows
+#     solver root, and nowhere else.
 #   * ui.main_panel._draw_path_warning emits a single ERROR line for a bad
 #     path and stays silent for a good one (a fake layout records the
 #     label() calls, since a real UILayout can't be built outside draw).
@@ -211,6 +213,33 @@ try:
     props.win_native_path = "C:/ppf|run"
     record("poll_win_forbidden_char_disabled", connect_enabled() is False,
            {"path": props.win_native_path})
+
+    # A WINDOWS SOLVER ROOT ALSO CANNOT HOLD `;`: its DLL folders go on PATH,
+    # which `;` separates, and the distribution's embedded Python does not start
+    # from such a folder. Every other Windows path may hold one, and every
+    # solver root elsewhere may too, so the refusal is that narrow.
+    fsr = utils.find_unusable_solver_root_char
+    record("validator_semicolon_refused_only_in_a_windows_solver_root",
+           fsr("C:/ppf;run", windows=True) == ";"
+           and fsr("/data/ppf;run", windows=False) is None
+           and fic_win("C:/keys/id;rsa") is None
+           and fsr(awkward.replace(";", ""), windows=True) is None,
+           {"win_root": fsr("C:/ppf;run", windows=True),
+            "posix_root": fsr("/data/ppf;run", windows=False),
+            "win_key": fic_win("C:/keys/id;rsa"),
+            "win_root_without_semicolon": fsr(awkward.replace(";", ""), windows=True)})
+    props.win_native_path = "C:/ppf (1);run"
+    fl_semi = _FakeLayout()
+    semi_warned = main_panel._draw_path_warning(
+        fl_semi, props.win_native_path, windows=True, solver_root=True)
+    record("poll_win_semicolon_disabled_and_warned",
+           connect_enabled() is False and semi_warned is True
+           and len(fl_semi.labels) == 1,
+           {"path": props.win_native_path, "labels": fl_semi.labels})
+    props.server_type = "LINUX_NATIVE"
+    props.linux_native_path = "/data/ppf (1);run"
+    record("poll_linux_native_semicolon_enabled", connect_enabled() is True,
+           {"path": props.linux_native_path})
 
 
     # ---- project name validator (stricter: no path separators either) ----
