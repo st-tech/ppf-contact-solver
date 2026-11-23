@@ -839,18 +839,31 @@ pub unsafe fn advance<D: Device>(
     };
     // How many contacts the iteration assembled, its increment, and the
     // progress bookkeeping: the smallest increment so far, the one before,
-    // and how many iterations have stalled since the last new minimum. An
-    // iteration stalls when its increment neither sets a new minimum nor grows
-    // past the previous one: shrinking increments converge, growing ones are
-    // Newton climbing out of a contact (the secant over the sweep is
-    // logarithmic in the gap there), and a cycle (through a point the line
-    // search holds, or between iterates whose contact sets differ, both
-    // measured) alternates and stalls on every other iteration.
+    // whether that one went down and whether it set a new minimum, and how
+    // many failed valleys the increments have shown since the last new
+    // minimum.
+    //
+    // A STALL IS A FAILED VALLEY, NOT A SHRINKING INCREMENT. Growing
+    // increments are Newton climbing out of a contact (the secant over the
+    // sweep is logarithmic in the gap there), and the descent after such a
+    // climb shrinks for several iterations before it gets below the minimum
+    // it started from: counting those as stalls stopped a converging step one
+    // iteration short of its quadratic finish (measured on a bouncing ball,
+    // where the committed pose then lost most of a bounce). What does not
+    // converge is the sequence turning back up, or going flat, at a point that
+    // set no new minimum: a cycle (through a point the line search holds, or
+    // between iterates whose contact sets differ, both measured) does that
+    // once per period, and an increment fluctuating at its noise floor does it
+    // repeatedly, while a climb and its descent never do.
     let mut contacts: u64;
     let mut increment: f32;
     let mut best_increment = f32::INFINITY;
     let mut previous_increment = f32::INFINITY;
+    let mut previous_descended = false;
+    let mut previous_new_minimum = false;
     let mut stalled: u32 = 0;
+    // How many error-reduction iterations the convergence loop has scored.
+    let mut reduction_passes: u32 = 0;
     let mut repeats: u32 = 0;
     // Whether the error-reduction iteration is running AGAIN because its
     // friction record overflowed (STEP B33): its clock and its pins were
@@ -3013,7 +3026,17 @@ pub unsafe fn advance<D: Device>(
                 continue;
             }
             if let Some(tolerance) = convergence_tolerance {
-                if increment < best_increment {
+                // THE POSE THIS INCREMENT SCORES is the one the iteration
+                // started from, which STEP B20 copied into `target`; `eval_x`
+                // is already the pose after the step, whose own increment the
+                // next iteration measures. The FIRST pass's starting pose is
+                // not a candidate: it is what the Newton loop left, on the
+                // clock before STEP B3 shrank it and with the pins before
+                // their rewind, so it is no iterate of this step's system.
+                let candidate = reduction_passes > 0;
+                reduction_passes += 1;
+                let new_minimum = candidate && increment < best_increment;
+                if new_minimum {
                     best_increment = increment;
                     stalled = 0;
                     // THE ITERATE NEAREST CONVERGENCE SO FAR, kept so that a
@@ -3022,16 +3045,23 @@ pub unsafe fn advance<D: Device>(
                     // the committed position's error into the velocity, so
                     // committing an iterate Newton was still walking out of a
                     // contact with hands the walk back as a launch. Every
-                    // iterate passed the line search, so any of them is a
+                    // candidate passed the line search, so any of them is a
                     // valid pose.
-                    let SolverState { best_x, eval_x, .. } = &mut *state;
-                    if best_x.len() != eval_x.len() {
-                        best_x.size(device, eval_x.len(), ppf_cts_compute::AllocLabel("step.best_x"))?;
+                    let SolverState { best_x, target, .. } = &mut *state;
+                    if best_x.len() != target.len() {
+                        best_x.size(device, target.len(), ppf_cts_compute::AllocLabel("step.best_x"))?;
                     }
-                    best_x.copy_from(device, eval_x)?;
-                } else if increment <= previous_increment {
+                    best_x.copy_from(device, target)?;
+                } else if increment >= previous_increment
+                    && previous_descended
+                    && !previous_new_minimum
+                {
+                    // The previous increment was a valley (or a flat point)
+                    // that set no new minimum.
                     stalled += 1;
                 }
+                previous_descended = increment <= previous_increment;
+                previous_new_minimum = new_minimum;
                 previous_increment = increment;
                 if contacts > 0
                     && increment > tolerance
@@ -3043,7 +3073,9 @@ pub unsafe fn advance<D: Device>(
                     continue;
                 }
                 if contacts > 0 && increment > tolerance && best_increment < increment {
-                    // Stopped short: commit the nearest iterate (above).
+                    // Stopped short: commit the nearest candidate (above). An
+                    // unscored last pose is kept only when no candidate beat
+                    // the last increment.
                     let SolverState { best_x, eval_x, .. } = &mut *state;
                     eval_x.copy_from(device, best_x)?;
                 }
@@ -3686,6 +3718,14 @@ mod tests {
             props[3].pdrd_body_index = 1;
             props[4].fix_index = 0;
         }
+        // THE BODY VERTEX 3 NAMES HAS TO EXIST. Allocation reads each
+        // vertex's PDRD body from the body table (its restitution weight), so
+        // a `pdrd_body_index` with no row behind it is a scene the builder
+        // never produces, not a shape the mask has to survive.
+        scene.data.prop.pdrd_body = crate::cvec::CVec::from(
+            &[crate::data::PdrdBodyProp { vertex_start: 0, vertex_count: 1, ..Default::default() }][..],
+        );
+        scene.data.pdrd_vert_list = crate::cvec::CVec::from(&[3u32][..]);
         let mut state = SolverState::default();
         let mut device = host_device();
         // Safety: the scene lives in its box for the whole test.
