@@ -38,39 +38,67 @@ To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www
 
 ## 🚧 Disclaimer and Limitations
 
+### Scope
+
 - **⏳ Offline use:** Not real time, though some examples reach interactive rates.
 - **🐢 Not the fastest:** Other recent work reports faster results.
 - **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
+
+### Maturity
+
 - **🧪 Not production ready (yet):** Many bugs remain, including undiscovered ones. We are actively working to make it production-proof. Known bugs are tracked in [Issues](https://github.com/st-tech/ppf-contact-solver/issues).
 - **🔌 Disable when not in use:** Disable or uninstall the add-on when you are not using it. Undiscovered bugs may affect performance, auto-save, or other parts of Blender in unexpected ways (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed).
-- **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
-- **🟥 AMD GPUs not tested every version:** The ROCm backend has run on real AMD hardware (see [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860)), but the author owns no AMD hardware and does not test every version. We rely on community bug reports.
-- **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
 - **👤 Development pace:** Maintained by Ryoichi Ando alone, with limited time.
 - **⚖️ Criticism exists:** We share critical comments from community videos for fairness [(Markdown)](./articles/criticism.md).
 
+### Hardware and Backends
+
+- **🐌 CPU and Metal backends are slow:** Meant for evaluation, learning, and small examples. Larger scenes need a powerful GPU.
+- **🟥 AMD GPUs not tested every version:** The ROCm backend has run on real AMD hardware (see [the discussion](https://github.com/st-tech/ppf-contact-solver/discussions/131#discussioncomment-18525860)), but the author owns no AMD hardware and does not test every version. We rely on community bug reports.
+
+### Setup
+
+- **🛠️ Add-on setup takes effort:** Not one click. The solver backend is deployed separately, locally or remotely.
+
 ## ✨ Highlights
 
+### Simulation Quality
+
 - **💪 100% Penetration-Free Upon Success**: No snagging intersections [(Details)](#-our-penetration-free-guarantee).
-- **🦀 Rust-First**: We minimize the use of C++ to maximize safety. No performance compromised.
-- **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
-- **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
 - **🥼 Not Rubbery**: Any single triangle never extends beyond strict upper bounds (e.g., 1%).
 - **📐 Finite Element Method**: We use FEM for deformables and symbolic force jacobians.
 - **📊 Parameters Calibrated**: Fabric presets match real measurements [(Report)](https://st-tech.github.io/ppf-contact-solver/fabric-report/index.html).
-- **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
-- **🐛 Community Tested**: Users report bugs and we fix them [(Issues)](https://github.com/st-tech/ppf-contact-solver/issues).
+
+### Performance and Engineering
+
 - **🚀 Massively Parallel**: Both contact and elasticity solvers are run on the GPU.
+- **⏲ Scalable**: An extreme case includes beyond 180M contacts. Not just one million.
+- **🚲 Cache Efficient**: All on the GPU runs in single precision. No double precision.
+- **🦀 Rust-First**: We minimize the use of C++ to maximize safety. No performance compromised.
+
+### Platforms and Hardware
+
 - **🖥️ Cross Platform**: Both the add-on and the solver engine run natively on macOS, Windows, and Linux.
 - **🎛️ Cross Architecture**: We natively support Apple silicon (Metal), NVIDIA (CUDA), and AMD (ROCm) GPUs.
 - **🧮 SIMD-Optimized CPU Backend**: Our CPU code runs natively on both x86_64 and ARM64.
-- **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
-- **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8).
-- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/module_reference.html) and lintable [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03).
-- **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
+
+### Interfaces
+
 - **🎨 Blender Add-on**: Simulate remotely and fetch results locally, even on macOS.
 - **🤖 MCP Support**: Let a LLM run simulations for you using natural language.
+- **🌐 JupyterLab Included**: Open your browser and run examples right away [(Video)](https://zozo.box.com/s/jgd6ijfmwee04vvnnfzapq7m2eq7cxy8).
+- **🐍 Documented Python APIs**: Our Python code is fully [docstringed](https://st-tech.github.io/ppf-contact-solver/jupyterlab_api/module_reference.html) and lintable [(Video)](https://zozo.box.com/s/52atrfn70vn8u07iwzbyrrz5ameczo03).
+
+### Deployment
+
+- **🐳 Docker Sealed**: All can be deployed fast. The image is ~1GB.
+- **☁️ Cloud-Ready**: Our solver can be seamlessly deployed on major cloud platforms.
 - **✨ Stay Clean**: You can remove all traces after use.
+
+### Trust and Community
+
+- **⚔️ Highly Stressed**: We run GitHub Actions to run stress tests [10 times in a row](#️-ten-consecutive-runs).
+- **🐛 Community Tested**: Users report bugs and we fix them [(Issues)](https://github.com/st-tech/ppf-contact-solver/issues).
 - **📜 Permissive License**: Apache 2.0 allows commercial and proprietary use.
 
 ## 🔖 Table of Contents
