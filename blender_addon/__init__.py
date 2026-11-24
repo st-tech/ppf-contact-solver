@@ -4,7 +4,7 @@
 # License: GPL-3.0-or-later
 from bpy.app.handlers import persistent  # pyright: ignore
 
-from .ui import main_panel, console, solver, state
+from .ui import main_panel, console, solver, state, examples
 from .ui import dynamics  # Import the dynamics package
 from . import mesh_ops  # Import the mesh_ops package (snap + merge only)
 from . import i18n  # Import the localization package (bpy.app.translations catalogs)
@@ -321,6 +321,7 @@ def _register_body():
     main_panel.register()
     solver.register()
     dynamics.register()
+    examples.register()
     mesh_ops.register()
     console.register()
     zozo_contact_solver.register()
@@ -637,6 +638,7 @@ def unregister():
     zozo_contact_solver.unregister()
     console.unregister()
     mesh_ops.unregister()
+    examples.unregister()
     dynamics.unregister()
     solver.unregister()
     main_panel.unregister()

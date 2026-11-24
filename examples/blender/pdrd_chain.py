@@ -130,7 +130,9 @@ def build(
     r_minor: float = 0.012,
     elong: float = 0.025,
 ):
-    """Build the chain scene and assign groups.
+    """PDRD chain.
+
+    A horizontal chain of PDRD rigid links dangling from a static top link.
 
     The total link length along its long axis is
     ``2 * (r_major + elong)``. Adjacent links overlap by ``2 * r_minor``

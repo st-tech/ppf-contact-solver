@@ -45,6 +45,11 @@ import re
 import bpy
 import numpy as np
 
+# Not offered by the add-on's Examples panel: the Rumba_Dancing OBJ sequence
+# it plays back does not ship with the add-on. Run this script from the
+# Scripting workspace once that folder is on disk.
+PANEL = False
+
 
 def _resolve_addon() -> str:
     """Return the importable module name of the installed addon."""
@@ -128,6 +133,13 @@ def build(obj_dir: str | None = None, max_frames: int | None = None,
           group_name: str = "RumbaDancer", vertex_group: str = "pinned",
           shell_density: float = 0.3, shell_young_modulus: float = 5.0e5,
           bend: float = 1.0e-3, friction: float = 0.2):
+    """Character animation.
+
+    Plays back the Codim-IPC Rumba_Dancing FEM-shell sequence as a fully
+    pinned SHELL. Needs the Rumba_Dancing OBJ folder: set Obj dir to the
+    folder holding shell0.obj, or keep it under ~/Desktop/blender-
+    examples.
+    """
     addon = _resolve_addon()
     solver = importlib.import_module(f"{addon}.ops.api").solver
 

@@ -80,6 +80,11 @@ def build(n_grid: int = 11, scale: float = 0.05, n_segments: int = 960,
           fix_xz_threshold: float = 1.0, air_friction: float = 1e-4,
           object_name: str = "Noodles", group_name: str = "Noodles",
           colorize: bool = True, rng_seed: int = 0):
+    """Noodles into a bowl.
+
+    A grid of ROD strands falling into an inverted hemispherical sphere
+    collider, as in examples/noodle.ipynb.
+    """
     solver = _resolve_solver()
 
     rng = np.random.default_rng(rng_seed)

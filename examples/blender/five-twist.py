@@ -167,6 +167,11 @@ def build(n: int = 180, n_cylinders: int = 5, ring_radius: float = 1.0,
           step_size: float = 0.01, frame_count: int = 480,
           fps: int = 60, jitter_amp: float = 1e-2,
           group_name: str = "Cylinders", rng_seed: int = 0):
+    """Five-cylinder twist.
+
+    Five SHELL cylinders in a ring, each end pinned, spun and moved, as
+    in examples/five-twist.ipynb.
+    """
     solver = _resolve_solver()
 
     rng = np.random.default_rng(rng_seed)

@@ -78,7 +78,9 @@ stops. Open a connection (see
 [Connections](connections/index.md)), then use **Transfer**, **Run**, and
 **Fetch All Animation** as for any other scene. The
 [`examples/blender`](https://github.com/st-tech/ppf-contact-solver/tree/main/examples/blender)
-folder on GitHub holds more scripts.
+folder on GitHub holds more scripts. The add-on carries the same scripts: its
+**Examples** panel builds any of them with editable parameters and no download
+(see [Examples](getting_started/tour.md#examples)).
 
 <div class="gallery-grid">
   <figure class="gallery-card">

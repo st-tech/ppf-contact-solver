@@ -89,6 +89,17 @@ jobs:
           # Defensive: drop any __pycache__ that might sneak in.
           find staged-addon -type d -name __pycache__ -exec rm -rf {} +
           test -f staged-addon/blender_manifest.toml
+          # The Examples panel (ui/examples.py) lists the Blender example
+          # scripts. An installed extension has no repository beside it, so
+          # the scripts ride in the add-on's own `examples/` folder, staged
+          # from the one tracked copy under examples/blender. Only its
+          # top-level scripts and LICENSE: a subfolder there is not an
+          # example the panel lists and does not ship.
+          mkdir -p staged-addon/examples
+          git archive --format=tar HEAD ':(glob)examples/blender/*.py' \
+            examples/blender/LICENSE \
+            | tar -x --strip-components=2 -C staged-addon/examples
+          ls staged-addon/examples/*.py
           echo "Staged contents:"
           find staged-addon -maxdepth 2 -mindepth 1 | sort
 

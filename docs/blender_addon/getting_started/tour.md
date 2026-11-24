@@ -247,7 +247,7 @@ The Visualization panel, with **Hide all pins** highlighted.
 
 ## Object Statistics
 
-The last panel in the tab, collapsed by default: a per-object readout of what
+Collapsed by default: a per-object readout of what
 the solver measured on the frame you are looking at. Pick an object from the
 **Object** menu, which lists every object included in an active group (Static
 colliders among them). The rows follow the playhead and appear in this order:
@@ -265,6 +265,24 @@ fetched frame to a `.csv` file. An object with no recorded statistics reads
 *Statistics unavailable; rerun the simulation*. See
 [Reading Per-Frame Statistics](../workflow/sim/simulating.md#reading-per-frame-statistics)
 for where the numbers come from and when they go away.
+
+## Examples
+
+The last panel in the tab, collapsed by default. It builds one of the example
+scenes of the [Gallery](../gallery.md#scenes-built-by-a-python-script) from
+the add-on, with no script to download. The menu at the top lists the examples
+by name, and below it is a sentence on what the selected one builds. The
+**Parameters** box holds one field per setting the example's script takes, each
+at the script's own default; the arrow button at the box's right sets them all
+back. A setting the script can choose for itself has a checkbox beside it:
+leave it off to let the script choose. **Target** picks where the scene goes.
+**New Scene**, the default, makes a new Blender scene and switches to it, so
+nothing in the current scene changes. **Current Scene** resets this scene's
+add-on setup first, exactly as running the script would (see
+[Reset](../integrations/python_api.md#reset)), then builds the example into it.
+**Populate** builds it. The refresh button beside the menu reads the scripts
+again. As with a script, the scene is built and nothing is run: connect, then
+**Transfer**, **Run** and **Fetch All Animation**.
 
 ## Debug Tools
 

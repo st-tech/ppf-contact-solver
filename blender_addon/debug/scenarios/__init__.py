@@ -243,6 +243,7 @@ from . import bl_multi_group
 from . import bl_collider_keyframes
 from . import bl_stitch_merge
 from . import bl_blender_examples
+from . import bl_examples_populate
 from . import bl_static_transform_sampling
 from . import bl_encode_refusals
 from . import bl_api_force_field
@@ -729,6 +730,7 @@ REGISTRY = {
     "bl_collider_keyframes": bl_collider_keyframes,
     "bl_stitch_merge": bl_stitch_merge,
     "bl_blender_examples": bl_blender_examples,
+    "bl_examples_populate": bl_examples_populate,
     "bl_static_transform_sampling": bl_static_transform_sampling,
     "bl_encode_refusals": bl_encode_refusals,
     "bl_api_force_field": bl_api_force_field,

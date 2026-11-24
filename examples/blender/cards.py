@@ -152,6 +152,11 @@ def build(mesh_res: int = 8, n_stack: int = 8, card_height: float = 0.25,
           sphere_radius: float = 0.15, sphere_subdiv: int = 3,
           sphere_velocity: float = 2.3,
           sphere_start: tuple = (-2.0, 0.0, 1.0)):
+    """House of cards.
+
+    Eight rows of leaning SHELL cards struck by a SOLID icosphere, as in
+    examples/cards.ipynb.
+    """
     solver = _resolve_solver()
 
     card_width = 0.75 * card_height

@@ -83,6 +83,11 @@ def build(n: int = 256, offset: float = 4e-3, scale: float = 2.0,
           pin: bool = True, motion: bool = True,
           angular_velocity: float = 365.0, move_delta: float = 0.15,
           motion_frame_start: int = 1, motion_frame_end: int = 1200):
+    """Woven cylinder.
+
+    Interwoven ROD strands on a cylinder whose two open ends are pinned,
+    spun and moved, as in examples/woven.ipynb.
+    """
     solver = _resolve_solver()
 
     strands = make_woven_cylinder(n, offset, scale)

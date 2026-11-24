@@ -116,6 +116,11 @@ def build(offset: float = 4e-3, width: float = 0.5, res: float = 1.0,
           pin: bool = True, motion: bool = True,
           move_delta: float = -5.0,
           motion_frame_start: int = 1, motion_frame_end: int = 1000):
+    """Interwoven yarn.
+
+    A yarn fabric of ROD strands whose two pinned warp ends are pulled
+    apart, as in examples/yarn.ipynb.
+    """
     solver = _resolve_solver()
 
     strands = make_strands(offset, width, res)
