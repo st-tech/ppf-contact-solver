@@ -863,8 +863,26 @@ class DriverHelpers:
                     self.events.QueryRequested(request={}, message=""))
             self.facade.tick()
             if self.facade.engine.state.frame >= expected_frames:
+                # The query dispatched just above may still be in flight,
+                # which holds the engine at EXECUTING. Returning now hands
+                # the caller a busy engine, and the next request it makes
+                # (a fetch, say) has a ``not state.busy`` guard and is
+                # dropped without a word.
+                self.wait_not_busy(timeout=max(0.0, deadline - time.time()))
                 return
             time.sleep(0.2)
+
+    def wait_not_busy(self, *, timeout=15.0):
+        # Tick until the engine's activity is IDLE, so the request the
+        # caller dispatches next is accepted. True once it is.
+        deadline = time.time() + timeout
+        while True:
+            self.facade.tick()
+            if not self.facade.engine.state.busy:
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.05)
 
     def settle_idle(self, *, timeout=15.0, stable_for=1.0):
         # Wait for activity=IDLE for ``stable_for`` consecutive seconds.
@@ -891,6 +909,10 @@ class DriverHelpers:
         # dispatch FetchRequested, drain the modal in-driver via
         # direct apply_animation calls (the modal can't fire while we
         # hold the main thread).
+        # A fetch requested while the engine is busy is dropped, and the
+        # loops below would then drain only what the live fetch delivered
+        # and report a total of 0.
+        self.wait_not_busy(timeout=fetch_timeout)
         self.facade.runner.clear_fetched_frames()
         self.com.fetch()
         deadline = time.time() + fetch_timeout

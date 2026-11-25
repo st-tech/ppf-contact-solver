@@ -106,7 +106,7 @@ use super::fixedcsr::FixedCsr;
 use super::operator::{DynamicView, Operator};
 use super::scene::{Fatal, FatalResult};
 use super::state::SolverState;
-use super::{assemble, dirichlet, log, pcg};
+use super::{assemble, cut_solve, dirichlet, log, pcg};
 
 use ppf_cts_compute::{Device, EncoderExt, Fault, Handle};
 use super::kernels::{
@@ -811,6 +811,22 @@ pub unsafe fn advance<D: Device>(
     let mut toi_advanced: f64 = 0.0;
     let mut step: u32 = 1;
     let mut final_step = false;
+    // A SOLVE WHOSE DIRECTION THE LINE SEARCH IS EXPECTED TO CUT MAY STOP
+    // EARLY (`cut_solve.rs`). The expectation is carried in the state from one
+    // line search to the next; no direction of an earlier step is offered to
+    // this one's first solve.
+    let early_stop_on = !cut_solve::disabled();
+    state.cut_expectation.begin_step();
+    state.dx_carried_ready = false;
+    // True while the last direction applied was one stopped early that the
+    // line search did not cut: the step held it back, and the loop does not
+    // end on it.
+    let mut held_back = false;
+    // Whether a solve of this step has been armed and found its bound usable.
+    // Until one has, no direction is kept for the next solve: a tied scene, a
+    // scene with a massless free vertex and the solve paths that never arm
+    // the stop then pay nothing for it.
+    let mut early_stop_usable = false;
     // THE CONTACT STEP'S CONVERGENCE, for restitution only. A restitution
     // weight carries the committed position's error into the velocity, divided
     // by `theta * dt`, so a contact step left at the usual single iteration
@@ -1056,6 +1072,19 @@ pub unsafe fn advance<D: Device>(
             seam_arena_count: 0,
         };
         device.launch("step.dx_seed", &seed_args, vertices as u32)?;
+        // THE CARRIED START TAKES THE SAME PRESCRIBED ROWS, so it differs from
+        // the seeded start on free rows only.
+        if state.dx_carried_ready {
+            let carried_seed_args = DxSeedArgs {
+                eval_x: state.eval_x.handle(),
+                target: state.target.handle(),
+                prop: state.prop_vertex.handle(),
+                dx: state.dx_carried.handle(),
+                count: vertices as u32,
+                seam_arena_count: 0,
+            };
+            device.launch("step.dx_seed", &carried_seed_args, vertices as u32)?;
+        }
 
         // RECORDED AND NOT PRINTED: the head of a Newton iteration is not one
         // of the solver's own printed scopes. Its span overlaps the assembly's,
@@ -1675,6 +1704,13 @@ pub unsafe fn advance<D: Device>(
             dx,
             pcg: work,
             contact: contact_state,
+            prop_vertex,
+            pull,
+            pin_set,
+            dx_carried,
+            dx_carried_ready,
+            cut_expectation,
+            cut_staging,
             ..
         } = state;
         let operator = Operator {
@@ -2173,6 +2209,35 @@ pub unsafe fn advance<D: Device>(
                 crate::data::PrecondMode::BlockJacobi => None,
             };
             super::dump_linsys::maybe_dump(device, &operator, force.handle(), eval_x.handle(), vertices)?;
+            // ARM THE EARLY STOP WHEN THIS DIRECTION IS EXPECTED TO BE CUT. A
+            // tie rewrites the operator and the held rows of `dx`, which the
+            // bound's diagonal and the carried vector do not follow, so a tied
+            // scene solves as it always has; so does the trailing iteration.
+            let mut armed = early_stop_on
+                && !final_step
+                && tie_view.is_none()
+                && cut_expectation.expects_cut();
+            if armed {
+                // THE BOUND'S DIAGONAL, staged again only when something it is
+                // built from has changed: the step size, which vertices are
+                // pinned, or a pull pin's weight.
+                let pulls = pull.host();
+                let generation = pin_set.generation();
+                if !cut_staging.is_current(vertices, dt, generation, pulls) {
+                    let mut blocks = vec![0.0f32; 9 * vertices];
+                    let unbounded = cut_solve::inertia_inverse_blocks(
+                        &prop_vertex.host()[..vertices], pulls, dt, &mut blocks);
+                    work.stage_inertia_inverse(device, &blocks)?;
+                    cut_staging.set_current(vertices, dt, generation, pulls, unbounded);
+                }
+                armed = cut_staging.bounded();
+                early_stop_usable = armed;
+            }
+            work.arm_early_stop(armed.then(|| pcg::EarlyStop {
+                ratio: cut_solve::MISSED_ENERGY_RATIO,
+                start: dx_carried_ready.then(|| dx_carried.handle()),
+                verify: cut_solve::verify(),
+            }));
             let report = pcg::solve(
                 device,
                 &operator,
@@ -2207,6 +2272,20 @@ pub unsafe fn advance<D: Device>(
             }
             report
         };
+        // `PPF_VERIFY_EARLY_STOP`: the solve ran on past the look its early stop
+        // would have fired on, and what it gained after that look must be
+        // within the bound that look computed. The allowance is the float
+        // noise of two sums of the size of the energy held.
+        if let Some(check) = state.pcg.take_bound_check() {
+            if check.gained_after > check.bound + 1.0e-3 * check.held {
+                return Err(Fatal::invariant(format!(
+                    "solver driver: the early stop's bound did not hold at Newton iteration {step}: \
+                     at PCG iteration {} the iterate held {:e} and the bound on what it missed was \
+                     {:e}, but the solve went on to gain {:e}",
+                    check.iteration, check.held, check.bound, check.gained_after,
+                )));
+            }
+        }
         // THE HELD ROWS OF THE CORRECTION, from their controllers' solved rows
         // and the consistency term the seed left in them, before anything reads
         // `dx` (the rescale, the step, the line search).
@@ -2277,7 +2356,15 @@ pub unsafe fn advance<D: Device>(
         match report.outcome {
             // BOTH ARE SUCCESSES, and the truncation reports itself at the
             // site where it happens (`pcg.rs`). Nothing is added here.
-            pcg::Outcome::Converged | pcg::Outcome::CurvatureTruncated => {}
+            pcg::Outcome::Converged => {
+                // How long a solve to `cg-tol` is here, which is what decides
+                // whether stopping one early can save anything.
+                state.cut_expectation.record_full_solve(report.iterations);
+            }
+            pcg::Outcome::CurvatureTruncated => {}
+            // A direction the step below cuts or holds back; see the loop's
+            // head and `cut_solve.rs`.
+            pcg::Outcome::EnergyConverged => {}
             pcg::Outcome::MaxIterations => {
                 // A FAILURE: the cap is reported as `### cg failed` with
                 // `pcg_success = false` and an abandoned step.
@@ -2732,6 +2819,28 @@ pub unsafe fn advance<D: Device>(
         // sweep ends would report a shorter time under the `line_search` name
         // and put the lines in the wrong order.
         log::mark("advance", "line_search", _line_search.elapsed());
+        // A DIRECTION STOPPED EARLY IS NEVER TAKEN WHOLE. What the line search
+        // found, before any holding back, is what the next solve's expectation
+        // reads; a direction it did not cut is held to a fraction, and the
+        // loop goes on to a solve that runs to `cg-tol`.
+        let cut_by_search = toi_recale * toi < 1.0;
+        let stopped_early = matches!(report.outcome, pcg::Outcome::EnergyConverged);
+        held_back = stopped_early && !cut_by_search;
+        if stopped_early {
+            toi = toi.min(cut_solve::HELD_BACK_FRACTION);
+        }
+        if !final_step {
+            state.cut_expectation.record_search(cut_by_search);
+        }
+        // Name: Early-Stopped Linear Solve
+        // Format: list[(time, count)]
+        // Description:
+        // 1 if this Newton iteration's linear solve stopped before reaching
+        // the configured tolerance because its search direction was expected
+        // to be cut by the line search and already held nearly all of the
+        // energy the direction can give, 0 if it ran to the tolerance. Such a
+        // direction is never applied in full.
+        log::mark("advance", "early_stop", log::Marked::quiet(if stopped_early { 1.0 } else { 0.0 }));
         let toi = toi;
         // Name: Line Search Time of Impact
         // Format: list[(time, ratio)]
@@ -2765,6 +2874,23 @@ pub unsafe fn advance<D: Device>(
         // double, because it accumulates across every Newton iteration.
         if !final_step {
             toi_advanced += (1.0 - toi_advanced).max(0.0) * f64::from(toi_recale * toi);
+        }
+        // WHAT THE NEXT SOLVE IS OFFERED, when it may stop early: this
+        // direction scaled by the fraction the step leaves untaken. For a
+        // quadratic energy that vector solves the next system up to the rows
+        // the step changed. Nothing is kept for a solve that will run to
+        // `cg-tol`, which starts from the seed as it always has.
+        if early_stop_on && early_stop_usable && !final_step && state.cut_expectation.expects_cut() {
+            pcg::scaled_copy(
+                device,
+                state.dx.handle(),
+                state.dx_carried.handle(),
+                1.0 - toi_recale * toi,
+                3 * vertices,
+            )?;
+            state.dx_carried_ready = true;
+        } else {
+            state.dx_carried_ready = false;
         }
         // PRINTED AT EVERY NEWTON ITERATION, so it is a bare transcript line
         // rather than a debug one. It
@@ -3082,7 +3208,7 @@ pub unsafe fn advance<D: Device>(
             }
             break;
         }
-        if toi_advanced >= f64::from(prm.target_toi) && step >= prm.min_newton_steps {
+        if toi_advanced >= f64::from(prm.target_toi) && step >= prm.min_newton_steps && !held_back {
             final_step = true;
         } else {
             step += 1;

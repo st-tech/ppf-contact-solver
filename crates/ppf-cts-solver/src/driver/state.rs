@@ -757,6 +757,8 @@ pub struct SolverState {
     /// the kernels that read it touch it, so nothing reads it back and nothing
     /// seeds it.
     pub residual: Buffer<f32>,
+    /// The pin set the last constraint rebuild ran on (`constraint::PinSet`).
+    pub pin_set: super::constraint::PinSet,
     /// The search direction, `3 * vertices` floats.
     pub dx: Buffer<f32>,
     /// `C`, the block diagonal, `9 * vertices` floats.
@@ -776,6 +778,16 @@ pub struct SolverState {
     /// solve that asks for it, and every level's operator and smoother.
     pub multigrid: super::multigrid::State,
     pub precond_inverse: Buffer<f32>,
+    /// The part of the last Newton direction the line search left untaken,
+    /// offered to the step's next solve as its start when that solve may stop
+    /// early (`cut_solve.rs`). `dx_carried_ready` is false at a step's start
+    /// and whenever the next solve will run to `cg-tol`.
+    pub dx_carried: Buffer<f32>,
+    pub dx_carried_ready: bool,
+    /// Whether the next line search is expected to be cut, and what the early
+    /// stop's bound is staged for.
+    pub cut_expectation: super::cut_solve::Expectation,
+    pub cut_staging: super::cut_solve::Staging,
     /// Which vertices are Dirichlet-removed this step, one per vertex.
     ///
     /// KERNEL-WRITTEN, WHICH IS WHY IT IS A PLAIN DEVICE BUFFER. `step.rs`
@@ -2670,6 +2682,8 @@ impl SolverState {
         self.friction_memory.set_frames(self.cosserat.frames_for_friction());
         self.precond_inverse
             .size(device, 9 * vertices, AllocLabel("step.precond_inverse"))?;
+        self.dx_carried
+            .size(device, 3 * vertices, AllocLabel("step.dx_carried"))?;
         self.dof_mask
             .size(device, vertices, AllocLabel("step.dof_mask"))?;
         // THE FOLD'S SCRATCH, sized for every level at once: level one writes
@@ -3180,6 +3194,54 @@ impl SolverState {
                  rebuild: {fault:?}"
             ))
         })
+    }
+
+    /// The upload half of the two re-stages below, for a step whose pin set
+    /// did not change: the host records already match the staged ones, so
+    /// there is nothing to compare or copy, and a buffer some other writer
+    /// dirtied still reaches the device here as it did before.
+    pub fn upload_pin_props<D: Device>(&mut self, device: &mut D) -> FatalResult<()> {
+        if self.prop_vertex.len() > 0 {
+            self.prop_vertex.upload(device).map_err(|fault| {
+                Fatal::device_assert(format!(
+                    "solver driver: the vertex props failed to reach the device: {fault:?}"
+                ))
+            })?;
+        }
+        if self.prop_face.len() > 0 {
+            self.prop_face.upload(device)?;
+        }
+        if self.prop_edge.len() > 0 {
+            self.prop_edge.upload(device)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the staged vertex pin indices and the staged face and edge
+    /// records equal the scene's: what the two re-stages below would find. Read
+    /// only under `PPF_VERIFY_PIN_SKIP`.
+    pub fn staged_pins_match(
+        &self,
+        vertices: &[crate::data::VertexProp],
+        faces: &[crate::data::FaceProp],
+        edges: &[crate::data::EdgeProp],
+    ) -> bool {
+        let count = self.prop_vertex.len().min(vertices.len());
+        let staged = self.prop_vertex.host();
+        let vertices_match = (0..count).all(|i| {
+            staged[i].fix_index == vertices[i].fix_index && staged[i].pull_index == vertices[i].pull_index
+        });
+        let face_count = self.prop_face.len().min(faces.len());
+        let faces_match = self.prop_face.host()[..face_count]
+            .iter()
+            .zip(&faces[..face_count])
+            .all(|(a, b)| same_face(a, b));
+        let edge_count = self.prop_edge.len().min(edges.len());
+        let edges_match = self.prop_edge.host()[..edge_count]
+            .iter()
+            .zip(&edges[..edge_count])
+            .all(|(a, b)| same_edge(a, b));
+        vertices_match && faces_match && edges_match
     }
 
     /// Re-stage the per-element `fixed` flags after a pin rebuild.

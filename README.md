@@ -120,7 +120,6 @@ To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www
 - [🖼️ Catalogue](#️-catalogue)
   - [🎨 Blender Add-on Examples](#-blender-add-on-examples)
   - [🌐 JupyterLab Examples](#-jupyterlab-examples)
-  - [💰 Budget Table on AWS](#-budget-table-on-aws)
   - [🏗️ Large Scale Examples](#️-large-scale-examples)
 - [🚀 GitHub Actions](#-github-actions)
   - [⚔️ Ten Consecutive Runs](#️-ten-consecutive-runs)
@@ -679,10 +678,6 @@ All these examples run on our Python frontend through JupyterLab. Click any note
 |![](./asset/image/catalogue/ribbon.mp4.webp)|![](./asset/image/catalogue/curtain.mp4.webp)|![](./asset/image/catalogue/fishingknot.mp4.webp)|![](./asset/image/catalogue/friction.mp4.webp)|
 |[belt.ipynb](./examples/belt.ipynb) [(Video)](https://zozo.box.com/s/7ovalnjrptprcib7z0hj85lvr3yuhroz)|[fitting.ipynb](./examples/fitting.ipynb) [(Video)](https://zozo.box.com/s/pdcswk4ytzqgo98cjo91ensprgxz2umm)|[roller.ipynb](./examples/roller.ipynb) [(Video)](https://zozo.box.com/s/5156ez3b7rsvldqbgxsd7irhwp7mo2nc)|[yarn.ipynb](./examples/yarn.ipynb) [(Video)](https://zozo.box.com/s/3ly6riq5id8y9ukvbpnfnlro3qttylxw)|
 |![](./asset/image/catalogue/belt.mp4.webp)|![](./asset/image/catalogue/fitting.mp4.webp)|![](./asset/image/catalogue/roller.mp4.webp)|![](./asset/image/catalogue/yarn.mp4.webp)|
-
-### 💰 Budget Table on AWS
-
-Estimated costs for running our examples on an NVIDIA L4 instance at Amazon Web Services [(Markdown)](./articles/budget_aws.md).
 
 #### 🏗️ Large Scale Examples
 

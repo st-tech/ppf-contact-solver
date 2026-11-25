@@ -1498,6 +1498,8 @@ impl Backend {
                     .collect();
                 BendRestSchedule { index, keyframes }
             });
+        #[cfg(cuda_backend)]
+        let mut gpu_clock = GpuClockProbe::default();
         loop {
             // GPU clock sampling is meaningful only against a CUDA device, so
             // it is gated on the backend build.rs actually chose, never on a
@@ -1505,31 +1507,7 @@ impl Backend {
             // feature here either, so any weaker condition would spawn
             // nvidia-smi once per simulation step on a machine that has none.
             #[cfg(cuda_backend)]
-            if let Ok(output) = std::process::Command::new("nvidia-smi")
-                .arg("--query-gpu=clocks.current.sm")
-                .arg("--format=csv,noheader,nounits")
-                .output()
-            {
-                if let Ok(clock_str) = String::from_utf8(output.stdout) {
-                    let clock = clock_str.trim();
-                    info!("GPU SM Clock: {clock} MHz");
-
-                    // Name: GPU SM Clock Speed
-                    // Format: list[(time, MHz)]
-                    // Description:
-                    // GPU streaming-multiprocessor clock speed in MHz, sampled
-                    // from nvidia-smi once per simulation step. Useful for
-                    // correlating slow steps with thermal or power-related
-                    // clock throttling on the device.
-                    /*== push "clock" ==*/
-                    let mut clock_log = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(format!("{}/data/clock.out", program_args.output).as_str())
-                        .unwrap();
-                    writeln!(clock_log, "{} {}", self.state.time, clock).unwrap();
-                }
-            }
+            gpu_clock.poll(self.state.time, &program_args.output);
 
             // THE FRAME-STEP HOLD, checked before save_and_quit so a caller
             // can save a held run. A run past its last frame is not held: it
@@ -1928,6 +1906,90 @@ drop(_wphase);
             }
         }
         write_current_time_to_file(finished_path.to_str().unwrap()).unwrap();
+    }
+}
+
+/// The GPU clock sample, taken WITHOUT WAITING FOR IT.
+///
+/// `nvidia-smi` takes about 22 ms to answer (measured on an L40S host), and
+/// run to completion at the top of every simulation step that is 22 ms a step
+/// whatever the scene: 6.1 s of a 22.0 s `drape` run of 217 steps. The probe
+/// is started and the step goes on; a later step collects the answer once the
+/// child has exited, and starts the next. At most one child runs at a time, so
+/// a scene whose steps are shorter than a probe samples as often as a probe
+/// can answer, and a scene whose steps are longer still samples every step.
+///
+/// The row keeps its form, `<time> <MHz>`, and carries the simulation time the
+/// probe was STARTED at, which is when the clock was read. Rows stay in time
+/// order and no probe is collected twice.
+///
+#[cfg(cuda_backend)]
+#[derive(Default)]
+struct GpuClockProbe {
+    running: Option<(std::process::Child, f64)>,
+}
+
+#[cfg(cuda_backend)]
+impl GpuClockProbe {
+    fn poll(&mut self, time: f64, output: &str) {
+        if let Some((child, _)) = self.running.as_mut() {
+            match child.try_wait() {
+                // Still answering: this step neither waits nor starts another.
+                Ok(None) => return,
+                Ok(Some(_)) => {
+                    let (mut child, started) = self.running.take().expect("checked above");
+                    let mut text = String::new();
+                    if let Some(mut pipe) = child.stdout.take() {
+                        use std::io::Read;
+                        let _ = pipe.read_to_string(&mut text);
+                    }
+                    let clock = text.trim();
+                    if !clock.is_empty() {
+                        info!("GPU SM Clock: {clock} MHz");
+
+                        // Name: GPU SM Clock Speed
+                        // Format: list[(time, MHz)]
+                        // Description:
+                        // GPU streaming-multiprocessor clock speed in MHz,
+                        // sampled from nvidia-smi while the simulation runs,
+                        // at most once per simulation step. Useful for
+                        // correlating slow steps with thermal or power-related
+                        // clock throttling on the device.
+                        /*== push "clock" ==*/
+                        let mut clock_log = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(format!("{output}/data/clock.out").as_str())
+                            .unwrap();
+                        writeln!(clock_log, "{started} {clock}").unwrap();
+                    }
+                }
+                Err(_) => {
+                    self.running = None;
+                }
+            }
+        }
+        if let Ok(child) = std::process::Command::new("nvidia-smi")
+            .arg("--query-gpu=clocks.current.sm")
+            .arg("--format=csv,noheader,nounits")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            self.running = Some((child, time));
+        }
+    }
+}
+
+#[cfg(cuda_backend)]
+impl Drop for GpuClockProbe {
+    fn drop(&mut self) {
+        // A probe still answering when the run ends is reaped, not left behind.
+        if let Some((mut child, _)) = self.running.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

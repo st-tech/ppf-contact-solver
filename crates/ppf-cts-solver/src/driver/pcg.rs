@@ -664,11 +664,71 @@ unsafe fn encode_combine_indirect(
     encoder.elements(&args, n as u32)
 }
 
+/// `destination = scale * source`, for the direction a step carries over to
+/// its next solve (`driver/cut_solve.rs`).
+pub fn scaled_copy<D: Device>(
+    device: &mut D,
+    source: ppf_cts_compute::Handle,
+    destination: ppf_cts_compute::Handle,
+    scale: f32,
+    n: usize,
+) -> Result<(), Fault> {
+    device.run("pcg.scaled_copy", |encoder| {
+        // Safety: both vectors outlive the submit.
+        unsafe { encode_combine_raw(encoder, source, source, destination, scale, 0.0, n) }
+    })?;
+    Ok(())
+}
+
+/// An early stop armed for ONE solve, and what that solve starts from.
+///
+/// THE TEST IS A BOUND, NOT AN ESTIMATE. With `A` the matrix and `D` the part
+/// of its block diagonal that is there whatever else is assembled (the inertia
+/// term, or a pull pin's weight), every other term being positive
+/// semidefinite gives `D <= A`, and then the energy an iterate with residual
+/// `r` has not captured, `r . A^-1 r`, is at most `r . D^-1 r`. The solve
+/// stops when that is at most `ratio` times the energy the iterate holds, so
+/// the iterate holds at least `1 / (1 + ratio)` of what the direction can
+/// give. [`Workspace::stage_inertia_inverse`] holds `D^-1`.
+///
+/// `start` is the part of the last direction the line search left untaken,
+/// with the seed's values on every prescribed row. Everything this solve
+/// measures stays against the SEEDED start: the residual norm the tolerance is
+/// relative to, and the energy the iterate is credited with.
+///
+#[derive(Debug, Clone, Copy)]
+pub struct EarlyStop {
+    pub ratio: f32,
+    pub start: Option<ppf_cts_compute::Handle>,
+    /// Run on to the tolerance after the bound is met and report what the
+    /// solve gained beyond that point ([`Workspace::take_bound_check`]).
+    pub verify: bool,
+}
+
+/// What a verifying solve measured: the energy held and the bound on what was
+/// missing when the early stop would have fired, and the energy the solve went
+/// on to gain. The bound's claim is `gained_after <= bound`.
+#[derive(Debug, Clone, Copy)]
+pub struct BoundCheck {
+    pub held: f64,
+    pub bound: f64,
+    pub gained_after: f64,
+    pub iteration: u32,
+}
+
 /// Why a solve stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     /// The relative residual reached the tolerance.
     Converged,
+    /// An armed early stop fired ([`EarlyStop`]): the iterate provably holds
+    /// all but a stated fraction of the energy the direction can give, and the
+    /// residual has NOT met the tolerance.
+    ///
+    /// A SUCCESS FOR A DIRECTION THAT WILL BE CUT, AND FOR NO OTHER. The caller
+    /// armed the stop because it expects the line search to take only part of
+    /// this direction, and it must not take such a direction whole.
+    EnergyConverged,
     /// The iteration limit was reached first.
     MaxIterations,
     /// The curvature was unresolvable above the round-off of its own sum, so the
@@ -808,9 +868,46 @@ pub struct Workspace {
     /// A PLAIN `Buffer`: no level of a fold is ever read by the host, only the
     /// last one's destination, which is a slot of `scalar` above.
     fold: Buffer<f32>,
+    /// A 3x3 block per row, the inverse of the diagonal the early stop's bound
+    /// relies on; zero for a row that adds nothing to it. Sized with the rest
+    /// and written by [`Self::stage_inertia_inverse`].
+    inertia_inverse: Buffer<f32>,
+    /// Armed by the driver for the next solve and taken by it.
+    early_stop: Option<EarlyStop>,
+    /// What the last verifying solve measured.
+    bound_check: Option<BoundCheck>,
 }
 
 impl Workspace {
+    /// Arm an early stop for the next plain block-Jacobi solve, or disarm it.
+    /// The solve takes it, so it never outlives one solve.
+    pub fn arm_early_stop(&mut self, stop: Option<EarlyStop>) {
+        self.early_stop = stop;
+    }
+
+    /// Write the per-row blocks of the bound's inverse diagonal, nine floats a
+    /// row for every row the workspace was sized for.
+    pub fn stage_inertia_inverse(
+        &mut self,
+        device: &mut impl Device,
+        blocks: &[f32],
+    ) -> Result<(), Fault> {
+        assert_eq!(
+            blocks.len(),
+            self.inertia_inverse.len(),
+            "the bound's diagonal is staged for exactly the rows the workspace holds"
+        );
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        self.inertia_inverse.write(device, 0, blocks)
+    }
+
+    /// What the last verifying solve measured, once.
+    pub fn take_bound_check(&mut self) -> Option<BoundCheck> {
+        self.bound_check.take()
+    }
+
     /// The search direction `p`, for the breakdown dump (`dump_linsys.rs`).
     pub fn direction(&self) -> ppf_cts_compute::Handle {
         self.p.handle()
@@ -861,6 +958,8 @@ impl Workspace {
             (2 * fold_scratch_len(n)).max(1),
             AllocLabel("pcg.fold"),
         )?;
+        self.inertia_inverse
+            .size(device, 9 * rows as usize, AllocLabel("pcg.inertia_inverse"))?;
         Ok(())
     }
 }
@@ -1106,6 +1205,14 @@ fn solve_scheduled<D: Device>(
     let rows = op.rows();
     let n = 3 * rows as usize;
     assert_eq!(work.ap.len(), n, "the workspace was sized for a different scene");
+    // THE EARLY STOP IS ONE SOLVE'S, and the plain block-Jacobi solve's only:
+    // taken here whatever runs, so it cannot outlive the solve it was armed
+    // for, and dropped under a sweep preconditioner.
+    let early = work
+        .early_stop
+        .take()
+        .filter(|_| sweep.is_none() && work.inertia_inverse.len() == 9 * rows as usize);
+    work.bound_check = None;
 
     let Workspace {
         ap,
@@ -1119,6 +1226,8 @@ fn solve_scheduled<D: Device>(
         scalar,
         cause,
         fold,
+        inertia_inverse,
+        bound_check,
         ..
     } = work;
     let mut terms = DotTerms {
@@ -1145,6 +1254,9 @@ fn solve_scheduled<D: Device>(
     //
     let accumulates = op.accumulates();
 
+    // A CARRIED START'S REFERENCE: the seeded start's residual norm and the
+    // model's value there, formed before the start replaces `x`.
+    let mut seeded_reference: Option<(f32, f64)> = None;
     // r = b - A x0, the preconditioner, the first search direction and BOTH
     // opening scalars, in ONE boundary. Consecutive entries of a region are
     // ordered with a full barrier between them on every backend, so a phase
@@ -1169,6 +1281,35 @@ fn solve_scheduled<D: Device>(
         // A WHOLE-BUFFER SEED RATHER THAN A ONE-SLOT FILL, because a fill takes
         // a live allocation and a slot is a span inside one.
         scalar.seed(device, &[0.0; slot::COUNT])?;
+        // AN ARMED SOLVE MAY START FROM A CARRIED DIRECTION, and every measure
+        // of it stays against the SEEDED start: one boundary forms the seed's
+        // residual and its norm, the denominator of every relative residual
+        // below with or without a start, and the model's value at the seed,
+        // which is where the energy the iterate holds is counted from. The
+        // carried vector then replaces `x` and the seed phase forms `r` from
+        // it. One operator product more than a solve from the seed.
+        if let Some(start) = early.and_then(|stop| stop.start) {
+            device.run("pcg.carried.reference", |encoder| unsafe {
+                op.encode_apply(encoder, x, ap_h, row_absolute.handle(),
+                                row_curvature.handle())?;
+                encode_combine_raw(encoder, b, ap_h, r_h, 1.0, -1.0, n)?;
+                encode_fold(encoder, r_h, n, fold, err_out, true)
+            })?;
+            scalar.download(device)?;
+            let seeded = scalar.host()[slot::ERR];
+            // A seed that already solves the system, or a norm that is not a
+            // number, is left to the seed phase to report as it always has:
+            // nothing is taken then.
+            if seeded.is_finite() && seeded > 0.0 {
+                let at_seed =
+                    energy_probe(device, &mut terms, x, b, r_h, z_h, None, rows, n, fold, scalar)?.0;
+                seeded_reference = Some((seeded, at_seed));
+                device.run("pcg.carried.take", |encoder| unsafe {
+                    encode_combine_raw(encoder, start, start, x, 1.0, 0.0, n)
+                })?;
+            }
+            scalar.seed(device, &[0.0; slot::COUNT])?;
+        }
         device.run("pcg.seed", |encoder| {
             // Safety: every buffer is borrowed for the whole call, and a
             // sweep's handles outlive it for the same reason.
@@ -1211,14 +1352,16 @@ fn solve_scheduled<D: Device>(
     // trivially-already-converged case, and whether the preconditioner is SPD
     // at the seed.
     scalar.download(device)?;
-    let err0 = scalar.host()[slot::ERR];
-    if err0 == 0.0 {
+    let entered = scalar.host()[slot::ERR];
+    if entered == 0.0 {
         return Ok(Report {
             outcome: Outcome::Converged,
             iterations: 0,
             relative_residual: 0.0,
         });
     }
+    // The denominator stays the seeded start's when a carried start was taken.
+    let err0 = seeded_reference.map_or(entered, |(seeded, _)| seeded);
     let rz0 = scalar.host()[slot::RZ0];
     // The negation is deliberate and clippy's suggestion would break it: NaN
     // fails `> 0.0`, so `!(rz0 > 0.0)` traps a NaN where `rz0 <= 0.0` would let
@@ -1259,7 +1402,34 @@ fn solve_scheduled<D: Device>(
     // dump_on_breakdown`): a sweep preconditioner has no latch, so a batch goes
     // on past a breakdown and leaves a later iterate's `r` and `z` behind.
     let every_iterate = sweep.is_some() && std::env::var_os("PPF_DUMP_MG_ON_BREAKDOWN").is_some();
-    let mut stride = if every_iterate { 1 } else { RESID_CHECK_STRIDE };
+    // AN ARMED SOLVE LOOKS ON ITS OWN SCHEDULE: at iteration 1, eight
+    // iterations later, and from then on where the bound's measured decay says
+    // it will be met, between `EARLY_LOOK_LEAST` and `EARLY_LOOK_MOST`
+    // iterations ahead. A look costs one more submit than a plain one, so the
+    // schedule is a cost and nothing else: looking late only stops late.
+    const EARLY_LOOK_FIRST: u32 = 8;
+    const EARLY_LOOK_LEAST: u32 = 4;
+    const EARLY_LOOK_MOST: u32 = 32;
+    let mut stride = if every_iterate {
+        1
+    } else if early.is_some() {
+        EARLY_LOOK_FIRST
+    } else {
+        RESID_CHECK_STRIDE
+    };
+    // THE MODEL'S VALUE AT THE SEED, where the energy an iterate holds is
+    // counted from: a prescribed row puts a constant into `x . (b + r)`.
+    let energy_at_seed = match (early, seeded_reference) {
+        (None, _) => 0.0,
+        (Some(_), Some((_, at_seed))) => at_seed,
+        (Some(_), None) => {
+            energy_probe(device, &mut terms, x, b, r.handle(), z.handle(), None, rows, n, fold, scalar)?.0
+        }
+    };
+    // The last look's bound ratio and its iteration, for the schedule.
+    let mut last_look: Option<(f64, u32)> = None;
+    // A verifying solve's record of the look the stop would have fired on.
+    let mut would_stop: Option<(f64, f64, u32)> = None;
     // CLEAR THE LATCH BEFORE THE LOOP. The workspace is allocated once and
     // reused by every solve, and the latch is sticky BY DESIGN, so without this
     // a breakdown in one solve would abort the next one before it had taken a
@@ -1341,7 +1511,10 @@ fn solve_scheduled<D: Device>(
     // while one that re-encodes every replay pays for each, and measured on
     // Metal that cost more (drape +4 %, woven +3 % PCG time) than the round
     // trips it saved. The answer is the same bits either way.
+    // AN ARMED SOLVE KEEPS THE PLAIN SCHEDULE: its looks read three sums the
+    // device's freeze does not know about.
     let latched = latch
+        && early.is_none()
         && device.info().supports_deferred_regions
         && sweep.is_none()
         && err0.is_finite()
@@ -1623,7 +1796,20 @@ fn solve_scheduled<D: Device>(
         // scheduled check, so the submit's own synchronize is the only one the
         // iteration pays and this readback rides it rather than adding a
         // second.
-        scalar.download(device)?;
+        //
+        // AN ARMED SOLVE'S LOOK READS THREE MORE SUMS: the bound on the energy
+        // the iterate has not captured, and the two halves of the energy it
+        // holds. They cost one more submit and ride the same single read. `z`
+        // is free to carry `D^-1 r` here: every iteration writes it from `r`
+        // before reading it.
+        let look = if early.is_some() && would_stop.is_none() {
+            Some(energy_probe(
+                device, &mut terms, x, b, r.handle(), z.handle(),
+                Some(inertia_inverse.handle()), rows, n, fold, scalar)?)
+        } else {
+            scalar.download(device)?;
+            None
+        };
         // A FREEZE MOVES THE CHECK BACK to the iterate it fell on, which is a
         // scheduled one; everything after it in the batch did nothing.
         let frozen = scalar.host()[slot::LATCH_FROZEN] != 0.0;
@@ -1661,12 +1847,80 @@ fn solve_scheduled<D: Device>(
         // wins in that case, and a NaN or Inf residual fails this test and
         // falls through to the breakdown branches below.
         if residual < tolerance {
+            // A VERIFYING SOLVE REPORTS WHAT IT GAINED past the look its stop
+            // would have fired on, and hands back a direction of the outcome
+            // the stop would have given, so the step treats it the same way.
+            if let Some((held, bound, at)) = would_stop {
+                let decrease = energy_probe(
+                    device, &mut terms, x, b, r.handle(), z.handle(), None, rows, n, fold, scalar)?.0;
+                *bound_check = Some(BoundCheck {
+                    held,
+                    bound,
+                    gained_after: decrease - energy_at_seed - held,
+                    iteration: at,
+                });
+                finished = Some(Report {
+                    outcome: Outcome::EnergyConverged,
+                    iterations: iteration,
+                    relative_residual: residual,
+                });
+                break;
+            }
+            // A SOLVE FROM A CARRIED START IS NOT A SOLVE FROM THE SEED,
+            // whatever it reaches. At the same residual tolerance it leaves the
+            // rows the last step changed less resolved than a solve from the
+            // seed does (measured: fifteen times the vertex error), so it is
+            // reported as the early stop it was armed for and the caller never
+            // takes it whole.
+            let outcome = if seeded_reference.is_some() {
+                Outcome::EnergyConverged
+            } else {
+                Outcome::Converged
+            };
             finished = Some(Report {
-                outcome: Outcome::Converged,
+                outcome,
                 iterations: iteration,
                 relative_residual: residual,
             });
             break;
+        }
+        // THE EARLY STOP, at a look and only while no breakdown is latched.
+        if let (Some(stop), Some((decrease, missing))) = (early, look) {
+            if alpha_cause == PCG_BREAK_NONE {
+                let held = decrease - energy_at_seed;
+                let allowed = f64::from(stop.ratio) * held;
+                // A BOUND OF EXACTLY ZERO IS NOT A REASON TO STOP. It is what a
+                // diagonal with nothing staged in it returns for any residual,
+                // and a residual that really is zero ends the solve through
+                // the tolerance above.
+                if held > 0.0 && missing > 0.0 && missing <= allowed {
+                    if stop.verify {
+                        would_stop = Some((held, missing, iteration));
+                        stride = RESID_CHECK_STRIDE;
+                    } else {
+                        finished = Some(Report {
+                            outcome: Outcome::EnergyConverged,
+                            iterations: iteration,
+                            relative_residual: residual,
+                        });
+                        break;
+                    }
+                } else if held > 0.0 && missing > 0.0 && allowed > 0.0 {
+                    // THE NEXT LOOK, where the decay measured between the last
+                    // two says the bound will be met. `excess` is how many
+                    // times too large the bound still is.
+                    let excess = missing / allowed;
+                    stride = match last_look {
+                        Some((before, at)) if excess < before && iteration > at => {
+                            let rate = (before / excess).ln() / f64::from(iteration - at);
+                            let ahead = (excess.ln() / rate).ceil();
+                            ahead.clamp(f64::from(EARLY_LOOK_LEAST), f64::from(EARLY_LOOK_MOST)) as u32
+                        }
+                        _ => EARLY_LOOK_FIRST,
+                    };
+                    last_look = Some((excess, iteration));
+                }
+            }
         }
         // THE LATCHED CAUSE IS MATCHED EXHAUSTIVELY, because one slot now
         // carries all three. Alpha latches `PCG_BREAK_PAP` and
@@ -1777,6 +2031,65 @@ fn solve_scheduled<D: Device>(
         iterations: max_iterations,
         relative_residual: residual,
     }))
+}
+
+/// What an armed solve reads at a look, in one submit and one read: twice the
+/// quadratic model's decrease at the iterate, `x . (b + r)` with `r = b - A x`,
+/// which holds for any start and which conjugate gradients never lowers; and,
+/// when `inertia_inverse` is given, `r . (D^-1 r)`, the bound on the same
+/// measure of what the iterate has not captured. That leaves `D^-1 r` in `z`.
+///
+/// The three sums land in scalar slots nothing reads between batches: the
+/// one-off fold scratch and the two noise floors the verdict bodies rewrite
+/// every iteration. The read is the whole scalar buffer, so it also serves as
+/// the batch's own probe.
+///
+/// ONLY EXISTING BODIES: the block-diagonal apply the preconditioner uses, the
+/// dot-terms fill and the fold. Nothing here is a kernel of its own, so every
+/// backend runs it as it stands.
+#[allow(clippy::too_many_arguments)]
+fn energy_probe<D: Device>(
+    device: &mut D,
+    terms: &mut DotTerms<'_>,
+    x: ppf_cts_compute::Handle,
+    b: ppf_cts_compute::Handle,
+    r: ppf_cts_compute::Handle,
+    z: ppf_cts_compute::Handle,
+    inertia_inverse: Option<ppf_cts_compute::Handle>,
+    rows: u32,
+    n: usize,
+    fold: &Buffer<f32>,
+    scalar: &mut ReadbackBuffer<f32>,
+) -> Result<(f64, f64), Fault> {
+    let term_rows = terms.rows();
+    if term_rows == 0 {
+        scalar.download(device)?;
+        return Ok((0.0, 0.0));
+    }
+    let product_h = terms.product_handle();
+    let out_bound = scalar.span(slot::FOLD_SCRATCH, 1);
+    let out_xb = scalar.span(slot::ALPHA_NOISE, 1);
+    let out_xr = scalar.span(slot::BETA_NOISE, 1);
+    device.run("pcg.energy_probe", |encoder| {
+        // Safety: every buffer outlives the submit.
+        unsafe {
+            if let Some(inverse) = inertia_inverse {
+                encode_preconditioner(encoder, inverse, r, z, rows)?;
+                terms.encode_fill(encoder, r, z, n)?;
+                encode_fold(encoder, product_h, term_rows, fold, out_bound, false)?;
+            }
+            terms.encode_fill(encoder, x, b, n)?;
+            encode_fold(encoder, product_h, term_rows, fold, out_xb, false)?;
+            terms.encode_fill(encoder, x, r, n)?;
+            encode_fold(encoder, product_h, term_rows, fold, out_xr, false)
+        }
+    })?;
+    scalar.download(device)?;
+    let host = scalar.host();
+    Ok((
+        f64::from(host[slot::ALPHA_NOISE]) + f64::from(host[slot::BETA_NOISE]),
+        if inertia_inverse.is_some() { f64::from(host[slot::FOLD_SCRATCH]) } else { 0.0 },
+    ))
 }
 
 /// One scalar from `pcg_alpha` / `pcg_beta`, with the body's own
@@ -3179,6 +3492,190 @@ mod tests {
             "the returned x does not satisfy the system: relative residual {}",
             residual / scale
         );
+    }
+
+    /// `2 b.x - x.A x`, twice the model's decrease at `x`, formed on the host
+    /// in double from the device's own product.
+    fn model_decrease_at(
+        device: &mut impl Device,
+        resident: &SpdDevice,
+        b: &[f32],
+        x: &Buffer<f32>,
+    ) -> f64 {
+        let n = b.len();
+        let x_host = read_back(device, x, n);
+        let mut ax = vec![0.0f32; n];
+        let ax_d = staged_block(device, &ax, "test.ax");
+        // Safety: every handle names a live allocation on this device.
+        unsafe { spmv::fixed_csr_spmv(device, &resident.view(), x.span(0, n), ax_d.span(0, n), n) }
+            .expect("the fixed-pattern matvec dispatches");
+        ax_d.read(device, 0, &mut ax).expect("ax reads back");
+        x_host
+            .iter()
+            .zip(b.iter())
+            .zip(ax.iter())
+            .map(|((x, b), ax)| f64::from(*x) * (2.0 * f64::from(*b) - f64::from(*ax)))
+            .sum()
+    }
+
+    /// The block diagonal `value * I` for every row, nine floats a row.
+    fn scaled_identity_blocks(rows: usize, value: f32) -> Vec<f32> {
+        let mut blocks = vec![0.0f32; 9 * rows];
+        for row in 0..rows {
+            blocks[9 * row] = value;
+            blocks[9 * row + 4] = value;
+            blocks[9 * row + 8] = value;
+        }
+        blocks
+    }
+
+    // `spd` is block tridiagonal with diagonal blocks whose smallest
+    // eigenvalue is above 7.5 and off-diagonal blocks `0.75 I` on either side,
+    // so `6 I <= A` by Gershgorin with room to spare. That is the diagonal the
+    // early stop's bound is given in the tests below.
+    const SPD_LOWER_DIAGONAL: f32 = 6.0;
+
+    #[test]
+    fn an_armed_solve_stops_on_the_bound_and_holds_the_energy_it_claims() {
+        let a = spd(600);
+        let n = 3 * a.rows as usize;
+        let b_host: Vec<f32> = (0..n).map(|k| ((k % 11) as f32 - 5.0) * 0.5).collect();
+        let mut device = host_device();
+        let b_in = staged_block(&mut device, &b_host, "test.b");
+        let zero_diag =
+            staged_block(&mut device, &vec![0.0f32; 9 * a.rows as usize], "test.zero_diagonal");
+        let inverse = a.inverse(&mut device);
+        let resident = a.upload(&mut device);
+
+        let full_x = staged_block(&mut device, &vec![0.0f32; n], "test.full");
+        let mut work = a.work(&mut device);
+        let full = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), full_x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(full.outcome, Outcome::Converged);
+        let whole = model_decrease_at(&mut device, &resident, &b_host, &full_x);
+
+        // A ratio of one: the iterate must provably hold half of the energy.
+        let ratio = 1.0f32;
+        let early_x = staged_block(&mut device, &vec![0.0f32; n], "test.early");
+        let mut work = a.work(&mut device);
+        work.stage_inertia_inverse(&mut device, &scaled_identity_blocks(a.rows as usize, 1.0 / SPD_LOWER_DIAGONAL))
+            .expect("the bound's diagonal stages");
+        work.arm_early_stop(Some(EarlyStop { ratio, start: None, verify: false }));
+        let early = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), early_x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(early.outcome, Outcome::EnergyConverged, "the bound was never met: {early:?}");
+        assert!(
+            early.iterations < full.iterations,
+            "an early stop that took {} iterations against the full solve's {} stopped nothing",
+            early.iterations, full.iterations
+        );
+        assert!(early.relative_residual >= 1.0e-6, "it stopped on the bound, not on the tolerance");
+        let held = model_decrease_at(&mut device, &resident, &b_host, &early_x);
+        assert!(held > 0.0 && held <= whole * (1.0 + 1.0e-5));
+        assert!(
+            whole - held <= f64::from(ratio) * held * (1.0 + 1.0e-4),
+            "the iterate misses {} of the model's decrease while holding {}, more than the bound allows",
+            whole - held, held
+        );
+
+        // The stop is one solve's: the next solve on the same workspace runs
+        // to the tolerance.
+        let again_x = staged_block(&mut device, &vec![0.0f32; n], "test.again");
+        let again = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), again_x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(again.outcome, Outcome::Converged);
+    }
+
+    #[test]
+    fn a_bound_with_nothing_staged_never_stops_a_solve() {
+        let a = spd(300);
+        let n = 3 * a.rows as usize;
+        let b_host: Vec<f32> = (0..n).map(|k| ((k % 9) as f32 - 4.0) * 0.2).collect();
+        let mut device = host_device();
+        let b_in = staged_block(&mut device, &b_host, "test.b");
+        let zero_diag =
+            staged_block(&mut device, &vec![0.0f32; 9 * a.rows as usize], "test.zero_diagonal");
+        let inverse = a.inverse(&mut device);
+        let resident = a.upload(&mut device);
+        let x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
+        let mut work = a.work(&mut device);
+        // Every block zero: the "bound" reads zero for any residual.
+        work.stage_inertia_inverse(&mut device, &vec![0.0f32; 9 * a.rows as usize])
+            .expect("the bound's diagonal stages");
+        work.arm_early_stop(Some(EarlyStop { ratio: 0.1, start: None, verify: false }));
+        let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(report.outcome, Outcome::Converged, "{report:?}");
+        assert!(report.relative_residual < 1.0e-6);
+    }
+
+    #[test]
+    fn a_carried_start_is_credited_from_the_seed_and_never_reported_as_a_full_solve() {
+        let a = spd(300);
+        let n = 3 * a.rows as usize;
+        let b_host: Vec<f32> = (0..n).map(|k| ((k % 9) as f32 - 4.0) * 0.2).collect();
+        let mut device = host_device();
+        let b_in = staged_block(&mut device, &b_host, "test.b");
+        let zero_diag =
+            staged_block(&mut device, &vec![0.0f32; 9 * a.rows as usize], "test.zero_diagonal");
+        let inverse = a.inverse(&mut device);
+        let resident = a.upload(&mut device);
+
+        let answer = staged_block(&mut device, &vec![0.0f32; n], "test.answer");
+        let mut work = a.work(&mut device);
+        let full = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), answer.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(full.outcome, Outcome::Converged);
+        let answer_values = read_back(&mut device, &answer, n);
+
+        // The start is nine tenths of the answer: it holds 99% of the energy
+        // (1 - 0.1^2), so the bound at a ratio of 0.1 is met within a look or
+        // two, where a solve from the seed needs most of the full solve.
+        let start_values: Vec<f32> = answer_values.iter().map(|v| 0.9 * v).collect();
+        let start = staged_block(&mut device, &start_values, "test.start");
+        let x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
+        let mut work = a.work(&mut device);
+        work.stage_inertia_inverse(&mut device, &scaled_identity_blocks(a.rows as usize, 1.0 / SPD_LOWER_DIAGONAL))
+            .expect("the bound's diagonal stages");
+        work.arm_early_stop(Some(EarlyStop { ratio: 0.1, start: Some(start.handle()), verify: false }));
+        let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(
+            report.outcome,
+            Outcome::EnergyConverged,
+            "a solve from a carried start is not a solve from the seed, whatever it reaches: {report:?}"
+        );
+        assert!(report.iterations < full.iterations, "{} against {}", report.iterations, full.iterations);
+        // Measured against the seed: the residual is relative to the zero
+        // start's, so it is small, not near one.
+        assert!(report.relative_residual < 0.2, "{report:?}");
+        let whole = model_decrease_at(&mut device, &resident, &b_host, &answer);
+        let held = model_decrease_at(&mut device, &resident, &b_host, &x);
+        assert!(whole - held <= 0.1 * held * (1.0 + 1.0e-4), "misses {} holding {}", whole - held, held);
+    }
+
+    #[test]
+    fn a_verifying_solve_runs_to_the_tolerance_and_its_gain_is_within_the_bound() {
+        let a = spd(600);
+        let n = 3 * a.rows as usize;
+        let b_host: Vec<f32> = (0..n).map(|k| ((k % 11) as f32 - 5.0) * 0.5).collect();
+        let mut device = host_device();
+        let b_in = staged_block(&mut device, &b_host, "test.b");
+        let zero_diag =
+            staged_block(&mut device, &vec![0.0f32; 9 * a.rows as usize], "test.zero_diagonal");
+        let inverse = a.inverse(&mut device);
+        let resident = a.upload(&mut device);
+        let x = staged_block(&mut device, &vec![0.0f32; n], "test.x");
+        let mut work = a.work(&mut device);
+        work.stage_inertia_inverse(&mut device, &scaled_identity_blocks(a.rows as usize, 1.0 / SPD_LOWER_DIAGONAL))
+            .expect("the bound's diagonal stages");
+        work.arm_early_stop(Some(EarlyStop { ratio: 1.0, start: None, verify: true }));
+        let report = solve(&mut device, &a.op(&resident, zero_diag.handle()), inverse.handle(), b_in.handle(), x.handle(), &mut work, None, 1.0e-6, 500).expect("the solve dispatches");
+        assert_eq!(report.outcome, Outcome::EnergyConverged);
+        assert!(report.relative_residual < 1.0e-6, "a verifying solve runs on to the tolerance: {report:?}");
+        let check = work.take_bound_check().expect("a verifying solve that met its bound reports it");
+        assert!(check.held > 0.0 && check.bound > 0.0);
+        assert!(check.gained_after >= 0.0, "conjugate gradients never lowers the model's decrease: {check:?}");
+        assert!(
+            check.gained_after <= check.bound + 1.0e-3 * check.held,
+            "the solve gained {} after a look whose bound on that was {}",
+            check.gained_after, check.bound
+        );
+        assert!(work.take_bound_check().is_none(), "the record is handed over once");
     }
 
     #[test]

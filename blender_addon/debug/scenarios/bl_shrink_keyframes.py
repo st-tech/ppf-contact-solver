@@ -97,19 +97,20 @@ def pc2_samples(obj):
 
 
 def fetch_frames(expected, timeout=60.0):
-    # Fetch the frames the live fetch has not delivered yet and wait until
-    # every body's cache holds them all; those caches are what the checks read.
-    dh.com.fetch()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        dh.facade.engine.dispatch(dh.events.PollTick())
-        dh.facade.tick()
-        dh.client.apply_animation()
-        state = dh.facade.engine.state
-        samples = min(pc2_samples(o) for o in bodies.values())
-        if samples >= expected and state.activity.name == "IDLE":
-            return samples
-        time.sleep(0.1)
+    # Every frame of the run, fetched again and applied, because the caches
+    # are what the checks read. The live fetch asks only for the latest frame
+    # at each poll, so it skips frames whenever the solver steps faster than
+    # the poll, and a skipped frame's cache slot holds a COPY of an earlier
+    # frame: the sample count is complete while the samples are not. The count
+    # therefore proves nothing; what does is the fetch reporting that it
+    # applied every frame it was asked for.
+    applied, total = dh.fetch_and_drain(fetch_timeout=timeout,
+                                        drain_timeout=timeout)
+    if total < expected or applied < total:
+        raise RuntimeError(
+            "the fetch applied %d of %d frames, %d expected: the caches "
+            "hold stand-in copies where frames are missing"
+            % (applied, total, expected))
     return min(pc2_samples(o) for o in bodies.values())
 
 

@@ -150,6 +150,111 @@ pub unsafe fn rebuild(view: &SceneView, constraint: &Constraint) -> FatalResult<
     Ok(())
 }
 
+/// The pin set the last [`rebuild`] was run on: which vertex each fix pin and
+/// each pull pin names, in the constraint's own order.
+///
+/// EVERYTHING [`rebuild`] WRITES IS A FUNCTION OF THESE TWO LISTS and of the
+/// mesh's connectivity, which does not change during a run: it clears every
+/// pin index, assigns them in list order, and recomputes every `fixed` flag
+/// from the fix indices. It reads no position, no weight and nothing a
+/// previous call left. So a call whose two lists equal the remembered ones
+/// would write, field for field, what the arrays already hold, and the walk
+/// over every vertex, face, edge, tetrahedron and hinge can be skipped.
+///
+/// Measured on `trapped` (135,396 vertices, no pin at all): the rebuild and
+/// the two re-stage comparisons behind it were 8.5 ms a step, 7.9 s of a
+/// 76 s run of 929 steps.
+///
+/// THE REMEMBERED LISTS ARE COPIES. `backend.rs` frees the previous
+/// `Constraint` as it assigns the next, which is why nothing else here keeps
+/// a pointer into one.
+///
+#[derive(Default)]
+pub struct PinSet {
+    fix: Vec<u32>,
+    pull: Vec<u32>,
+    /// False until a rebuild has run, so the first call never skips.
+    known: bool,
+    /// How many times the remembered pins have been replaced, for whoever
+    /// stages something that depends on which vertices are pinned.
+    generation: u64,
+}
+
+impl PinSet {
+    /// Whether `constraint` names the pins the last rebuild was run on.
+    pub fn matches(&self, fix: &[crate::data::FixPair], pull: &[crate::data::PullPair]) -> bool {
+        self.known
+            && self.fix.len() == fix.len()
+            && self.pull.len() == pull.len()
+            && self.fix.iter().zip(fix).all(|(seen, pin)| *seen == pin.index)
+            && self.pull.iter().zip(pull).all(|(seen, pin)| *seen == pin.index)
+    }
+
+    /// Record the pins a rebuild has just been run on.
+    pub fn remember(&mut self, fix: &[crate::data::FixPair], pull: &[crate::data::PullPair]) {
+        self.fix.clear();
+        self.fix.extend(fix.iter().map(|pin| pin.index));
+        self.pull.clear();
+        self.pull.extend(pull.iter().map(|pin| pin.index));
+        self.known = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Changes whenever [`Self::remember`] records a new pin set.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// Whether a skipped rebuild is checked instead of trusted, from
+/// `PPF_VERIFY_PIN_SKIP`.
+///
+/// THE SKIP RESTS ON A CLAIM ABOUT THE WHOLE TREE that no type enforces:
+/// nothing but [`rebuild`] writes the pin indices and the `fixed` flags once a
+/// run has started. A violation would be silent, a step simulated against a
+/// stale pin set, so the knob turns the claim into a check: every skipped step
+/// runs the rebuild anyway and stops the run if it changed anything.
+pub fn verify_pin_skip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PPF_VERIFY_PIN_SKIP").is_ok_and(|v| v != "0"))
+}
+
+/// Everything [`rebuild`] writes, read back.
+unsafe fn rebuilt_fields(view: &SceneView) -> (Vec<(u32, u32)>, [Vec<bool>; 4]) {
+    (
+        view.vertex_props_mut().iter().map(|p| (p.fix_index, p.pull_index)).collect(),
+        [
+            view.face_props_mut().iter().map(|p| p.fixed).collect(),
+            view.edge_props_mut().iter().map(|p| p.fixed).collect(),
+            view.tet_props_mut().iter().map(|p| p.fixed).collect(),
+            view.hinge_props_mut().iter().map(|p| p.fixed).collect(),
+        ],
+    )
+}
+
+/// Run the rebuild a step skipped and report whether it changed anything.
+///
+/// # Safety
+/// As [`rebuild`].
+pub unsafe fn verify_skipped(view: &SceneView, constraint: &Constraint) -> FatalResult<()> {
+    let before = rebuilt_fields(view);
+    rebuild(view, constraint)?;
+    let after = rebuilt_fields(view);
+    if before.0 != after.0 {
+        return Err(Fatal::invariant(
+            "PPF_VERIFY_PIN_SKIP: a skipped pin rebuild would have changed a vertex's fix or              pull index, so something other than the rebuild wrote them since the last one",
+        ));
+    }
+    for (kind, (a, b)) in ["face", "edge", "tet", "hinge"].iter().zip(before.1.iter().zip(after.1.iter())) {
+        if a != b {
+            return Err(Fatal::invariant(format!(
+                "PPF_VERIFY_PIN_SKIP: a skipped pin rebuild would have changed a {kind}'s fixed                  flag, so something other than the rebuild wrote it since the last one"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The prop array may not be longer than the connectivity it indexes.
 fn check_pairing(kind: &str, props: usize, connectivity: usize) -> FatalResult<()> {
     if props > connectivity {
@@ -184,6 +289,98 @@ mod tests {
     use crate::driver::test_scene::{constraint, fix_pin, pull_pin, TestScene};
     use crate::data::{Vec2u, Vec3u, Vec4u};
     use ppf_cts_formats::status::error_code;
+
+    /// The skip's whole premise: the lists a rebuild ran on are recognized,
+    /// and nothing else is. A pin set never rebuilt matches nothing, so the
+    /// first step always rebuilds.
+    #[test]
+    fn a_pin_set_matches_only_the_lists_it_remembered() {
+        let mut seen = PinSet::default();
+        let (fix, pull) = ([fix_pin(3), fix_pin(1)], [pull_pin(2)]);
+        assert!(!seen.matches(&fix, &pull), "a pin set no rebuild has run on matched");
+        assert!(!PinSet::default().matches(&[], &[]), "the empty set matched before any rebuild");
+        seen.remember(&fix, &pull);
+        assert!(seen.matches(&fix, &pull));
+        // A pin that moves, changes weight or turns kinematic names the same
+        // vertex, and the rebuild reads nothing else.
+        let mut moved = [fix_pin(3), fix_pin(1)];
+        moved[0].kinematic = true;
+        moved[0].position = crate::driver::test_scene::position(1.0, 2.0, 3.0);
+        assert!(seen.matches(&moved, &pull));
+        // Another vertex, another order, one pin fewer, one pin more, and a pin
+        // changing kind are each a different set.
+        assert!(!seen.matches(&[fix_pin(3), fix_pin(0)], &pull));
+        assert!(!seen.matches(&[fix_pin(1), fix_pin(3)], &pull));
+        assert!(!seen.matches(&[fix_pin(3)], &pull));
+        assert!(!seen.matches(&[fix_pin(3), fix_pin(1), fix_pin(0)], &pull));
+        assert!(!seen.matches(&[fix_pin(3)], &[pull_pin(2), pull_pin(1)]));
+        assert!(!seen.matches(&fix, &[]));
+    }
+
+    /// What the skip relies on, checked against the rebuild itself: a second
+    /// rebuild on the same lists writes what the first left, whatever stood in
+    /// the arrays before, and a rebuild on other lists does not.
+    #[test]
+    fn a_rebuild_on_the_same_pins_writes_what_is_already_there() {
+        let scene = TestScene::new(4)
+            .with_faces(&[Vec3u::new(0, 1, 2), Vec3u::new(1, 2, 3)])
+            .with_edges(&[Vec2u::new(0, 1), Vec2u::new(2, 3)]);
+        let view = scene.view();
+        let read = |view: &SceneView| unsafe {
+            (
+                view.vertex_props_mut().iter().map(|p| (p.fix_index, p.pull_index)).collect::<Vec<_>>(),
+                view.face_props_mut().iter().map(|p| p.fixed).collect::<Vec<_>>(),
+                view.edge_props_mut().iter().map(|p| p.fixed).collect::<Vec<_>>(),
+            )
+        };
+        let pins = constraint(&[fix_pin(0), fix_pin(1), fix_pin(2)], &[pull_pin(3)]);
+        unsafe { rebuild(&view, &pins) }.expect("the rebuild runs");
+        let first = read(&view);
+        assert_eq!(first.1, vec![true, false]);
+        // Scribble over every output, then rebuild on the same lists.
+        unsafe {
+            for prop in view.vertex_props_mut().iter_mut() {
+                prop.fix_index = 9;
+                prop.pull_index = 9;
+            }
+            for prop in view.face_props_mut().iter_mut() {
+                prop.fixed = !prop.fixed;
+            }
+            for prop in view.edge_props_mut().iter_mut() {
+                prop.fixed = !prop.fixed;
+            }
+            rebuild(&view, &pins).expect("the rebuild runs");
+        }
+        assert_eq!(read(&view), first, "a rebuild read something a previous call left");
+        let fewer = constraint(&[fix_pin(0), fix_pin(1)], &[pull_pin(3)]);
+        unsafe { rebuild(&view, &fewer) }.expect("the rebuild runs");
+        assert_ne!(read(&view), first);
+    }
+
+    /// The check behind `PPF_VERIFY_PIN_SKIP` passes on arrays a rebuild left
+    /// and refuses arrays something else wrote since: one index, one flag.
+    #[test]
+    fn the_skip_check_refuses_fields_written_since_the_last_rebuild() {
+        let scene = TestScene::new(4)
+            .with_faces(&[Vec3u::new(0, 1, 2)])
+            .with_edges(&[Vec2u::new(0, 1)])
+            .with_tets(&[Vec4u::new(0, 1, 2, 3)])
+            .with_hinges(&[Vec4u::new(0, 1, 2, 3)]);
+        let view = scene.view();
+        let pins = constraint(&[fix_pin(0), fix_pin(1), fix_pin(2)], &[pull_pin(3)]);
+        unsafe {
+            rebuild(&view, &pins).expect("the rebuild runs");
+            verify_skipped(&view, &pins).expect("nothing was written since the rebuild");
+            view.vertex_props_mut()[3].pull_index = 0;
+            assert!(verify_skipped(&view, &pins).is_err(), "a changed pull index passed");
+            // The refused check has rebuilt the arrays, so they pass again.
+            verify_skipped(&view, &pins).expect("the check restores what it compares");
+            view.tet_props_mut()[0].fixed = true;
+            assert!(verify_skipped(&view, &pins).is_err(), "a changed tet flag passed");
+            view.face_props_mut()[0].fixed = false;
+            assert!(verify_skipped(&view, &pins).is_err(), "a changed face flag passed");
+        }
+    }
 
     /// THE DEFECT AN EMPTY `update_constraint` HIDES, and it is not the pins.
     ///

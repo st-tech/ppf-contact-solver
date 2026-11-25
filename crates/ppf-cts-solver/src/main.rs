@@ -807,6 +807,10 @@ fn decompress_from_gz(compressed_data: Vec<u8>, path: &str) -> Vec<u8> {
 /// 64 KiB I/O write buffer.
 const IO_BUF_CAPACITY: usize = 64 * 1024;
 
+/// The block the serialized bytes of a checkpoint are gathered into before
+/// they are compressed.
+const SAVE_BLOCK: usize = 1 << 20;
+
 /// Streams serialization directly to a gzip-compressed file without buffering entire data in RAM.
 ///
 /// The bytes are written to a temporary sibling file and then atomically
@@ -821,12 +825,85 @@ fn save<T: serde::Serialize>(obj: &T, path: &str) {
         let file = std::fs::File::create(&tmp_path).unwrap();
         let buf_writer = std::io::BufWriter::with_capacity(IO_BUF_CAPACITY, file);
         let mut encoder = GzEncoder::new(buf_writer, Compression::default());
-        bincode::serialize_into(&mut encoder, obj).unwrap();
+        // THE SERIALIZED BYTES ARE GATHERED INTO BLOCKS BEFORE THEY REACH THE
+        // COMPRESSOR. bincode writes one field at a time, so an array of
+        // floats arrives four bytes a call, and each call is a trip into the
+        // deflate stream. The compressor sees the same bytes in the same
+        // order either way, so the file decompresses to the same checkpoint
+        // (`a_gathered_save_holds_the_bytes_an_ungathered_one_does`); the
+        // compressed bytes themselves differ by a few. Measured on
+        // large-animals (L40S host): `dataset.bin.gz` (235 MB) 98.4 s -> 32.6 s,
+        // `meshset.bin.gz` 32 s -> 15.1 s, a state checkpoint 0.96 s -> 0.34 s.
+        serialize_gathered(&mut encoder, obj);
         let buf_writer = encoder.finish().unwrap();
         let file = buf_writer.into_inner().unwrap();
         file.sync_all().unwrap();
     }
     std::fs::rename(&tmp_path, path).unwrap();
+}
+
+/// bincode's bytes for `obj`, handed to `sink` in blocks of [`SAVE_BLOCK`].
+fn serialize_gathered<W: Write, T: serde::Serialize>(sink: &mut W, obj: &T) {
+    let mut gathered = std::io::BufWriter::with_capacity(SAVE_BLOCK, sink);
+    bincode::serialize_into(&mut gathered, obj).unwrap();
+    gathered.flush().unwrap();
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    /// A record shaped like a checkpoint: scalars between long float and index
+    /// arrays, long enough to span several blocks.
+    #[derive(serde::Serialize)]
+    struct Sample {
+        frame: i32,
+        time: f64,
+        positions: Vec<f32>,
+        indices: Vec<u32>,
+        tail: (u8, f32),
+    }
+
+    fn sample() -> Sample {
+        let count = 3 * SAVE_BLOCK / 4 + 17;
+        let mut state = 0x9E37_79B9u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        Sample {
+            frame: 42,
+            time: 1.25,
+            positions: (0..count).map(|_| (next() as f32) * 1.0e-6).collect(),
+            indices: (0..count / 2).map(|_| next()).collect(),
+            tail: (7, -0.5),
+        }
+    }
+
+    /// The gathered writer must not change what a checkpoint holds: its
+    /// compressed stream decompresses to bincode's own bytes, as the
+    /// field-by-field writer's does. The two STREAMS are not the same bytes
+    /// (deflate cuts its blocks by how the input arrives), which is why the
+    /// comparison is made after decompression.
+    #[test]
+    fn a_gathered_save_holds_the_bytes_an_ungathered_one_does() {
+        let obj = sample();
+        let plain = bincode::serialize(&obj).unwrap();
+        assert!(plain.len() > 4 * SAVE_BLOCK, "the sample does not span several blocks");
+
+        let mut gathered = GzEncoder::new(Vec::new(), Compression::default());
+        serialize_gathered(&mut gathered, &obj);
+        let gathered = gathered.finish().unwrap();
+
+        let mut ungathered = GzEncoder::new(Vec::new(), Compression::default());
+        bincode::serialize_into(&mut ungathered, &obj).unwrap();
+        let ungathered = ungathered.finish().unwrap();
+
+        assert_eq!(decompress_from_gz(gathered, "gathered"), plain);
+        assert_eq!(decompress_from_gz(ungathered, "ungathered"), plain);
+    }
 }
 
 fn read_gz(path: &str) -> Vec<u8> {

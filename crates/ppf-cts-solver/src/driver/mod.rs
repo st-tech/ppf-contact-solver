@@ -125,6 +125,7 @@ pub(crate) mod force_field;
 pub mod contact;
 mod constraint;
 mod cosserat;
+mod cut_solve;
 mod dirichlet;
 mod dump_linsys;
 pub(crate) mod friction_memory;
@@ -1135,8 +1136,27 @@ pub unsafe extern "C" fn update_constraint(constraint: *const Constraint) {
         ));
     }
     let view = require_scene("update_constraint");
-    if let Err(fatal) = constraint::rebuild(&view, &*constraint) {
-        fatal_exit(fatal);
+    // A PIN SET THAT DID NOT CHANGE IS NOT REBUILT. What the rebuild writes is
+    // a function of the two pin lists alone, so when they name the same
+    // vertices in the same order as the last rebuild's, the arrays already
+    // hold its output (`constraint::PinSet`).
+    let same_pins = {
+        let fix = scene::slice(&(*constraint).fix);
+        let pull = scene::slice(&(*constraint).pull);
+        SOLVER
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|state| state.pin_set.matches(fix, pull)))
+            .unwrap_or(false)
+    };
+    if !same_pins {
+        if let Err(fatal) = constraint::rebuild(&view, &*constraint) {
+            fatal_exit(fatal);
+        }
+    } else if constraint::verify_pin_skip() {
+        if let Err(fatal) = constraint::verify_skipped(&view, &*constraint) {
+            fatal_exit(fatal);
+        }
     }
     // COPY THE PINS, do not keep the handles. `backend.rs` drops the previous
     // `Constraint` and frees its buffers as it assigns the new one, so a
@@ -1178,6 +1198,24 @@ pub unsafe extern "C" fn update_constraint(constraint: *const Constraint) {
             // guarded in `plasticity.rs`, which downloads them before it writes
             // the host array.
             if let Err(fatal) = with_device(|device| {
+                if same_pins {
+                    // Nothing was rebuilt, so there is nothing to compare: only
+                    // the uploads the two re-stages end with are kept. Under
+                    // `PPF_VERIFY_PIN_SKIP` the comparison is made anyway and
+                    // must find nothing.
+                    if constraint::verify_pin_skip()
+                        && !state.staged_pins_match(
+                            view.vertex_props_mut(),
+                            view.face_props_mut(),
+                            view.edge_props_mut(),
+                        )
+                    {
+                        return Err(Fatal::invariant(
+                            "PPF_VERIFY_PIN_SKIP: the staged vertex, face or edge props differ                              from the scene's on a step whose pin set did not change",
+                        ));
+                    }
+                    return state.upload_pin_props(device);
+                }
                 state.restage_pin_indices(device, view.vertex_props_mut())?;
                 // THE PER-ELEMENT `fixed` FLAGS TOO, which `constraint::rebuild`
                 // has just recomputed as the AND over each element's vertices
@@ -1187,6 +1225,9 @@ pub unsafe extern "C" fn update_constraint(constraint: *const Constraint) {
             }) {
                 drop(guard);
                 fatal_exit(fatal);
+            }
+            if !same_pins {
+                state.pin_set.remember(fix, pull);
             }
             let sphere = scene::slice(&(*constraint).sphere);
             let floor = scene::slice(&(*constraint).floor);
