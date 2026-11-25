@@ -103,6 +103,7 @@ To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www
 
 ## 🔖 Table of Contents
 
+- [📈 Optimization History](#-optimization-history)
 - [📝 Change History](#-change-history)
 - [🎓 Technical Materials](#-technical-materials)
 - [⚡️ Requirements](#️-requirements)
@@ -144,6 +145,14 @@ To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www
 
 - 🧑 Setting Up Your Development Environment [(Markdown)](./articles/develop.md#-setting-up-your-development-environment)
 - 🐞 Bug Fixes and Updates [(Markdown)](./articles/bug.md)
+
+## 📈 Optimization History
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./asset/image/simulation-time/sim-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./asset/image/simulation-time/sim-light.svg">
+  <img alt="Optimization History" src="./asset/image/simulation-time/sim-light.svg">
+</picture>
 
 ## 📝 Change History
 

@@ -23,7 +23,6 @@ For the latest highlights, see the [README](../README.md).
 - **(2025.08.09)** Added a hindsight note in [eigensystem analysis](./eigensys.md) to acknowledge prior work by [Poya et al. (2023)](https://romeric.github.io/).
 - **(2025.05.01)** Simulation states now can be saved and loaded [(Video)](https://zozo.box.com/s/7v0exrbptvfli4o4z91pqtmz0tehdn62).
 - **(2025.04.02)** Added 9 examples. See the [catalogue](../README.md#️-catalogue).
-- **(2025.03.03)** Added a [budget table on AWS](../README.md#-budget-table-on-aws).
 - **(2025.02.28)** Added a [reference branch and a Docker image of our TOG paper](../README.md#-technical-materials).
 - **(2025.02.26)** Added Floating Point-Rounding Errors in ACCD in [hindsight](./hindsight.md).
 - **(2025.02.07)** Updated the [trapped example](../examples/trapped.ipynb) [(Video)](https://zozo.box.com/s/lnnyeqrvm86rxnwyjxhojfj0jgm5nphn) with squishy balls.
