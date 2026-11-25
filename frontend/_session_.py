@@ -1098,21 +1098,16 @@ class FixedSession:
                 session.run_until_frame(10)
                 assert session.held_frame() == 10
         """
-        path = os.path.join(self.output.path, "held")
-        try:
-            with open(path, encoding="utf-8") as f:
-                text = f.read().strip()
-        except OSError:
-            return None
-        return int(text) if text else None
+        # The solver removes `held` while this poll may be reading it, and
+        # writes `hold_at_frame` while `_write_hold` replaces it. Both files
+        # go through the extension, never Python's `open` or `os.replace`:
+        # on Windows those make the solver's removal fail and the replace
+        # refuse ("Access is denied") whenever the other side has the file
+        # open. `ppf_cts_formats::hold` has the measurement.
+        return _rust.read_held_frame(self.output.path)
 
     def _write_hold(self, frame: int, timeout: float) -> None:
-        os.makedirs(self.output.path, exist_ok=True)
-        path = os.path.join(self.output.path, "hold_at_frame")
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(f"{int(frame)} {float(timeout)}\n")
-        os.replace(tmp, path)
+        _rust.write_hold_at_frame(self.output.path, int(frame), float(timeout))
 
     def run_until_frame(
         self, frame: int, timeout: float = 3600.0, poll: float = 0.05

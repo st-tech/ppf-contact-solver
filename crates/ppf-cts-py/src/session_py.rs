@@ -302,6 +302,30 @@ pub fn touch_save_and_quit(session_path: &str) -> PyResult<String> {
         .map_err(|e| PyValueError::new_err(format!("touch save_and_quit: {e}")))
 }
 
+/// Ask a running solver to hold at `frame`: `<output_dir>/hold_at_frame`.
+/// Backs `FixedSession.run_until_frame`. `ppf_cts_formats::hold` says why
+/// the frontend does not write the file with Python's own calls.
+#[pyfunction]
+pub fn write_hold_at_frame(output_dir: &str, frame: i64, timeout: f64) -> PyResult<String> {
+    ppf_cts_formats::hold::write_hold_at_frame(std::path::Path::new(output_dir), frame, timeout)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(PyErr::from)
+}
+
+/// The frame `<output_dir>/held` names, or `None` when the solver is not
+/// held. Backs `FixedSession.held_frame`. A file that does not hold a frame
+/// raises `ValueError`.
+#[pyfunction]
+pub fn read_held_frame(output_dir: &str) -> PyResult<Option<i64>> {
+    ppf_cts_formats::hold::read_held_frame(std::path::Path::new(output_dir)).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidData {
+            PyValueError::new_err(e.to_string())
+        } else {
+            PyErr::from(e)
+        }
+    })
+}
+
 /// Recursively delete the session directory. Mirrors `FixedSession.delete`.
 /// No-op when missing.
 #[pyfunction]
@@ -820,6 +844,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(marker_exists, m)?)?;
     m.add_function(wrap_pyfunction!(save_and_quit_file_path, m)?)?;
     m.add_function(wrap_pyfunction!(touch_save_and_quit, m)?)?;
+    m.add_function(wrap_pyfunction!(write_hold_at_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(read_held_frame, m)?)?;
     m.add_function(wrap_pyfunction!(delete_session_dir, m)?)?;
     m.add_function(wrap_pyfunction!(delete_session_dir_keep_output, m)?)?;
     m.add_function(wrap_pyfunction!(param_export_to_disk, m)?)?;

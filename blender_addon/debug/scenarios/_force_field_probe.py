@@ -37,6 +37,7 @@ from . import _runner as r
 
 
 PROBE = r'''
+import contextlib
 import json
 import math
 import os
@@ -889,6 +890,59 @@ elif SECTION == "frame_step":
     y16 = float(frames_of(session, 16)[:, 1].mean())
     check("resume_keeps_the_updated_field",
           session.finished() and y16 > y8 + 0.05, {"y8": y8, "y16": y16})
+
+    # A STEP REQUEST LANDS WHILE THE SOLVER HAS THE REQUEST OPEN. A held
+    # solver reads `hold_at_frame` every 20 ms, so a step's replace of that
+    # file now and then meets the solver's open handle: one step in about
+    # 400, measured on Windows. There a replace through Python's `os.replace`
+    # was refused ("Access is denied"), and the step never happened. Here the
+    # file is held open the way the solver's read holds it, sharing every
+    # access, so the replace meets an open handle every time.
+    @contextlib.contextmanager
+    def open_like_the_solver(path):
+        # The solver reads with Rust's std, whose handles share read, write
+        # and delete access. Python's `open` shares no delete access on
+        # Windows, so there the handle comes from the API directly.
+        if os.name != "nt":
+            with open(path, "rb"):
+                yield
+            return
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                    ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                    wintypes.HANDLE]
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        generic_read, share_all, open_existing = 0x80000000, 0x1 | 0x2 | 0x4, 3
+        handle = k32.CreateFileW(path, generic_read, share_all, None, open_existing, 0, None)
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            yield
+        finally:
+            k32.CloseHandle(handle)
+
+    begin("frame_step_request_open")
+    app = new_app("frame_step_open")
+    scene = app.scene.create()
+    scene.add("sheet").at(0.0, 1.0, 0.0)
+    session = app.session.create(scene.build(quiet=True))
+    session.param.set("frames", 4).set("gravity", [0.0, 0.0, 0.0])
+    session = session.build()
+    session.run_until_frame(1)
+    failure = None
+    with open_like_the_solver(os.path.join(session.output.path, "hold_at_frame")):
+        try:
+            session.step_frame()
+        except OSError as e:
+            failure = repr(e)
+    held = session.held_frame()
+    session.release()
+    check("step_request_lands_while_the_solver_reads_it",
+          failure is None and held == 2 and session.finished(),
+          {"failure": failure, "held": held, "finished": bool(session.finished())})
 
 elif SECTION in ("fluid", "fluid_shortfall"):
     # A FLUID FIELD against the reference, whose law the

@@ -21,12 +21,14 @@
 //! - [`status`]: the structured solver run-status record ([`RunStatus`])
 //!   and its liveness [`status::lock`], the single source of truth for
 //!   solver lifecycle and outcome.
+//! - [`hold`]: the caller's side of the frame-step hold files.
 //!
 //! Consumers: [`ppf_cts_core`] (kernels and state), `ppf-cts-py`
 //! (PyO3 bindings), and `ppf-cts-server` (engine host).
 
 pub mod envelope;
 pub mod files;
+pub mod hold;
 pub mod kinds;
 pub mod statistics;
 pub mod status;
