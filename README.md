@@ -41,7 +41,7 @@ To use this through Blender, watch the [Faebe Tutorials walkthrough](https://www
 ### Scope
 
 - **⏳ Offline use:** Not real time, though some examples reach interactive rates.
-- **🐢 Not the fastest:** Other recent work reports faster results.
+- **🐢 Not the fastest:** Other recent work reports faster results. Our speed-ups so far are in the [optimization history](#-optimization-history).
 - **📉 Not differentiable:** No gradients, so inverse design and learning are out of scope.
 
 ### Maturity
@@ -968,11 +968,11 @@ Why no intersections remain after a successful step, and why an intersection err
 | Why did ZOZO, Inc. make this? | To accelerate our internal R&D. Please read this article from [ZOZO, Inc.](https://corp.zozo.com/en/) (Japanese): <https://corp.zozo.com/topics/20241125-siggraphasia/> |
 | A fashion company made this? | Yes. |
 | Is there any criticism of this solver? | Yes. See [Criticism for Fairness](./articles/criticism.md). |
-| Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. |
-| This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. |
+| Why is this very slow? | We use a very different physics that guarantees strain limiting (e.g., no stretching over 2%) and penetration-free. That costs a lot. Other popularized solvers (e.g., XPBD) are much faster, but we don't know how to satisfy the two guarantees with them. We keep making it faster; see the [optimization history](#-optimization-history) timeline. |
+| This paper &lt;XXX&gt; is faster than yours! | We are aware of that, so we never claim the state-of-the-art performance. We keep working on speed; see the [optimization history](#-optimization-history) timeline. |
 | Then why not use &lt;XXX&gt;? | We need to check two things for &lt;XXX&gt;. First, whether it provides a strain limit guarantee, which is very important for us. Second, whether it runs entirely in single precision, since any use of double precision would prevent it from compiling on Apple Metal. |
 | Then, if &lt;XXX&gt; can do all of that, will you adopt it? | The adoption cost is not free. Also, incorporating third-party techniques requires our internal legal review. |
-| Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it. |
+| Should we use it? | Honestly, not yet for serious use. We still have many bugs, and performance is too slow. A lot needs to be fixed and improved. We are on it, and the [optimization history](#-optimization-history) timeline shows the speed-ups so far. |
 | Is this QA tested? | Yes, through GitHub Actions, for both the [add-on](https://github.com/st-tech/ppf-contact-solver/actions/workflows/blender.yml) and the [solver](https://github.com/st-tech/ppf-contact-solver/actions/workflows/run-all-once.yml). However, this does not guarantee that all bugs are eliminated. |
 | Can I leave the add-on enabled? | When not in use, disable or uninstall it. Undiscovered bugs may affect performance, auto-save, or other parts of Blender (e.g., [#36](https://github.com/st-tech/ppf-contact-solver/issues/36) and [#145](https://github.com/st-tech/ppf-contact-solver/issues/145), both fixed). |
 | I bumped into a bug. | We kindly ask you to report it via [GitHub Issues](https://github.com/st-tech/ppf-contact-solver/issues). See [Contributing](#-contributing) for what to attach. |
