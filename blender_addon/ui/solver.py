@@ -785,12 +785,12 @@ class SOLVER_OT_Transfer(AsyncOperator):
             raise StageAbort(why)
 
     def _stage_upload(self, context):
-        # The topology stamp lands HERE, not in the encoder: every stage that
-        # can refuse the Transfer has run by now, so a scene that never reached
-        # the wire does not get recorded as transferred and its stale-topology
-        # warning still fires.
+        # The topology stamp and the objects' transferred world matrices land
+        # HERE, not in the encoder: every stage that can refuse the Transfer
+        # has run by now, so a scene that never reached the wire does not get
+        # recorded as transferred and its stale-topology warning still fires.
         state = get_addon_data(context.scene).state
-        state.commit_pending_mesh_hash()
+        state.commit_pending_transfer()
         # Local fetched animation is keyed by the previous upload's data;
         # new data invalidates it, so drop it before kicking the pipeline
         # (matches the prior NO_DATA fast-path behavior).

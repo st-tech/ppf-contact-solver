@@ -805,7 +805,38 @@ def _build_obj_data(context, *, persist_topology_hash: bool) -> list:
 
     data = []
     with evaluate_at_start_frame(context, state):
-        return _encode_obj_inner(context, scene, state, data)
+        tree = _encode_obj_inner(context, scene, state, data)
+        # Held, like the topology summary, until the upload is accepted.
+        if persist_topology_hash:
+            state.set_pending_transfer_world(_transfer_world_matrices(scene))
+        return tree
+
+
+def _transfer_world_matrices(scene) -> dict:
+    """``{object uuid: 16 floats}``: every simulated object's solver-space
+    world matrix (``world_matrix``, row-major) at the starting frame, the
+    frame the caller has the scene on.
+
+    This is where the solver was told each object stands, so its world-space
+    output is placed by these matrices. A fetch compares them with where the
+    objects stand now (``core.client``), which is what lets a parent moved
+    after the run carry the fetched result with it.
+    """
+    from ..uuid_registry import resolve_assigned
+
+    out = {}
+    for group in iterate_object_groups(scene):
+        if not group.active:
+            continue
+        for assigned in group.assigned_objects:
+            if not assigned.included or not assigned.uuid:
+                continue
+            obj = resolve_assigned(assigned)
+            if obj is None:
+                continue
+            m = world_matrix(obj)
+            out[assigned.uuid] = [float(m[i][j]) for i in range(4) for j in range(4)]
+    return out
 
 
 def _refuse_degenerate_tessellation(context, scene, state):

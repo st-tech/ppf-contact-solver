@@ -168,6 +168,7 @@ from . import bl_overlay_respects_user_obj_color
 from . import bl_cleanup_respects_user_obj_color
 from . import bl_race_state_machine
 from . import bl_fetch_clear_refetch
+from . import bl_fetch_parent_offset
 from . import bl_geometry_hash
 from . import bl_param_change
 from . import bl_friction_mode
@@ -645,6 +646,8 @@ REGISTRY = {
     "bl_cleanup_respects_user_obj_color": bl_cleanup_respects_user_obj_color,
     "bl_race_state_machine": bl_race_state_machine,
     "bl_fetch_clear_refetch": bl_fetch_clear_refetch,
+    # Issue #167: Fetch All after moving a parent Empty keeps the parent's offset.
+    "bl_fetch_parent_offset": bl_fetch_parent_offset,
     "bl_geometry_hash": bl_geometry_hash,
     "bl_param_change": bl_param_change,
     "bl_friction_mode": bl_friction_mode,

@@ -1464,6 +1464,21 @@ class State(PropertyGroup):
         default="",
         options={"HIDDEN"},
     )  # pyright: ignore
+    # Each simulated object's world matrix (solver space, at the starting
+    # frame) as the last accepted upload sent it, keyed by object UUID. The
+    # solver returns world positions placed by THESE matrices, so a fetch
+    # carries them along by however far each object has moved since: moving a
+    # parent after a run then moves the fetched result with it (issue #167).
+    transfer_world_json: StringProperty(
+        name="Transfer World Matrices JSON",
+        default="{}",
+        options={"HIDDEN"},
+    )  # pyright: ignore
+    pending_transfer_world_json: StringProperty(
+        name="Pending Transfer World Matrices JSON",
+        default="",
+        options={"HIDDEN"},
+    )  # pyright: ignore
 
     def set_mesh_hash(self, hash_data: dict):
         """Store mesh hash data as JSON string."""
@@ -1479,11 +1494,32 @@ class State(PropertyGroup):
         """
         self.pending_mesh_hash_json = json.dumps(hash_data)
 
-    def commit_pending_mesh_hash(self):
-        """Promote the held topology summary, if there is one."""
+    def set_pending_transfer_world(self, matrices: dict):
+        """Hold each object's transferred world matrix until the upload lands.
+
+        Held and promoted with the topology summary, for the same reason: a
+        Transfer refused after the geometry encode never reached the solver.
+        """
+        self.pending_transfer_world_json = json.dumps(matrices)
+
+    def commit_pending_transfer(self):
+        """Promote what the geometry encode held for this upload: the
+        topology summary and the world matrices the objects were sent with."""
         if self.pending_mesh_hash_json:
             self.mesh_hash_json = self.pending_mesh_hash_json
             self.pending_mesh_hash_json = ""
+        if self.pending_transfer_world_json:
+            self.transfer_world_json = self.pending_transfer_world_json
+            self.pending_transfer_world_json = ""
+
+    def get_transfer_world(self) -> dict:
+        """``{object uuid: 16 floats}``, each object's solver-space world
+        matrix at the starting frame as the last accepted upload carried it.
+        Empty for a scene transferred before this was recorded."""
+        try:
+            return json.loads(self.transfer_world_json)
+        except (json.JSONDecodeError, ValueError):
+            return {}
 
     def get_mesh_hash(self) -> dict:
         """Retrieve mesh hash data from JSON string."""

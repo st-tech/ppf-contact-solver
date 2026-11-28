@@ -48,7 +48,7 @@ from .status import (
     ConnectionInfo,
     RemoteStatus,
 )
-from .transform import inv_world_matrix
+from .transform import inv_world_matrix, world_matrix
 
 
 # Per-target apply state. ``needs_per_frame`` is True for meshes of any
@@ -58,10 +58,43 @@ from .transform import inv_world_matrix
 # ``scene.frame_set`` before each write. For everyone else
 # ``constant_inv`` carries a pre-snapshotted ``inv_world_matrix(obj)``
 # numpy (4,4) and the loop skips the per-frame depsgraph eval.
+# ``carry`` is ``_transfer_carry``'s matrix, or None when the object stands
+# where the last upload sent it.
 _ApplyTarget = collections.namedtuple(
     "_ApplyTarget",
-    ["uuid", "obj", "map", "object_type", "needs_per_frame", "constant_inv"],
+    ["uuid", "obj", "map", "object_type", "needs_per_frame", "constant_inv",
+     "carry"],
 )
+
+
+def _transfer_carry(obj, sent):
+    """How far *obj* has moved since the upload the solver ran, as the solver-
+    space matrix that carries its output along, or None if it has not moved.
+
+    The solver returns world positions placed by the world matrix the object
+    was SENT with (``sent``, 16 row-major floats from the state's transfer
+    record, at the starting frame). The fetch writes object-local positions,
+    and MESH_CACHE puts back the transform the object has now, so dividing
+    the output by today's matrix alone pins the result to where it was
+    simulated: a cloth whose parent Empty was moved after the run went back to
+    its old place on the next fetch (issue #167), while the same cache fetched
+    BEFORE the move followed the parent. Carrying the output by
+    ``now @ sent^-1`` first makes the two orders agree: the result moves with
+    whatever moved the object.
+
+    ``now`` is read at the starting frame, the frame ``sent`` was recorded at;
+    the caller has the scene there for an object whose matrix varies by frame.
+    An object whose transform is animated and unchanged since the upload has
+    ``now == sent``, so its per-frame division is exactly what it was.
+    """
+    if sent is None:
+        return None
+    sent = numpy.array(sent, dtype=numpy.float64).reshape(4, 4)
+    now = numpy.array(world_matrix(obj), dtype=numpy.float64)
+    carry = now @ numpy.linalg.inv(sent)
+    if numpy.allclose(carry, numpy.eye(4), rtol=0.0, atol=1e-9):
+        return None
+    return carry
 
 
 def _needs_per_frame_matrix(obj):
@@ -349,7 +382,8 @@ def _gap_fill_poses(obj, n_verts):
     return rest_co, sd_cache_world
 
 
-def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
+def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame,
+                               carry=None):
     """Append gap frames covering PC2 indices ``[0, frame_idx)`` so the
     next appended real frame lands at PC2 index ``frame_idx``.
 
@@ -376,6 +410,10 @@ def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
       always comes from this gap-fill, and an armature-driven SOLID
       collider showed the parked frame's pose on Blender frame 1 while
       every later frame was correct.
+
+    ``carry`` is the object's ``_transfer_carry``. The captured cache is
+    carried by it before the division, as the real frames are. The local
+    fallback pose needs no carry: MESH_CACHE already shows it at the object.
     """
     if frame_idx <= 0:
         return
@@ -427,6 +465,10 @@ def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
                 inv = numpy.array(inv_world_matrix(obj), dtype=numpy.float64)
             else:
                 inv = constant_inv
+            # The cache is the world motion the solver was given, so it moves
+            # with the object the way the solver's own frames do.
+            if carry is not None:
+                inv = inv @ carry
             local = sd_cache_world[gap_i] @ inv[:3, :3].T + inv[:3, 3]
             append_pc2_frame(pc2_path, local, n_verts)
     finally:
@@ -436,7 +478,8 @@ def _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame):
 
 def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
                               n_verts_override=None,
-                              place_after_deformers=False):
+                              place_after_deformers=False,
+                              carry=None):
     """Write a single frame to the object's PC2 file.
 
     Works for both mesh objects (vertex positions) and curve objects
@@ -499,7 +542,8 @@ def _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
         os.makedirs(os.path.dirname(pc2_path), exist_ok=True)
         create_pc2_file(pc2_path, n_verts, start=0.0, sampling=1.0)
         # Fill gap frames [0, frame_idx).
-        _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame)
+        _append_leading_gap_frames(pc2_path, frame_idx, n_verts, obj, start_frame,
+                                   carry=carry)
         # Write the actual simulation frame
         append_pc2_frame(pc2_path, map_vert, n_verts)
         mark_real_frame(key, frame_idx)
@@ -646,6 +690,11 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
             mat = world_inv_by_uuid[uid]
         else:
             mat = target.constant_inv
+        # World to local is carry-then-divide (``_transfer_carry``), so every
+        # use of ``mat`` below, the frame-embedding reconstruction included,
+        # sees the output already moved with the object.
+        if target.carry is not None:
+            mat = numpy.asarray(mat, dtype=numpy.float64) @ target.carry
 
         if obj.type == "CURVE":
             cached = curve_fit_cache.get(uid) if curve_fit_cache is not None else None
@@ -720,7 +769,7 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         world_by_uuid[uid] = world_vert
         records.append({
             "kind": "mesh", "obj": obj, "mat": mat, "world": world_vert,
-            "after": place_after_deformers,
+            "after": place_after_deformers, "carry": target.carry,
         })
 
     # Phase 2: snap every stitched source vertex exactly onto its target
@@ -754,7 +803,8 @@ def _apply_single_frame(context, n, vert, map_by_uuid, surface_map_by_uuid,
         else:
             map_vert = _apply_matrix_np(mat, rec["world"])
             _write_mesh_frame_to_pc2(obj, map_vert, blender_frame, start_frame,
-                                     place_after_deformers=rec["after"])
+                                     place_after_deformers=rec["after"],
+                                     carry=rec["carry"])
 
     return blender_frame
 
@@ -1065,8 +1115,22 @@ def apply_animation():
                                 object_type=group.object_type,
                                 needs_per_frame=needs_per_frame,
                                 constant_inv=constant_inv,
+                                carry=None,
                             ))
                 any_per_frame = any(t.needs_per_frame for t in target_objects)
+                # Each object's carry since the upload, read at the starting
+                # frame the upload recorded it at. Only an object whose matrix
+                # varies by frame needs the scene moved there; the per-frame
+                # read below moves it on to frame N before anything is written.
+                sent = state.get_transfer_world()
+                if sent:
+                    if any(t.needs_per_frame and t.uuid in sent
+                           for t in target_objects):
+                        context.scene.frame_set(start_frame)
+                    target_objects = [
+                        t._replace(carry=_transfer_carry(t.obj, sent.get(t.uuid)))
+                        for t in target_objects
+                    ]
 
             # For targets whose matrix_world varies per frame, we must
             # evaluate Blender's depsgraph at frame N to read the true
