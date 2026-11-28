@@ -25,13 +25,6 @@ body:
     validations:
       required: true
   - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives Considered
-      description: Other approaches or workarounds you have considered.
-    validations:
-      required: false
-  - type: textarea
     id: additional-context
     attributes:
       label: Additional Context
